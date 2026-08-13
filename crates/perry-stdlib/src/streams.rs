@@ -25,16 +25,126 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
-use perry_runtime::{
-    js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
-    js_nanbox_get_pointer, js_object_alloc, js_object_get_field_by_name, js_object_set_field,
-    js_object_set_field_by_name, js_object_set_keys, js_promise_mark_internally_handled,
-    js_promise_new, js_promise_reject, js_promise_resolve, js_string_from_bytes, ClosureHeader,
-    JSValue, ObjectHeader, Promise,
-};
+use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_int;
 use std::sync::Mutex;
+
+// Calls that allocate or mutate runtime-owned values must cross the stable C
+// ABI. A shared stdlib still contains fallback Rust runtime glue for generic
+// monomorphizations; direct Rust calls would allocate into that image's arena
+// instead of the process-wide runtime provider.
+extern "C" {
+    #[link_name = "js_array_alloc"]
+    fn provider_js_array_alloc(capacity: u32) -> *mut ArrayHeader;
+    #[link_name = "js_array_push"]
+    fn provider_js_array_push(array: *mut ArrayHeader, value: JSValue) -> *mut ArrayHeader;
+    #[link_name = "js_closure_call0"]
+    fn provider_js_closure_call0(closure: *const ClosureHeader) -> f64;
+    #[link_name = "js_closure_call1"]
+    fn provider_js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64;
+    #[link_name = "js_closure_call2"]
+    fn provider_js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64;
+    #[link_name = "js_nanbox_get_pointer"]
+    fn provider_js_nanbox_get_pointer(value: f64) -> i64;
+    #[link_name = "js_object_alloc"]
+    fn provider_js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    #[link_name = "js_object_get_field_by_name"]
+    fn provider_js_object_get_field_by_name(
+        object: *const ObjectHeader,
+        key: *const StringHeader,
+    ) -> JSValue;
+    #[link_name = "js_object_set_field"]
+    fn provider_js_object_set_field(object: *mut ObjectHeader, index: u32, value: JSValue);
+    #[link_name = "js_object_set_field_by_name"]
+    fn provider_js_object_set_field_by_name(
+        object: *mut ObjectHeader,
+        key: *const StringHeader,
+        value: f64,
+    );
+    #[link_name = "js_object_set_keys"]
+    fn provider_js_object_set_keys(object: *mut ObjectHeader, keys: *mut ArrayHeader);
+    #[link_name = "js_promise_mark_internally_handled"]
+    fn provider_js_promise_mark_internally_handled(promise: *mut Promise);
+    #[link_name = "js_promise_new"]
+    fn provider_js_promise_new() -> *mut Promise;
+    #[link_name = "js_promise_reject"]
+    fn provider_js_promise_reject(promise: *mut Promise, reason: f64);
+    #[link_name = "js_promise_resolve"]
+    fn provider_js_promise_resolve(promise: *mut Promise, value: f64);
+    #[link_name = "js_string_from_bytes"]
+    fn provider_js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+}
+
+macro_rules! provider_call {
+    ($name:ident ( $($argument:expr),* $(,)? )) => {
+        unsafe { $name($($argument),*) }
+    };
+}
+
+fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
+    provider_call!(provider_js_array_alloc(capacity))
+}
+
+fn js_array_push(array: *mut ArrayHeader, value: JSValue) -> *mut ArrayHeader {
+    provider_call!(provider_js_array_push(array, value))
+}
+
+fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
+    provider_call!(provider_js_closure_call0(closure))
+}
+
+fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    provider_call!(provider_js_closure_call1(closure, arg0))
+}
+
+fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
+    provider_call!(provider_js_closure_call2(closure, arg0, arg1))
+}
+
+fn js_nanbox_get_pointer(value: f64) -> i64 {
+    provider_call!(provider_js_nanbox_get_pointer(value))
+}
+
+fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    provider_call!(provider_js_object_alloc(class_id, field_count))
+}
+
+fn js_object_get_field_by_name(object: *const ObjectHeader, key: *const StringHeader) -> JSValue {
+    provider_call!(provider_js_object_get_field_by_name(object, key))
+}
+
+fn js_object_set_field(object: *mut ObjectHeader, index: u32, value: JSValue) {
+    provider_call!(provider_js_object_set_field(object, index, value))
+}
+
+fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64) {
+    provider_call!(provider_js_object_set_field_by_name(object, key, value))
+}
+
+fn js_object_set_keys(object: *mut ObjectHeader, keys: *mut ArrayHeader) {
+    provider_call!(provider_js_object_set_keys(object, keys))
+}
+
+fn js_promise_mark_internally_handled(promise: *mut Promise) {
+    provider_call!(provider_js_promise_mark_internally_handled(promise))
+}
+
+fn js_promise_new() -> *mut Promise {
+    provider_call!(provider_js_promise_new())
+}
+
+fn js_promise_reject(promise: *mut Promise, reason: f64) {
+    provider_call!(provider_js_promise_reject(promise, reason))
+}
+
+fn js_promise_resolve(promise: *mut Promise, value: f64) {
+    provider_call!(provider_js_promise_resolve(promise, value))
+}
+
+fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader {
+    provider_call!(provider_js_string_from_bytes(data, len))
+}
 
 /// Allocate a promise the stream machinery owns and observes internally — the
 /// reader/writer `closed`, writer `ready`, and `[[closeRequest]]` promises.
@@ -87,6 +197,7 @@ unsafe fn settle_stream_action_promise(promise: *mut Promise, actions: &[*mut Pr
 
 mod byob;
 mod expando;
+mod gc;
 mod idalloc;
 mod pipe;
 mod strategy;
@@ -105,6 +216,9 @@ pub use self::byob::{
     js_readable_stream_controller_byob_request, js_readable_stream_get_byob_reader,
     js_reader_read_with_view,
 };
+use self::gc::ensure_gc_registered;
+#[cfg(test)]
+use self::gc::scan_stream_roots;
 pub(crate) use self::strategy::parse_strategy_value;
 pub use self::strategy::{
     js_byte_length_queuing_strategy_new, js_count_queuing_strategy_new,
@@ -322,133 +436,6 @@ lazy_static::lazy_static! {
 // `src.pipeThrough(ts).getReader()`. #6602: ids of terminal objects recycle
 // through `idalloc` so the finite band survives long-running servers.
 use self::idalloc::next_stream_id;
-
-static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-/// Register the streams GC root scanner once. Closures held by user-
-/// supplied `start` / `pull` / `cancel` / `write` / `close` / `abort` /
-/// `transform` / `flush` callbacks live in the registry maps below; the
-/// runtime GC mark phase wouldn't see them otherwise and a sweep
-/// between registration and dispatch would free the closure body. Same
-/// shape as `ws.rs::ensure_gc_scanner_registered`.
-fn ensure_gc_registered() {
-    GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner_named(
-            "stdlib:streams",
-            scan_stream_roots_mut,
-        );
-        perry_runtime::node_submodules::js_register_stream_consumer_callbacks(
-            js_readable_stream_get_reader,
-            js_reader_read,
-        );
-        unsafe {
-            perry_runtime::object::js_register_stream_expando_set(expando::stream_expando_set_hook);
-        }
-    });
-}
-
-#[allow(dead_code)]
-fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_stream_roots_mut(&mut visitor);
-}
-
-fn visit_stream_value_slot(
-    visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>,
-    slot: &mut u64,
-) {
-    let top = *slot >> 48;
-    if top == 0x7FFD || top == 0x7FFF {
-        visitor.visit_nanbox_u64_slot(slot);
-    }
-}
-
-fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    expando::scan_expando_roots(visitor);
-    if let Ok(mut map) = READABLE_STREAMS.lock() {
-        for s in map.values_mut() {
-            visitor.visit_i64_slot(&mut s.start_cb);
-            visitor.visit_i64_slot(&mut s.pull_cb);
-            visitor.visit_i64_slot(&mut s.cancel_cb);
-            visitor.visit_i64_slot(&mut s.strategy_size_cb);
-            for c in s.chunks.iter_mut() {
-                visit_stream_value_slot(visitor, c);
-            }
-            for p in s.pending_reads.iter_mut() {
-                visitor.visit_raw_mut_ptr_slot(p);
-            }
-            if s.state == ReadableState::Errored {
-                visit_stream_value_slot(visitor, &mut s.error_value);
-            }
-            if let Some(error) = &mut s.pending_error_after_chunks {
-                visit_stream_value_slot(visitor, error);
-            }
-        }
-    }
-    byob::scan_byob_roots(visitor);
-    if let Ok(mut map) = WRITABLE_STREAMS.lock() {
-        for s in map.values_mut() {
-            visitor.visit_i64_slot(&mut s.write_cb);
-            visitor.visit_i64_slot(&mut s.close_cb);
-            visitor.visit_i64_slot(&mut s.abort_cb);
-            visitor.visit_i64_slot(&mut s.strategy_size_cb);
-            for (chunk, p, _size) in s.write_queue.iter_mut() {
-                visit_stream_value_slot(visitor, chunk);
-                visitor.visit_raw_mut_ptr_slot(p);
-            }
-            visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut s.close_request_promise);
-            if s.state == WritableState::Errored {
-                visit_stream_value_slot(visitor, &mut s.error_value);
-            }
-        }
-    }
-    if let Ok(mut map) = TRANSFORM_STREAMS.lock() {
-        for t in map.values_mut() {
-            visitor.visit_i64_slot(&mut t.transform_cb);
-            visitor.visit_i64_slot(&mut t.flush_cb);
-        }
-    }
-    // Parked/deferred transform promises are held only as raw addresses in
-    // these maps (an unawaited write/close has no other root).
-    if let Ok(mut map) = transform::TRANSFORM_WRITE_RELEASES.lock() {
-        for promises in map.values_mut() {
-            for slot in promises.iter_mut() {
-                let mut p = *slot as *mut Promise;
-                visitor.visit_raw_mut_ptr_slot(&mut p);
-                *slot = p as usize;
-            }
-        }
-    }
-    if let Ok(mut map) = transform::TRANSFORM_PENDING_CLOSE.lock() {
-        for slot in map.values_mut() {
-            let mut p = *slot as *mut Promise;
-            visitor.visit_raw_mut_ptr_slot(&mut p);
-            *slot = p as usize;
-        }
-    }
-    if let Ok(mut map) = transform::TRANSFORM_BACKPRESSURED_JOBS.lock() {
-        for jobs in map.values_mut() {
-            for slot in jobs.iter_mut() {
-                let mut job = *slot as *mut ClosureHeader;
-                visitor.visit_raw_mut_ptr_slot(&mut job);
-                *slot = job as usize;
-            }
-        }
-    }
-    if let Ok(mut map) = READERS.lock() {
-        for r in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
-        }
-    }
-    if let Ok(mut map) = WRITERS.lock() {
-        for w in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut w.closed_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut w.ready_promise);
-        }
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers

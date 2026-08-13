@@ -314,6 +314,15 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     sym_ptr
 }
 
+/// Provider-safe C ABI for the Headers iterable probe. Separately packaged
+/// stdlib images must not call the Rust-mangled `well_known_symbol` directly,
+/// because their fallback runtime glue owns a different symbol cache.
+#[no_mangle]
+pub extern "C" fn js_symbol_well_known_iterator() -> f64 {
+    let symbol = well_known_symbol("iterator");
+    f64::from_bits(POINTER_TAG | (symbol as u64 & POINTER_MASK))
+}
+
 /// O(1) check whether a raw pointer is a well-known symbol (Symbol.toPrimitive etc.).
 /// Used by `js_symbol_key_for` so the spec-mandated `undefined` return for
 /// well-known symbols is preserved.

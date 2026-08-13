@@ -362,7 +362,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
 
     // ── Request property getters ──
     if module == "Request" {
-        let h_handle = lower_expr(ctx, recv)?;
+        let h_value = lower_expr(ctx, recv)?;
+        let h_handle = ctx
+            .block()
+            .call(DOUBLE, "js_fetch_unwrap_handle", &[(DOUBLE, &h_value)]);
         match method {
             "url" => {
                 let str_ptr = ctx
@@ -530,7 +533,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         // DOUBLE without any fptosi/bitcast conversion. May also be a chained
         // result from `.headers` / `.clone()` — those cases are recognised at
         // the Call callsite in lower_call.
-        let recv_handle = lower_expr(ctx, recv)?;
+        let recv_value = lower_expr(ctx, recv)?;
+        let recv_handle =
+            ctx.block()
+                .call(DOUBLE, "js_fetch_unwrap_handle", &[(DOUBLE, &recv_value)]);
         match method {
             "text" => {
                 let blk = ctx.block();

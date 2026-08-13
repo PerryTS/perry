@@ -147,6 +147,27 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     }
 }
 
+/// Normalize a Fetch `Request`/`Response` value for a direct stdlib FFI call.
+///
+/// Bare Fetch values are already registry handles and pass through unchanged.
+/// A userland subclass such as Next.js's `NextResponse` is a GC object whose
+/// native handle lives in [`FETCH_SUBCLASS_HANDLE_FIELD`]; typed lowering used
+/// to pass that object address to `js_fetch_response_*`, where it could never
+/// resolve in the stdlib registry.  Recover and re-box the backing handle so
+/// typed and dynamic property access share the same record.
+#[no_mangle]
+pub extern "C" fn js_fetch_unwrap_handle(value: f64) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return value;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    match unsafe { fetch_subclass_handle_id(raw) } {
+        Some(id) => crate::value::js_nanbox_pointer(id),
+        None => value,
+    }
+}
+
 /// Hidden own-field name under which a `class X extends Temporal.<Type>`
 /// instance stashes the NaN-boxed pointer to its underlying Temporal cell.
 /// Written by `js_fetch_or_value_super` (the runtime-value super dispatcher,

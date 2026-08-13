@@ -258,9 +258,10 @@ fn stack_maps() -> &'static StackMapIndex {
     STACK_MAPS.get_or_init(|| {
         // No section at all is the ordinary shadow-stack build: there are no
         // native frame roots to find, and an empty index is the right answer.
-        let Some(section) = loaded_stack_map_section() else {
+        let sections = loaded_stack_map_sections();
+        if sections.is_empty() {
             return StackMapIndex::default();
-        };
+        }
         // A section that exists but does not decode is a different thing
         // entirely, and it must never degrade to "no roots". The two failure
         // shapes are indistinguishable downstream — both yield an empty index
@@ -270,20 +271,39 @@ fn stack_maps() -> &'static StackMapIndex {
         // fourth gate-failure mode (the gate runs, its subject never did), so
         // fail loudly instead. In practice this can only mean a binary whose
         // compiler and runtime disagree about the map format.
-        let Some((mut records, roots)) = parse_gc_map(section) else {
-            panic!(
-                "perry: the GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
-                 present but could not be decoded — expected format {:?} v{}. This binary's \
-                 compiler and runtime disagree about the map layout; continuing would run \
-                 the collector with no roots and corrupt the heap silently.",
-                section.len(),
-                std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
-                GC_MAP_VERSION,
-            );
-        };
+        let mut records = Vec::new();
+        let mut roots = Vec::new();
+        for section in sections {
+            if append_gc_map_section(&mut records, &mut roots, section).is_none() {
+                panic!(
+                    "perry: a GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
+                     present but could not be decoded — expected format {:?} v{}. This binary's \
+                     compiler and runtime disagree about the map layout; continuing would run \
+                     the collector with missing roots and corrupt the heap silently.",
+                    section.len(),
+                    std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
+                    GC_MAP_VERSION,
+                );
+            }
+        }
         records.sort_unstable_by_key(|record| record.pc);
         index_records(records, roots)
     })
+}
+
+fn append_gc_map_section(
+    records: &mut Vec<StackMapRecord>,
+    roots: &mut Vec<StackMapLocation>,
+    section: &[u8],
+) -> Option<()> {
+    let (mut section_records, section_roots) = parse_gc_map(section)?;
+    let root_base = u32::try_from(roots.len()).ok()?;
+    for record in &mut section_records {
+        record.roots_start = record.roots_start.checked_add(root_base)?;
+    }
+    records.append(&mut section_records);
+    roots.extend(section_roots);
+    Some(())
 }
 
 fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> StackMapIndex {
@@ -879,8 +899,8 @@ fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 /// function addresses as `u64` and this code does `usize` arithmetic on them.
 /// The compiler refuses that target for the same reason.
 #[cfg(target_vendor = "apple")]
-fn loaded_stack_map_section() -> Option<&'static [u8]> {
-    use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide};
+fn loaded_stack_map_sections() -> Vec<&'static [u8]> {
+    use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide, _dyld_image_count};
 
     const LC_SEGMENT_64: u32 = 0x19;
 
@@ -942,43 +962,57 @@ fn loaded_stack_map_section() -> Option<&'static [u8]> {
             && actual.get(expected.len()).copied().unwrap_or(0) == 0
     }
 
+    let mut sections = Vec::new();
     unsafe {
-        let raw_header = _dyld_get_image_header(0);
-        if raw_header.is_null() {
-            return None;
-        }
-        let header = &*(raw_header.cast::<MachHeader64>());
-        let slide = _dyld_get_image_vmaddr_slide(0);
-        let mut command_ptr = raw_header
-            .cast::<u8>()
-            .add(std::mem::size_of::<MachHeader64>());
-        for _ in 0..header.command_count {
-            let load = std::ptr::read_unaligned(command_ptr.cast::<LoadCommand>());
-            if load.size < std::mem::size_of::<LoadCommand>() as u32 {
-                return None;
+        for image_index in 0.._dyld_image_count() {
+            let raw_header = _dyld_get_image_header(image_index);
+            if raw_header.is_null() {
+                continue;
             }
-            if load.command == LC_SEGMENT_64 {
-                let segment = std::ptr::read_unaligned(command_ptr.cast::<SegmentCommand64>());
-                let mut section_ptr = command_ptr.add(std::mem::size_of::<SegmentCommand64>());
-                for _ in 0..segment.section_count {
-                    let section = std::ptr::read_unaligned(section_ptr.cast::<Section64>());
-                    if fixed_name_matches(&section.segment_name, b"__PERRY_GCMAP")
-                        && fixed_name_matches(&section.section_name, b"__perry_gcmap")
-                    {
-                        let address = (section.address as isize).checked_add(slide)? as usize;
-                        let size = usize::try_from(section.size).ok()?;
-                        if address == 0 || size == 0 {
-                            return None;
-                        }
-                        return Some(std::slice::from_raw_parts(address as *const u8, size));
-                    }
-                    section_ptr = section_ptr.add(std::mem::size_of::<Section64>());
+            let header = &*(raw_header.cast::<MachHeader64>());
+            let slide = _dyld_get_image_vmaddr_slide(image_index);
+            let mut command_ptr = raw_header
+                .cast::<u8>()
+                .add(std::mem::size_of::<MachHeader64>());
+            for _ in 0..header.command_count {
+                let load = std::ptr::read_unaligned(command_ptr.cast::<LoadCommand>());
+                if load.size < std::mem::size_of::<LoadCommand>() as u32 {
+                    break;
                 }
+                if load.command == LC_SEGMENT_64 {
+                    let segment = std::ptr::read_unaligned(command_ptr.cast::<SegmentCommand64>());
+                    let mut section_ptr = command_ptr.add(std::mem::size_of::<SegmentCommand64>());
+                    for _ in 0..segment.section_count {
+                        let section = std::ptr::read_unaligned(section_ptr.cast::<Section64>());
+                        if fixed_name_matches(&section.segment_name, b"__PERRY_GCMAP")
+                            && fixed_name_matches(&section.section_name, b"__perry_gcmap")
+                        {
+                            if let (Some(address), Ok(size)) = (
+                                (section.address as isize).checked_add(slide),
+                                usize::try_from(section.size),
+                            ) {
+                                if address > 0 && size != 0 {
+                                    sections.push(std::slice::from_raw_parts(
+                                        address as usize as *const u8,
+                                        size,
+                                    ));
+                                }
+                            }
+                            break;
+                        }
+                        section_ptr = section_ptr.add(std::mem::size_of::<Section64>());
+                    }
+                }
+                command_ptr = command_ptr.add(load.size as usize);
             }
-            command_ptr = command_ptr.add(load.size as usize);
         }
     }
-    None
+    sections
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn loaded_stack_map_sections() -> Vec<&'static [u8]> {
+    loaded_stack_map_section().into_iter().collect()
 }
 
 /// ELF (#7173): the `.perry_gcmap` section of the main executable.

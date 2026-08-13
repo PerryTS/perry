@@ -278,6 +278,36 @@ struct FetchResponse {
     body_stream_id: Option<usize>,
 }
 
+/// Return the one `Headers` registry handle that backs `response.headers`.
+///
+/// Both typed property lowering (`js_response_get_headers`) and untyped handle
+/// dispatch must come through this helper.  Allocating a fresh snapshot in the
+/// typed path made repeated reads disagree and, more importantly, discarded
+/// mutations made through an earlier view.  `NextResponse.cookies` mutates the
+/// response through that Headers view, so losing the handle also lost its
+/// `Set-Cookie` header when the response crossed a module boundary.
+fn response_headers_handle(resp_id: usize) -> f64 {
+    let mut responses = FETCH_RESPONSES.lock().unwrap();
+    let Some(response) = responses.get_mut(&resp_id) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    if let Some(id) = response.cached_headers_id {
+        return handle_to_f64(id);
+    }
+    let id = alloc_headers(response.headers.clone());
+    response.cached_headers_id = Some(id);
+    handle_to_f64(id)
+}
+
+/// Snapshot the observable Headers backing, including mutations made through
+/// `response.headers`, for operations such as `Response.clone()`.
+fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
+    response
+        .cached_headers_id
+        .and_then(|id| HEADERS_REGISTRY.lock().unwrap().get(&id).cloned())
+        .unwrap_or_else(|| response.headers.clone())
+}
+
 thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
 }

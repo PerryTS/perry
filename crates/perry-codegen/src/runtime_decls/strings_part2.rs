@@ -931,6 +931,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // ──────────────────────────────────────────────────────────────────
     // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
     module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
+    // Normalize a Request/Response subclass object (for example NextResponse)
+    // to its native Fetch registry handle; bare handles pass through.
+    module.declare_function("js_fetch_unwrap_handle", DOUBLE, &[DOUBLE]);
     // js_response_body_init_ptr(body_value_f64) -> string_ptr (i64): drains a
     // ReadableStream body to bytes, else falls back to string coercion.
     module.declare_function("js_response_body_init_ptr", I64, &[DOUBLE]);

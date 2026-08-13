@@ -111,6 +111,23 @@ mod tests {
     }
 
     #[test]
+    fn merges_gc_maps_from_separate_loaded_images() {
+        let first = simple(0x1000, 0x10, -8);
+        let second = simple(0x2000, 0x20, -16);
+        let mut records = Vec::new();
+        let mut roots = Vec::new();
+        append_gc_map_section(&mut records, &mut roots, &first).expect("first image map");
+        append_gc_map_section(&mut records, &mut roots, &second).expect("second image map");
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(records[0].roots_start, 0);
+        assert_eq!(records[1].roots_start, 1);
+        assert_eq!(roots[records[0].roots_start as usize].offset, -8);
+        assert_eq!(roots[records[1].roots_start as usize].offset, -16);
+    }
+
+    #[test]
     fn repeated_live_sets_share_one_copy() {
         // Three safepoints, the last two repeating the first's live set: the
         // whole point of the format, and the reason the in-memory index does

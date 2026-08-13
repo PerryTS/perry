@@ -480,37 +480,12 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
 /// Returns `None` if the id isn't a known Response or the property is unknown.
 #[doc(hidden)]
 pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
-    // `response.headers` — lazily allocate a Headers registry entry
-    // backed by the response's stored headers and cache the id on the
-    // FetchResponse so repeat reads return the same handle (preserves
-    // `res.headers === res.headers`). Hono's `#newResponse` mutates the
-    // returned Headers object via `.set(k, v)`, but our snapshot is a
-    // copy of the response's HeadersStore — mutations land on the
-    // Headers handle's HeadersStore, not back on the FetchResponse.
-    // For the read-only case (the issue #486 acceptance) this is
-    // sufficient; spec-perfect "live header view" would need the
-    // FetchResponse's storage to be the same Vec as the Headers
-    // entries, which is a wider refactor.
+    // `response.headers` — use the same backing handle as the typed accessor.
+    // This preserves both object identity and mutations (notably
+    // `NextResponse.cookies`' Set-Cookie writes) across module boundaries.
     if prop == "headers" {
-        let cached = {
-            let guard = FETCH_RESPONSES.lock().unwrap();
-            guard.get(&resp_id)?.cached_headers_id
-        };
-        let id = match cached {
-            Some(id) => id,
-            None => {
-                let store = {
-                    let guard = FETCH_RESPONSES.lock().unwrap();
-                    guard.get(&resp_id)?.headers.clone()
-                };
-                let new_id = alloc_headers(store);
-                if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
-                    resp.cached_headers_id = Some(new_id);
-                }
-                new_id
-            }
-        };
-        return Some(handle_to_f64(id));
+        FETCH_RESPONSES.lock().unwrap().get(&resp_id)?;
+        return Some(response_headers_handle(resp_id));
     }
     // `response.body` — `ReadableStream | null` per the Web Fetch spec.
     // Returns a NaN-boxed (POINTER_TAG) single-chunk ReadableStream handle

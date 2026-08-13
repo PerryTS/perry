@@ -20,6 +20,7 @@
 // pull-sources driving `byobRequest.respond(n)` — observe Node-shaped
 // results either way.
 
+use super::gc::visit_stream_value_slot;
 use super::*;
 use std::collections::HashMap;
 
@@ -54,7 +55,7 @@ pub(super) fn has_pending(stream_id: usize) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn scan_byob_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+pub(super) fn scan_byob_roots<V: super::gc::StreamRootVisitor>(visitor: &mut V) {
     if let Ok(mut map) = BYOB_PENDING.lock() {
         for queue in map.values_mut() {
             for pending in queue.iter_mut() {
