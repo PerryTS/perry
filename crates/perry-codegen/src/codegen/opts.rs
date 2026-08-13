@@ -364,8 +364,8 @@ pub struct CompileOptions {
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
 
     /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
-    /// every Deferred `.next/server/**` module. The entry's `main` emits a
-    /// `js_register_path_init(path, &<prefix>__init)` for each so a runtime
+    /// every Deferred `.next/server/**` module. The entry's `main` or
+    /// `perry_module_init` emits a `js_register_path_init` for each so a runtime
     /// `require(absolutePath)` can lazily trigger the module's init. Only
     /// populated for the entry module; empty otherwise.
     pub nextjs_path_init_modules: Vec<(String, String)>,
@@ -957,7 +957,8 @@ pub(crate) struct CrossModuleCtx {
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
     /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
     /// every Deferred `.next/server/**` module — see [`CompileOptions`]. The
-    /// entry's `main` emits one `js_register_path_init` per entry.
+    /// entry's executable or dylib initializer emits one
+    /// `js_register_path_init` per entry.
     pub nextjs_path_init_modules: Vec<(String, String)>,
     /// Issue #753: sanitized prefixes of modules reached only through
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded

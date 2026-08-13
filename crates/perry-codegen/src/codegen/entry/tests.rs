@@ -96,6 +96,19 @@ fn emitted_ir(output_type: &str) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn emitted_path_init_ir(output_type: &str) -> String {
+    let mut opts = entry_opts(output_type);
+    opts.non_entry_module_prefixes = vec!["lazy_chunk_js".to_string()];
+    opts.deferred_module_prefixes
+        .insert("lazy_chunk_js".to_string());
+    opts.nextjs_path_init_modules = vec![(
+        "/fixture/.next/server/chunks/lazy.js".to_string(),
+        "lazy_chunk_js".to_string(),
+    )];
+    String::from_utf8(compile_module(&empty_module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
+
 #[test]
 fn executable_exit_releases_collection_side_allocations_last() {
     let ir = emitted_ir("executable");
@@ -152,4 +165,29 @@ fn dylib_entry_does_not_release_process_owned_collection_storage() {
         !ir.contains("call void @js_gc_release_current_thread_collection_side_allocations()"),
         "a library return is not a process-exit boundary"
     );
+}
+
+#[test]
+fn executable_and_app_dylib_both_register_lazy_path_initializers() {
+    for output_type in ["executable", "dylib"] {
+        let ir = emitted_path_init_ir(output_type);
+        let entry_symbol = if output_type == "dylib" {
+            "define void @perry_module_init()"
+        } else {
+            "define i32 @main()"
+        };
+        assert!(ir.contains(entry_symbol), "missing {entry_symbol}\n{ir}");
+        assert!(
+            ir.contains("call void @js_register_path_init("),
+            "{output_type} entry omitted the provider-visible lazy path registration\n{ir}"
+        );
+        assert!(
+            ir.contains("ptrtoint (ptr @lazy_chunk_js__init to i64)"),
+            "{output_type} entry did not register the generated init function\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @lazy_chunk_js__init()"),
+            "path-only module must remain cold at {output_type} startup\n{ir}"
+        );
+    }
 }

@@ -745,6 +745,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()
     );
+    let module_path_literal = format!("{:?}", source_path.to_string_lossy());
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -756,6 +757,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // real module ref the same way), so named/default-export resolution stays
     // correct regardless of what the body does to its `module` local.
     const __cjs_module = {{ exports: {{}} }};
+    // Publish the initial object before user code. The runtime exposes it only
+    // to same-thread recursive loads; concurrent first callers wait for the
+    // final registration at the bottom of this wrapper.
+    __perry_register_path_module_partial({module_path_literal}, __cjs_module.exports);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     function __perry_cjs_require_error(kind, code, message) {{
@@ -824,7 +829,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
         {{
             const __perry_path_mod = __perry_require_path_module(specifier);
-            if (__perry_path_mod !== undefined) return __perry_path_mod;
+            if (__perry_path_mod !== undefined || __perry_has_path_module(specifier)) return __perry_path_mod;
         }}
         // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
         // manifests this way: `require(this.middlewareManifestPath)`). Node's

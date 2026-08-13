@@ -7,7 +7,7 @@
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
-use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
+use crate::value::{js_nanbox_pointer, JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -230,31 +230,204 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
     js_module_create_require(filename_or_url)
 }
 
-/// Next.js wall 54: registry mapping an AOT-compiled CJS module's absolute
-/// source path to its evaluated `module.exports`, so a RUNTIME
-/// `require(absolutePath.js)` (Next.js / turbopack load page + chunk modules by
-/// a path computed at request time, not a static specifier) resolves to the
-/// module Perry already compiled instead of throwing `MODULE_NOT_FOUND`. Keyed
-/// by canonicalized path so `/a/../b` and symlinks normalize to one entry. Each
-/// compiled module self-registers at the end of its CJS wrapper init.
-static MODULE_PATH_REGISTRY: std::sync::RwLock<Option<std::collections::HashMap<String, u64>>> =
-    std::sync::RwLock::new(None);
+/// State of one AOT-compiled module that can be loaded by runtime path.
+///
+/// `Initializing` carries the owner thread so a CommonJS cycle on that same
+/// thread can observe the wrapper's partial `exports` object. Other callers
+/// wait for the owner to publish the final value (or failure), which prevents
+/// concurrent first requests from racing the generated module init guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PathModuleStatus {
+    Registered,
+    Initializing(std::thread::ThreadId),
+    Initialized,
+    /// Initializers are not retried. Every later caller receives the exact
+    /// same thrown JS value until process teardown.
+    Failed(u64),
+}
 
-/// Next.js wall 54 (part 2): registry mapping an AOT-compiled module's absolute
-/// source path to the ADDRESS of its `<prefix>__init` function, so a runtime
-/// `require(absolutePath.js)` can LAZILY trigger init of a module that was NOT
-/// run at startup (Deferred). The `.next/server/**` page/route/chunk modules are
-/// loaded by a path computed at request time; eager-initing them at startup runs
-/// React-SSR code before the server is ready (and turbopack chunks must init in
-/// the order the page loader's `R.c()` calls demand), so they are Deferred and
-/// init on first `require`. Populated once at program start by codegen-emitted
-/// `js_register_path_init` calls (no init runs there — only the address is
-/// recorded). The init function is idempotent (guarded), self-registers its
-/// exports into [`MODULE_PATH_REGISTRY`], and may recursively `require` its own
-/// dependencies (chunk loaders) — all safe because each module inits once.
-static MODULE_PATH_INIT_REGISTRY: std::sync::RwLock<
-    Option<std::collections::HashMap<String, usize>>,
-> = std::sync::RwLock::new(None);
+#[derive(Debug)]
+struct PathModuleEntry {
+    init_addr: Option<usize>,
+    /// `Option` is the presence bit: `Some(TAG_UNDEFINED)` is a real,
+    /// initialized CommonJS export and must not be confused with a miss.
+    exports: Option<u64>,
+    status: PathModuleStatus,
+}
+
+#[derive(Default)]
+struct PathModuleState {
+    entries: std::collections::HashMap<String, PathModuleEntry>,
+}
+
+/// Provider-visible path-module registry. App-only dylibs call these runtime
+/// symbols through their undefined ABI references, so the state lives in the
+/// separately loaded runtime provider rather than being duplicated per app.
+/// One mutex protects init ownership and export publication atomically; it is
+/// always released before generated code runs.
+struct PathModuleRegistry {
+    state: std::sync::Mutex<PathModuleState>,
+    ready: std::sync::Condvar,
+}
+
+impl Default for PathModuleRegistry {
+    fn default() -> Self {
+        Self {
+            state: std::sync::Mutex::new(PathModuleState::default()),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+}
+
+impl PathModuleRegistry {
+    fn lock(&self) -> std::sync::MutexGuard<'_, PathModuleState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Register one canonical path -> initializer mapping. The same mapping is
+    /// idempotent. A second address for the same canonical file is rejected so
+    /// an alias can never create a second logical module initialization.
+    fn register_init(&self, key: String, init_addr: usize) -> bool {
+        let mut state = self.lock();
+        let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+            init_addr: None,
+            exports: None,
+            status: PathModuleStatus::Registered,
+        });
+        if let Some(existing) = entry.init_addr {
+            return existing == init_addr;
+        }
+        entry.init_addr = Some(init_addr);
+        true
+    }
+
+    /// Publish the initial CommonJS `exports` object before the wrapper body.
+    /// Only same-thread recursive loads may observe it; unrelated waiters stay
+    /// parked while the status is `Initializing`.
+    fn register_partial_exports(&self, key: String, exports: u64) {
+        let mut state = self.lock();
+        let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+            init_addr: None,
+            exports: None,
+            status: PathModuleStatus::Registered,
+        });
+        if matches!(entry.status, PathModuleStatus::Failed(_)) {
+            return;
+        }
+        entry.exports = Some(exports);
+        if entry.status == PathModuleStatus::Registered {
+            entry.status = PathModuleStatus::Initializing(std::thread::current().id());
+        }
+    }
+
+    /// Store the wrapper's final `module.exports`. Lazy modules remain owned by
+    /// `require_with` until the generated init function returns (namespace
+    /// population can still follow the CJS body). Eager modules have no
+    /// registered init address, so this call is their completion boundary.
+    fn register_final_exports(&self, key: String, exports: u64) {
+        let mut state = self.lock();
+        let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+            init_addr: None,
+            exports: None,
+            status: PathModuleStatus::Registered,
+        });
+        if matches!(entry.status, PathModuleStatus::Failed(_)) {
+            return;
+        }
+        entry.exports = Some(exports);
+        if entry.init_addr.is_none() {
+            entry.status = PathModuleStatus::Initialized;
+            self.ready.notify_all();
+        }
+    }
+
+    /// Return the value for `key`, initializing it once when necessary.
+    ///
+    /// The callback is invoked with every registry lock released. Its error is
+    /// cached without retry and replayed to all waiters. `Ok(None)` is a miss;
+    /// `Ok(Some(TAG_UNDEFINED))` is an initialized module exporting undefined.
+    fn require_with(
+        &self,
+        key: &str,
+        initialize: &dyn Fn(usize) -> Result<(), u64>,
+    ) -> Result<Option<u64>, u64> {
+        let current = std::thread::current().id();
+        let init_addr = loop {
+            let mut state = self.lock();
+            let Some(entry) = state.entries.get_mut(key) else {
+                return Ok(None);
+            };
+            match entry.status {
+                PathModuleStatus::Initialized => return Ok(entry.exports),
+                PathModuleStatus::Failed(error) => return Err(error),
+                PathModuleStatus::Initializing(owner) if owner == current => {
+                    // CommonJS cycle: the owner sees its own partial exports.
+                    return Ok(entry.exports);
+                }
+                PathModuleStatus::Initializing(_) => {
+                    drop(
+                        self.ready
+                            .wait(state)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                }
+                PathModuleStatus::Registered => {
+                    let Some(addr) = entry.init_addr else {
+                        return Ok(entry.exports);
+                    };
+                    entry.status = PathModuleStatus::Initializing(current);
+                    break addr;
+                }
+            }
+        };
+
+        // Never hold the registry lock across generated module code. That code
+        // self-registers exports and may recursively require another path.
+        let outcome = initialize(init_addr);
+        let mut state = self.lock();
+        let entry = state
+            .entries
+            .get_mut(key)
+            .expect("path initializer entry disappeared while it was running");
+        let result = match outcome {
+            Ok(()) => {
+                entry.status = PathModuleStatus::Initialized;
+                Ok(entry.exports)
+            }
+            Err(error) => {
+                entry.exports = None;
+                entry.status = PathModuleStatus::Failed(error);
+                Err(error)
+            }
+        };
+        self.ready.notify_all();
+        result
+    }
+
+    fn has_exports(&self, key: &str) -> bool {
+        let state = self.lock();
+        state.entries.get(key).is_some_and(|entry| {
+            entry.exports.is_some() && !matches!(entry.status, PathModuleStatus::Failed(_))
+        })
+    }
+
+    fn scan_roots(&self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        let mut state = crate::gc::lock_gc_root_registry(&self.state);
+        for entry in state.entries.values_mut() {
+            if let Some(exports) = entry.exports.as_mut() {
+                visitor.visit_nanbox_u64_slot(exports);
+            }
+            if let PathModuleStatus::Failed(error) = &mut entry.status {
+                visitor.visit_nanbox_u64_slot(error);
+            }
+        }
+    }
+}
+
+static MODULE_PATH_REGISTRY: std::sync::LazyLock<PathModuleRegistry> =
+    std::sync::LazyLock::new(PathModuleRegistry::default);
 
 fn canonicalize_module_path(path: &str) -> String {
     std::fs::canonicalize(path)
@@ -264,8 +437,8 @@ fn canonicalize_module_path(path: &str) -> String {
 
 /// Codegen FFI: record that `<prefix>__init` (address `init_addr`) initializes
 /// the module whose absolute source path is `path_value`. Emitted once per
-/// Deferred `.next/server/**` module at the top of `main`. See
-/// [`MODULE_PATH_INIT_REGISTRY`].
+/// Deferred `.next/server/**` module at the top of the executable or app-dylib
+/// entry point. The registry records the address without executing it.
 /// # Safety
 /// `path_ptr`/`path_len` describe a valid UTF-8 byte range (a codegen string
 /// constant). `init_addr` is the address of an `extern "C" fn()` module
@@ -275,10 +448,20 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
     let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
     let path = String::from_utf8_lossy(slice).into_owned();
     let key = canonicalize_module_path(&path);
-    let mut guard = MODULE_PATH_INIT_REGISTRY.write().unwrap();
-    guard
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(key, init_addr as usize);
+    if !MODULE_PATH_REGISTRY.register_init(key.clone(), init_addr as usize) {
+        eprintln!("perry: rejected duplicate path-module initializer for canonical path {key}");
+    }
+}
+
+/// Codegen FFI: publish a CommonJS module's initial `exports` object before
+/// executing its body. This is visible only to recursive loads by the owning
+/// thread; concurrent callers wait for [`js_register_path_module`] and the
+/// generated initializer to complete.
+#[no_mangle]
+pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
+    let path = value_to_string(path_value, "path");
+    let key = canonicalize_module_path(&path);
+    MODULE_PATH_REGISTRY.register_partial_exports(key, exports.to_bits());
 }
 
 /// Codegen FFI: register an AOT-compiled module's exports under its absolute
@@ -288,99 +471,88 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
     let path = value_to_string(path_value, "path");
     let key = canonicalize_module_path(&path);
-    let mut guard = MODULE_PATH_REGISTRY.write().unwrap();
-    guard
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(key, exports.to_bits());
+    MODULE_PATH_REGISTRY.register_final_exports(key, exports.to_bits());
 }
 
-/// Codegen FFI: resolve a runtime `require(absolutePath.js)` to a registered
-/// AOT-compiled module's exports, or `undefined` when no module is registered
-/// for that path (caller then falls back to the `.json` disk read / throws
-/// `MODULE_NOT_FOUND`). Module exports are always objects, so `undefined`
-/// unambiguously signals "miss".
+fn directory_module_candidates(key: &str) -> Vec<String> {
+    let dir = std::path::Path::new(&key);
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    if let Ok(manifest) = std::fs::read_to_string(dir.join("package.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&manifest) {
+            if let Some(main) = parsed.get("main").and_then(|m| m.as_str()) {
+                let main_path = dir.join(main);
+                candidates.push(main_path.to_string_lossy().into_owned());
+                if main_path.extension().is_none() {
+                    candidates.push(format!("{}.js", main_path.to_string_lossy()));
+                }
+            }
+        }
+    }
+    candidates.push(dir.join("index.js").to_string_lossy().into_owned());
+    candidates
+}
+
+fn run_path_initializer(addr: usize) -> Result<(), u64> {
+    // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
+    // module initializer and was accepted once for this canonical path.
+    let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
+    crate::exception::js_call_catching(|| {
+        init_fn();
+        undefined()
+    })
+    .map(|_| ())
+    .map_err(f64::to_bits)
+}
+
+fn require_path_key(key: &str) -> Result<Option<u64>, u64> {
+    MODULE_PATH_REGISTRY.require_with(key, &run_path_initializer)
+}
+
+/// Codegen FFI: resolve a runtime `require(absolutePath.js)` to an AOT module.
+/// Initialization is once-only and waitable; recursive CommonJS loads receive
+/// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
     let path = value_to_string(path_value, "id");
     let key = canonicalize_module_path(&path);
-    // Fast path: the module already ran (eager, or a prior require) and
-    // self-registered its exports.
-    {
-        let guard = MODULE_PATH_REGISTRY.read().unwrap();
-        if let Some(map) = guard.as_ref() {
-            if let Some(bits) = map.get(&key) {
-                return f64::from_bits(*bits);
-            }
-        }
+    match require_path_key(&key) {
+        Ok(Some(bits)) => return f64::from_bits(bits),
+        Err(error) => crate::exception::js_throw(f64::from_bits(error)),
+        Ok(None) => {}
     }
-    // Wall 54 (part 2): no exports yet — if a Deferred module is registered for
-    // this path, trigger its init now. The init self-registers its exports (and
-    // may recursively require its chunk dependencies). Crucially, all registry
-    // locks are RELEASED before calling init, since init re-enters
-    // `js_register_path_module` / `js_require_path_module`.
-    let init_addr = {
-        let guard = MODULE_PATH_INIT_REGISTRY.read().unwrap();
-        guard.as_ref().and_then(|m| m.get(&key).copied())
-    };
-    if let Some(addr) = init_addr {
-        // SAFETY: `addr` is the address of a codegen-emitted `extern "C" fn()`
-        // module initializer, recorded by `js_register_path_init` from a value
-        // produced by `ptrtoint` of the same function symbol. The initializer
-        // is idempotent (guarded by `@__perry_init_done_<prefix>`).
-        let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-        init_fn();
-        let guard = MODULE_PATH_REGISTRY.read().unwrap();
-        if let Some(map) = guard.as_ref() {
-            if let Some(bits) = map.get(&key) {
-                return f64::from_bits(*bits);
-            }
-        }
-    }
-    // Node directory resolution: `require('<abs dir>')` loads the package's
-    // `main` (else `index.js`). Next's require-hook aliases `styled-jsx` to
-    // the RESOLVED PACKAGE DIRECTORY, so the eventual require arrives here
-    // with a directory path. Map it to the registered file module.
-    let dir = std::path::Path::new(&key);
-    if dir.is_dir() {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Ok(manifest) = std::fs::read_to_string(dir.join("package.json")) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&manifest) {
-                if let Some(main) = parsed.get("main").and_then(|m| m.as_str()) {
-                    let main_path = dir.join(main);
-                    candidates.push(main_path.to_string_lossy().into_owned());
-                    if main_path.extension().is_none() {
-                        candidates.push(format!("{}.js", main_path.to_string_lossy()));
-                    }
-                }
-            }
-        }
-        candidates.push(dir.join("index.js").to_string_lossy().into_owned());
-        for cand in candidates {
-            let cand_key = canonicalize_module_path(&cand);
-            let resolved = {
-                let guard = MODULE_PATH_REGISTRY.read().unwrap();
-                guard.as_ref().and_then(|m| m.get(&cand_key).copied())
-            };
-            if let Some(bits) = resolved {
-                return f64::from_bits(bits);
-            }
-            // Deferred module: trigger its init, then re-check.
-            let cand_init = {
-                let guard = MODULE_PATH_INIT_REGISTRY.read().unwrap();
-                guard.as_ref().and_then(|m| m.get(&cand_key).copied())
-            };
-            if let Some(addr) = cand_init {
-                // SAFETY: same contract as the direct-path init above.
-                let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-                init_fn();
-                let guard = MODULE_PATH_REGISTRY.read().unwrap();
-                if let Some(bits) = guard.as_ref().and_then(|m| m.get(&cand_key).copied()) {
-                    return f64::from_bits(bits);
-                }
-            }
+    for candidate in directory_module_candidates(&key) {
+        let candidate = canonicalize_module_path(&candidate);
+        match require_path_key(&candidate) {
+            Ok(Some(bits)) => return f64::from_bits(bits),
+            Err(error) => crate::exception::js_throw(f64::from_bits(error)),
+            Ok(None) => {}
         }
     }
     undefined()
+}
+
+/// Presence bit paired with [`js_require_path_module`]. A real module may
+/// export JavaScript `undefined`, so the CJS wrapper calls this only when the
+/// returned value is undefined to distinguish that value from a registry miss.
+#[no_mangle]
+pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
+    let path = value_to_string(path_value, "id");
+    let key = canonicalize_module_path(&path);
+    let found = MODULE_PATH_REGISTRY.has_exports(&key)
+        || directory_module_candidates(&key)
+            .into_iter()
+            .map(|candidate| canonicalize_module_path(&candidate))
+            .any(|candidate| MODULE_PATH_REGISTRY.has_exports(&candidate));
+    f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
+}
+
+/// Keep path-registry exports and cached exception values alive and rewrite
+/// them when a copying collection moves their referents.
+pub fn scan_module_path_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    MODULE_PATH_REGISTRY.scan_roots(visitor);
 }
 
 /// Node-style `require.resolve` fallback for package-subpath specifiers that
@@ -621,5 +793,178 @@ mod builtin_allowlist_parity_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod path_module_registry_tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Barrier,
+    };
+
+    #[test]
+    fn recursive_load_observes_partial_exports_without_reentering_init() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("route.js".into(), 7));
+        let calls = AtomicUsize::new(0);
+
+        let result = registry
+            .require_with("route.js", &|addr| {
+                assert_eq!(addr, 7);
+                calls.fetch_add(1, Ordering::Relaxed);
+                registry.register_partial_exports("route.js".into(), 0xA1);
+                let recursive = registry.require_with("route.js", &|_| {
+                    panic!("recursive load must not execute the initializer")
+                })?;
+                assert_eq!(recursive, Some(0xA1));
+                registry.register_final_exports("route.js".into(), 0xA2);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(result, Some(0xA2));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn concurrent_first_load_runs_one_initializer_and_publishes_one_value() {
+        const THREADS: usize = 20;
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.register_init("chunk.js".into(), 11));
+        let starts = Arc::new(Barrier::new(THREADS + 1));
+        let init_entered = Arc::new(Barrier::new(2));
+        let release_init = Arc::new(Barrier::new(2));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let mut workers = Vec::new();
+        for _ in 0..THREADS {
+            let registry = Arc::clone(&registry);
+            let starts = Arc::clone(&starts);
+            let init_entered = Arc::clone(&init_entered);
+            let release_init = Arc::clone(&release_init);
+            let calls = Arc::clone(&calls);
+            workers.push(std::thread::spawn(move || {
+                starts.wait();
+                registry.require_with("chunk.js", &|addr| {
+                    assert_eq!(addr, 11);
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    registry.register_partial_exports("chunk.js".into(), 0xB1);
+                    init_entered.wait();
+                    release_init.wait();
+                    registry.register_final_exports("chunk.js".into(), 0xB2);
+                    Ok(())
+                })
+            }));
+        }
+
+        starts.wait();
+        init_entered.wait();
+        release_init.wait();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap().unwrap(), Some(0xB2));
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn undefined_export_is_present_and_distinct_from_a_miss() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("undefined.js".into(), 13));
+        let value = registry
+            .require_with("undefined.js", &|_| {
+                registry.register_partial_exports("undefined.js".into(), TAG_UNDEFINED);
+                registry.register_final_exports("undefined.js".into(), TAG_UNDEFINED);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(value, Some(TAG_UNDEFINED));
+        assert!(registry.has_exports("undefined.js"));
+        assert_eq!(
+            registry.require_with("missing.js", &|_| unreachable!()),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn concurrent_initialization_failure_is_shared_and_cached_without_retry() {
+        const THREADS: usize = 20;
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.register_init("throws.js".into(), 17));
+        let starts = Arc::new(Barrier::new(THREADS + 1));
+        let init_entered = Arc::new(Barrier::new(2));
+        let release_init = Arc::new(Barrier::new(2));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let error = 0x7FFD_0000_0000_0042;
+
+        let mut workers = Vec::new();
+        for _ in 0..THREADS {
+            let registry = Arc::clone(&registry);
+            let starts = Arc::clone(&starts);
+            let init_entered = Arc::clone(&init_entered);
+            let release_init = Arc::clone(&release_init);
+            let calls = Arc::clone(&calls);
+            workers.push(std::thread::spawn(move || {
+                starts.wait();
+                registry.require_with("throws.js", &|addr| {
+                    assert_eq!(addr, 17);
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    init_entered.wait();
+                    release_init.wait();
+                    Err(error)
+                })
+            }));
+        }
+
+        starts.wait();
+        init_entered.wait();
+        release_init.wait();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), Err(error));
+        }
+        assert_eq!(
+            registry.require_with("throws.js", &|_| {
+                panic!("failed path modules use the explicit no-retry policy")
+            }),
+            Err(error)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn canonical_alias_cannot_replace_the_first_initializer() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!(
+            "perry-path-module-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let nested = temp.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let module = temp.join("module.js");
+        std::fs::write(&module, "module.exports = 1;").unwrap();
+        let direct = canonicalize_module_path(&module.to_string_lossy());
+        let aliased =
+            canonicalize_module_path(&nested.join("..").join("module.js").to_string_lossy());
+        assert_eq!(direct, aliased);
+
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init(direct.clone(), 19));
+        assert!(!registry.register_init(aliased, 23));
+        let seen = AtomicUsize::new(0);
+        assert_eq!(
+            registry.require_with(&direct, &|addr| {
+                seen.store(addr, Ordering::Relaxed);
+                registry.register_final_exports(direct.clone(), 0xC1);
+                Ok(())
+            }),
+            Ok(Some(0xC1))
+        );
+        assert_eq!(seen.load(Ordering::Relaxed), 19);
+        std::fs::remove_dir_all(temp).unwrap();
     }
 }

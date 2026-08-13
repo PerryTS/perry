@@ -187,3 +187,30 @@ fn a_module_that_was_never_cjs_wrapped_has_no_preamble() {
     assert_eq!(census.module_records, 0);
     assert_eq!(census.preamble_alloc_stmts, 0);
 }
+
+#[test]
+fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() {
+    let path = Path::new("/tmp/perry-canary/.next/server/chunks/lazy.js");
+    let marker = "exports.ready = true;";
+    let wrapped = wrap_commonjs_for_target(marker, path, None);
+
+    let partial = wrapped
+        .find("__perry_register_path_module_partial(")
+        .expect("CJS wrapper must publish its initial exports object");
+    let body = wrapped
+        .find(marker)
+        .expect("fixture body must remain in the wrapper");
+    let final_publish = wrapped
+        .rfind("__perry_register_path_module(")
+        .expect("CJS wrapper must publish its final module.exports value");
+    assert!(partial < body && body < final_publish, "{wrapped}");
+    assert!(
+        wrapped.contains("__perry_path_mod !== undefined || __perry_has_path_module(specifier)"),
+        "an exported undefined value must not be mistaken for a registry miss\n{wrapped}"
+    );
+
+    // Run the real parser/lowerer as an anti-vacuity check for both new
+    // intrinsics, including the boolean presence probe in the require shim.
+    let ast = perry_parser::parse_typescript(&wrapped, "lazy.js").unwrap();
+    perry_hir::lower_module(&ast, "lazy", &path.to_string_lossy()).unwrap();
+}

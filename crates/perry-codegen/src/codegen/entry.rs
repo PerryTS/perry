@@ -461,18 +461,14 @@ pub(super) fn compile_module_entry(
         // `.next/server/**` module path now (before `main` borrows `llmod`); the
         // registration calls go in the block below. `(string_const_name,
         // byte_len, sanitized_prefix)`.
-        let nextjs_path_inits: Vec<(String, usize, String)> = if is_dylib {
-            Vec::new()
-        } else {
-            cross_module
-                .nextjs_path_init_modules
-                .iter()
-                .map(|(path, prefix)| {
-                    let (cn, len) = llmod.add_string_constant(path);
-                    (cn, len, prefix.clone())
-                })
-                .collect()
-        };
+        let nextjs_path_inits: Vec<(String, usize, String)> = cross_module
+            .nextjs_path_init_modules
+            .iter()
+            .map(|(path, prefix)| {
+                let (cn, len) = llmod.add_string_constant(path);
+                (cn, len, prefix.clone())
+            })
+            .collect();
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
