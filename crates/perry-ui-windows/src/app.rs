@@ -63,6 +63,10 @@ const WM_PERRY_FRAME: u32 = WM_APP + 2;
 /// notifications interrupt it immediately through `WM_PERRY_RUNTIME_WAKE`.
 const MAINTENANCE_HEARTBEAT_MS: u32 = 50;
 
+/// Bound the display-link thread even when DwmFlush reports success without
+/// waiting for a composition boundary (for example in a remote session).
+const FRAME_INTERVAL_MS: u64 = 16;
+
 /// Cross-thread producers can notify once per promise resolution. Collapse a
 /// burst to one queue message; the UI thread clears this before draining work,
 /// so a notification racing the drain posts the next turn instead of getting
@@ -158,6 +162,23 @@ fn runtime_wait_timeout_ms(next_wake_ms: f64) -> u32 {
         .clamp(0.0, MAINTENANCE_HEARTBEAT_MS as f64) as u32
 }
 
+fn maintenance_service_due(elapsed: std::time::Duration) -> bool {
+    elapsed >= std::time::Duration::from_millis(MAINTENANCE_HEARTBEAT_MS as u64)
+}
+
+fn frame_loop_sleep_duration(
+    vsync_succeeded: bool,
+    elapsed: std::time::Duration,
+) -> Option<std::time::Duration> {
+    let interval = std::time::Duration::from_millis(FRAME_INTERVAL_MS);
+    if !vsync_succeeded {
+        // Preserve the bounded fallback used when desktop composition is not
+        // available. DwmFlush failures normally return immediately.
+        return Some(interval);
+    }
+    (elapsed < interval).then(|| interval - elapsed)
+}
+
 #[cfg(target_os = "windows")]
 unsafe extern "C" fn post_runtime_wake(ctx: *mut c_void) {
     if ctx.is_null() || RUNTIME_WAKE_PENDING.swap(true, Ordering::AcqRel) {
@@ -192,11 +213,12 @@ impl FrameDriver {
             .name("perry-dwm-frame".into())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Acquire) {
-                    if !crate::dwm::wait_for_vsync() {
-                        // DWM composition can be unavailable on Win7/classic
-                        // desktops. Preserve a bounded fallback without a hot
-                        // error loop.
-                        std::thread::sleep(std::time::Duration::from_millis(16));
+                    let iteration_started = std::time::Instant::now();
+                    let vsync_succeeded = crate::dwm::wait_for_vsync();
+                    if let Some(delay) =
+                        frame_loop_sleep_duration(vsync_succeeded, iteration_started.elapsed())
+                    {
+                        std::thread::sleep(delay);
                     }
                     if thread_stop.load(Ordering::Acquire)
                         || perry_runtime::frame::js_frame_has_pending() == 0
@@ -256,6 +278,12 @@ fn service_runtime_deadlines() {
     unsafe {
         js_gc_step_us(2_000, std::ptr::null_mut());
     }
+}
+
+#[cfg(target_os = "windows")]
+fn service_runtime_deadlines_and_reset(last_service: &mut std::time::Instant) {
+    service_runtime_deadlines();
+    *last_service = std::time::Instant::now();
 }
 
 #[cfg(target_os = "windows")]
@@ -712,6 +740,7 @@ pub fn app_run(app_handle: i64) {
             // notifications post an immediate wake, and DwmFlush posts a
             // separate coalesced frame message.
             unsafe {
+                let mut last_service = std::time::Instant::now();
                 'message_loop: loop {
                     let timeout =
                         runtime_wait_timeout_ms(perry_runtime::event_pump::perry_next_wake_ms());
@@ -724,8 +753,8 @@ pub fn app_run(app_handle: i64) {
                     if wait == WAIT_FAILED {
                         break;
                     }
-                    if wait == WAIT_TIMEOUT {
-                        service_runtime_deadlines();
+                    if wait == WAIT_TIMEOUT || maintenance_service_due(last_service.elapsed()) {
+                        service_runtime_deadlines_and_reset(&mut last_service);
                         // Thread creation can fail under extreme resource
                         // pressure. Retain the old maintenance-clock behavior
                         // as a degraded fallback instead of starving onFrame.
@@ -743,12 +772,15 @@ pub fn app_run(app_handle: i64) {
                         }
                         if msg.message == WM_PERRY_RUNTIME_WAKE {
                             RUNTIME_WAKE_PENDING.store(false, Ordering::Release);
-                            service_runtime_deadlines();
+                            service_runtime_deadlines_and_reset(&mut last_service);
                             continue;
                         }
                         if msg.message == WM_PERRY_FRAME {
                             frame_driver.message_consumed();
                             service_frame();
+                            if maintenance_service_due(last_service.elapsed()) {
+                                service_runtime_deadlines_and_reset(&mut last_service);
+                            }
                             continue;
                         }
                         dispatch_ui_message(&msg);
@@ -756,6 +788,13 @@ pub fn app_run(app_handle: i64) {
                         // through a timer; make those microtasks observable in
                         // the same message turn.
                         perry_runtime::event_pump::perry_poll();
+                        // PeekMessageW may never observe an empty queue during
+                        // drags, resizes, or key repeat. Check inside the drain
+                        // as well as after the wait so timers and GC retain a
+                        // maintenance floor under continuous input.
+                        if maintenance_service_due(last_service.elapsed()) {
+                            service_runtime_deadlines_and_reset(&mut last_service);
+                        }
                     }
 
                     // perry/media (#351) — UI-thread state poll for active
@@ -1623,7 +1662,11 @@ unsafe extern "system" fn wnd_proc(
 
 #[cfg(test)]
 mod dpi_tests {
-    use super::{dpi_scale_from_dpi, runtime_wait_timeout_ms, scale_logical_px_by};
+    use super::{
+        dpi_scale_from_dpi, frame_loop_sleep_duration, maintenance_service_due,
+        runtime_wait_timeout_ms, scale_logical_px_by,
+    };
+    use std::time::Duration;
 
     #[test]
     fn converts_logical_window_sizes_at_common_scales() {
@@ -1650,6 +1693,29 @@ mod dpi_tests {
         assert_eq!(runtime_wait_timeout_ms(0.1), 1);
         assert_eq!(runtime_wait_timeout_ms(16.1), 17);
         assert_eq!(runtime_wait_timeout_ms(500.0), 50);
+    }
+
+    #[test]
+    fn continuous_input_cannot_starve_the_maintenance_heartbeat() {
+        assert!(!maintenance_service_due(Duration::from_millis(49)));
+        assert!(maintenance_service_due(Duration::from_millis(50)));
+        assert!(maintenance_service_due(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn frame_loop_keeps_a_floor_when_dwm_flush_returns_quickly() {
+        assert_eq!(
+            frame_loop_sleep_duration(true, Duration::from_millis(1)),
+            Some(Duration::from_millis(15))
+        );
+        assert_eq!(
+            frame_loop_sleep_duration(true, Duration::from_millis(16)),
+            None
+        );
+        assert_eq!(
+            frame_loop_sleep_duration(false, Duration::from_millis(1)),
+            Some(Duration::from_millis(16))
+        );
     }
 }
 

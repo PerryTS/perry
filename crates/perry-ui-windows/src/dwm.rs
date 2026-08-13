@@ -46,8 +46,11 @@ extern "system" {
     fn DwmFlush() -> i32;
 }
 
-/// Block until the next DWM composition boundary. Returns false when desktop
+/// Ask DWM to flush queued presentation work. Returns false when desktop
 /// composition is unavailable so the caller can use a bounded timer fallback.
+/// A true result does not guarantee that a refresh interval elapsed: DwmFlush
+/// can return immediately when this process has no queued presentation work,
+/// so callers must enforce their own minimum cadence.
 pub fn wait_for_vsync() -> bool {
     // HRESULT success values are non-negative (`SUCCEEDED(hr)`).
     unsafe { DwmFlush() >= 0 }
