@@ -545,7 +545,7 @@ fn concat_box_delegates_a_non_string_operand_to_the_dynamic_add() {
         f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
     };
     let text = |v: f64| {
-        let p = unsafe { crate::value::js_jsvalue_to_string(v) };
+        let p = crate::value::js_jsvalue_to_string(v);
         let bytes = unsafe { std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize) };
         String::from_utf8(bytes.to_vec()).expect("ascii")
     };

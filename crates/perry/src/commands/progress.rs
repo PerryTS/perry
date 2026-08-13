@@ -8,7 +8,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub(crate) struct VerboseProgress {
-    enabled: bool,
+    detail_enabled: bool,
+    heartbeat_enabled: bool,
     last_heartbeat: Mutex<Instant>,
 }
 
@@ -26,20 +27,25 @@ pub(crate) struct ProgressSnapshot<'a> {
 
 impl VerboseProgress {
     pub(crate) fn new(format: OutputFormat, verbose: u8) -> Self {
+        let text_output = matches!(format, OutputFormat::Text);
         Self {
-            enabled: verbose > 0 && matches!(format, OutputFormat::Text),
+            detail_enabled: verbose > 0 && text_output,
+            // A normal human-readable build still needs a sign of life during
+            // module discovery/lowering. Keep the per-module event stream
+            // behind `-v`, but emit the throttled heartbeat by default.
+            heartbeat_enabled: text_output,
             last_heartbeat: Mutex::new(Instant::now()),
         }
     }
 
     pub(crate) fn record(&self, snapshot: ProgressSnapshot<'_>) {
-        if self.enabled {
+        if self.detail_enabled {
             eprintln!("{}", format_progress_line(&snapshot, false));
         }
     }
 
     pub(crate) fn heartbeat(&self, snapshot: ProgressSnapshot<'_>) {
-        if !self.enabled {
+        if !self.heartbeat_enabled {
             return;
         }
 
@@ -134,5 +140,16 @@ mod tests {
             format_progress_line(&snapshot, true),
             "[progress] heartbeat stage=lower module=/repo/src/main.ts api=WebAssembly.instantiate visited=3"
         );
+    }
+
+    #[test]
+    fn text_progress_heartbeats_without_verbose_detail() {
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+        assert!(!progress.detail_enabled);
+        assert!(progress.heartbeat_enabled);
+
+        let json_progress = VerboseProgress::new(OutputFormat::Json, 1);
+        assert!(!json_progress.detail_enabled);
+        assert!(!json_progress.heartbeat_enabled);
     }
 }

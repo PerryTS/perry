@@ -15,7 +15,7 @@ use super::page_meta::{
     materialize_all_promoted_page_runs, register_promoted_page_run, unregister_old_block_pages,
 };
 use super::*;
-use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_STRING};
+use crate::gc::{GcHeader, GC_TYPE_STRING};
 
 const OBJ: usize = 64;
 

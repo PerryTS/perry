@@ -21,6 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::Instant;
 
 use crate::OutputFormat;
 
@@ -29,6 +31,184 @@ use crate::OutputFormat;
 /// the wild are a handful of levels deep at most; the cap is a belt-and-braces
 /// stop so a pathological (or cyclic) re-export graph can never spin forever.
 const MAX_REEXPORT_HOPS: usize = 16;
+
+/// Keep outer module parallelism and each module's inner LLVM workers inside a
+/// single conservative CPU/memory budget. Large generated modules retain a
+/// substantial HIR/LLVM graph while their units compile, so letting Rayon's
+/// host-sized global pool start one such graph per logical CPU can exhaust RAM.
+fn default_module_codegen_jobs(
+    total_modules: usize,
+    logical_cpus: usize,
+    llvm_unit_jobs: usize,
+) -> usize {
+    let worker_budget = logical_cpus.max(1).min(4);
+    (worker_budget / llvm_unit_jobs.max(1))
+        .max(1)
+        .min(3)
+        .min(total_modules.max(1))
+}
+
+fn configured_module_codegen_jobs(total_modules: usize) -> (usize, usize) {
+    let llvm_unit_jobs = std::env::var("PERRY_CODEGEN_UNIT_JOBS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(2);
+    let logical_cpus = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let default_jobs = default_module_codegen_jobs(total_modules, logical_cpus, llvm_unit_jobs);
+    let module_jobs = std::env::var("PERRY_MODULE_JOBS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(default_jobs)
+        .min(total_modules.max(1));
+    (module_jobs, llvm_unit_jobs)
+}
+
+// OpenCode's 0.5--1.0 MiB generated chunks routinely lower to 20--45 MiB of
+// LLVM input even with fewer than 1,000 HIR callables. Treat that observed
+// range as memory-heavy too: ordinary modules still use outer parallelism,
+// while one generated chunk at a time gets the full inner-unit budget.
+const EXCLUSIVE_MODULE_CALLABLES: usize = 500;
+const EXCLUSIVE_MODULE_SOURCE_BYTES: u64 = 512 * 1024;
+
+fn module_codegen_callable_count(module: &perry_hir::Module) -> usize {
+    let class_callables: usize = module
+        .classes
+        .iter()
+        .map(|class| {
+            usize::from(class.constructor.is_some())
+                + class.methods.len()
+                + class.static_methods.len()
+                + class.computed_members.len()
+                + class.getters.len()
+                + class.setters.len()
+        })
+        .sum();
+    module.functions.len() + class_callables
+}
+
+fn module_codegen_is_exclusive(path: &Path, module: &perry_hir::Module) -> bool {
+    module_codegen_callable_count(module) >= EXCLUSIVE_MODULE_CALLABLES
+        || fs::metadata(path)
+            .map(|metadata| metadata.len() >= EXCLUSIVE_MODULE_SOURCE_BYTES)
+            .unwrap_or(false)
+}
+
+struct ModuleCodegenLimiter {
+    available: Mutex<usize>,
+    ready: Condvar,
+    capacity: usize,
+}
+
+struct ModuleCodegenPermit<'a> {
+    limiter: &'a ModuleCodegenLimiter,
+    weight: usize,
+}
+
+impl ModuleCodegenLimiter {
+    fn new(capacity: usize) -> Self {
+        Self {
+            available: Mutex::new(capacity.max(1)),
+            ready: Condvar::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn acquire(&self, exclusive: bool) -> ModuleCodegenPermit<'_> {
+        let weight = if exclusive { self.capacity } else { 1 };
+        let mut available = self.available.lock().expect("module limiter poisoned");
+        while *available < weight {
+            available = self.ready.wait(available).expect("module limiter poisoned");
+        }
+        *available -= weight;
+        ModuleCodegenPermit {
+            limiter: self,
+            weight,
+        }
+    }
+}
+
+impl Drop for ModuleCodegenPermit<'_> {
+    fn drop(&mut self) {
+        let mut available = self
+            .limiter
+            .available
+            .lock()
+            .expect("module limiter poisoned");
+        *available += self.weight;
+        self.limiter.ready.notify_all();
+    }
+}
+
+struct ModuleCodegenCompletion<'a> {
+    completed: &'a AtomicUsize,
+    total: usize,
+    started: Instant,
+    enabled: bool,
+}
+
+impl Drop for ModuleCodegenCompletion<'_> {
+    fn drop(&mut self) {
+        let done = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
+        if !self.enabled || self.total == 0 {
+            return;
+        }
+        let report_step = (self.total / 20).max(1);
+        if done != self.total && done % report_step != 0 {
+            return;
+        }
+        let elapsed = self.started.elapsed().as_secs_f64();
+        let eta = if done < self.total {
+            elapsed * self.total.saturating_sub(done) as f64 / done as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "[perry] codegen: modules finished {done}/{} ({:.0}%; {:.1} min elapsed; ETA ~{:.1} min)",
+            self.total,
+            done as f64 * 100.0 / self.total as f64,
+            elapsed / 60.0,
+            eta / 60.0
+        );
+    }
+}
+
+#[cfg(test)]
+mod module_codegen_job_tests {
+    use super::{default_module_codegen_jobs, ModuleCodegenLimiter};
+
+    #[test]
+    fn coordinates_outer_and_inner_parallelism() {
+        assert_eq!(default_module_codegen_jobs(308, 12, 2), 2);
+        assert_eq!(default_module_codegen_jobs(308, 12, 4), 1);
+        assert_eq!(default_module_codegen_jobs(308, 2, 1), 2);
+    }
+
+    #[test]
+    fn never_starts_more_jobs_than_modules() {
+        assert_eq!(default_module_codegen_jobs(1, 64, 1), 1);
+        assert_eq!(default_module_codegen_jobs(2, 64, 1), 2);
+        assert_eq!(default_module_codegen_jobs(0, 64, 1), 1);
+    }
+
+    #[test]
+    fn oversized_module_reserves_the_entire_outer_pool() {
+        let limiter = ModuleCodegenLimiter::new(2);
+        {
+            let _ordinary = limiter.acquire(false);
+            assert_eq!(*limiter.available.lock().unwrap(), 1);
+        }
+        assert_eq!(*limiter.available.lock().unwrap(), 2);
+        {
+            let _oversized = limiter.acquire(true);
+            assert_eq!(*limiter.available.lock().unwrap(), 0);
+        }
+        assert_eq!(*limiter.available.lock().unwrap(), 2);
+    }
+}
 
 /// Builds the complete codegen view of a foreign HIR class.
 ///
@@ -117,6 +297,20 @@ pub fn run_with_parse_cache(
     // ever sees the concrete `linux-musl` triple family.
     let mut args = args;
     args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
+
+    // Long native builds must never look hung. The codegen crate owns the
+    // detailed phase/unit reporter; enable it for human-readable CLI output
+    // and keep JSON output machine-clean.
+    if std::env::var_os("PERRY_CODEGEN_PROGRESS").is_none() {
+        std::env::set_var(
+            "PERRY_CODEGEN_PROGRESS",
+            if matches!(format, OutputFormat::Text) {
+                "1"
+            } else {
+                "0"
+            },
+        );
+    }
 
     // #835 + #846: clear the codegen-side FFI provenance set up-front
     // so any leftover entries from a prior `perry dev` rebuild (or a
@@ -2166,6 +2360,29 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
+    let codegen_modules_completed = AtomicUsize::new(0);
+    let codegen_started = Instant::now();
+    let codegen_progress_enabled = matches!(format, OutputFormat::Text)
+        && std::env::var("PERRY_CODEGEN_PROGRESS").as_deref() != Ok("0");
+    let (module_jobs, llvm_unit_jobs) = configured_module_codegen_jobs(total_codegen_modules);
+    let exclusive_modules = ctx
+        .native_modules
+        .iter()
+        .filter(|(path, module)| module_codegen_is_exclusive(path, module))
+        .count();
+    if matches!(format, OutputFormat::Text) && total_codegen_modules > 1 {
+        eprintln!(
+            "[perry] codegen: module parallelism: {module_jobs} module jobs x \
+             {llvm_unit_jobs} LLVM unit workers (override with PERRY_MODULE_JOBS / \
+             PERRY_CODEGEN_UNIT_JOBS)"
+        );
+        if module_jobs > 1 && exclusive_modules > 0 {
+            eprintln!(
+                "[perry] codegen: {exclusive_modules} oversized module(s) will run exclusively \
+                 to cap peak memory"
+            );
+        }
+    }
     // Where this compile's objects go — see `compile/object_staging.rs`.
     //
     // #7167: only a compile that is going to *link* gets a temp staging
@@ -2196,10 +2413,22 @@ pub fn run_with_parse_cache(
             no_link_destination.dir().to_path_buf()
         }
     };
-    let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
-        .native_modules
-        .par_iter()
-        .map(|(path, hir_module)| {
+    let module_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(module_jobs)
+        .thread_name(|index| format!("perry-module-{index}"))
+        .build()
+        .map_err(|error| anyhow!("failed to create module codegen pool: {error}"))?;
+    let module_limiter = ModuleCodegenLimiter::new(module_jobs);
+    let compile_results: Vec<Result<NativeObjectArtifact, String>> = module_pool.install(|| {
+        ctx.native_modules.par_iter().map(|(path, hir_module)| {
+            let _permit =
+                module_limiter.acquire(module_codegen_is_exclusive(path, hir_module));
+            let _completion = ModuleCodegenCompletion {
+                completed: &codegen_modules_completed,
+                total: total_codegen_modules,
+                started: codegen_started,
+                enabled: codegen_progress_enabled,
+            };
             // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
             // and return the object bytes for the linker to consume.
             let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
@@ -4533,7 +4762,8 @@ pub fn run_with_parse_cache(
                 stored_cache_path: false,
             })
         })
-        .collect();
+        .collect()
+    });
 
     // Tier 4.4 (v0.5.336): partition compile results, then write object
     // files in parallel via rayon. The OS handles concurrent writes to

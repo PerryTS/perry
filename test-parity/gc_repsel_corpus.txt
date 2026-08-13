@@ -765,3 +765,11 @@ test_gap_repsel_element_shape_param_binding
 # value here is byte-parity under every arm plus raw-f64 loads on proven
 # fields whenever relocation does land.
 test_gap_repsel_element_group_numeric
+
+# #7949/#7962 and #7978: runtime-held JS values and the full
+# Object.defineProperty receiver/key/descriptor chain must remain rooted while
+# allocating helpers run. These witnesses are specifically intended for the
+# moving-GC matrix, where a stale raw copy becomes observable.
+test_gap_gc_container_value_rooting
+test_gap_gc_define_properties_key_rooting
+test_gap_gc_define_property_descriptor_rooting

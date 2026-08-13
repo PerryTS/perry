@@ -829,7 +829,9 @@ mod tests {
     /// `record_ffi_call` on any other thread stops writing into this test's
     /// `USED_PROVIDERS` snapshot. Taking the lock alone is not enough: it only
     /// serialises tests that take it, and a neighbouring lowering test does not.
-    struct ProviderTestGuard(std::sync::MutexGuard<'static, ()>);
+    struct ProviderTestGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl ProviderTestGuard {
         fn new() -> Self {
@@ -837,7 +839,7 @@ mod tests {
             if let Ok(mut t) = super::PROVIDER_TEST_THREAD.lock() {
                 *t = Some(std::thread::current().id());
             }
-            ProviderTestGuard(g)
+            ProviderTestGuard { _lock: g }
         }
     }
 

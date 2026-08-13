@@ -41,7 +41,7 @@
 use anyhow::Result;
 
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{I1, I16, I32, I64, I8};
 
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,

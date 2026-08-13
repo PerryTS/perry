@@ -68,6 +68,7 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 /// The duplicate shares the open file description, so reads and writes land on
 /// the same terminal/pipe.
 fn std_fd_registry() -> StdHashMap<i32, fs::File> {
+    #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
     let mut map = StdHashMap::new();
     #[cfg(unix)]
     {

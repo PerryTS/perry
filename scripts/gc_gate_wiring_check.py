@@ -562,7 +562,7 @@ def main() -> int:
         if not path.exists():
             problems.append(f"{wf}: missing — a GC gate workflow was deleted")
             continue
-        problems.extend(check_gate(path.read_text(), job, wf))
+        problems.extend(check_gate(path.read_text(encoding="utf-8"), job, wf))
 
     # The constant-group hazard is not specific to the GC gates -- it hits any
     # scheduled workflow, and it took out `gate-freshness` (the alarm) too. So
@@ -571,7 +571,7 @@ def main() -> int:
     scanned = 0
     for path in sorted(wf_dir.glob("*.yml")):
         scanned += 1
-        problems.extend(check_schedule_group(path.read_text(), path.name))
+        problems.extend(check_schedule_group(path.read_text(encoding="utf-8"), path.name))
 
     if problems:
         print("GC GATE WIRING: one or more gates cannot fail where it matters.\n", file=sys.stderr)

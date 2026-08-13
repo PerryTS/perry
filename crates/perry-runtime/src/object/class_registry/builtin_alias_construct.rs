@@ -24,6 +24,7 @@
 
 /// Names this module constructs. Kept beside `construct` so the match in
 /// `construct.rs` and the arms here cannot drift apart.
+#[allow(dead_code)] // consumed only when the indirect-constructor surface is enabled
 pub(crate) fn handles(name: &str) -> bool {
     matches!(
         name,
@@ -41,6 +42,7 @@ pub(crate) fn handles(name: &str) -> bool {
 }
 
 /// Construct `name` with `args`. Only called for names `handles` accepts.
+#[allow(dead_code)] // paired with `handles` above
 pub(crate) fn construct(name: &str, args: &[f64]) -> f64 {
     match name {
         "EventTarget" => {

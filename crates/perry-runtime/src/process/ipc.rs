@@ -11,7 +11,9 @@ use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
     js_register_closure_arity, js_register_closure_length, ClosureHeader,
 };
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
+#[cfg(unix)]
+use crate::string::StringHeader;
 use crate::value::{JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, OnceLock};

@@ -354,11 +354,22 @@ fn ll_size_opt_max_fn_bytes() -> usize {
 /// ordinary functions (size-optimize, big `__text` win), `-O0` when it is a
 /// pathological few-giant-function monolith (`#4880`). `ll_fn_count` is the
 /// number of `define` functions in the unit.
-fn oversized_opt_flag(ll_byte_size: usize, ll_fn_count: usize) -> &'static str {
+fn oversized_opt_flag(
+    ll_byte_size: usize,
+    ll_fn_count: usize,
+    max_fn_bytes: Option<usize>,
+) -> &'static str {
     match std::env::var("PERRY_LL_SIZE_OPT").as_deref() {
         Ok("0") | Ok("off") | Ok("false") => return "-O0",
         Ok("1") | Ok("on") | Ok("true") => return "-Os",
         _ => {}
+    }
+    // Native construction knows each function's render-free size. Do not let
+    // hundreds of small functions dilute one pathological generated function's
+    // average: that sent a 20+ MiB body through -Os in the Claude bundle and
+    // spent minutes in LLVM where the same body finishes in seconds at -O0.
+    if max_fn_bytes.is_some_and(|bytes| bytes > ll_o0_threshold_bytes()) {
+        return "-O0";
     }
     let avg_fn_bytes = ll_byte_size / ll_fn_count.max(1);
     if avg_fn_bytes <= ll_size_opt_max_fn_bytes() {
@@ -382,6 +393,7 @@ fn build_clang_compile_plan(
     target_triple: Option<&str>,
     ll_byte_size: usize,
     ll_fn_count: usize,
+    max_fn_bytes: Option<usize>,
     debug_symbols: bool,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
@@ -400,7 +412,7 @@ fn build_clang_compile_plan(
     // oversized_opt_flag.
     let o0_threshold = ll_o0_threshold_bytes();
     let opt_flag = if o0_threshold > 0 && ll_byte_size > o0_threshold {
-        let flag = oversized_opt_flag(ll_byte_size, ll_fn_count);
+        let flag = oversized_opt_flag(ll_byte_size, ll_fn_count, max_fn_bytes);
         eprintln!(
             "perry: module IR is {:.1} MB (> {:.1} MB), {} functions \
              (~{:.0} KB/fn); compiling at {} instead of -O3 so LLVM's -O1+ \
@@ -658,6 +670,7 @@ pub(crate) fn native_plan_args(
     target_triple: Option<&str>,
     est_ll_bytes: usize,
     ll_fn_count: usize,
+    max_fn_bytes: usize,
 ) -> (String, Vec<String>) {
     let plan = build_clang_compile_plan(
         PathBuf::from("(in-process)"),
@@ -666,6 +679,7 @@ pub(crate) fn native_plan_args(
         target_triple,
         est_ll_bytes,
         ll_fn_count,
+        Some(max_fn_bytes),
         env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
     );
     (plan.effective_target, plan.clang_args)
@@ -740,10 +754,11 @@ pub(crate) fn finish_native_emission(
 /// (#7339).
 ///
 /// `PERRY_LLVM_INPROCESS=0`/`off`/`false` reverts to the clang subprocess for
-/// bisection. `=native` additionally builds function bodies through the C API
-/// instead of rendering per-function text; that is byte-identical on the
-/// 81-module zod corpus but has narrower CI coverage, so it stays opt-in until
-/// that widens.
+/// bisection. Large codegen-unit-split modules default to direct C-API native
+/// construction because materializing their textual IR is itself a dominant
+/// serial cost; `=1` selects the legacy in-process text transport, while
+/// `=diff` builds both arms and compares them. Small modules retain the mature
+/// text transport unless `=native` is explicit.
 ///
 /// The value participates in both the build cache and the object cache keys,
 /// so the backends can never share a cached object.
@@ -781,6 +796,7 @@ fn compile_ll_inprocess_in(
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        None,
         policy.debug_symbols,
     );
     // #7131 parity: the module identifier is the content-addressed basename,
@@ -961,6 +977,7 @@ fn compile_ll_to_object_in(
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        None,
         policy.debug_symbols,
     );
 
@@ -1156,8 +1173,11 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
     merge_unit_objects(&objs)
 }
 
-/// Partial-link (`ld -r`) already-compiled codegen-unit objects into one
-/// object. Shared by the text path above and the native construction path
+/// Combine already-compiled codegen-unit objects into one linker input.
+/// Unix uses a relocatable partial link (`ld -r`). COFF has no equivalent,
+/// so Windows stores the objects in a static archive; the final MSVC linker
+/// accepts that archive anywhere it accepts the former single object.
+/// Shared by the text path above and the native construction path
 /// (`native_emit::compile_module_units_native`).
 pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let tmp_dir = env::temp_dir();
@@ -1172,23 +1192,44 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         obj_paths.push(p);
     }
 
+    #[cfg(target_os = "windows")]
+    let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.lib", pid, nonce));
+    #[cfg(not(target_os = "windows"))]
     let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.o", pid, nonce));
-    let ld = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
-    let mut cmd = Command::new(&ld);
+
+    #[cfg(target_os = "windows")]
+    let tool = env::var("PERRY_LLVM_LIB").unwrap_or_else(|_| "llvm-lib".to_string());
+    #[cfg(not(target_os = "windows"))]
+    let tool = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
+    let mut cmd = Command::new(&tool);
+    #[cfg(target_os = "windows")]
+    cmd.arg(format!("/OUT:{}", combined.display()));
+    #[cfg(not(target_os = "windows"))]
     cmd.arg("-r").arg("-o").arg(&combined);
     for p in &obj_paths {
         cmd.arg(p);
     }
-    let out = cmd
-        .output()
-        .with_context(|| format!("failed to invoke partial linker `{} -r`", ld))?;
+    let out = cmd.output().with_context(|| {
+        #[cfg(target_os = "windows")]
+        {
+            format!("failed to invoke COFF codegen-unit archiver `{}`", tool)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            format!("failed to invoke partial linker `{} -r`", tool)
+        }
+    })?;
     let result = if out.status.success() {
         fs::read(&combined)
             .with_context(|| format!("failed to read merged object {}", combined.display()))
     } else {
+        #[cfg(target_os = "windows")]
+        let operation = format!("COFF archive `{}`", tool);
+        #[cfg(not(target_os = "windows"))]
+        let operation = format!("partial link `{} -r`", tool);
         Err(anyhow!(
-            "partial link `{} -r` of {} codegen units failed (status={}).\nstderr:\n{}",
-            ld,
+            "{} of {} codegen units failed (status={}).\nstderr:\n{}",
+            operation,
             objs.len(),
             out.status,
             String::from_utf8_lossy(&out.stderr)

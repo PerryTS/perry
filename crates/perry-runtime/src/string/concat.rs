@@ -497,12 +497,12 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     }
 }
 
+#[cfg(test)]
+thread_local! {
 /// #7912 counter: how many chains took the unrooted fast path below. A gate
 /// that cannot see its subject run is not a gate — the unit tests assert this
 /// moves, so a refactor that quietly stops taking the fast path is red rather
 /// than "still correct, just slow again".
-#[cfg(test)]
-thread_local! {
     pub(crate) static CONCAT_CHAIN_NO_COLLECT_HITS: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
 }
@@ -915,7 +915,7 @@ pub extern "C" fn js_value_concat_string(
 fn string_handle_of(value: f64) -> *const StringHeader {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
     if jsval.is_string() {
-        return unsafe { jsval.as_string_ptr() };
+        return jsval.as_string_ptr();
     }
     crate::value::js_get_string_pointer_unified(value) as *const StringHeader
 }

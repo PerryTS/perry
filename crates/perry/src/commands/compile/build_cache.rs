@@ -73,6 +73,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_CANONICAL_I32_LOCALS",
     "PERRY_CANONICAL_STR_LOCALS",
     "PERRY_CODEGEN_UNITS",
+    "PERRY_CODEGEN_UNIT_BYTES",
     "PERRY_CODEGEN_UNIT_SIZE",
     "PERRY_ENTRY_SYMBOL",
     "PERRY_FULL_OUTLINE_IC",
@@ -85,6 +86,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_INT_VALUED_LOCALS",
     "PERRY_JSCVT",
     "PERRY_LD",
+    "PERRY_LLVM_LIB",
     "PERRY_LLVM_OPT",
     "PERRY_LL_O0_THRESHOLD_BYTES",
     "PERRY_LL_SIZE_OPT",
@@ -122,9 +124,12 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // having the test.
     "PERRY_OPT_REPORT",
     // Parallelism only — partitioning is keyed by PERRY_CODEGEN_UNIT_SIZE /
-    // PERRY_CODEGEN_UNITS, which ARE inputs; the job count just decides how
-    // many threads chew through the same units.
+    // PERRY_CODEGEN_UNIT_BYTES / PERRY_CODEGEN_UNITS, which ARE inputs; the
+    // job count just decides how many threads chew through the same units.
     "PERRY_CODEGEN_UNIT_JOBS",
+    // Human-facing telemetry only; never changes IR or object bytes.
+    "PERRY_CODEGEN_PROGRESS",
+    "PERRY_CODEGEN_UNIT_TIMINGS",
 ];
 
 #[cfg(test)]

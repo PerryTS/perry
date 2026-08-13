@@ -376,8 +376,6 @@ pub(crate) fn apply_to_module(module: &mut crate::module::LlModule) -> usize {
 /// A value the pass can re-materialise: a load out of a collector-rewritten
 /// location, or anything derived from one by pure bit ops (#7664).
 struct Reloadable {
-    /// Where the defining instruction is, which is where its window starts.
-    pos: (usize, usize),
     /// The register it defines, without the `%`.
     reg: String,
     /// The location whose store invalidates the recipe, sigil included.
@@ -433,7 +431,6 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                 }
                 by_reg.insert(dst.clone(), values.len());
                 values.push(Reloadable {
-                    pos: (bi, ii),
                     reg: dst.clone(),
                     root_ptr: ptr.clone(),
                     recipe: vec![(bi, ii)],
@@ -504,7 +501,6 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                 }
                 by_reg.insert(dst.clone(), values.len());
                 values.push(Reloadable {
-                    pos: (bi, ii),
                     reg: dst.clone(),
                     root_ptr: root,
                     recipe,

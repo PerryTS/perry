@@ -277,6 +277,10 @@ mod tests {
 
     // A 70-param all-f64 callee: returns arg0*1 + arg1*2 + ... weighted sum so
     // a misplaced/garbage arg is detectable, plus marker on the last few.
+    #[cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", not(target_os = "windows"))
+    ))]
     extern "C" fn sum70(
         a0: f64,
         a1: f64,

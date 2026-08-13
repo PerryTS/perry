@@ -87,7 +87,9 @@ struct StackMapIndex {
     /// Used to confirm a matched record belongs to the function `ip` is in.
     function_starts: Vec<usize>,
     chain_walkable: bool,
+    #[cfg(any(target_arch = "aarch64", test))]
     min_pc: usize,
+    #[cfg(any(target_arch = "aarch64", test))]
     max_pc: usize,
 }
 
@@ -301,7 +303,9 @@ fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> 
             DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64
         )
     });
+    #[cfg(any(target_arch = "aarch64", test))]
     let min_pc = records.first().map_or(usize::MAX, |record| record.pc);
+    #[cfg(any(target_arch = "aarch64", test))]
     let max_pc = records.last().map_or(0, |record| record.pc);
     let mut function_starts: Vec<usize> = records
         .iter()
@@ -314,7 +318,9 @@ fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> 
         roots,
         function_starts,
         chain_walkable,
+        #[cfg(any(target_arch = "aarch64", test))]
         min_pc,
+        #[cfg(any(target_arch = "aarch64", test))]
         max_pc,
     }
 }
@@ -566,11 +572,6 @@ fn sve_vector_length_bytes() -> Option<usize> {
     // No non-Linux aarch64 target Perry supports implements SVE, and neither
     // backend for them emits `addvl`. Fail closed if one ever does, rather
     // than invent a length.
-    None
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn fp_to_sp_offset(_function_address: usize) -> Option<usize> {
     None
 }
 
@@ -1039,6 +1040,7 @@ fn main_object_load_bias() -> Option<usize> {
         dlpi_name: *const std::os::raw::c_char,
         // remaining fields unused
     }
+    #[allow(clashing_extern_declarations)]
     unsafe extern "C" {
         fn dl_iterate_phdr(
             callback: unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) -> i32,

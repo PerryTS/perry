@@ -152,6 +152,7 @@ pub fn render_text(entries: &[Entry]) -> String {
 }
 
 /// [`render_text`] with the de-duplication count supplied explicitly.
+#[cfg(test)]
 pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
     render_text_with_sources(entries, masked, &HashMap::new())
 }

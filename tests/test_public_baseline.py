@@ -13,6 +13,8 @@ from benchmarks.public_baseline import (
     SOURCE_PATHS,
     _CARGO_VERSION_RE,
     _cargo_profile_tables,
+    _is_resolved_path,
+    _normalize_checkout_newlines,
     _replace_block,
     _validate_component_measurement_config,
     _validate_suite,
@@ -158,6 +160,17 @@ class PublicBaselineTests(unittest.TestCase):
         profile_change = base.replace(b"opt-level = 3", b"opt-level = 2")
         self.assertEqual(normalize(base), normalize(dependency_change))
         self.assertNotEqual(normalize(base), normalize(profile_change))
+
+    def test_fingerprint_input_is_checkout_line_ending_independent(self):
+        self.assertEqual(
+            _normalize_checkout_newlines(b"alpha\r\nbeta\r\n"),
+            _normalize_checkout_newlines(b"alpha\nbeta\n"),
+        )
+
+    def test_resolved_paths_are_host_independent(self):
+        self.assertTrue(_is_resolved_path("target/release/perry"))
+        self.assertTrue(_is_resolved_path(r"target\release\perry.exe"))
+        self.assertFalse(_is_resolved_path("perry"))
 
     def test_measurement_config_is_the_fingerprinted_protocol(self):
         config = load_measurement_config()

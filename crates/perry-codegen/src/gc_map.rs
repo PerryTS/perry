@@ -82,6 +82,7 @@ const ELF_SECTION: &str = ".perry_gcmap,\"awR\",@progbits";
 const COFF_SECTION: &str = ".pgcmap,\"dw\"";
 /// What the runtime looks for in a PE image. Must match `COFF_SECTION`'s name
 /// and stay within eight bytes.
+#[cfg(test)]
 pub(crate) const COFF_SECTION_NAME: &str = ".pgcmap";
 
 /// LLVM stack-map v3 location kinds. Only these two describe a frame slot;
@@ -245,7 +246,9 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
     let mut end_line = lines.len();
 
     for (index, raw) in lines.iter().enumerate().skip(start_line + 1) {
-        let line = raw.trim();
+        // LLVM's assembly memory buffer may expose its terminating NUL as the
+        // final line. It is not an assembler directive and emits no bytes.
+        let line = raw.trim().trim_matches('\0').trim();
         // The block runs to the next section or to the Mach-O epilogue.
         //
         // The shorthand section directives are terminators too. Missing one
@@ -1469,6 +1472,19 @@ mod tests {
         let block = super::parse_block(&lines, 4).expect("ELF symbol assignments must parse");
         // 1 + 1 + 2 + 4 -- the assignments contribute nothing.
         assert_eq!(block.bytes.len(), 8);
+    }
+
+    #[test]
+    fn trailing_llvm_buffer_nul_is_not_an_assembly_directive() {
+        let asm = concat!(
+            "\t.section\t.llvm_stackmaps,\"a\",@progbits\n",
+            "__LLVM_StackMaps:\n",
+            "\t.byte\t3\n",
+            "\0\n",
+        );
+        let lines: Vec<&str> = asm.lines().collect();
+        let block = super::parse_block(&lines, 4).expect("trailing NUL must be ignored");
+        assert_eq!(block.bytes, vec![3]);
     }
 
     #[test]

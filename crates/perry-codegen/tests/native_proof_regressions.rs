@@ -6684,6 +6684,46 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
     )
 }
 
+#[test]
+fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
+    // An unresolved Worker construction lowers to a runtime throw followed by
+    // `unreachable`.  The enclosing LocalSet must not create its post-store
+    // write-barrier blocks after that terminator: the store and its SSA inputs
+    // were never emitted, so such a block is unreachable *and* refers to
+    // undefined registers (the Pi agent bundle exposed this at LLVM parse
+    // time).
+    let replacement = Expr::WorkerNew {
+        paths: Vec::new(),
+        filename: Box::new(Expr::LocalGet(99)),
+        options: None,
+        is_eval: false,
+    };
+    let module = boxed_local_storage_module(
+        "abrupt_captured_local_set_barrier.ts",
+        Expr::Array(Vec::new()),
+        replacement,
+    );
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let throw = ir
+        .find("call void @js_throw_error_with_code")
+        .expect("unresolved Worker construction should lower to the deferred runtime throw");
+    let function_tail = &ir[throw..];
+    let function_end = function_tail
+        .find("\n}\n")
+        .expect("throwing closure should have a complete definition");
+    let throwing_body = &function_tail[..function_end];
+
+    assert!(
+        throwing_body.contains("\n  unreachable"),
+        "fixture should terminate the assignment before its store:\n{throwing_body}"
+    );
+    assert!(
+        !throwing_body.contains("wb.maybe")
+            && !throwing_body.contains("call void @js_write_barrier("),
+        "a terminated assignment cannot reach or supply operands to a write barrier:\n{throwing_body}"
+    );
+}
+
 fn boxed_param_capture_module(name: &str) -> Module {
     module_with_classes_and_params(
         name,

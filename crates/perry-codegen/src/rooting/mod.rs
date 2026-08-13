@@ -1834,7 +1834,7 @@ mod migration_ledger {
 
         let decl = include_str!("mod.rs");
         assert!(
-            decl.contains("\nmod temp_root;\n"),
+            decl.lines().any(|line| line == "mod temp_root;"),
             "rooting/temp_root.rs must be declared with a PRIVATE `mod temp_root;` — \
              a pub(crate) module would make every item in it reachable crate-wide \
              regardless of its own visibility"

@@ -10,7 +10,7 @@
 //! `to_ir()` assembles the pieces into a complete `.ll` file with the target
 //! triple header.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::block::FpFlags;
 use crate::function::LlFunction;
@@ -77,6 +77,33 @@ fn collect_symbol_refs(text: &str, out: &mut HashSet<String>) {
     }
 }
 
+fn metadata_definition_id(line: &str) -> Option<u32> {
+    let rest = line.trim_start().strip_prefix('!')?;
+    let (digits, _) = rest.split_once(" =")?;
+    digits.parse().ok()
+}
+
+/// Collect numeric LLVM metadata references (`!123`) from instructions or
+/// metadata definitions. Named metadata does not occur in Perry's alias tail.
+fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'!' || i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        i = start;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if let Ok(id) = text[start..i].parse() {
+            out.insert(id);
+        }
+    }
+}
+
 fn promote_global_for_units(line: &str) -> String {
     if line.contains(" = external ") {
         return line.to_string();
@@ -89,6 +116,62 @@ fn promote_global_for_units(line: &str) -> String {
         ),
         None => line.to_string(),
     }
+}
+
+/// Give a generated global one non-discardable definition. On COFF each
+/// global has a unique owning codegen unit; leaving that sole definition as
+/// `linkonce_odr` lets LLVM discard it when all references in the owner happen
+/// to optimize away, even though other object files still reference it.
+fn make_unique_owner_global(line: &str) -> String {
+    if line.contains(" = external ") {
+        return line.to_string();
+    }
+    match line.split_once(" = ") {
+        Some((lhs, rhs)) => format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start())),
+        None => line.to_string(),
+    }
+}
+
+fn external_decl_for_global(line: &str) -> Option<String> {
+    if line.contains(" = external ") {
+        return Some(line.to_string());
+    }
+    let (name, rhs) = line.split_once(" = ")?;
+    let rhs = strip_leading_linkage(rhs.trim_start());
+    let (kind, rest) = if let Some(rest) = rhs.strip_prefix("unnamed_addr constant ") {
+        ("constant", rest)
+    } else if let Some(rest) = rhs.strip_prefix("constant ") {
+        ("constant", rest)
+    } else if let Some(rest) = rhs.strip_prefix("global ") {
+        ("global", rest)
+    } else {
+        return None;
+    };
+    let rest = rest.trim_start();
+    let ty_end = match rest.as_bytes().first().copied() {
+        Some(b'[') | Some(b'{') | Some(b'<') => {
+            let (mut square, mut curly, mut angle) = (0i32, 0i32, 0i32);
+            let mut end = None;
+            for (i, b) in rest.bytes().enumerate() {
+                match b {
+                    b'[' => square += 1,
+                    b']' => square -= 1,
+                    b'{' => curly += 1,
+                    b'}' => curly -= 1,
+                    b'<' => angle += 1,
+                    b'>' => angle -= 1,
+                    _ => {}
+                }
+                if square == 0 && curly == 0 && angle == 0 {
+                    end = Some(i + 1);
+                    break;
+                }
+            }
+            end?
+        }
+        _ => rest.find(char::is_whitespace).unwrap_or(rest.len()),
+    };
+    Some(format!("{name} = external {kind} {}", &rest[..ty_end]))
 }
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by
@@ -205,7 +288,7 @@ pub(crate) fn declare_line_for(f: &LlFunction) -> String {
 /// Render a function with external linkage forced, promoting an `internal` /
 /// `private` definition so cross-unit calls can bind to it. Names are
 /// module-prefixed and unique, so promotion never collides.
-fn render_fn_external(f: &LlFunction) -> String {
+pub(crate) fn render_fn_external(f: &LlFunction) -> String {
     let ir = f.to_ir();
     if f.linkage == "internal" || f.linkage == "private" {
         return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
@@ -242,6 +325,7 @@ pub struct LlModule {
     declarations: Vec<(String, String)>, // (name, full "declare …" line)
     declared_names: HashSet<String>,
     functions: Vec<LlFunction>,
+    defined_names: HashSet<String>,
     globals: Vec<String>,
     string_constants: Vec<String>,
     string_counter: u32,
@@ -266,6 +350,12 @@ pub struct LlModule {
 }
 
 impl LlModule {
+    pub(crate) fn declaration_lines(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.declarations
+            .iter()
+            .map(|(name, line)| (name.as_str(), line.as_str()))
+    }
+
     pub fn new(target_triple: impl Into<String>) -> Self {
         Self::new_with_fp_flags(target_triple, FpFlags::default())
     }
@@ -276,6 +366,7 @@ impl LlModule {
             declarations: Vec::new(),
             declared_names: HashSet::new(),
             functions: Vec::new(),
+            defined_names: HashSet::new(),
             globals: Vec::new(),
             string_constants: Vec::new(),
             string_counter: 0,
@@ -427,6 +518,8 @@ impl LlModule {
         return_type: LlvmType,
         params: Vec<(LlvmType, String)>,
     ) -> &mut LlFunction {
+        let name = name.into();
+        self.defined_names.insert(name.clone());
         let func = LlFunction::new_with_fp_flags(name, return_type, params, self.fp_flags);
         self.functions.push(func);
         self.functions.last_mut().unwrap()
@@ -455,12 +548,22 @@ impl LlModule {
         self.functions.len()
     }
 
+    /// Render-free size estimate for the function bodies that LLVM will see.
+    /// Used after lowering to size codegen units by actual generated IR rather
+    /// than HIR callable count (a poor proxy for minified/generated programs).
+    pub(crate) fn estimated_function_ir_bytes(&self) -> usize {
+        self.deduped_function_refs()
+            .iter()
+            .map(|f| f.estimated_ir_bytes())
+            .sum()
+    }
+
     /// True if a function with the given name has already been *defined*
     /// in this module. Used by the #461 export-stub pass to avoid
     /// redefining a symbol that an earlier emission path (function body,
     /// value-getter, #460 forwarding wrapper) already claimed.
     pub fn has_function(&self, name: &str) -> bool {
-        self.functions.iter().any(|f| f.name == name)
+        self.defined_names.contains(name)
     }
 
     pub fn add_global(&mut self, name: &str, ty: LlvmType, init: &str) {
@@ -664,7 +767,7 @@ impl LlModule {
     /// tail. Factored out of [`to_ir`] so each codegen unit can replicate the
     /// same attributes and metadata (so `#0`/`#1` and `!N` references resolve in
     /// every unit). Over-emitting an unused attribute group is harmless.
-    fn push_attrs_and_metadata(&self, ir: &mut String) {
+    fn push_attrs(&self, ir: &mut String) {
         // Verified runtime-helper groups (#6082) — emitted only when a
         // declaration actually references them (mirrors the setjmp gating
         // above). See `helper_decl_attrs` for the audit invariants.
@@ -688,6 +791,10 @@ impl LlModule {
         if used_nounwind_willreturn {
             ir.push_str("\nattributes #4 = { nounwind willreturn }\n");
         }
+    }
+
+    fn push_attrs_and_metadata(&self, ir: &mut String) {
+        self.push_attrs(ir);
         // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
         // loops only with these present.
@@ -695,6 +802,41 @@ impl LlModule {
         for ml in &self.metadata_lines {
             ir.push_str(ml);
             ir.push('\n');
+        }
+    }
+
+    /// Emit only metadata nodes reachable from one codegen unit's function
+    /// bodies. Buffer alias metadata is numbered module-wide; replicating its
+    /// complete table into every unit gave full Claude a ~15 MiB per-unit floor
+    /// and duplicated gigabytes of parse input. References between metadata
+    /// nodes are closed transitively (scope lists -> scopes -> domain), while
+    /// preserving original definition order for deterministic output.
+    fn push_attrs_and_referenced_metadata_ids(&self, ir: &mut String, mut needed: HashSet<u32>) {
+        self.push_attrs(ir);
+        ir.push_str("\n!0 = !{}\n");
+        needed.remove(&0);
+        let mut by_id: HashMap<u32, &str> = HashMap::with_capacity(self.metadata_lines.len());
+        for line in &self.metadata_lines {
+            if let Some(id) = metadata_definition_id(line) {
+                by_id.insert(id, line);
+            }
+        }
+        let mut work: Vec<u32> = needed.iter().copied().collect();
+        while let Some(id) = work.pop() {
+            let Some(line) = by_id.get(&id) else { continue };
+            let mut refs = HashSet::new();
+            collect_metadata_refs(line, &mut refs);
+            for referenced in refs {
+                if referenced != id && referenced != 0 && needed.insert(referenced) {
+                    work.push(referenced);
+                }
+            }
+        }
+        for line in &self.metadata_lines {
+            if metadata_definition_id(line).is_some_and(|id| needed.contains(&id)) {
+                ir.push_str(line);
+                ir.push('\n');
+            }
         }
     }
 
@@ -781,7 +923,7 @@ impl LlModule {
                 .or_insert_with(|| declare_line_for(f));
         }
 
-        // #7174 (real-app scaling): render each bucket's functions first, then
+        // #7174 (real-app scaling): scan each bucket's functions first, then
         // give every global/string exactly ONE defining unit and hand the rest
         // an `external` declaration. Replicating all definitions into every
         // unit made per-unit IR grow with unit COUNT — on the 13 MB Claude Code
@@ -789,25 +931,20 @@ impl LlModule {
         // large ... ran out of source locations`, no matter how finely it was
         // split. Definitions are already `linkonce_odr` (visible), so an
         // external declaration resolves to the same symbol at link time.
-        let bucket_texts: Vec<String> = buckets
-            .iter()
-            .map(|bucket| {
-                let mut t = String::new();
-                for func in bucket {
-                    t.push_str(&render_fn_external(func));
-                    t.push('\n');
-                }
-                t
-            })
-            .collect();
-        let bucket_refs: Vec<HashSet<String>> = bucket_texts
-            .iter()
-            .map(|t| {
-                let mut refs = HashSet::new();
-                collect_symbol_refs(t, &mut refs);
-                refs
-            })
-            .collect();
+        // Scan one function at a time and discard its text immediately. The
+        // native API path needs only these reference sets, not a retained
+        // module-scale `.ll` duplicate beside the lowering-owned IR graph.
+        let mut bucket_refs: Vec<HashSet<String>> =
+            (0..buckets.len()).map(|_| HashSet::new()).collect();
+        let mut bucket_metadata_refs: Vec<HashSet<u32>> =
+            (0..buckets.len()).map(|_| HashSet::new()).collect();
+        for (bi, bucket) in buckets.iter().enumerate() {
+            for func in bucket {
+                let text = render_fn_external(func);
+                collect_symbol_refs(&text, &mut bucket_refs[bi]);
+                collect_metadata_refs(&text, &mut bucket_metadata_refs[bi]);
+            }
+        }
 
         // A global is emitted into every unit that REFERENCES it — normally
         // exactly one, and `linkonce_odr` lets the linker fold the rare
@@ -856,12 +993,29 @@ impl LlModule {
                 need
             })
             .collect();
-        let referenced_anywhere: Vec<bool> = (0..all_globals.len())
-            .map(|gi| bucket_needs.iter().any(|need| need.contains(&gi)))
+        // COFF cannot safely fold every generated COMDAT here: globals whose
+        // initializers name unit-local functions can acquire conflicting weak
+        // associative targets (LNK1227). Give each global one owner and use
+        // external declarations in other consumers. Mach-O retains the
+        // replicated policy required by `-dead_strip`.
+        let global_owners: Vec<usize> = (0..all_globals.len())
+            .map(|gi| {
+                bucket_needs
+                    .iter()
+                    .position(|need| need.contains(&gi))
+                    .unwrap_or(0)
+            })
             .collect();
+        let replicate_globals = self.target_triple.contains("apple");
 
-        let mut post = String::new();
-        self.push_attrs_and_metadata(&mut post);
+        let unit_posts: Vec<String> = bucket_metadata_refs
+            .into_iter()
+            .map(|metadata_refs| {
+                let mut post = String::new();
+                self.push_attrs_and_referenced_metadata_ids(&mut post, metadata_refs);
+                post
+            })
+            .collect();
 
         let mut parts = Vec::with_capacity(n);
         for (bi, bucket) in buckets.into_iter().enumerate() {
@@ -879,8 +1033,19 @@ impl LlModule {
                 let referenced = bucket_needs[bi].contains(&gi);
                 // Unreferenced globals (anchors, `llvm.*`, appending lists)
                 // keep a home in unit 0 so nothing is lost.
-                if referenced || (!referenced_anywhere[gi] && bi == 0) {
-                    pre.push_str(def);
+                let owns = global_owners[gi] == bi;
+                if (replicate_globals && referenced) || owns {
+                    if replicate_globals {
+                        pre.push_str(def);
+                    } else {
+                        pre.push_str(&make_unique_owner_global(def));
+                    }
+                    pre.push('\n');
+                } else if referenced {
+                    let decl = external_decl_for_global(def).unwrap_or_else(|| {
+                        panic!("cannot form external declaration for generated global: {def}")
+                    });
+                    pre.push_str(&decl);
                     pre.push('\n');
                 }
             }
@@ -902,8 +1067,22 @@ impl LlModule {
                 .iter()
                 .map(|nm| nm.trim_start_matches('@'))
                 .collect();
-            for gi in &bucket_needs[bi] {
-                for nm in &global_refs[*gi] {
+            for (gi, refs) in global_refs.iter().enumerate() {
+                let referenced = bucket_needs[bi].contains(&gi);
+                let owns = global_owners[gi] == bi;
+                // Include references from every global whose initializer is
+                // actually emitted in this unit. Unit 0 owns otherwise-dead
+                // anchor globals, including static ClosureHeaders that name
+                // an `__perry_wrap_extern_*` function. Those globals are not
+                // in `bucket_needs` (no function references them), but their
+                // initializer still requires a cross-unit function declare.
+                // Merely external declarations in non-owning COFF units have
+                // no initializer, so they contribute no symbol references.
+                let emits_definition = (replicate_globals && referenced) || owns;
+                if !emits_definition {
+                    continue;
+                }
+                for nm in refs {
                     needed.insert(nm.trim_start_matches('@'));
                 }
             }
@@ -921,11 +1100,53 @@ impl LlModule {
 
             parts.push(CodegenUnitPart {
                 pre,
-                post: post.clone(),
+                post: unit_posts[bi].clone(),
                 funcs: bucket,
             });
         }
         parts
+    }
+
+    /// Consuming twin of [`Self::codegen_unit_parts`] for the native LLVM API
+    /// path. The borrowed partitioner computes the exact same deterministic
+    /// layout, then functions move out of the module and into their owning
+    /// unit. This lets the native freeze producer release each lowering-owned
+    /// function graph as soon as its immutable worker payload exists instead
+    /// of retaining the whole `LlModule` until every LLVM unit has finished.
+    pub(crate) fn into_codegen_unit_parts(mut self, n: usize) -> Vec<OwnedCodegenUnitPart> {
+        let layouts: Vec<(String, String, Vec<String>)> = self
+            .codegen_unit_parts(n)
+            .into_iter()
+            .map(|part| {
+                (
+                    part.pre,
+                    part.post,
+                    part.funcs.iter().map(|func| func.name.clone()).collect(),
+                )
+            })
+            .collect();
+
+        let mut functions_by_name = HashMap::with_capacity(self.functions.len());
+        for function in std::mem::take(&mut self.functions) {
+            let name = function.name.clone();
+            functions_by_name.entry(name).or_insert(function);
+        }
+
+        layouts
+            .into_iter()
+            .map(|(pre, post, names)| OwnedCodegenUnitPart {
+                pre,
+                post,
+                funcs: names
+                    .into_iter()
+                    .map(|name| {
+                        functions_by_name
+                            .remove(&name)
+                            .expect("borrowed codegen partition named an owned function")
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Render this module as `n` independent codegen-unit `.ll` texts (#5391).
@@ -961,10 +1182,34 @@ pub(crate) struct CodegenUnitPart<'m> {
     pub funcs: Vec<&'m LlFunction>,
 }
 
+pub(crate) struct OwnedCodegenUnitPart {
+    pub pre: String,
+    pub post: String,
+    pub funcs: Vec<LlFunction>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+
+    #[test]
+    fn owned_codegen_units_move_each_function_exactly_once() {
+        let mut module = LlModule::new("x86_64-pc-windows-msvc");
+        for name in ["first", "second", "third"] {
+            let function = module.define_function(name, VOID, vec![]);
+            function.create_block("entry").ret_void();
+        }
+
+        let units = module.into_codegen_unit_parts(2);
+        assert_eq!(units.len(), 2);
+        let mut names: Vec<String> = units
+            .iter()
+            .flat_map(|unit| unit.funcs.iter().map(|function| function.name.clone()))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["first", "second", "third"]);
+    }
 
     #[test]
     fn render_codegen_units_partitions_and_links() {
@@ -972,7 +1217,7 @@ mod tests {
         // function in exactly one unit, (b) declare the other so cross-unit
         // calls resolve, and (c) carry the shared globals in BOTH units with
         // local linkage promoted to linkonce_odr (linker dedups).
-        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        let mut m = LlModule::new("x86_64-pc-windows-msvc");
         m.declare_function("js_console_log_number", VOID, &[DOUBLE]);
         m.add_internal_global("perry_global_x", DOUBLE, "0.0");
         let (_s, _l) = m.add_string_constant("hi");
@@ -1014,12 +1259,12 @@ mod tests {
         // count and broke clang's translation-unit limit on real bundles.
         let global_defs = units
             .iter()
-            .filter(|u| u.contains("@perry_global_x = linkonce_odr global double 0.0"))
+            .filter(|u| u.contains("@perry_global_x = global double 0.0"))
             .count();
         assert_eq!(global_defs, 1, "global must be defined in exactly one unit");
         let str_defs = units
             .iter()
-            .filter(|u| u.contains("@.str.0 = linkonce_odr unnamed_addr constant"))
+            .filter(|u| u.contains("@.str.0 = unnamed_addr constant"))
             .count();
         assert_eq!(str_defs, 1, "string must be defined in exactly one unit");
 
@@ -1028,7 +1273,7 @@ mod tests {
         for u in &units {
             if u.contains("@perry_global_x") {
                 assert!(
-                    u.contains("@perry_global_x = linkonce_odr global double 0.0")
+                    u.contains("@perry_global_x = global double 0.0")
                         || u.contains("@perry_global_x = external global double"),
                     "referencing unit must define or externally declare the global"
                 );
@@ -1043,8 +1288,48 @@ mod tests {
                     "a unit calling the helper must declare it"
                 );
             }
-            assert!(u.contains("target triple = \"arm64-apple-macosx15.0.0\""));
+            assert!(u.contains("target triple = \"x86_64-pc-windows-msvc\""));
         }
+    }
+
+    #[test]
+    fn owner_only_global_declares_cross_unit_function_from_initializer() {
+        // An unreferenced generated global is retained in unit 0. If its
+        // initializer names a function assigned to another unit, unit 0 must
+        // still declare that function even though no function body mentions
+        // the global. Extern-function ClosureHeaders have exactly this shape.
+        let mut m = LlModule::new("x86_64-pc-windows-msvc");
+
+        let big = m.define_function("perry_fn_m__big", DOUBLE, vec![]);
+        let block = big.create_block("entry");
+        for _ in 0..200 {
+            block.call_void("js_noop", &[]);
+        }
+        block.ret(DOUBLE, "0.0");
+
+        let wrapper = m.define_function(
+            "__perry_wrap_extern_dep__value",
+            DOUBLE,
+            vec![(I64, "%this_closure".to_string())],
+        );
+        wrapper.linkage = "internal".to_string();
+        wrapper.create_block("entry").ret(DOUBLE, "0.0");
+        m.add_internal_constant(
+            "__perry_extern_closure_dep__value",
+            "{ ptr, i32, i32 }",
+            "{ ptr @__perry_wrap_extern_dep__value, i32 0, i32 1129074515 }",
+        );
+
+        let units = m.render_codegen_units(2);
+        let global_unit = units
+            .iter()
+            .find(|unit| unit.contains("@__perry_extern_closure_dep__value = constant"))
+            .expect("one unit must own the closure global");
+        assert!(
+            !global_unit.contains("define double @__perry_wrap_extern_dep__value("),
+            "size balancing should put the small wrapper in the other unit"
+        );
+        assert!(global_unit.contains("declare double @__perry_wrap_extern_dep__value(i64)"));
     }
 
     #[test]

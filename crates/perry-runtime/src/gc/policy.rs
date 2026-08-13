@@ -1569,6 +1569,7 @@ pub(super) fn note_survivor_promotion_handoff_full() {
 /// itself is observable: the latch short-circuits before the arena inspection,
 /// so a test with an empty heap cannot otherwise distinguish "suppressed" from
 /// "there was no pressure anyway".
+#[cfg(test)]
 pub(super) fn survivor_promotion_handoff_suppressions() -> u64 {
     SURVIVOR_HANDOFF_SUPPRESSIONS.with(Cell::get)
 }

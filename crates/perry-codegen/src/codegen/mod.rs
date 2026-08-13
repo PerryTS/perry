@@ -29,7 +29,11 @@
 //! Anything else (objects, arrays, classes, closures, async, imports, …)
 //! errors with an actionable "Phase X not yet supported" message.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
@@ -38,6 +42,137 @@ use crate::module::LlModule;
 use crate::runtime_decls;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I32, I64};
+
+pub(super) struct CompileProgress {
+    enabled: bool,
+    started: Instant,
+    last_checkpoint: Cell<Instant>,
+    phase: Arc<AtomicU8>,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    module: String,
+}
+
+impl CompileProgress {
+    fn new(module: &str, callables: usize) -> Self {
+        let progress_mode = std::env::var("PERRY_CODEGEN_PROGRESS").unwrap_or_default();
+        // Avoid three status lines for every tiny module in dependency-heavy
+        // projects. Long modules get automatic reporting; `=all` is the
+        // diagnostic override when per-module detail is wanted regardless.
+        let enabled = progress_mode == "all" || (progress_mode == "1" && callables >= 1_000);
+        let started = Instant::now();
+        let phase = Arc::new(AtomicU8::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        if enabled {
+            eprintln!("[perry] codegen: lowering {module} ({callables} callables)");
+        }
+        let worker = enabled.then(|| {
+            let phase = Arc::clone(&phase);
+            let stop = Arc::clone(&stop);
+            let module = module.to_string();
+            std::thread::Builder::new()
+                .name("perry-progress".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::park_timeout(Duration::from_secs(30));
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let label = match phase.load(Ordering::Relaxed) {
+                            0 => "lowering HIR",
+                            1 => "finalizing generated IR",
+                            2 => "partitioning/freezing/LLVM codegen",
+                            3 => "releasing generated IR",
+                            _ => "LLVM optimization and object emission",
+                        };
+                        eprintln!(
+                            "[perry] codegen: {module}: {label}, elapsed {:.1} min",
+                            started.elapsed().as_secs_f64() / 60.0
+                        );
+                    }
+                })
+                .expect("spawn Perry progress reporter")
+        });
+        Self {
+            enabled,
+            started,
+            last_checkpoint: Cell::new(started),
+            phase,
+            stop,
+            worker,
+            module: module.to_string(),
+        }
+    }
+
+    fn phase(&self, phase: u8, label: &str) {
+        self.phase.store(phase, Ordering::Relaxed);
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: {} ({:.1}s elapsed)",
+                self.module,
+                label,
+                self.started.elapsed().as_secs_f64()
+            );
+        }
+    }
+
+    /// Report a completed lowering subphase. Large generated bundles can spend
+    /// minutes before LLVM sees any IR, so a coarse heartbeat is not enough to
+    /// distinguish useful progress from a stuck compiler. Keeping the lap time
+    /// here also makes the output directly usable as a lightweight profile.
+    pub(super) fn checkpoint(&self, label: &str) {
+        let now = Instant::now();
+        let previous = self.last_checkpoint.replace(now);
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: {} in {:.1}s ({:.1}s total)",
+                self.module,
+                label,
+                now.duration_since(previous).as_secs_f64(),
+                now.duration_since(self.started).as_secs_f64()
+            );
+        }
+    }
+
+    pub(super) fn items(&self, label: &str, done: usize, total: usize, started: Instant) {
+        if !self.enabled || total == 0 {
+            return;
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        let eta = if done == 0 {
+            0.0
+        } else {
+            elapsed * (total.saturating_sub(done)) as f64 / done as f64
+        };
+        eprintln!(
+            "[perry] codegen: {}: {} {}/{} ({:.0}%; {:.1}s elapsed; ETA ~{:.1}s)",
+            self.module,
+            label,
+            done,
+            total,
+            done as f64 * 100.0 / total as f64,
+            elapsed,
+            eta
+        );
+    }
+}
+
+impl Drop for CompileProgress {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            let _ = worker.join();
+        }
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: stage finished in {:.1}s",
+                self.module,
+                self.started.elapsed().as_secs_f64()
+            );
+        }
+    }
+}
 
 pub(crate) mod arguments;
 mod artifacts;
@@ -187,6 +322,7 @@ pub(crate) fn static_method_registry_key(method_name: &str) -> String {
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+    let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
@@ -1136,6 +1272,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             0.0
         } // macOS / darwin default
     };
+    progress.checkpoint("symbol tables and initial declarations");
+
     // Pre-scan hir.init for compile-time constant variables. These are
     // `declare const __platform__: number` / `declare const __plugins__: number`
     // that other backends (JS, WASM) inject at build time. The LLVM backend
@@ -1316,6 +1454,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    progress.checkpoint("module constant and export analysis");
+
     // Build the cross-module context bundle from CompileOptions.
     let disable_buffer_fast_path = opts.disable_buffer_fast_path
         || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
@@ -1412,6 +1552,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    progress.checkpoint("cross-module and typed-ABI analysis");
+
     // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
     // eligibility loop because representation-selection Phase 5a's
     // proven-`this` admission consults them (§5.2 shape barriers, the
@@ -1962,6 +2104,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         func_synthetic_arguments,
     } = func_registry::build_func_registry(hir, &module_prefix);
 
+    progress.checkpoint("class dispatch and representation analysis");
+
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
@@ -2333,6 +2477,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         cross_module.spec_ta_bindings = spec_facts.ta_bindings;
     }
 
+    progress.checkpoint("locals, closures, and module globals analysis");
+
     // Emit internal typed-f64 clones before their public/generic wrappers. The
     // public wrapper keeps the JSValue ABI; it and direct proven numeric call
     // sites can call the internal clone.
@@ -2408,8 +2554,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
     }
 
-    // Lower each user function into the module.
-    for f in &hir.functions {
+    progress.checkpoint("typed top-level function clones");
+
+    // Lower each user function into the module. Generated single-file bundles
+    // can spend minutes here; report real item progress instead of making the
+    // 30-second heartbeat the only proof that lowering is advancing.
+    let function_bodies_started = Instant::now();
+    let function_bodies_progress_step = (hir.functions.len() / 20).max(1);
+    for (function_index, f) in hir.functions.iter().enumerate() {
         let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
             Some(typed_abi::TypedFunctionTrampolineKind::F64)
         } else if cross_module.typed_i32_functions.contains(&f.id) {
@@ -2443,6 +2595,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             None,
         )
         .with_context(|| format!("lowering function '{}'", f.name))?;
+        let done = function_index + 1;
+        if done == hir.functions.len() || done % function_bodies_progress_step == 0 {
+            progress.items(
+                "top-level function bodies",
+                done,
+                hir.functions.len(),
+                function_bodies_started,
+            );
+        }
     }
 
     // Closes #460: emit forwarding wrappers for `export { local as exported }`
@@ -2554,6 +2715,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    progress.checkpoint("top-level function bodies and export stubs");
+
     // ── End of compile_module prelude (data + initial emission). ──
     // The remainder (closures, methods, ctors, statics, function /
     // ExternFuncRef / export-rename / unknown-func / method
@@ -2562,6 +2725,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `artifacts::emit_module_artifacts`. Behavior is unchanged —
     // see the doc on that fn for the split rationale.
     emit_module_artifacts(ModuleArtifactsCtx {
+        progress: &progress,
         llmod: &mut llmod,
         target_triple: &triple,
         strings: &mut strings,
@@ -2617,6 +2781,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // renderer and the in-process constructor see the same IR; a pass living in
     // one of them would silently not apply to the other.
     // See `crate::root_reload`.
+    progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
 
     let verify_native_regions = opts.verify_native_regions
@@ -2639,12 +2804,25 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let n_units = if opts.emit_ir_only {
         1
     } else {
-        decide_codegen_units(module_callable_count(hir))
+        decide_codegen_units(
+            module_callable_count(hir),
+            llmod.estimated_function_ir_bytes(),
+        )
     };
     if n_units > 1 {
+        progress.phase(2, &format!("partitioning into {n_units} codegen units"));
         if let Some(result) =
-            try_native_units(&llmod, n_units, opts.target.as_deref(), &module_prefix)
+            try_native_units(&mut llmod, n_units, opts.target.as_deref(), &module_prefix)
         {
+            // `result` already contains the final object/archive here. The
+            // generated `LlModule` can own millions of small allocations in a
+            // minified bundle, and Rust must destroy that graph before this
+            // function (and its `CompileProgress` guard) can return. On the
+            // 8.8 MiB OpenCode code-mode chunk this took about five minutes
+            // after LLVM reported 77/77, previously making the build look
+            // stuck in LLVM. Name the real phase while the heartbeat thread is
+            // still alive; a future arena-backed IR can make this O(arenas).
+            progress.phase(3, "object ready; releasing generated IR");
             return result;
         }
         let units = llmod.render_codegen_units(n_units);
@@ -2702,18 +2880,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 /// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].
 #[cfg(feature = "llvm-inprocess")]
 fn try_native_units(
-    llmod: &crate::module::LlModule,
+    llmod: &mut crate::module::LlModule,
     n_units: usize,
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
-    // SEH funclets are the one EH shape the in-process reader cannot
-    // construct (see LlModule::needs_eh_funclets). Decline to the textual
-    // path rather than failing the compile.
-    if llmod.needs_eh_funclets() {
-        return None;
-    }
-    match crate::native_emit::native_mode() {
+    // Personality-carrying Windows functions are parsed as small textual
+    // islands inside each otherwise-native unit; ordinary functions still use
+    // typed C-API construction. See `native_emit::freeze_unit`.
+    match crate::native_emit::native_units_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(
             crate::native_emit::compile_module_units_native(llmod, n_units, target, module_prefix),
@@ -2726,7 +2901,7 @@ fn try_native_units(
 
 #[cfg(not(feature = "llvm-inprocess"))]
 fn try_native_units(
-    _llmod: &crate::module::LlModule,
+    _llmod: &mut crate::module::LlModule,
     _n_units: usize,
     _target: Option<&str>,
     _module_prefix: &str,

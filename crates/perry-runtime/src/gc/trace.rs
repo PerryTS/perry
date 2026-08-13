@@ -158,6 +158,7 @@ impl ValidPointerSet {
     }
 
     /// Total censused entries (arena starts + malloc starts).
+    #[cfg(test)]
     pub(super) fn lookup_count(&self) -> usize {
         self.arena_count + self.malloc_lookup.len()
     }

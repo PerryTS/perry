@@ -379,7 +379,11 @@ fn every_covered_clear_helper_is_still_called_by_the_guards() {
         .split_once("fn reset_copying_nursery_runtime_test_state()")
         .expect("the guards' reset function was renamed — update this test")
         .1;
-    let body = body.split_once("\n}\n").expect("unterminated reset fn").0;
+    let body = body
+        .lines()
+        .take_while(|line| *line != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         body.contains("test_clear_closure_side_tables"),
         "sanity: the extracted reset body does not contain a call it certainly \

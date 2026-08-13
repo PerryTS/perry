@@ -691,26 +691,24 @@ fn inline_slot_floor_matches_codegen() {
 /// that makes the floor a footprint dial rather than a correctness one.
 #[test]
 fn by_name_growth_past_the_floor_reads_back() {
-    unsafe {
-        let obj = js_object_alloc(0, 0);
-        assert!(!obj.is_null());
-        let names: [&[u8]; 6] = [b"k0", b"k1", b"k2", b"k3", b"k4", b"k5"];
-        for (i, n) in names.iter().enumerate() {
-            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
-            js_object_set_field_by_name(obj, key, i as f64);
-        }
-        for (i, n) in names.iter().enumerate() {
-            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
-            let got = js_object_get_field_by_name(obj, key);
-            assert!(
-                got.is_number() && got.as_number() == i as f64,
-                "field {} ({}) read back as {:#x}; the inline/overflow boundary \
-                 must be invisible to reads",
-                i,
-                std::str::from_utf8(n).unwrap(),
-                got.bits()
-            );
-        }
+    let obj = js_object_alloc(0, 0);
+    assert!(!obj.is_null());
+    let names: [&[u8]; 6] = [b"k0", b"k1", b"k2", b"k3", b"k4", b"k5"];
+    for (i, n) in names.iter().enumerate() {
+        let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_object_set_field_by_name(obj, key, i as f64);
+    }
+    for (i, n) in names.iter().enumerate() {
+        let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        let got = js_object_get_field_by_name(obj, key);
+        assert!(
+            got.is_number() && got.as_number() == i as f64,
+            "field {} ({}) read back as {:#x}; the inline/overflow boundary \
+             must be invisible to reads",
+            i,
+            std::str::from_utf8(n).unwrap(),
+            got.bits()
+        );
     }
 }
 
@@ -1551,7 +1549,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
             CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
-            instance_lex_7689 as usize as i64,
+            instance_lex_7689 as *const () as usize as i64,
             0,
             0,
             0,
@@ -1560,7 +1558,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
             CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
-            static_lex_7689 as usize as i64,
+            static_lex_7689 as *const () as usize as i64,
             0,
             0,
         );

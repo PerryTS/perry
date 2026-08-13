@@ -95,10 +95,9 @@ pub use exec::js_regexp_exec;
 pub use match_string::{js_string_match, js_string_match_value, js_string_search_value};
 
 crate::perry_thread_local! {
-    /// Last exec result metadata: (index, groups_object_ptr)
-    /// Stored per-thread so that `m.index` and `m.groups` can retrieve them
-    /// after the exec call.
+    #[cfg(feature = "regex-engine")]
     static LAST_EXEC_INDEX: RefCell<f64> = const { RefCell::new(0.0) };
+
     static LAST_EXEC_GROUPS: RefCell<*mut ObjectHeader> = const { RefCell::new(ptr::null_mut()) };
 
     /// Set of all RegExpHeader pointers ever allocated in this thread.

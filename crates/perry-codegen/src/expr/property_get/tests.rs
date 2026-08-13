@@ -288,23 +288,31 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
 #[test]
 fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     let ir = emit(false, None);
+    let main_start = ir
+        .find("define i32 @main()")
+        .expect("entry module should define main");
+    let main_rest = &ir[main_start..];
+    let main_end = main_rest
+        .find("\n}\n")
+        .expect("main should have a closing brace");
+    let main = &main_rest[..main_end];
     assert!(
-        ir.contains("@perry_ic_"),
+        main.contains("@perry_ic_"),
         "test premise: the generic read reaches the inline PIC:\n{ir}"
     );
     assert!(
-        ir.contains("\npic.miss.cold"),
+        main.contains("\npic.miss.cold"),
         "the two receiver-validation failures need their own landing block, \
          otherwise pic.miss is not dominated by pic.token:\n{ir}"
     );
-    let epoch_loads = ir.matches("load i64, ptr @PERRY_IC_EPOCH").count();
+    let epoch_loads = main.matches("load i64, ptr @PERRY_IC_EPOCH").count();
     assert_eq!(
         epoch_loads, 1,
         "one generic read must load @PERRY_IC_EPOCH exactly once; a second \
          load means the way block re-derived the epoch predicate:\n{ir}"
     );
     assert!(
-        !ir.contains("ptrtoint ptr @perry_ic_"),
+        !main.contains("ptrtoint ptr @perry_ic_"),
         "the small-handle sentinel select only existed because an invalid \
          receiver could reach the way compares; it must be gone:\n{ir}"
     );
@@ -313,7 +321,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         ("icmp eq i8 ", "the GC_TYPE_OBJECT compare"),
         ("icmp eq i32 %", "the closure-magic / object_type compares"),
     ] {
-        let n = ir.matches(needle).count();
+        let n = main.matches(needle).count();
         assert!(
             n <= 2,
             "{what} appears {n} times — the miss block is re-deriving the \

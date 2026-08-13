@@ -580,6 +580,7 @@ pub extern "C" fn js_string_split_value(
     limit: f64,
 ) -> *mut ArrayHeader {
     use crate::value::JSValue;
+    #[cfg(feature = "regex-engine")]
     let sep_jv = JSValue::from_bits(separator.to_bits());
     let lim_jv = JSValue::from_bits(limit.to_bits());
     let scope = crate::gc::RuntimeHandleScope::new();

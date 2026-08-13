@@ -25,7 +25,6 @@
 //! rather than "does it happen to still read correctly after a collection",
 //! which is exactly the question a lucky allocator answers wrong.
 
-use super::super::*;
 use super::support::*;
 
 /// The name bytes a bound closure keeps, as raw parts.

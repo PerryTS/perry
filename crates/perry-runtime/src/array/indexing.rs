@@ -478,6 +478,8 @@ pub(crate) unsafe fn keys_array_slot(
     crate::array::js_array_get(keys, index)
 }
 
+#[cfg(test)]
+thread_local! {
 /// Times [`keys_array_slot`] could NOT serve a slot from the dense words and
 /// had to delegate. Asserted in both directions by
 /// `array::collection_tag_tests` — zero for the dense keys arrays the fast path
@@ -487,8 +489,6 @@ pub(crate) unsafe fn keys_array_slot(
 ///
 /// Per THREAD — `cargo test` runs every case on its own thread in one process,
 /// so a process-global counter would be moved by whatever else is running.
-#[cfg(test)]
-thread_local! {
     static KEYS_ARRAY_SLOT_FALLBACKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

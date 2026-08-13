@@ -78,7 +78,7 @@ mod root_words;
 use root_words::*;
 mod layout;
 mod layout_slot_visit;
-pub(crate) use layout_slot_visit::*;
+use layout_slot_visit::*;
 /// #7510: the per-object slot-layout side tables and the emptiness flag that
 /// keeps them off the allocation, store, death and trace paths. Split out of
 /// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
@@ -100,7 +100,7 @@ mod barrier;
 pub use barrier::*;
 /// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
 mod barrier_store;
-pub use barrier_store::*;
+pub(crate) use barrier_store::*;
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
@@ -140,6 +140,7 @@ use sticky_remembered::*;
 pub(crate) use copying::CopyingPointerSet;
 // The hard ceiling every birth-generation threshold in `gc::types` must stay
 // under; asserted by `arena::tests::pointer_bearing_large_object_threshold_is_movable`.
+#[cfg(test)]
 pub(crate) use copying::MAX_YOUNG_MOVE_BYTES;
 mod dead_owner;
 mod old_free;
@@ -512,6 +513,8 @@ pub(super) mod knob_overrides {
     }
 }
 
+#[cfg(test)]
+thread_local! {
 /// `PERRY_GC_SCAVENGE` — **ON by default since #7056**, kill switch
 /// `PERRY_GC_SCAVENGE=0`/`off`/`false`. It is a PACING knob: it routes
 /// nursery-churn triggers to the direct minor in `gc_check_trigger` instead of
@@ -567,8 +570,6 @@ pub(super) mod knob_overrides {
 /// for the reason above. It is recorded rather than quietly deleted because
 /// this whole PR exists because a stale half of a doc comment kept carrying a
 /// soundness argument after it stopped being true.
-#[cfg(test)]
-thread_local! {
     /// Test-only override, consulted BEFORE the process-wide OnceLock so a
     /// single test can pin a pacing mode even though the process default is on.
     /// Same discipline as `GC_MOVING_LOOP_POLLS_TEST_OVERRIDE`.

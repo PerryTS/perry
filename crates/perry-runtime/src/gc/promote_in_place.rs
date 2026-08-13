@@ -488,10 +488,6 @@ pub fn untraced_promoted_objects() -> u64 {
     UNTRACED_PROMOTED_OBJECTS.with(Cell::get)
 }
 
-pub(crate) fn untraced_promoted_bytes_since_measurement() -> usize {
-    UNTRACED_PROMOTED_BYTES.with(Cell::get)
-}
-
 /// Record the young-survival ratio a copying minor just measured. Called on
 /// EVERY copying minor that TRACES, promoting or evacuating — that is what
 /// keeps the predictor from going stale under repeated promotion. An untraced
@@ -564,6 +560,7 @@ pub(crate) fn last_young_survival_permille() -> Option<u64> {
     LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get)
 }
 
+#[cfg(test)]
 pub(crate) fn promoted_dead_bytes_since_full() -> usize {
     PROMOTED_DEAD_BYTES.with(Cell::get)
 }

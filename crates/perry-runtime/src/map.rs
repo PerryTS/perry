@@ -191,6 +191,8 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
     });
 }
 
+#[cfg(test)]
+thread_local! {
 /// Every entry into [`is_registered_map`], i.e. every caller that could not
 /// rule a `Map` out more cheaply. The `js_array_get_f64` / `js_array_length`
 /// receiver-tag gates (#7765) are asserted against this: a plain-array element
@@ -200,8 +202,6 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
 /// Per THREAD, not per process: the registries themselves are thread-local, and
 /// `cargo test` runs every case on its own thread in one process, so a global
 /// counter would be moved by whatever else happens to be running.
-#[cfg(test)]
-thread_local! {
     static TEST_MAP_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

@@ -221,10 +221,10 @@ fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
     });
 }
 
-/// Every entry into [`is_registered_set`]. Twin of
-/// `map::TEST_MAP_REGISTRY_PROBES` — see that counter for what it pins down.
 #[cfg(test)]
 thread_local! {
+/// Every entry into [`is_registered_set`]. Twin of
+/// `map::TEST_MAP_REGISTRY_PROBES` — see that counter for what it pins down.
     static TEST_SET_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

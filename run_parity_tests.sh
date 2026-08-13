@@ -40,13 +40,17 @@ fi
 mkdir -p "$TEMP_ROOT"
 
 PYTHON_CMD=""
-if command -v python3 &>/dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &>/dev/null; then
-    # GitHub's Windows image exposes the setup-python shim as `python` on
-    # some revisions and `python3` on others.
-    PYTHON_CMD="python"
-fi
+# `command -v` alone is insufficient on Windows: the Microsoft Store app-
+# execution alias can expose a `python3.exe` that only prints an installation
+# prompt and exits nonzero. Probe the interpreter before selecting it.
+for candidate in python3 python; do
+    if command -v "$candidate" &>/dev/null \
+        && "$candidate" -c 'import sys; raise SystemExit(sys.version_info.major != 3)' \
+            &>/dev/null; then
+        PYTHON_CMD="$candidate"
+        break
+    fi
+done
 if [[ -z "$PYTHON_CMD" ]]; then
     echo "Python 3 is required by the parity output normalizer" >&2
     exit 1
@@ -532,7 +536,7 @@ for raw in sys.stdin:
 }
 
 normalize_failure_output() {
-    printf '%s' "$1" | python3 -c '
+    printf '%s' "$1" | "$PYTHON_CMD" -c '
 import re
 import sys
 
@@ -898,6 +902,13 @@ import hashlib
 import json
 import os
 import sys
+
+# Native Windows Python translates stdout newlines to CRLF. Values from this
+# helper are consumed by Bash arithmetic and line-based resume logic, where the
+# retained `\r` corrupts counts such as `1` into `1\r`.
+if os.name == "nt":
+    sys.stdout.reconfigure(newline="\n")
+    sys.stderr.reconfigure(newline="\n")
 
 cmd = sys.argv[1]
 

@@ -389,8 +389,25 @@ pub(super) fn lower_meta_prop(
 /// Used by both the bare-`import.meta` Object synthesis above and the
 /// member-access fast path in `expr_member::lower_member`.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
-    let path = ctx.source_file_path.replace('\\', "/");
-    let url = format!("file://{}", path);
+    let mut path = ctx.source_file_path.replace('\\', "/");
+    // `dunce::canonicalize` keeps Windows' verbatim `\\?\` prefix for long
+    // bundle paths.  It is a Win32 path decoration, not part of the file URL:
+    // `file:////?/C:/x` makes Node-compatible fileURLToPath reject the path as
+    // non-absolute.  Strip it before exposing import.meta.{url,filename}.
+    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+        path = format!("//{rest}");
+    } else if let Some(rest) = path.strip_prefix("//?/") {
+        path = rest.to_string();
+    }
+    let url = if path.starts_with("//") {
+        // UNC: `//server/share/x` -> `file://server/share/x`.
+        format!("file:{path}")
+    } else if path.as_bytes().get(1) == Some(&b':') {
+        // Windows drive: `C:/x` -> `file:///C:/x`.
+        format!("file:///{path}")
+    } else {
+        format!("file://{path}")
+    };
     let dirname = match path.rfind('/') {
         Some(i) if i > 0 => path[..i].to_string(),
         Some(_) => "/".to_string(),
@@ -409,4 +426,27 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Resu
         value,
         delegate: y.delegate,
     })
+}
+
+#[cfg(test)]
+mod import_meta_path_tests {
+    use super::{import_meta_paths, LoweringContext};
+
+    #[test]
+    fn windows_verbatim_drive_path_becomes_standard_file_url() {
+        let ctx = LoweringContext::new(r"\\?\C:\project\bundle.mjs");
+        let (url, dirname, filename) = import_meta_paths(&ctx);
+        assert_eq!(url, "file:///C:/project/bundle.mjs");
+        assert_eq!(dirname, "C:/project");
+        assert_eq!(filename, "C:/project/bundle.mjs");
+    }
+
+    #[test]
+    fn windows_verbatim_unc_path_becomes_unc_file_url() {
+        let ctx = LoweringContext::new(r"\\?\UNC\server\share\bundle.mjs");
+        let (url, dirname, filename) = import_meta_paths(&ctx);
+        assert_eq!(url, "file://server/share/bundle.mjs");
+        assert_eq!(dirname, "//server/share");
+        assert_eq!(filename, "//server/share/bundle.mjs");
+    }
 }

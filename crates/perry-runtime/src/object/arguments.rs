@@ -249,11 +249,11 @@ pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
     ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&(obj as usize)))
 }
 
+#[cfg(test)]
+thread_local! {
 /// Every entry into [`is_arguments_object`]. Twin of
 /// `set::TEST_SET_REGISTRY_PROBES` — lets a test assert that the latch
 /// actually short-circuits rather than merely that nothing threw.
-#[cfg(test)]
-thread_local! {
     static TEST_ARGUMENTS_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

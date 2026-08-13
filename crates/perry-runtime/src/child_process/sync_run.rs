@@ -332,10 +332,10 @@ fn cp_wait_for_timeout(
     }
 }
 
-fn cp_terminate_child(child: &mut std::process::Child, kill_signal: i32) {
+fn cp_terminate_child(child: &mut std::process::Child, _kill_signal: i32) {
     #[cfg(unix)]
     unsafe {
-        let _ = libc::kill(child.id() as i32, kill_signal);
+        let _ = libc::kill(child.id() as i32, _kill_signal);
     }
     #[cfg(not(unix))]
     {

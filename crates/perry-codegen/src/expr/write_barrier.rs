@@ -25,7 +25,17 @@ const LAYOUT_SIDE_MASK_INTACT_I16: &str = "-28672";
 /// compatibility wrapper, which conservatively marks the parent span.
 /// The env gate is read once and OnceLock-cached at codegen time.
 pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) {
-    if !crate::codegen::write_barriers_enabled() {
+    // Expression lowering can complete abruptly (for example, an unsupported
+    // dynamic `new Worker(path)` lowers to a throwing call + `unreachable`)
+    // before an enclosing captured-local assignment reaches its post-store
+    // barrier.  `LlBlock` deliberately drops instructions appended after a
+    // terminator, but creating the barrier diamond here would still publish
+    // two new blocks and put `ctx.current_block` on the second one.  The first
+    // then contains uses of the parent/child registers whose definitions were
+    // dropped with the terminated assignment block, leaving invalid orphan IR.
+    // A terminated path performed no store and cannot reach a barrier, so it
+    // is both correct and necessary to leave the CFG untouched.
+    if !crate::codegen::write_barriers_enabled() || ctx.block().is_terminated() {
         return;
     }
     let child_bits_value = LoweredValue::js_value_bits(child_bits.to_string());

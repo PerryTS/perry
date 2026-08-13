@@ -204,13 +204,6 @@ pub struct CheckEnv<'a> {
     pub first_arg: Option<&'a str>,
 }
 
-fn is_on(raw: Option<&str>) -> bool {
-    matches!(
-        raw.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
-        Some("1") | Some("true") | Some("on") | Some("yes")
-    )
-}
-
 fn is_present(raw: Option<&str>) -> bool {
     !matches!(
         raw.map(|s| s.trim().to_ascii_lowercase()).as_deref(),

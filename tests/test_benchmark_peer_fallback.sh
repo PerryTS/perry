@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "$(uname -s)" in
+  Linux|Darwin) ;;
+  *)
+    echo "benchmark Bun-absent fallback: skipped (RSS collection requires Linux or macOS)"
+    exit 0
+    ;;
+esac
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NODE_REAL="$(command -v node)"
 TMP="$(mktemp -d)"

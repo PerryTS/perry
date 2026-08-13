@@ -14,8 +14,7 @@ use crate::expr::{
     lower_expr_with_expected_type, unbox_str_handle,
 };
 use crate::native_value::{
-    BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal,
-    SemanticKind,
+    LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal, SemanticKind,
 };
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};

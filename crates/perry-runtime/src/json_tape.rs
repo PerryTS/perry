@@ -1476,10 +1476,10 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if i >= cached_length {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-
-    // Fast path 2: bitmap hit.
     let bitmap = (*hdr).materialized_bitmap;
     let cache = (*hdr).materialized_elements;
+
+    // Fast path 2: bitmap hit.
     if !bitmap.is_null() && !cache.is_null() {
         let word_idx = (i as usize) / 64;
         let bit_idx = (i as usize) % 64;
@@ -1779,8 +1779,6 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
         return (*hdr).materialized;
     }
     let cached_length = (*hdr).cached_length;
-    let bitmap = (*hdr).materialized_bitmap;
-    let cache = (*hdr).materialized_elements;
     // Same helper `lazy_get`'s scan-flip trigger consults, so the trigger
     // can never ask for a producer this function then declines.
     let cached_count = lazy_cached_count(hdr);

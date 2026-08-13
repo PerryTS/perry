@@ -410,6 +410,7 @@ fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> 
 /// already compile-gated. Now it produces nothing, which is the same amount of
 /// information and looks far more like success. The trace dump uses this to say
 /// so out loud rather than writing an empty file.
+#[cfg(feature = "diagnostics")]
 pub(crate) fn no_sites_were_instrumented() -> bool {
     registry().sites.is_empty()
 }

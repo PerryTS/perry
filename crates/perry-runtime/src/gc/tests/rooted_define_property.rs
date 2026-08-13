@@ -186,28 +186,26 @@ fn unrooted_receiver_copy_still_names_from_space() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
 
-    unsafe {
-        let scope = RuntimeHandleScope::new();
-        let rooted = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-        let unrooted_copy = addr_of(rooted.get_nanbox_f64());
+    let scope = RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+    let unrooted_copy = addr_of(rooted.get_nanbox_f64());
 
-        let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-        assert!(trace.copying_nursery.copied_objects > 0);
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert!(trace.copying_nursery.copied_objects > 0);
 
-        assert_ne!(
-            addr_of(rooted.get_nanbox_f64()),
-            unrooted_copy,
-            "the rooted receiver did not move -- this cycle cannot demonstrate the hazard"
-        );
-        // And the plain copy is unchanged, by construction: nothing can rewrite
-        // a Rust local. If this ever fails, the collector grew a way to see the
-        // Rust stack and the `across!` discipline can be retired.
-        assert_eq!(
-            unrooted_copy, unrooted_copy,
-            "a plain usize cannot be rewritten by the collector"
-        );
-    }
+    assert_ne!(
+        addr_of(rooted.get_nanbox_f64()),
+        unrooted_copy,
+        "the rooted receiver did not move -- this cycle cannot demonstrate the hazard"
+    );
+    // And the plain copy is unchanged, by construction: nothing can rewrite
+    // a Rust local. If this ever fails, the collector grew a way to see the
+    // Rust stack and the `across!` discipline can be retired.
+    assert_eq!(
+        unrooted_copy, unrooted_copy,
+        "a plain usize cannot be rewritten by the collector"
+    );
 }
 
 #[test]

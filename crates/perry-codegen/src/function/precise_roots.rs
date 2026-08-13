@@ -195,24 +195,24 @@ pub(super) fn lower_precise_roots_to_native_stack(
     slot_count: u32,
 ) -> String {
     let lines: Vec<&str> = ir.lines().collect();
-    let mut roots: Vec<Option<String>> = vec![None; slot_count as usize];
+    // A logical shadow slot can be rebound to a different physical alloca when
+    // disjoint source scopes reuse one LocalId (for example, the synthetic
+    // locals produced by `using` lowering). The runtime shadow stack needs only
+    // the currently bound address, but RS4GC roots physical allocas, so retain
+    // every address ever bound to the logical slot. Each is null-initialized
+    // below, making an inactive scope's alloca a harmless conservative root.
+    let mut roots: Vec<Vec<String>> = vec![Vec::new(); slot_count as usize];
     for line in &lines {
         if let Some((idx, ptr)) = parse_shadow_bind(line) {
-            if let Some(root) = roots.get_mut(idx) {
-                match root {
-                    Some(existing) => {
-                        debug_assert_eq!(
-                            existing, &ptr,
-                            "one precise-root slot must not bind two native allocas"
-                        );
-                    }
-                    None => *root = Some(ptr),
+            if let Some(slot_roots) = roots.get_mut(idx) {
+                if !slot_roots.contains(&ptr) {
+                    slot_roots.push(ptr);
                 }
             }
         }
     }
 
-    let root_ptrs: Vec<String> = roots.iter().flatten().cloned().collect();
+    let root_ptrs: Vec<String> = roots.into_iter().flatten().collect();
     let report = crate::statepoint_report::enabled().then(|| {
         crate::statepoint_report::FunctionRecord::new(
             function_name,
@@ -246,6 +246,31 @@ pub(super) fn lower_precise_roots_to_native_stack(
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::lower_precise_roots_to_native_stack;
+
+    #[test]
+    fn one_logical_slot_can_root_disjoint_physical_allocas() {
+        let ir = r#"define void @f() {
+  %a = alloca i64
+  %b = alloca double
+  call void @js_shadow_slot_bind(i32 0, ptr %a)
+  call void @may_collect()
+  call void @js_shadow_slot_bind(i32 0, ptr %b)
+  call void @may_collect()
+  ret void
+}
+"#;
+
+        let lowered = lower_precise_roots_to_native_stack(ir, "f", 1);
+        assert!(lowered.contains("%a = alloca ptr addrspace(1)"));
+        assert!(lowered.contains("%b = alloca ptr addrspace(1)"));
+        assert!(!lowered.contains("@js_shadow_slot_bind"));
+    }
+}
+
 pub(super) fn retype_landing_pads_for_statepoints(ir: &str) -> String {
     const ITANIUM: &str = "landingpad { ptr, i32 } catch ptr null";
     if !ir.contains(ITANIUM) {

@@ -141,7 +141,7 @@ def _is_resolved_path(value: Any) -> bool:
     absolute path — :func:`portable_path` deliberately emits repo-relative paths.
     """
     text = str(value or "")
-    return bool(text) and (os.path.isabs(text) or os.sep in text)
+    return bool(text) and (os.path.isabs(text) or "/" in text or "\\" in text)
 
 
 def _cargo_profile_tables(data: bytes) -> bytes:
@@ -176,8 +176,16 @@ def _cargo_profile_tables(data: bytes) -> bytes:
     return b"".join(kept)
 
 
+def _normalize_checkout_newlines(data: bytes) -> bytes:
+    """Make text fingerprints independent of Git's checkout policy."""
+    return data.replace(b"\r\n", b"\n")
+
+
 def _fingerprint_bytes(name: str) -> bytes:
-    data = (ROOT / name).read_bytes()
+    # Every fingerprint input is text. Git may materialize it as CRLF on a
+    # Windows checkout even though the canonical blob (and Linux/macOS
+    # checkouts) uses LF; that transport detail must not invalidate evidence.
+    data = _normalize_checkout_newlines((ROOT / name).read_bytes())
     if name == "Cargo.toml":
         # The version normalization stays: `[workspace.package] version` is not
         # in a profile table, but keeping the substitution makes the intent

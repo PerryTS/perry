@@ -1517,7 +1517,7 @@ mod c3c_pic_tests {
     #[test]
     fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
         let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
+        {
             let packed = b"picdel_a\0picdel_b\0picdel_c";
             let mk = || {
                 crate::object::js_object_alloc_class_with_keys(
@@ -1688,7 +1688,7 @@ mod array_length_fast_path_tests {
     #[test]
     fn array_length_short_circuit_agrees_with_the_full_ladder() {
         let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
+        {
             let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
             let other_key = crate::string::js_string_from_bytes(b"lengtx".as_ptr(), 6);
             for n in [0u32, 1, 5, 40] {

@@ -376,12 +376,12 @@ pub(crate) unsafe fn may_be_symbol_header(ptr: *const u8) -> bool {
     std::ptr::read_unaligned(ptr as *const u32) == SYMBOL_MAGIC
 }
 
+#[cfg(test)]
+thread_local! {
 /// Test-only override that forces [`may_be_symbol_header`] to answer `true` —
 /// i.e. removes the screen without deleting it, so a test can show the screen is
 /// what makes the fast path fast rather than dead code in front of a probe that
 /// would have answered anyway.
-#[cfg(test)]
-thread_local! {
     static TEST_DISABLE_SYMBOL_MAGIC_SCREEN: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
@@ -402,13 +402,13 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
     guard.as_mut().unwrap().insert(ptr);
 }
 
+#[cfg(test)]
+thread_local! {
 /// Every entry into [`is_registered_symbol`] that got past the latch, i.e.
 /// every caller that could not rule a `Symbol` out more cheaply. Twin of
 /// `map::TEST_MAP_REGISTRY_PROBES`: #7850's header-directed dispatch in
 /// `object::native_call_method` is asserted against this, so "the probe no
 /// longer runs on a plain-object dispatch" is a test rather than a claim.
-#[cfg(test)]
-thread_local! {
     static TEST_SYMBOL_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

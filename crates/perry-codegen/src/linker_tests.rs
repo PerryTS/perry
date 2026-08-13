@@ -165,6 +165,7 @@ fn compile_plan_records_effective_target_and_native_tuning() {
         None,
         0,
         0,
+        None,
         false,
     );
     assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
@@ -199,6 +200,7 @@ fn compile_plan_size_optimizes_oversized_many_function_module() {
         None,
         huge,
         many_funcs,
+        None,
         false,
     );
     assert!(plan.clang_args.contains(&"-Os".to_string()));
@@ -219,6 +221,7 @@ fn compile_plan_keeps_o0_for_oversized_giant_function_monolith() {
         None,
         huge,
         2, // ~3 MB/fn — far above the density cap
+        None,
         false,
     );
     assert!(plan.clang_args.contains(&"-O0".to_string()));
@@ -235,6 +238,7 @@ fn compile_plan_skips_native_tuning_for_explicit_target() {
         Some("x86_64-unknown-linux-gnu"),
         0,
         0,
+        None,
         false,
     );
     assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
@@ -328,6 +332,7 @@ fn compile_plan_metadata_json_contains_object_source() {
         Some("x86_64-unknown-linux-gnu"),
         0,
         0,
+        None,
         false,
     );
     write_compile_plan_metadata(&plan, &temp).unwrap();

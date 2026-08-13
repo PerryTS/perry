@@ -50,7 +50,7 @@ EXCLUDE = {"crates/perry-runtime/src/gc/roots/runtime_handles.rs"}
 def count():
     total, per_file = 0, {}
     for f in sorted(SRC.rglob("*.rs")):
-        rel = str(f.relative_to(ROOT))
+        rel = f.relative_to(ROOT).as_posix()
         if rel in EXCLUDE:
             continue
         n = len(PAT.findall(f.read_text(encoding="utf-8", errors="replace")))

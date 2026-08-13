@@ -5,6 +5,7 @@
 //! targets the accessors return 0 and the setters are no-ops.
 
 use super::format_out_of_range_number;
+#[cfg(unix)]
 use crate::string::StringHeader;
 use crate::value::JSValue;
 

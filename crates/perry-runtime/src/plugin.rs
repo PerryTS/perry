@@ -19,7 +19,9 @@
 //! registration order.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+#[cfg(not(windows))]
+use std::ffi::CStr;
+use std::ffi::CString;
 use std::sync::Mutex;
 
 use lazy_static::lazy_static;

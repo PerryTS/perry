@@ -24,7 +24,7 @@ use crate::expr::{
 };
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I64, PTR};
 
 use super::try_emit_buffer_read_intrinsic;
 

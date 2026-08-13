@@ -16,6 +16,9 @@ echo "==> Building perry (release)…"
 cargo build --release -p perry
 
 PERRY="$ROOT/target/release/perry"
+if [[ -f "${PERRY}.exe" ]]; then
+  PERRY="${PERRY}.exe"
+fi
 
 mkdir -p "$ROOT/docs/src/api" "$ROOT/docs/api"
 

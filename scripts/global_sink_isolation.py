@@ -141,7 +141,7 @@ def clear_helpers(body: str) -> list:
 
 
 def rust_sources() -> dict:
-    return {p: p.read_text() for p in RUNTIME_SRC.rglob("*.rs")}
+    return {p: p.read_text(encoding="utf-8") for p in RUNTIME_SRC.rglob("*.rs")}
 
 
 def find_fn_body(sources: dict, name: str):
@@ -392,7 +392,7 @@ def self_test() -> int:
 
     # 5. The parsers must survive the REAL tree, or the gate is vacuous.
     try:
-        real_support = SUPPORT.read_text()
+        real_support = SUPPORT.read_text(encoding="utf-8")
         helpers = clear_helpers(reset_body(real_support))
         if len(helpers) < 10:
             failures.append("only %d clear helpers parsed from the real %s" % (len(helpers), SUPPORT.name))
@@ -423,7 +423,12 @@ def main() -> int:
         return self_test()
 
     try:
-        violations = audit(rust_sources(), SUPPORT.read_text(), ALLOWLIST, floor=CLASSIFIED_FLOOR)
+        violations = audit(
+            rust_sources(),
+            SUPPORT.read_text(encoding="utf-8"),
+            ALLOWLIST,
+            floor=CLASSIFIED_FLOOR,
+        )
     except Violation as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 1

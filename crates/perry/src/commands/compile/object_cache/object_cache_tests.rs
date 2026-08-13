@@ -604,6 +604,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
         "PERRY_ENTRY_SYMBOL",
         "PERRY_CODEGEN_UNITS",
+        "PERRY_CODEGEN_UNIT_BYTES",
         "PERRY_CODEGEN_UNIT_SIZE",
         "PERRY_GC_MOVING_LOOP_POLLS",
         // Inline-hot-small (#6850 follow-up).

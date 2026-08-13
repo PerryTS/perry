@@ -153,7 +153,6 @@ pub(crate) enum PromotionLiveness {
 /// promotion policy is calibrated against — `PERRY_GC_DIAG=1` prints it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct InPlacePromotionStats {
-    pub(crate) blocks: usize,
     pub(crate) objects: usize,
     pub(crate) live_objects: usize,
     pub(crate) bytes: usize,
@@ -304,10 +303,7 @@ pub(crate) fn finish_in_place_promotion(
     promotion: InPlacePromotion,
     liveness: PromotionLiveness,
 ) -> InPlacePromotionStats {
-    let mut stats = InPlacePromotionStats {
-        blocks: promotion.blocks.len(),
-        ..InPlacePromotionStats::default()
-    };
+    let mut stats = InPlacePromotionStats::default();
     if promotion.blocks.is_empty() {
         return stats;
     }

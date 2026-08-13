@@ -228,7 +228,7 @@ fn check(kind: &str, walker: &str, samples: &[Sample], expected: usize, frame: F
 // has nowhere else to put a result, and a thread-local keeps it off `static
 // mut` (whose references the 2024 edition rejects). Each test drives one probe
 // to completion before reading, so there is no interleaving to reason about.
-thread_local! {
+crate::perry_thread_local! {
     static PROBE: std::cell::RefCell<ProbeState> = const {
         std::cell::RefCell::new(ProbeState {
             frame: ELF_FRAME,

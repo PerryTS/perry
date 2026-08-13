@@ -82,8 +82,20 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
             }
         }
     }
-    // Clone shared keys array if needed, then append.
-    let owned_keys = if key_count == (*obj).field_count as usize {
+    // Clone a shape-cache / transition-cache keys array before appending.
+    //
+    // The old `key_count == field_count` proxy was not an ownership test.
+    // Objects may legitimately have a different logical field boundary while
+    // still pointing at the shared shape array. In that case defineProperty
+    // appended directly to the cache entry, so sibling `{}` allocations grew
+    // the same phantom own key (Babel's webpack exports objects exposed this
+    // as an enumerable `ALIAS_KEYS: undefined`). The caches already stamp the
+    // authoritative GC_FLAG_SHAPE_SHARED bit; use it just like the ordinary
+    // [[Set]] growth path does.
+    let keys_gc_header =
+        (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let keys_shared = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
+    let owned_keys = if keys_shared {
         let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
         refresh_define_property_roots!();
         let keys = (*obj).keys_array;
@@ -139,6 +151,34 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
     if new_index < inline_capacity && new_index >= (*obj).field_count {
         (*obj).field_count = new_index + 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn define_property_key_growth_does_not_mutate_a_shared_shape_sibling() {
+        unsafe {
+            let packed = b"";
+            let first =
+                crate::object::js_object_alloc_with_shape(0x6B45_5901, 0, packed.as_ptr(), 0);
+            let sibling =
+                crate::object::js_object_alloc_with_shape(0x6B45_5901, 0, packed.as_ptr(), 0);
+            assert_eq!((*first).keys_array, (*sibling).keys_array);
+
+            // A logical-field/key-count mismatch is not evidence that the
+            // keys array is privately owned. This was the false assumption in
+            // the old clone condition.
+            (*first).field_count = 1;
+            let key = crate::string::js_string_from_bytes(b"ALIAS_KEYS".as_ptr(), 10);
+            ensure_key_in_keys_array(first, key);
+
+            assert!(own_key_present(first, key));
+            assert!(!own_key_present(sibling, key));
+            assert_ne!((*first).keys_array, (*sibling).keys_array);
+        }
     }
 }
 

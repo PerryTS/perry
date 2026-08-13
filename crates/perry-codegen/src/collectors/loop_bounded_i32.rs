@@ -1088,7 +1088,7 @@ fn step_magnitude_bound(
             }
             let divisor = integer_literal(right)?;
             let magnitude = u128::from(divisor.unsigned_abs());
-            (magnitude > 0).then_some(magnitude - 1)
+            (magnitude > 0).then(|| magnitude - 1)
         }
         // Bitwise operands are ToInt32-coerced. For a non-negative literal
         // mask, the source literal itself is a conservative magnitude bound

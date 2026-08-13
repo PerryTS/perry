@@ -544,6 +544,21 @@ pub(super) fn compile_closure(
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
     };
 
+    // A LocalId is module-unique, but a closure can only observe ids referenced
+    // or declared in its own body (plus its parameters/capture list). Older
+    // code cloned the complete module-wide boxed/type/reassignment tables into
+    // every closure's FnCtx. Generated bundles contain thousands of closures,
+    // making that O(closures * module locals) in both time and retained memory.
+    // Build the precise key set once and project each global oracle through it.
+    let mut closure_referenced_ids: HashSet<u32> = HashSet::new();
+    collect_ref_ids_in_stmts(body, &mut closure_referenced_ids);
+    let mut closure_declared_ids: HashSet<u32> = HashSet::new();
+    collect_let_ids(body, &mut closure_declared_ids);
+    let mut closure_relevant_ids = closure_referenced_ids.clone();
+    closure_relevant_ids.extend(closure_declared_ids.iter().copied());
+    closure_relevant_ids.extend(params.iter().map(|p| p.id));
+    closure_relevant_ids.extend(captures.iter().copied());
+
     let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
@@ -616,7 +631,11 @@ pub(super) fn compile_closure(
 
     let _ = lf.create_block("entry");
 
-    let mut closure_boxed_vars = module_boxed_vars.clone();
+    let mut closure_boxed_vars: HashSet<u32> = closure_relevant_ids
+        .iter()
+        .filter(|id| module_boxed_vars.contains(id))
+        .copied()
+        .collect();
     super::arguments::add_arguments_mapped_boxes(params, &mut closure_boxed_vars);
 
     // Allocate slots for the closure's own params (captures don't get
@@ -645,8 +664,10 @@ pub(super) fn compile_closure(
     // typed fast path and return undefined.
     let mut local_types: HashMap<u32, perry_hir::types::Type> =
         params.iter().map(|p| (p.id, p.ty.clone())).collect();
-    for (id, ty) in module_receiver_types.iter() {
-        local_types.entry(*id).or_insert_with(|| ty.clone());
+    for id in &closure_relevant_ids {
+        if let Some(ty) = module_receiver_types.get(id) {
+            local_types.entry(*id).or_insert_with(|| ty.clone());
+        }
     }
 
     // Build the capture map: each captured LocalId gets the index it
@@ -668,17 +689,13 @@ pub(super) fn compile_closure(
         .filter(|id| !module_globals.contains_key(id))
         .collect();
     {
-        let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        collect_ref_ids_in_stmts(body, &mut referenced);
-        let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        collect_let_ids(body, &mut inner_lets);
         let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
         let already: std::collections::HashSet<u32> = auto_captures.iter().copied().collect();
-        let mut sorted: Vec<u32> = referenced.into_iter().collect();
+        let mut sorted: Vec<u32> = closure_referenced_ids.iter().copied().collect();
         sorted.sort();
         for id in sorted {
             if !param_ids.contains(&id)
-                && !inner_lets.contains(&id)
+                && !closure_declared_ids.contains(&id)
                 && !already.contains(&id)
                 && !module_globals.contains_key(&id)
             {
@@ -837,7 +854,11 @@ pub(super) fn compile_closure(
         std::collections::HashSet::new()
     };
 
-    let mut reassigned_locals = module_reassigned_locals.clone();
+    let mut reassigned_locals: HashSet<u32> = closure_relevant_ids
+        .iter()
+        .filter(|id| module_reassigned_locals.contains(id))
+        .copied()
+        .collect();
     reassigned_locals.extend(crate::collectors::reassigned_locals(body));
 
     // #7055: spill the closure's own `%this_closure` pointer into a

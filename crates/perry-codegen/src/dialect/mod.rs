@@ -38,6 +38,7 @@ mod tests;
 /// native path pre-declares every define before reading any body — calls to
 /// module-internal functions are forward references at module scope, exactly
 /// like registers are at function scope.
+#[allow(dead_code)] // retained as the text-path oracle for native-emission debugging
 pub(crate) fn predeclare_function_from_text<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,
@@ -107,6 +108,7 @@ impl<'ctx, 'm> FnStream<'ctx, 'm> {
 
 /// Parse `fn_text` (a complete `define ... { ... }`) and build it into
 /// `module`. Returns the number of instructions constructed.
+#[allow(dead_code)] // retained as the text-path oracle for native-emission debugging
 pub(crate) fn add_function_from_text<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,

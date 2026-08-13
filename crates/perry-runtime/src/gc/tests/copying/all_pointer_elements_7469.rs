@@ -151,13 +151,11 @@ fn a_numeric_layout_probe_revokes_the_declaration_and_the_header_test_catches_it
     // The refused push routes through the runtime, which records the slot.
     let child = fresh_string(b"after_revocation");
     let arr = crate::array::js_array_push_f64(arr, f64::from_bits(string_bits(child)));
-    unsafe {
-        assert!(
-            test_heap_child_slot_count(arr as *mut u8) >= 1,
-            "the runtime push must have recorded the pointer the elided store \
-             was refused for"
-        );
-    }
+    assert!(
+        test_heap_child_slot_count(arr as *mut u8) >= 1,
+        "the runtime push must have recorded the pointer the elided store \
+         was refused for"
+    );
 }
 
 #[test]

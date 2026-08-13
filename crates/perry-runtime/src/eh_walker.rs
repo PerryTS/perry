@@ -270,7 +270,6 @@ fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, 
             let e_off = u16at(page_off + 4) as usize;
             let count = u16at(page_off + 6) as usize;
             let enc_off = u16at(page_off + 8) as usize;
-            let enc_count = u16at(page_off + 10) as usize;
             for e in 0..count {
                 let raw = u32at(page_off + e_off + 4 * e);
                 let idx = (raw >> 24) as usize;
