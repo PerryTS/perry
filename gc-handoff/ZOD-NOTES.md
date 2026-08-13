@@ -859,8 +859,10 @@ is byte-identical, so the rooting did not change the answer.
 mutable-capture box read held across property-get helpers and used as the callee
 of `js_closure_call1/2`. That is the shape on §15's failing stack
 (`core/schemas.ts` closure 138), and the same callee-outlives-arguments defect
-in a third family of arms (`lower_call/early_branches.rs:384`,
-`extern_func.rs`, `static_method.rs`). It is unfixed as of this note.
+in a third family of arms.
+
+**Fixed too, in `lower_call/early_branches.rs:384`** — and the final number is
+better than this section's 26. See §22.
 
 ## 19. The fix does NOT close #7803 — the dynamic half says so
 
@@ -1135,3 +1137,43 @@ worktree.
 commit before any long-running step, and never treat a worktree `target/` as
 durable for longer than a single command. The 25 minutes to rebuild is the
 whole cost when you have commits; it is the whole session when you don't.
+
+## 22. Final static number: 66 → 3, and a lesson about which build you measured
+
+The third arm (`lower_call/early_branches.rs`: `recv_box` lowered, arguments
+lowered, then unmasked into `closure_handle`) was fixed but never measured
+statically — the 26 in §18 was taken from a corpus emitted before that fix
+existed. On a CLEAN rebuild with all three arms:
+
+```
+=== statepoint hazards: 3  (unrooted: 3, stale: 0)
+       2  unrooted/alloc     1  unrooted/rootread
+       1  sink=js_array_concat
+       1  sink=js_rel_ge
+       1  sink=js_get_string_pointer_unified
+```
+
+| sink | before | after |
+|---|---|---|
+| `js_new_function_construct` | 24 | **0** |
+| `js_closure_call_apply_with_spread` | 16 | **0** |
+| `js_closure_call1` / `js_closure_call2` | 23 | **0** |
+| everything else | 3 | 3 |
+| **total** | **66** | **3** |
+
+Live bundles 39,073 → 39,186; relocations 444,472. The dependency corpus under
+the shipping lowering is now within a hair of the zero its curated sibling is
+gated at.
+
+> **The lesson is about the 26, not the 3.** That number came from an
+> incremental build whose corpus predated one of the three fixes, and it went
+> into a committed gate budget. A ratchet's number has to come from a tree
+> someone else can reproduce — a clean build — or the ratchet encodes whatever
+> the build directory happened to contain that afternoon. Caught only because
+> the worktree was swept and the rebuild was from scratch; a friendlier box
+> would have shipped `--max-unrooted 26` and never known.
+
+The gate now carries `--max-unrooted 3 --max-stale 0`.
+
+**None of this closes #7803** (§19): the failure rate is unmoved. Two separate
+true statements, and the second one is the one the issue is about.

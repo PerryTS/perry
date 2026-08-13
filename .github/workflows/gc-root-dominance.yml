@@ -679,12 +679,21 @@ jobs:
       # 39 into the js_closure_call family, i.e. the two shapes #7803 surfaces
       # as ("Cannot read properties of undefined" / "value is not a function").
       #
-      # BUDGET, not allowlist, and it can only go down. 66 -> 26 when the
+      # BUDGET, not allowlist, and it can only go down. 66 -> 3 when the
       # callee-outlives-arguments defect was fixed in new_dynamic.rs,
-      # call_spread.rs and early_branches.rs. The residual 26 are a population
-      # under triage (19 are the `js_box_get_bits` mutable-capture-box shape),
-      # not a list anyone has adjudicated one by one — same reasoning the
-      # `--stale-registers` budget records.
+      # call_spread.rs and early_branches.rs — the whole
+      # js_new_function_construct sink (24), the whole
+      # js_closure_call_apply_with_spread sink (16) and the whole
+      # js_closure_call1/2 sink (23). The residual 3 are one each of
+      # js_array_concat, js_rel_ge and js_get_string_pointer_unified: a
+      # population under triage, not a list anyone has adjudicated one by one
+      # — same reasoning the `--stale-registers` budget records.
+      #
+      # Measured on a CLEAN rebuild. An earlier incremental build read 26 for
+      # the same source, because the corpus had been emitted before the third
+      # arm's fix existed; the number in a ratchet has to come from a tree
+      # someone can reproduce, not from whatever the build directory happened
+      # to contain.
       - name: Emit the dependency-scale NATIVE (statepoint) IR corpus
         run: ./scripts/gc_root_dominance_dep_native_corpus.sh ir-corpus-dep-native
 
@@ -698,7 +707,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 26 \
+            --max-unrooted 3 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \
