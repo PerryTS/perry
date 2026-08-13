@@ -373,11 +373,20 @@ jobs:
             echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
             exit 1
           fi
-          export PERRY_LLVM_OPT="$llvm_bin/opt$exe"
-          export PERRY_LLVM_CLANG="$llvm_bin/clang$exe"
+          llvm_opt="$llvm_bin/opt$exe"
+          llvm_clang="$llvm_bin/clang$exe"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Shell tools need the POSIX path above, while native perry.exe
+            # reads these environment values directly as Windows PathBufs.
+            export PERRY_LLVM_OPT="$(cygpath -w "$llvm_opt")"
+            export PERRY_LLVM_CLANG="$(cygpath -w "$llvm_clang")"
+          else
+            export PERRY_LLVM_OPT="$llvm_opt"
+            export PERRY_LLVM_CLANG="$llvm_clang"
+          fi
           echo "RS4GC toolchain: $llvm_bin"
-          "$PERRY_LLVM_OPT" --version | head -2
-          "$PERRY_LLVM_CLANG" --version | head -2
+          "$llvm_opt" --version | head -2
+          "$llvm_clang" --version | head -2
 
           pass=0
           total=0
