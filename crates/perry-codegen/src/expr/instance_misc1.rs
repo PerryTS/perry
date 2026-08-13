@@ -1626,8 +1626,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Emit a per-call-site rodata constant. The IR
                     // byte-escape format matches what
                     // `add_named_string_constant` produces elsewhere.
-                    let idx = ctx.typed_parse_counter;
-                    ctx.typed_parse_counter += 1;
+                    let idx = ctx.ic_site_counter;
+                    ctx.ic_site_counter += 1;
                     let gname = format!("perry_typed_parse_keys_{}", idx);
                     let bytes_len = packed_bytes.len();
                     let mut lit = String::with_capacity(bytes_len + 8);

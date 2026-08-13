@@ -8250,6 +8250,57 @@ fn typed_i32_return_module(case: &str) -> Module {
     }
 }
 
+fn typed_parse_spec_clone_rodata_module() -> Module {
+    let properties = [
+        (
+            "a".to_string(),
+            PropertyInfo {
+                ty: Type::String,
+                optional: false,
+                readonly: false,
+            },
+        ),
+        (
+            "b".to_string(),
+            PropertyInfo {
+                ty: Type::String,
+                optional: false,
+                readonly: false,
+            },
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let record_type = Type::Object(ObjectType {
+        name: None,
+        properties,
+        property_order: Some(vec!["a".to_string(), "b".to_string()]),
+        index_signature: None,
+    });
+    let return_type = Type::Array(Box::new(record_type.clone()));
+    let mut module = module_with_classes_and_params(
+        "typed_parse_spec_clone_rodata.ts",
+        Vec::new(),
+        vec![param(1, "n", Type::Number)],
+        return_type.clone(),
+        vec![Stmt::Return(Some(Expr::JsonParseTyped {
+            text: Box::new(Expr::String("[{\"a\":\"x\",\"b\":\"y\"}]".to_string())),
+            ty: return_type,
+            ordered_keys: Some(vec!["a".to_string(), "b".to_string()]),
+        }))],
+    );
+    module.functions[0].name = "parse_records".to_string();
+    // The integer argument selects a full-body `$spec_i32` entry while the
+    // ordinary boxed body remains present. Both lower the typed parse site.
+    module.init = vec![Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::Integer(1)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    })];
+    module
+}
+
 fn typed_f64_method_clone_module() -> Module {
     let mut calc = class(201, "Calc", Vec::new());
     calc.methods.push(Function {
@@ -11178,6 +11229,38 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
     assert!(
         !caller_ir.contains(&format!("call double @{public}(")),
         "same-module direct caller should not bounce through the public JSValue wrapper:\n{caller_ir}"
+    );
+}
+
+#[test]
+fn typed_parse_rodata_names_are_unique_across_spec_and_boxed_bodies() {
+    let ir = String::from_utf8(
+        compile_module(&typed_parse_spec_clone_rodata_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("perry_fn_typed_parse_spec_clone_rodata_ts__parse_records$spec_i32"),
+        "fixture must exercise the specialised and boxed body pair:\n{ir}"
+    );
+
+    let globals: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("@perry_typed_parse_keys_"))
+        .collect();
+    assert_eq!(
+        globals.len(),
+        2,
+        "both function bodies must materialise their parse schema:\n{ir}"
+    );
+    let names: std::collections::HashSet<&str> = globals
+        .iter()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert_eq!(
+        names.len(),
+        globals.len(),
+        "module-level LLVM globals must not be redefined:\n{}",
+        globals.join("\n")
     );
 }
 

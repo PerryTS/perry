@@ -1300,10 +1300,11 @@ pub(crate) struct FnCtx<'a> {
     /// `JsonParseTyped` codegen. Each entry is the full LLVM IR line
     /// `@<name> = private unnamed_addr constant [N x i8] c"..."` to
     /// append after the function finishes. Mirrors the `ic_globals`
-    /// drain pattern. Also: counter for unique names at each call
-    /// site in this function.
+    /// drain pattern. Globals use `ic_site_counter` as their module-wide site
+    /// identity: function bodies can be emitted more than once (for example a
+    /// specialised ABI body plus its boxed body), so a per-function counter
+    /// would collide across those emissions.
     pub typed_parse_rodata: Vec<String>,
-    pub typed_parse_counter: u32,
 
     /// (Issue #50) Per-function row aliases. When a function declares
     /// `let krow = X[i]` where `X` is in `flat_const_arrays`, this map

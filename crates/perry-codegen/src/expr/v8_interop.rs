@@ -64,8 +64,8 @@ pub(crate) fn emit_v8_export_call(
     export_name: &str,
     lowered_args: &[String],
 ) -> String {
-    let idx = ctx.typed_parse_counter;
-    ctx.typed_parse_counter += 1;
+    let idx = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
     let spec_global = format!("perry_v8_spec_{}", idx);
     let name_global = format!("perry_v8_name_{}", idx);
     let escape = |s: &str| -> String {
@@ -160,8 +160,8 @@ pub(crate) fn emit_v8_member_method_call(
     method: &str,
     lowered_args: &[String],
 ) -> String {
-    let idx = ctx.typed_parse_counter;
-    ctx.typed_parse_counter += 1;
+    let idx = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
     let spec_global = format!("perry_v8_mspec_{}", idx);
     let member_global = format!("perry_v8_mmember_{}", idx);
     let method_global = format!("perry_v8_mmethod_{}", idx);

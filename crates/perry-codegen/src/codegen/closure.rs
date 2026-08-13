@@ -1090,7 +1090,6 @@ pub(super) fn compile_closure(
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
         typed_parse_rodata: Vec::new(),
-        typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
         buffer_view_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),
