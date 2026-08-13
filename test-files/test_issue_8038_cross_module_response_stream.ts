@@ -54,6 +54,18 @@ async function validate(label: string, response: Response): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const initializerHeaders = new Headers({ x: "a" });
+  const copiedHeadersResponse = new Response(null, {
+    headers: initializerHeaders,
+  });
+  console.log(
+    `headers-copy:identity=${copiedHeadersResponse.headers === initializerHeaders}`,
+  );
+  initializerHeaders.set("x", "b");
+  console.log(`headers-copy:response=${copiedHeadersResponse.headers.get("x")}`);
+  copiedHeadersResponse.headers.set("x", "c");
+  console.log(`headers-copy:initializer=${initializerHeaders.get("x")}`);
+
   await validate("sync", syncResponse());
   await validate("async", await asyncResponse());
   const next = await asyncNextResponse();

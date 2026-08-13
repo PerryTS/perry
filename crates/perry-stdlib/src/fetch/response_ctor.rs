@@ -87,16 +87,14 @@ pub unsafe extern "C" fn js_response_new(
     } else {
         HeadersStore::default()
     };
+    // A Response owns a private Headers list. The constructor input may be an
+    // existing Headers object, so retaining its registry id would make
+    // mutations alias in both directions instead of copying the initializer.
+    let response_headers_id = (headers_id != 0).then(|| alloc_headers(headers.clone()));
     let id = alloc_response(status_u16, status_text, headers, body, body_present);
-    if headers_id != 0 || body_stream_id.is_some() {
+    if response_headers_id.is_some() || body_stream_id.is_some() {
         if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {
-            // The runtime always materializes a fresh Headers handle for the
-            // constructor init, so it is already the response's private copy.
-            // Retain that handle as the live `response.headers` backing instead
-            // of cloning its Vec into a second registry entry on first read.
-            // Besides preserving identity, this keeps allocation/deallocation
-            // inside one provider image when Perry is hosted as split dylibs.
-            if headers_id != 0 {
+            if let Some(headers_id) = response_headers_id {
                 resp.cached_headers_id = Some(headers_id);
             }
             if let Some(stream_id) = body_stream_id {

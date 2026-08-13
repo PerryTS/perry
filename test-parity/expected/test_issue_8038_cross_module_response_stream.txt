@@ -1,3 +1,6 @@
+headers-copy:identity=false
+headers-copy:response=a
+headers-copy:initializer=b
 sync:brand=true
 sync:status=207 Multi-Status
 sync:headers-stable=true

@@ -196,49 +196,7 @@ fn alloc_fetch_handle_id() -> usize {
 mod headers_json_test;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fetch_handle_ids_use_high_small_handle_range() {
-        use perry_runtime::value::addr_class;
-        assert!(FETCH_HANDLE_ID_START >= addr_class::COMMON_HANDLE_BAND_END);
-        assert!(FETCH_HANDLE_ID_END <= addr_class::HANDLE_BAND_MAX);
-
-        let native_id = crate::common::register_handle("native-request-marker".to_string());
-        let id = alloc_fetch_handle_id();
-        assert!((native_id as usize) < FETCH_HANDLE_ID_START);
-        assert!((FETCH_HANDLE_ID_START..FETCH_HANDLE_ID_END).contains(&id));
-        assert_ne!(native_id as usize, id);
-        crate::common::drop_handle(native_id);
-    }
-
-    /// `string_from_header` must treat a handle-band value (a Fetch / native
-    /// registry id, not a `StringHeader` pointer) as "not a string" and return
-    /// `None` WITHOUT dereferencing it. Regression for the doctor / mcp-list
-    /// startup SIGSEGV: `fetch()` called with a non-string first argument (a
-    /// `Request`/`Headers` object) passed the bare handle id into the
-    /// `url_ptr` `*StringHeader` slot, and reading `(*ptr).byte_len` at `id+4`
-    /// dereferenced an unmapped low address.
-    #[test]
-    fn string_from_header_rejects_handle_band_ids() {
-        use perry_runtime::value::addr_class;
-        for &id in &[
-            1usize,                                  // common native handle
-            addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
-            addr_class::FETCH_HANDLE_BAND_START + 2, // a fetch handle id
-            addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
-        ] {
-            assert!(addr_class::is_handle_band(id));
-            // Must return None without dereferencing the bogus pointer.
-            let r = unsafe { string_from_header(id as *const StringHeader) };
-            assert!(
-                r.is_none(),
-                "handle-band id {id:#x} must be rejected, got {r:?}"
-            );
-        }
-    }
-}
+mod tests;
 
 struct StreamState {
     status: u8, // 0=connecting, 1=streaming, 2=done, 3=error
@@ -1390,7 +1348,7 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Pr
         let guard = FETCH_RESPONSES.lock().unwrap();
         guard
             .get(&id)
-            .and_then(|resp| resp.headers.get("content-type"))
+            .and_then(|resp| response_headers_snapshot(resp).get("content-type"))
             .unwrap_or_default()
     };
     let body = match consume_response_body(handle) {

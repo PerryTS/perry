@@ -10,6 +10,10 @@ const FFI_SLOT_NANBOX_U64: u32 = 5;
 type FfiMutableRootVisitor = extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
 type FfiNamedMutableRootScanner =
     extern "C" fn(scanner_id: usize, visit: FfiMutableRootVisitor, ctx: *mut c_void);
+type StreamGetReaderFn = unsafe extern "C" fn(f64) -> f64;
+type StreamReaderReadFn = unsafe extern "C" fn(f64) -> *mut Promise;
+type StreamExpandoSetFn =
+    unsafe extern "C" fn(id: usize, key_ptr: *const u8, key_len: usize, value: f64) -> i32;
 
 extern "C" {
     fn perry_ffi_gc_register_mutable_root_scanner_named(
@@ -18,6 +22,13 @@ extern "C" {
         scanner_id: usize,
         scanner: FfiNamedMutableRootScanner,
     );
+    #[link_name = "js_register_stream_consumer_callbacks"]
+    fn provider_js_register_stream_consumer_callbacks(
+        get_reader: StreamGetReaderFn,
+        reader_read: StreamReaderReadFn,
+    );
+    #[link_name = "js_register_stream_expando_set"]
+    fn provider_js_register_stream_expando_set(hook: StreamExpandoSetFn);
 }
 
 pub(super) trait StreamRootVisitor {
@@ -83,12 +94,12 @@ pub(super) fn ensure_gc_registered() {
                 scan_stream_roots_ffi,
             );
         }
-        perry_runtime::node_submodules::js_register_stream_consumer_callbacks(
-            js_readable_stream_get_reader,
-            js_reader_read,
-        );
         unsafe {
-            perry_runtime::object::js_register_stream_expando_set(expando::stream_expando_set_hook);
+            provider_js_register_stream_consumer_callbacks(
+                js_readable_stream_get_reader,
+                js_reader_read,
+            );
+            provider_js_register_stream_expando_set(expando::stream_expando_set_hook);
         }
     });
 }
@@ -109,12 +120,12 @@ pub(super) fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
 
 pub(super) fn visit_stream_value_slot<V: StreamRootVisitor>(visitor: &mut V, slot: &mut u64) {
     let top = *slot >> 48;
-    if top == 0x7FFD || top == 0x7FFF {
+    if matches!(top, 0x7FFA | 0x7FFD | 0x7FFF) {
         visitor.visit_nanbox_u64_slot(slot);
     }
 }
 
-fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
+pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     expando::scan_expando_roots(visitor);
     if let Ok(mut map) = READABLE_STREAMS.lock() {
         for stream in map.values_mut() {
@@ -161,6 +172,21 @@ fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
             visitor.visit_i64_slot(&mut transform.flush_cb);
         }
     }
+    scan_transform_deferred_roots(visitor);
+    if let Ok(mut map) = READERS.lock() {
+        for reader in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut reader.closed_promise);
+        }
+    }
+    if let Ok(mut map) = WRITERS.lock() {
+        for writer in map.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut writer.closed_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut writer.ready_promise);
+        }
+    }
+}
+
+pub(super) fn scan_transform_deferred_roots<V: StreamRootVisitor>(visitor: &mut V) {
     if let Ok(mut map) = transform::TRANSFORM_WRITE_RELEASES.lock() {
         for promises in map.values_mut() {
             for slot in promises.iter_mut() {
@@ -184,17 +210,6 @@ fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
                 visitor.visit_raw_mut_ptr_slot(&mut job);
                 *slot = job as usize;
             }
-        }
-    }
-    if let Ok(mut map) = READERS.lock() {
-        for reader in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut reader.closed_promise);
-        }
-    }
-    if let Ok(mut map) = WRITERS.lock() {
-        for writer in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut writer.closed_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut writer.ready_promise);
         }
     }
 }
