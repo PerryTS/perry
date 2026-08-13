@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2929 entries across 124 modules.
+Total: 2933 entries across 125 modules.
 
 ## Modules
 
@@ -82,6 +82,7 @@ Total: 2929 entries across 124 modules.
 - [`perry/gc`](#perrygc)
 - [`perry/i18n`](#perryi18n)
 - [`perry/media`](#perrymedia)
+- [`perry/native`](#perrynative)
 - [`perry/plugin`](#perryplugin)
 - [`perry/system`](#perrysystem)
 - [`perry/thread`](#perrythread)
@@ -2521,6 +2522,18 @@ Total: 2929 entries across 124 modules.
 - `setRate` — module
 - `setVolume` — module
 - `stop` — module
+
+## `perry/native`
+
+### Methods
+
+- `alignof` — module *(intrinsic)*
+- `offsetof` — module *(intrinsic)*
+- `sizeof` — module *(intrinsic)*
+
+### Properties
+
+- `NativeArena`
 
 ## `perry/plugin`
 

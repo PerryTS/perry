@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2006 entries across 122 modules
+// Coverage: 2010 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2662,6 +2662,17 @@ declare module "perry/media" {
   export function setVolume(...args: any[]): any;
   /** stdlib */
   export function stop(...args: any[]): any;
+}
+
+declare module "perry/native" {
+  /** stdlib */
+  export const NativeArena: any;
+  /** intrinsic */
+  export function alignof(): number;
+  /** intrinsic */
+  export function offsetof(field: string): number;
+  /** intrinsic */
+  export function sizeof(): number;
 }
 
 declare module "perry/plugin" {

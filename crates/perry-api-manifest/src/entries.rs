@@ -383,6 +383,11 @@ const fn method_sig_entry(
     }
 }
 
+const fn intrinsic(mut entry: ApiEntry) -> ApiEntry {
+    entry.source = ApiSource::Intrinsic;
+    entry
+}
+
 const fn property(module: &'static str, name: &'static str) -> ApiEntry {
     ApiEntry {
         module,

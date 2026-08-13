@@ -9,9 +9,7 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use super::super::super::{lower_expr, LoweringContext};
 
 fn pod_layout_intrinsic_is_shadowed(ctx: &LoweringContext, name: &str) -> bool {
-    ctx.lookup_local(name).is_some()
-        || ctx.lookup_func(name).is_some()
-        || ctx.lookup_imported_func(name).is_some()
+    ctx.shadows_unqualified_global(name)
 }
 
 fn pod_layout_intrinsic_name(ctx: &LoweringContext, local_name: &str) -> Option<&'static str> {

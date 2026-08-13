@@ -468,6 +468,38 @@ fn pod_layout_constants_respect_shadowing() {
 }
 
 #[test]
+fn pod_layout_constants_respect_class_shadowing() {
+    let module = lower_src(
+        r#"
+        type Packet = PerryPod<{ tag: PerryU32; }>;
+        class sizeof {}
+        class alignof {}
+        class offsetof {}
+        const size = sizeof<Packet>();
+        const alignment = alignof<Packet>();
+        const offset = offsetof<Packet>("tag");
+        "#,
+    )
+    .expect("class-shadowed layout helper calls should use ordinary call lowering");
+
+    for name in ["size", "alignment", "offset"] {
+        assert!(matches!(
+            find_let(&module, name),
+            Stmt::Let {
+                init: Some(Expr::Call { .. }),
+                ..
+            }
+        ));
+    }
+    assert!(!module_any(&module, |expr| matches!(
+        expr,
+        Expr::PodLayoutSizeOf { .. }
+            | Expr::PodLayoutAlignOf { .. }
+            | Expr::PodLayoutOffsetOf { .. }
+    )));
+}
+
+#[test]
 fn pod_layout_constants_reject_dynamic_offset_path() {
     let err = lower_src(
         r#"
