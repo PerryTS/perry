@@ -102,19 +102,25 @@ the check and the fix cannot drift apart. A CPU-only wrapper (bcrypt, argon2)
 never enters a tokio context, and requiring a shared compilation there would
 fail links that work.
 
-**(b) Stop manufacturing the mismatch.**
-`build_missing_prebuilt_ext_lib` now refuses to build a tokio-using wrapper on
-its own under `PERRY_NO_AUTO_OPTIMIZE`, and says what to run instead. It cannot
-repair the situation itself: building the wrapper *with* `perry-stdlib-static`
-would fix tokio but silently overwrite the prebuilt stdlib with this
-invocation's feature set, dropping the `external-*-pump` features the no-auto
-flow needs — trading an abort for a hang.
+**(b) Warn where the mismatch is manufactured.**
+`build_missing_prebuilt_ext_lib` now says what it is about to do and why it
+usually ends badly, then builds anyway and lets (a) decide. It deliberately does
+**not** refuse: refusing there is a prediction, and two cargo invocations *can*
+unify to the same tokio — those links work, and a check that reads the actual
+archives should not fail them. (The first draft did refuse; it was softened
+after noticing it would fail `scripts/run_doc_tests.sh`-shaped builds that had
+never been shown to be broken.) It cannot repair the situation either: building
+the wrapper *with* `perry-stdlib-static` would fix tokio but silently overwrite
+the prebuilt stdlib with this invocation's feature set, dropping the
+`external-*-pump` features the no-auto flow needs — trading an abort for a hang.
 
 **(c) Make the harness's own builds coherent.**
 `run_parity_tests.sh`: fold `-p perry-ext-net` into `BUILD_PACKAGES` instead of
 a second invocation, and under `PERRY_SKIP_BUILD=1` verify every required ext
 archive is present in `PERRY_RUNTIME_DIR` before running anything — with the
-exact command, instead of leaving the operator to decode six SIGABRTs.
+exact command, instead of leaving the operator to decode six SIGABRTs. (For the
+`all` suite that list is now empty by design: its ext-routed tests take the
+auto-optimize path per test, see (d), so no prebuilt ext archive is required.)
 
 **(d) A second, independent defect the first one was hiding.**
 With coherent tokio the no-auto gap path still failed — now at *link*, with five
