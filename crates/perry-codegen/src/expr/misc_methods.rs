@@ -9,7 +9,6 @@ use perry_hir::{Expr, UnaryOp};
 
 use crate::nanbox::double_literal;
 use crate::native_value::{ExpectedNativeRep, LoweredValue, MaterializationReason, NativeRep};
-use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
 
 use super::{
@@ -840,7 +839,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     vec!["slot_kind=raw_i32_proven".to_string()],
                 );
                 Ok(result)
-            } else if is_numeric_expr(ctx, value) {
+            } else if crate::codegen::typed_arg_is_guard_candidate(
+                ctx,
+                crate::codegen::TypedParamRep::F64,
+                value,
+            ) {
                 let (raw, slot_note) = lower_iter_result_f64_payload(ctx, value)?;
                 let result = ctx.block().call(
                     DOUBLE,

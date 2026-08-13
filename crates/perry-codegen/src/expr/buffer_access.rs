@@ -11,7 +11,7 @@ use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 use super::{
     attach_buffer_view_facts, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
     buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
-    int_range_expr, is_numeric_expr, lower_expr_native, FnCtx,
+    int_range_expr, is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -721,7 +721,13 @@ pub(crate) fn lower_typed_array_store(
     {
         return Ok(None);
     }
-    if matches!(view.elem, BufferElem::F32 | BufferElem::F64) && !is_numeric_expr(ctx, value_expr) {
+    if matches!(view.elem, BufferElem::F32 | BufferElem::F64)
+        && !crate::codegen::typed_arg_is_guard_candidate(
+            ctx,
+            crate::codegen::TypedParamRep::F64,
+            value_expr,
+        )
+    {
         return Ok(None);
     }
     // `data_slot` is a raw cached pointer. It is stable across a collecting RHS
@@ -748,7 +754,21 @@ pub(crate) fn lower_typed_array_store(
     // The gates above guarantee this is inline-owned, non-movable storage when
     // the RHS collects, so loading the slot here does not reuse a GC-stale view
     // backing pointer.
-    let result = lower_expr_native(ctx, value_expr, expected)?;
+    // A declaration may nominate the floating store route, but the bytes we
+    // write must come from the live value. `lower_expr_native(F64)` still has
+    // legacy source-type fast paths, so annotation-only candidates are boxed
+    // and explicitly ToNumber-coerced here before a raw backing-store write.
+    let result = if matches!(proof.view.elem, BufferElem::F32 | BufferElem::F64)
+        && !is_numeric_expr(ctx, value_expr)
+    {
+        let boxed = lower_expr(ctx, value_expr)?;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)]);
+        LoweredValue::f64(coerced)
+    } else {
+        lower_expr_native(ctx, value_expr, expected)?
+    };
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
     let stored = match proof.view.elem {
         BufferElem::I8 | BufferElem::U8 => {

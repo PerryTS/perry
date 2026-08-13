@@ -1080,6 +1080,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     &parent_ctor.params,
                     &lowered_args,
+                    super_args,
                     parent_capture_fill,
                 );
 

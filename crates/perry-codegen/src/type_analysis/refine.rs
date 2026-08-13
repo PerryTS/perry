@@ -145,7 +145,9 @@ pub(crate) fn declared_property_type_from_annotation(
     property: &str,
 ) -> Option<HirType> {
     let declared = match object {
-        Expr::LocalGet(id) => ctx.local_types.get(id)?,
+        // This function produces metadata only. Representation consumers must
+        // either re-check the current value or use `proven_local_types`.
+        Expr::LocalGet(id) => ctx.local_type_hint(id)?,
         _ => return None,
     };
     match strip_nullish_union(declared)? {
@@ -169,6 +171,96 @@ pub(crate) fn declared_property_type_from_annotation(
         }
         // The alias was already expanded in place (`let e: { … } | null`).
         HirType::Object(obj) => obj.properties.get(property).map(|p| p.ty.clone()),
+        _ => None,
+    }
+}
+
+/// Derive only the runtime kind established by the initializer expression
+/// itself. This is deliberately narrower than [`refine_type_from_init`],
+/// which is also allowed to propagate declared property/return metadata for
+/// consumers that carry their own runtime guard.
+///
+/// Array/object/function details are erased to their outer runtime kind. A
+/// specialized method HIR node is intentionally not enough: it may have been
+/// selected from source metadata and may retain an override-aware fallback
+/// whose result has another kind. New expression variants are unproven by
+/// default until their full lowering contract is explicitly reviewed here.
+pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    match init {
+        Expr::LocalGet(id) => ctx.stable_local_type_proof(id).cloned(),
+        Expr::Undefined | Expr::Void(_) => Some(HirType::Void),
+        Expr::Null => Some(HirType::Null),
+        Expr::Bool(_) | Expr::Compare { .. } => Some(HirType::Boolean),
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Not => Some(HirType::Boolean),
+            UnaryOp::Neg | UnaryOp::BitNot if is_bigint_expr(ctx, operand) => Some(HirType::BigInt),
+            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot if is_numeric_expr(ctx, operand) => {
+                Some(HirType::Number)
+            }
+            _ => None,
+        },
+        Expr::Binary { op, left, right }
+            if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) =>
+        {
+            matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Mod
+                    | BinaryOp::Pow
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            )
+            .then_some(HirType::BigInt)
+        }
+        Expr::Binary { left, right, .. }
+            if is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right) =>
+        {
+            Some(HirType::Number)
+        }
+        Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
+            Some(HirType::String)
+        }
+        Expr::Array(_) | Expr::ArraySpread(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        Expr::MapNew | Expr::MapNewFromArray(_) => Some(HirType::Generic {
+            base: "Map".to_string(),
+            type_args: vec![HirType::Any, HirType::Any],
+        }),
+        Expr::SetNew | Expr::SetNewFromArray(_) => Some(HirType::Generic {
+            base: "Set".to_string(),
+            type_args: vec![HirType::Any],
+        }),
+        // These HIR constructors always allocate a Uint8Array representation;
+        // unlike metadata-selected access nodes, they have no override-aware
+        // result fallback.
+        Expr::Uint8ArrayNew(_) | Expr::Uint8ArrayFrom(_) => {
+            Some(HirType::Named("Uint8Array".to_string()))
+        }
+        Expr::Object(_) | Expr::ObjectSpread { .. } => Some(HirType::Object(Default::default())),
+        Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } => Some(HirType::Function(perry_hir::types::FunctionType {
+            params: Vec::new(),
+            return_type: Box::new(HirType::Any),
+            is_async: *is_async,
+            is_generator: *is_generator,
+        })),
+        // A constructor can explicitly return a different object, so `new C`
+        // proves only Object, never C's class-specific layout.
+        Expr::New { .. } => Some(HirType::Object(Default::default())),
+        Expr::BigInt(_) => Some(HirType::BigInt),
         _ => None,
     }
 }
@@ -497,11 +589,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 return None;
             }
             if let Expr::LocalGet(arr_id) = object.as_ref() {
-                if let Some(HirType::Array(elem_ty)) = ctx.local_types.get(arr_id) {
+                if let Some(HirType::Array(elem_ty)) = ctx.stable_local_type_proof(arr_id) {
                     return Some((**elem_ty).clone());
                 }
                 // str[i] — single-char string from string indexing.
-                if let Some(HirType::String) = ctx.local_types.get(arr_id) {
+                if let Some(HirType::String) = ctx.stable_local_type_proof(arr_id) {
                     return Some(HirType::String);
                 }
             }

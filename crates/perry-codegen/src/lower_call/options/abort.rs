@@ -21,7 +21,7 @@ pub(in crate::lower_call) fn is_abort_controller_expr(ctx: &FnCtx<'_>, e: &Expr)
     match e {
         Expr::New { class_name, .. } => class_name == "AbortController",
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Named(n)) if n == "AbortController"
         ),
         _ => false,
@@ -34,7 +34,7 @@ pub(in crate::lower_call) fn is_abort_signal_typed_expr(ctx: &FnCtx<'_>, e: &Exp
     matches!(
         e,
         Expr::LocalGet(id)
-            if matches!(ctx.local_types.get(id), Some(HirType::Named(n)) if n == "AbortSignal")
+            if matches!(ctx.stable_local_type_proof(id), Some(HirType::Named(n)) if n == "AbortSignal")
     )
 }
 

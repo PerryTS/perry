@@ -160,6 +160,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/check_file_size.sh
 
+      # #7846: erased TypeScript annotations and initializer-refined local
+      # types are hints, not runtime proofs. Every codegen read must choose the
+      # whole-region write-invalidating accessor or carry an inventoried
+      # runtime/representation justification. Count-exact entries make both a
+      # new consumer and a stale exemption fail.
+      - name: Local binding type-proof audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/local_binding_type_audit.py --self-test
+          python3 scripts/local_binding_type_audit.py
+
       # Well-known binding provenance pins: every third-party binding in
       # well_known_bindings.toml must carry an [bindings.<name>.upstream]
       # pin, and the lock-step rule (ported-at == version) must hold, so a

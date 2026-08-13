@@ -1026,7 +1026,7 @@ fn lower_new_impl_inner<'a>(
             caps_absent_from_args,
         });
     let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
-        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, ctor_capture_fill)
+        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, args, ctor_capture_fill)
     });
 
     if let Some(stop_at) = inherited_ctor_class.clone() {
@@ -1105,6 +1105,7 @@ fn lower_new_impl_inner<'a>(
                         ctx,
                         &parent_ctor.params,
                         &lowered_args,
+                        args,
                         parent_capture_fill,
                     );
 

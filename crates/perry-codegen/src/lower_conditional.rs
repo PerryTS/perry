@@ -34,10 +34,15 @@ use crate::types::{DOUBLE, I32, I64};
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
     if is_numeric_expr(ctx, cond_expr)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
+        // Keep bare binding truthiness independent of binding-level type
+        // evidence, including any future provenance extensions. Constructed
+        // numeric expressions stay inline; slot values use the total runtime
+        // predicate (#7846).
+        && !matches!(cond_expr, Expr::LocalGet(_))
     {
         return ctx.block().fcmp("one", cond_val, "0.0");
     }
-    if is_bool_expr(ctx, cond_expr) {
+    if is_bool_expr(ctx, cond_expr) && !matches!(cond_expr, Expr::LocalGet(_)) {
         // The lowered cond_val is *normally* NaN-boxed TAG_TRUE or TAG_FALSE,
         // but for optional `boolean` parameters that the caller didn't pass,
         // codegen pads the missing arg with TAG_UNDEFINED at the call site
@@ -51,6 +56,10 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         // `includeComponents=true` overload variant — the function returned
         // an `Array<{entity, components}>` of length 0 and downstream
         // assertions on the entity count fired.
+        //
+        // A bare local is also excluded above: a declared `boolean` can hold
+        // any runtime value, so its annotation may select this predicate but
+        // cannot license a tag equality as the answer.
         //
         // Use `bits == TAG_TRUE` instead, which is also two ALU ops and
         // correctly reports `false` for both TAG_FALSE and TAG_UNDEFINED.

@@ -128,8 +128,12 @@ fn lower_value_for_dynamic_index_set(
 /// typed-array object (data at byte 16): a type-confused write, not a missed
 /// optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
+        _ => crate::type_analysis::static_type_of(ctx, object),
+    };
     matches!(
-        crate::type_analysis::static_type_of(ctx, object),
+        ty,
         Some(perry_hir::types::Type::Named(name)) if matches!(
             name.as_str(),
             "Int8Array"
@@ -251,6 +255,15 @@ fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr)
     is_numeric_expr(ctx, index)
         && !numeric_index_has_integer_array_index_proof(ctx, index)
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
+}
+
+/// Whether a value is worth routing through the numeric-array store guard.
+///
+/// A source type is only a candidate here: both guarded store tiers validate
+/// the live JSValue before a raw-f64 store and retain the boxed fallback.  It
+/// must never be reused to elide layout notes or write barriers.
+fn guarded_numeric_array_store_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    crate::codegen::typed_arg_is_guard_candidate(ctx, crate::codegen::TypedParamRep::F64, value)
 }
 
 fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
@@ -1214,8 +1227,9 @@ pub(crate) fn lower(
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                         let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
                         let value_is_numeric = is_numeric_expr(ctx, value);
-                        let require_numeric_layout = value_is_numeric
-                            && expr_has_numeric_pointer_free_array_layout(ctx, object);
+                        let require_numeric_layout =
+                            guarded_numeric_array_store_candidate(ctx, value)
+                                && expr_has_numeric_pointer_free_array_layout(ctx, object);
                         // #7640 section A: the receiver was lowered, then the
                         // index, then — the hazard — the VALUE, with no
                         // rooting decision at all. `classify_for_length_hoist`'s
@@ -1435,8 +1449,8 @@ pub(crate) fn lower(
                 let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                 let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
                 let value_is_numeric = is_numeric_expr(ctx, value);
-                let require_numeric_layout =
-                    value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, object);
+                let require_numeric_layout = guarded_numeric_array_store_candidate(ctx, value)
+                    && expr_has_numeric_pointer_free_array_layout(ctx, object);
                 let local_id = if let Expr::LocalGet(id) = object.as_ref() {
                     Some(*id)
                 } else {

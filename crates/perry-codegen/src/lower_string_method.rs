@@ -559,7 +559,7 @@ fn lower_string_method_dispatch(
             let needle_is_regex = args.first().is_some_and(|needle| {
                 matches!(needle, Expr::RegExp { .. })
                     || matches!(needle, Expr::LocalGet(id) if matches!(
-                        ctx.local_types.get(id),
+                        ctx.stable_local_type_proof(id),
                         Some(HirType::Named(n)) if n == "RegExp"
                     ))
             });

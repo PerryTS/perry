@@ -10,7 +10,7 @@ use perry_hir::{BinaryOp, Expr};
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
-    is_bigint_expr, is_definitely_string_expr, is_numeric_expr, set_static_type_args,
+    is_bigint_expr, set_static_type_args, string_value_is_runtime_guaranteed,
 };
 use crate::types::{DOUBLE, F32, I1, I32, I64, PTR};
 
@@ -585,9 +585,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let use_boolean_set =
                 receiver_boolean_set && can_lower_i1_for_collection_value(ctx, value);
             let receiver_number_set = is_static_number_set(ctx, &set_expr);
-            let use_number_set = receiver_number_set && is_numeric_expr(ctx, value);
+            let use_number_set = receiver_number_set
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    value,
+                );
             let receiver_string_set = is_static_string_set(ctx, &set_expr);
-            let value_is_string = is_definitely_string_expr(ctx, value);
+            let value_is_string = string_value_is_runtime_guaranteed(ctx, value);
             let use_string_set = receiver_string_set && value_is_string;
             let new_handle = if use_i32_set {
                 let value_i32 =
@@ -857,9 +862,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let use_boolean_set =
                 receiver_boolean_set && can_lower_i1_for_collection_value(ctx, value);
             let receiver_number_set = is_static_number_set(ctx, set);
-            let use_number_set = receiver_number_set && is_numeric_expr(ctx, value);
+            let use_number_set = receiver_number_set
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    value,
+                );
             let use_string_set =
-                is_static_string_set(ctx, set) && is_definitely_string_expr(ctx, value);
+                is_static_string_set(ctx, set) && string_value_is_runtime_guaranteed(ctx, value);
             let s_box = lower_expr(ctx, set)?;
             let s_handle = {
                 let blk = ctx.block();
@@ -1092,9 +1102,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let use_boolean_set =
                 receiver_boolean_set && can_lower_i1_for_collection_value(ctx, value);
             let receiver_number_set = is_static_number_set(ctx, set);
-            let use_number_set = receiver_number_set && is_numeric_expr(ctx, value);
+            let use_number_set = receiver_number_set
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    value,
+                );
             let use_string_set =
-                is_static_string_set(ctx, set) && is_definitely_string_expr(ctx, value);
+                is_static_string_set(ctx, set) && string_value_is_runtime_guaranteed(ctx, value);
             let s_box = lower_expr(ctx, set)?;
             let s_handle = {
                 let blk = ctx.block();

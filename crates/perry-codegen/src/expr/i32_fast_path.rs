@@ -13,7 +13,8 @@ use crate::native_value::{
     MaterializationReason, NativeRep,
 };
 use crate::type_analysis::{
-    expr_may_return_boxed_value_from_raw_f64_fallback, is_definitely_string_expr, is_numeric_expr,
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr,
+    string_value_is_runtime_guaranteed,
 };
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
@@ -1006,7 +1007,7 @@ fn native_expr_kind(e: &Expr) -> &'static str {
 }
 
 fn lower_expr_native_string_ref(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    if !is_definitely_string_expr(ctx, e) {
+    if !string_value_is_runtime_guaranteed(ctx, e) {
         bail!("cannot lower expression as native StringRef without a string proof");
     }
     let boxed = lower_expr(ctx, e)?;

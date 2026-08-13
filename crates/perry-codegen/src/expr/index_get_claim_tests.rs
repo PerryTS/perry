@@ -20,10 +20,19 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::String)),
                 mutable: false,
-                // Deliberately violate the annotation in HIR. The source-level
-                // repro does the same through an `any` value stored in a typed
-                // field; this smaller shape reaches the identical IndexGet arm.
-                init: Some(Expr::String("ss".to_string())),
+                // Deliberately violate the annotation through a dynamic
+                // property read.  The initializer really evaluates to a
+                // String, but (unlike a literal initializer) supplies no
+                // compile-time representation proof, matching the source
+                // repro's `any` value stored in a typed field.
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::String("ss".to_string()),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
             },
             Stmt::Let {
                 id: RESULT,

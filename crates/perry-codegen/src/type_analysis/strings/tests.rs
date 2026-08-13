@@ -1,5 +1,5 @@
 //! cargo-test-visible coverage for the declaration-based string proof in
-//! `is_definitely_string_expr` and the `type X = { … }` arm of
+//! `string_value_is_runtime_guaranteed` and the `type X = { … }` arm of
 //! `static_type_of`.
 //!
 //! `"lit" + r.field` where `field` is DECLARED `string` must lower to the
@@ -137,7 +137,7 @@ fn alias_declared_string_field_takes_the_static_concat() {
 fn alias_declared_number_field_is_deliberately_not_routed() {
     // The alias resolution added here is consumed by the STRING side only.
     // `"t:" + r.amount` lands in the one-sided arm, which keeps the strict
-    // `is_definitely_string_expr` on the left and asks `is_numeric_expr` about
+    // `string_value_is_runtime_guaranteed` on the left and asks `is_numeric_expr` about
     // the right — and `is_numeric_expr`'s `PropertyGet` arm answers from
     // `ctx.classes` alone, on purpose: a `true` there means "this lowers to a
     // REAL double", and the guarded class-field diamond's cold arm can hand

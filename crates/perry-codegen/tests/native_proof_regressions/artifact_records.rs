@@ -174,11 +174,17 @@ fn artifact_records_write_barrier_child_js_value_bits() {
         Vec::new(),
         vec![
             param(1, "xs", Type::Array(Box::new(Type::Any))),
-            param(2, "key", Type::String),
             param(3, "value", Type::Any),
         ],
         Type::Number,
         vec![
+            Stmt::Let {
+                id: 2,
+                name: "key".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("key".to_string())),
+            },
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),

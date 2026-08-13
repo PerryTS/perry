@@ -14,7 +14,7 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::SetNew | Expr::SetNewFromArray(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Generic { base, .. }) if base == "Set"
         ),
         // `this.field` where the field is declared as `Set<T>` on the
@@ -40,12 +40,19 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 pub(crate) fn set_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
     match e {
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
-            Some(HirType::Generic { base, type_args }) if base == "Set" => {
-                Some(type_args.as_slice())
+        Expr::LocalGet(id)
+            if matches!(
+                ctx.stable_local_type_proof(id),
+                Some(HirType::Generic { base, .. }) if base == "Set"
+            ) =>
+        {
+            match ctx.local_type_hint(id) {
+                Some(HirType::Generic { base, type_args }) if base == "Set" => {
+                    Some(type_args.as_slice())
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
@@ -70,7 +77,7 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::UrlSearchParamsNew(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Named(name)) if name == "URLSearchParams"
         ),
         Expr::UrlGetSearchParams(_) => true,
@@ -83,7 +90,7 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         } if property == "searchParams" => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 return matches!(
-                    ctx.local_types.get(id),
+                    ctx.stable_local_type_proof(id),
                     Some(HirType::Named(name)) if name == "URL"
                 );
             }
@@ -136,7 +143,7 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::MapNew | Expr::MapNewFromArray(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Generic { base, .. }) if base == "Map"
         ),
         // `this.field` where the field is declared as `Map<K, V>` on
@@ -165,12 +172,19 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 pub(crate) fn map_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
     match e {
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
-            Some(HirType::Generic { base, type_args }) if base == "Map" => {
-                Some(type_args.as_slice())
+        Expr::LocalGet(id)
+            if matches!(
+                ctx.stable_local_type_proof(id),
+                Some(HirType::Generic { base, .. }) if base == "Map"
+            ) =>
+        {
+            match ctx.local_type_hint(id) {
+                Some(HirType::Generic { base, type_args }) if base == "Map" => {
+                    Some(type_args.as_slice())
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
@@ -201,7 +215,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.local_type_hint(id),
             Some(HirType::String | HirType::StringLiteral(_))
         ),
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
@@ -339,6 +353,23 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     if is_definitely_string_expr(ctx, e) {
         return true;
     }
+    if let Expr::LocalGet(id) = e {
+        return matches!(
+            ctx.local_type_hint(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        );
+    }
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    {
+        if matches!(
+            super::refine::declared_property_type_from_annotation(ctx, object, property),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ) {
+            return true;
+        }
+    }
     matches!(
         e,
         Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
@@ -370,6 +401,10 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// compare, whereas defaulting the other way costs a silent wrong answer.
 pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
+        Expr::LocalGet(id) => matches!(
+            ctx.stable_local_type_proof(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ),
         Expr::String(_)
         | Expr::WtfString(_)
         | Expr::StringCoerce(_)
@@ -504,7 +539,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => {
-            match ctx.local_types.get(id) {
+            match ctx.stable_local_type_proof(id) {
                 Some(HirType::String | HirType::StringLiteral(_)) => true,
                 // Union(String, Null/Void) — nullable strings are still
                 // strings at runtime when non-null. The ?. and != null

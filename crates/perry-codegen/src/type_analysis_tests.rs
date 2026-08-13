@@ -1,6 +1,6 @@
 use super::*;
 use perry_hir::infer_expr_type;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn hir_inferred_refinable_type_reuses_codegen_local_types() {
@@ -117,13 +117,15 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
 #[test]
 fn hir_inferred_types_reuse_imported_function_return_facts() {
     let local_types = HashMap::new();
+    let reassigned_locals = HashSet::new();
     let imported_func_return_types = HashMap::from([("readName".to_string(), HirType::String)]);
     let classes = HashMap::new();
     let interfaces = HashMap::new();
     let class_stack = Vec::new();
     let enums = HashMap::new();
     let facts = CodegenTypeFacts {
-        local_types: &local_types,
+        proven_local_types: &local_types,
+        reassigned_locals: &reassigned_locals,
         imported_func_return_types: &imported_func_return_types,
         classes: &classes,
         interfaces: &interfaces,
@@ -146,6 +148,30 @@ fn hir_inferred_types_reuse_imported_function_return_facts() {
         Some(HirType::String)
     );
     assert_eq!(infer_expr_type(&call, &facts), HirType::String);
+}
+
+#[test]
+fn codegen_type_facts_invalidate_reassigned_local_hints() {
+    use perry_hir::HirTypeFacts as _;
+
+    let local_types = HashMap::from([(7, HirType::String)]);
+    let reassigned_locals = HashSet::from([7]);
+    let imported_func_return_types = HashMap::new();
+    let classes = HashMap::new();
+    let interfaces = HashMap::new();
+    let class_stack = Vec::new();
+    let enums = HashMap::new();
+    let facts = CodegenTypeFacts {
+        proven_local_types: &local_types,
+        reassigned_locals: &reassigned_locals,
+        imported_func_return_types: &imported_func_return_types,
+        classes: &classes,
+        interfaces: &interfaces,
+        class_stack: &class_stack,
+        enums: &enums,
+    };
+
+    assert_eq!(facts.local_type(7), None);
 }
 
 #[test]
@@ -291,8 +317,10 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         aliases: Vec::new(),
     };
     let classes = HashMap::from([("Base".to_string(), &base), ("Widget".to_string(), &widget)]);
+    let reassigned_locals = HashSet::new();
     let facts = CodegenTypeFacts {
-        local_types: &local_types,
+        proven_local_types: &local_types,
+        reassigned_locals: &reassigned_locals,
         imported_func_return_types: &imported_func_return_types,
         classes: &classes,
         interfaces: &interfaces,
@@ -405,13 +433,15 @@ fn function_return_type_is_conservative() {
     // updated alongside it.
     use perry_hir::HirTypeFacts as _;
     let local_types = HashMap::new();
+    let reassigned_locals = HashSet::new();
     let imported_func_return_types = HashMap::new();
     let classes = HashMap::new();
     let interfaces = HashMap::new();
     let class_stack = Vec::new();
     let enums = HashMap::new();
     let facts = CodegenTypeFacts {
-        local_types: &local_types,
+        proven_local_types: &local_types,
+        reassigned_locals: &reassigned_locals,
         imported_func_return_types: &imported_func_return_types,
         classes: &classes,
         interfaces: &interfaces,

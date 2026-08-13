@@ -137,8 +137,8 @@ fn the_pipeline_produces_safepoints_and_a_map_on_every_shipped_target() {
         );
         assert_eq!(
             root_allocas(fn_ir),
-            2,
-            "[{target}] two heap locals, two root slots:\n{fn_ir}"
+            3,
+            "[{target}] two heap locals plus the unchecked generic-ABI parameter, three root slots:\n{fn_ir}"
         );
 
         let points = statepoints_of(&ir, target, &symbol);

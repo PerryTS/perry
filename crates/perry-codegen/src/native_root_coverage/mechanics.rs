@@ -83,9 +83,9 @@ fn a_live_pointer_local_is_a_root_in_the_emitted_map() {
         );
         assert_eq!(
             root_allocas(fn_ir),
-            2,
-            "[{target}] both heap locals must be `ptr addrspace(1)` root \
-             slots:\n{fn_ir}"
+            3,
+            "[{target}] both heap locals and the unchecked generic-ABI \
+             parameter must be `ptr addrspace(1)` root slots:\n{fn_ir}"
         );
 
         // (2) the result
@@ -226,7 +226,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
 ///
 /// **Sabotage** — `function/precise_roots.rs`, retyping every `alloca double`
 /// rather than only the bound roots: RED, the numeric program's root slots went
-/// 1 → 2 while the heap control stayed at 2, collapsing the difference the
+/// 2 → 3 while the heap control stayed at 3, collapsing the difference the
 /// mechanic is about.
 #[test]
 fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
@@ -263,9 +263,10 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
 
         assert_eq!(
             (root_allocas(numeric_fn), root_allocas(heap_fn)),
-            (1, 2),
-            "[{target}] two locals, of which only the heap one may reserve a \
-             root slot. Stated as a pair so a lowering that stopped rooting \
+            (2, 3),
+            "[{target}] the unchecked parameter is the common baseline; of \
+             the two locals, only the heap one may reserve another root slot. \
+             Stated as a pair so a lowering that stopped rooting \
              ANYTHING fails the second half instead of passing the first.\
              \nnumeric:\n{numeric_fn}\nheap:\n{heap_fn}"
         );
@@ -446,9 +447,10 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
         );
         assert_eq!(
             subject_allocs[1].live.len(),
-            1,
-            "[{target}] only `acc` may be live at the in-loop allocation. A \
-             second root here is the previous iteration's `tmp` surviving the \
+            2,
+            "[{target}] only `acc` and the unchecked loop-bound parameter may \
+             be live at the in-loop allocation. A third root here is the \
+             previous iteration's `tmp` surviving the \
              back edge: {:?}",
             subject_allocs[1]
         );
@@ -470,9 +472,10 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
         let control_allocs = control_points.at("js_map_alloc");
         assert_eq!(
             control_allocs.last().unwrap().live.len(),
-            2,
-            "[{target}] CONTROL: two outer locals live across the loop must \
-             both be roots at the in-loop allocation — so the count above is \
+            3,
+            "[{target}] CONTROL: two outer locals plus the unchecked bound \
+             parameter live across the loop must all be roots at the in-loop \
+             allocation — so the count above is \
              not a cap: {:?}",
             control_allocs.last().unwrap()
         );

@@ -9,7 +9,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
 
 use crate::rooting::{operand_may_collect, with_operands_rooted, with_rooted_group, RootedGroup};
-use crate::type_analysis::{is_definitely_string_expr, is_numeric_expr, map_static_type_args};
+use crate::type_analysis::{map_static_type_args, string_value_is_runtime_guaranteed};
 use crate::types::{DOUBLE, F32, I1, I32, I64};
 
 use super::{
@@ -537,32 +537,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- map.set(key, value) / .get / .has --------
         Expr::MapSet { map, key, value } => {
             let has_string_key_map =
-                is_static_string_key_map(ctx, map) && is_definitely_string_expr(ctx, key);
+                is_static_string_key_map(ctx, map) && string_value_is_runtime_guaranteed(ctx, key);
             let use_number_key_map = !has_string_key_map
                 && is_static_number_key_map(ctx, map)
-                && is_numeric_expr(ctx, key);
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    key,
+                );
             let static_number_string_map =
                 use_number_key_map && is_static_number_string_map(ctx, map);
             let use_number_string_map =
-                static_number_string_map && is_definitely_string_expr(ctx, value);
+                static_number_string_map && string_value_is_runtime_guaranteed(ctx, value);
             let use_string_i32_map = is_static_string_i32_map(ctx, map)
-                && is_definitely_string_expr(ctx, key)
+                && string_value_is_runtime_guaranteed(ctx, key)
                 && can_use_string_i32_map_value(ctx, value);
             let use_string_u32_map = is_static_string_u32_map(ctx, map)
-                && is_definitely_string_expr(ctx, key)
+                && string_value_is_runtime_guaranteed(ctx, key)
                 && can_use_string_u32_map_value(ctx, value);
             let use_string_f32_map = is_static_string_f32_map(ctx, map)
-                && is_definitely_string_expr(ctx, key)
+                && string_value_is_runtime_guaranteed(ctx, key)
                 && can_use_string_f32_map_value(value);
-            let use_string_number_map =
-                is_static_string_number_map(ctx, map) && is_definitely_string_expr(ctx, key);
-            let static_string_boolean_map =
-                is_static_string_boolean_map(ctx, map) && is_definitely_string_expr(ctx, key);
+            let use_string_number_map = is_static_string_number_map(ctx, map)
+                && string_value_is_runtime_guaranteed(ctx, key);
+            let static_string_boolean_map = is_static_string_boolean_map(ctx, map)
+                && string_value_is_runtime_guaranteed(ctx, key);
             let use_string_boolean_map =
                 static_string_boolean_map && can_use_string_boolean_map_value(ctx, value);
             let use_string_string_map = is_static_string_string_map(ctx, map)
-                && is_definitely_string_expr(ctx, key)
-                && is_definitely_string_expr(ctx, value);
+                && string_value_is_runtime_guaranteed(ctx, key)
+                && string_value_is_runtime_guaranteed(ctx, value);
             // #6970: each operand is finished before the next is lowered, and
             // both are live in nothing but SSA registers until the runtime
             // call. `m.set(fresh(k), churn(N))` aborted inside `js_map_set` on
@@ -895,10 +899,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::MapGet { map, key } => {
             let use_string_key_map =
-                is_static_string_key_map(ctx, map) && is_definitely_string_expr(ctx, key);
+                is_static_string_key_map(ctx, map) && string_value_is_runtime_guaranteed(ctx, key);
             let use_number_key_map = !use_string_key_map
                 && is_static_number_key_map(ctx, map)
-                && is_numeric_expr(ctx, key);
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    key,
+                );
             // #6970: `key` is lowered after the receiver and can collect, so the
             // receiver would otherwise sit unrooted in an SSA register across it.
             let value = with_operands_rooted(ctx, &[map, key], |ctx, values| {
@@ -951,10 +959,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::MapHas { map, key } => {
             let use_string_key_map =
-                is_static_string_key_map(ctx, map) && is_definitely_string_expr(ctx, key);
+                is_static_string_key_map(ctx, map) && string_value_is_runtime_guaranteed(ctx, key);
             let use_number_key_map = !use_string_key_map
                 && is_static_number_key_map(ctx, map)
-                && is_numeric_expr(ctx, key);
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    key,
+                );
             // #6970: same hazard as `MapGet` — the key's lowering can collect
             // while the receiver is live only in an SSA register.
             let i32_v = with_operands_rooted(ctx, &[map, key], |ctx, values| {

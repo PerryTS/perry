@@ -178,7 +178,7 @@ fn expr_is_number_under(
         Expr::LocalGet(id) => {
             refined.contains(id)
                 || matches!(
-                    ctx.local_types.get(id),
+                    ctx.local_type_hint(id),
                     Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }
@@ -598,7 +598,7 @@ pub(super) fn try_match_masked_window_region(
             && !ctx.boxed_vars.contains(&id)
             && !ctx.closure_captures.contains_key(&id)
             && !matches!(
-                ctx.local_types.get(&id),
+                ctx.local_type_hint(&id),
                 Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
             )
     };
@@ -719,7 +719,10 @@ fn lower_region_copy(
             let id = refinements[r].local_id;
             let set_number = refinements[r].set_number;
             if saved_ids.insert(id) {
-                saved.push((id, ctx.local_types.get(&id).cloned()));
+                // Save the map entry itself. The active masked-window guard is
+                // the value proof; the whole-region reassignment set would
+                // intentionally hide this scoped refinement.
+                saved.push((id, ctx.local_type_hint(&id).cloned()));
             }
             if set_number {
                 ctx.local_types.insert(id, perry_hir::types::Type::Number);

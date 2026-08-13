@@ -90,14 +90,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // array-initialized local can now hold a number. Mirror
             // `is_array_expr`/`receiver_class_name`: only fold a local whose
             // binding has not been written after initialization.
-            let static_type_is_still_valid = !matches!(
-                o.as_ref(),
-                Expr::LocalGet(id) if ctx.reassigned_locals.contains(id)
-            );
-            if let Some(ty) = static_type_is_still_valid
-                .then_some(crate::type_analysis::static_type_of(ctx, o))
-                .flatten()
-            {
+            let ty = match o.as_ref() {
+                // Folding is an answer, not guarded dispatch. Use only the
+                // initializer-derived, whole-region-stable proof; a declared
+                // `number[]` can hold any runtime value (#7846).
+                Expr::LocalGet(id) => ctx.stable_local_type_proof(id).cloned(),
+                _ => crate::type_analysis::static_type_of(ctx, o),
+            };
+            if let Some(ty) = ty {
                 if matches!(
                     ty,
                     perry_hir::types::Type::Array(_) | perry_hir::types::Type::Tuple(_)

@@ -118,6 +118,11 @@ run_check "public benchmark evidence freshness" \
 # 5. File-size cap — a long doc comment is enough to trip this.
 run_check "file size limit" ./scripts/check_file_size.sh
 
+run_check "local binding type-proof audit self-test" \
+    python3 scripts/local_binding_type_audit.py --self-test
+run_check "local binding type-proof audit" \
+    python3 scripts/local_binding_type_audit.py
+
 # 6. GC store-site inventory: every raw heap-slot store must be barriered
 #    or carry a justified marker.
 run_check "GC store-site inventory self-test" \

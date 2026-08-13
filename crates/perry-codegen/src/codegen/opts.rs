@@ -624,6 +624,10 @@ pub(crate) struct CrossModuleCtx {
     /// completion/timer queues on the worker thread and alias the main
     /// thread's heap.
     pub async_step_closures: std::collections::HashSet<u32>,
+    /// Module-global runtime kinds proven directly from their initializer and
+    /// invalidated by any module-wide write. Used by the worker-thread safety
+    /// check; declared module types are intentionally excluded (#7846).
+    pub module_global_proven_types: std::collections::HashMap<u32, perry_hir::types::Type>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS
@@ -870,10 +874,11 @@ pub(crate) struct CrossModuleCtx {
     /// closure identity/arity, string argument guards, and any required string
     /// capture guards pass.
     pub typed_string_closures: std::collections::HashSet<u32>,
-    /// Number of immutable string captures consumed by each typed-string
-    /// closure clone. Direct local call sites use this to guard capture slots
-    /// before entering the raw string ABI.
-    pub typed_string_closure_capture_counts: std::collections::HashMap<u32, usize>,
+    /// Candidate raw representations for immutable captures consumed by each
+    /// typed closure clone. Every typed entry path checks the current capture
+    /// bits against these reps before entering the raw ABI.
+    pub typed_closure_capture_reps:
+        std::collections::HashMap<u32, Vec<super::typed_abi::TypedParamRep>>,
     /// Per-closure typed-i1 clone parameter reps. This lets direct local
     /// closure calls target mixed native predicate clones such as
     /// `i1(i64 closure, double, double)` without routing through the public

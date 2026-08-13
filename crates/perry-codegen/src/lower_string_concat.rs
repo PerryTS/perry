@@ -554,8 +554,8 @@ pub(crate) fn flatten_string_add_chain<'a>(
                 left: l,
                 right: r,
             } => {
-                let l_str = crate::type_analysis::is_definitely_string_expr(ctx, l);
-                let r_str = crate::type_analysis::is_definitely_string_expr(ctx, r);
+                let l_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, l);
+                let r_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, r);
                 if !l_str && !r_str {
                     // Stop the descent — this Add isn't unambiguously
                     // string-shaped. Treat the entire `cur` subtree as

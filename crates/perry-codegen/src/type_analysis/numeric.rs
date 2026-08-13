@@ -31,7 +31,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::BigInt(_) => true,
         // `BigInt(x)` always returns a bigint.
         Expr::BigIntCoerce(_) => true,
-        Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::BigInt)),
+        Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::BigInt)),
         Expr::StaticMethodCall {
             class_name,
             method_name,
@@ -140,10 +140,19 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // operands, the non-BigInt bitwise fast path.
         Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
         Expr::BufferIndexGet { .. } | Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(HirType::Number) | Some(HirType::Int32)
-        ),
+        Expr::LocalGet(id) => {
+            ctx.element_shape_loop_facts
+                .iter()
+                .rev()
+                .any(|fact| fact.numeric_accumulator == *id)
+                || ctx.integer_locals.contains(id)
+                || ctx.unsigned_i32_locals.contains(id)
+                || ctx.int_valued_i64_locals.contains_key(id)
+                || matches!(
+                    ctx.stable_local_type_proof(id),
+                    Some(HirType::Number) | Some(HirType::Int32)
+                )
+        }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle
         // incorrectly (NaN compared with 0.0 is unordered → false).
@@ -176,7 +185,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // would silently produce NaN.
         Expr::Update { id, .. } => {
             matches!(
-                ctx.local_types.get(id),
+                ctx.stable_local_type_proof(id),
                 Some(HirType::Number) | Some(HirType::Int32)
             ) || ctx.integer_locals.contains(id)
                 || ctx.unsigned_i32_locals.contains(id)
@@ -401,7 +410,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
-            match ctx.local_types.get(arr_id) {
+            match ctx.stable_local_type_proof(arr_id) {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
                 }
@@ -608,7 +617,8 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
     // Already-proven primitives: a real Number/Int32, a Boolean, or a String
     // are all definitionally non-BigInt.
-    if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || is_definitely_string_expr(ctx, e) {
+    if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || string_value_is_runtime_guaranteed(ctx, e)
+    {
         return true;
     }
     match e {
@@ -726,6 +736,13 @@ pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// so letting it widen the divisor would introduce a UB window that
 /// `integer_locals` alone does not open. The dividend has no such constraint.
 pub(crate) fn is_integer_valued_divisor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::LocalGet(id) | Expr::Update { id, .. }
+            if ctx.int_valued_i64_locals.contains_key(id)
+    ) {
+        return false;
+    }
     integer_magnitude_bits_inner(ctx, e, false).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
 }
 
@@ -836,7 +853,7 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::MapHas { .. }
         | Expr::MapDelete { .. } => true,
         Expr::ArrayIncludes { .. } => true,
-        Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::Boolean)),
+        Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::Boolean)),
         _ => false,
     }
 }

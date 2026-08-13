@@ -58,7 +58,7 @@ fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Opti
     match expr {
         Expr::FuncRef(fid) => Some(ctx.local_async_funcs.contains(fid)),
         Expr::Closure { is_async, .. } => Some(*is_async),
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+        Expr::LocalGet(id) => match ctx.stable_local_type_proof(id) {
             Some(HirType::Function(ft)) => Some(ft.is_async),
             _ => None,
         },
@@ -230,7 +230,7 @@ pub(crate) fn lower_native_method_call(
                             } else {
                                 let hazardous_ids = hazardous_module_global_ids(
                                     ctx.module_globals,
-                                    &ctx.local_types,
+                                    &ctx.module_global_proven_types,
                                 );
                                 find_thread_hazard_in_body(
                                     body,

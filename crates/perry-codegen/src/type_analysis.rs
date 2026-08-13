@@ -53,7 +53,8 @@ pub(crate) use predicates::{
 pub(crate) use predicates::tuple_index_literal;
 pub(crate) use refine::{
     compute_auto_captures, declared_array_property_claim, is_crypto_digest_chain,
-    is_global_constructor_expr, is_process_namespace_version_property, refine_type_from_init,
+    is_global_constructor_expr, is_process_namespace_version_property, proven_type_from_init,
+    refine_type_from_init,
 };
 pub(crate) use strings::{
     class_name_extends_url_search_params, is_declared_string_expr, is_definitely_string_expr,

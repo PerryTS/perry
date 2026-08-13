@@ -20,22 +20,6 @@ fn is_i32_expr(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
     }
 }
 
-fn typed_i1_param_reps_match_args(
-    ctx: &FnCtx<'_>,
-    reps: &[crate::codegen::TypedParamRep],
-    args: &[Expr],
-) -> bool {
-    reps.len() == args.len()
-        && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
-            crate::codegen::TypedParamRep::F64 => crate::type_analysis::is_numeric_expr(ctx, arg),
-            crate::codegen::TypedParamRep::I32 => is_i32_expr(ctx, arg),
-            crate::codegen::TypedParamRep::I1 => crate::type_analysis::is_bool_expr(ctx, arg),
-            crate::codegen::TypedParamRep::StringRef => {
-                crate::type_analysis::is_definitely_string_expr(ctx, arg)
-            }
-        })
-}
-
 fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
@@ -519,7 +503,7 @@ pub fn try_lower_func_ref_call(
     {
         ctx.typed_i1_function_param_reps
             .get(fid)
-            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -532,7 +516,7 @@ pub fn try_lower_func_ref_call(
     {
         ctx.typed_i1_function_param_reps
             .get(fid)
-            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -545,7 +529,7 @@ pub fn try_lower_func_ref_call(
     {
         ctx.typed_i1_function_param_reps
             .get(fid)
-            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -558,7 +542,7 @@ pub fn try_lower_func_ref_call(
     {
         ctx.typed_i1_function_param_reps
             .get(fid)
-            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None

@@ -635,7 +635,7 @@ pub(crate) fn store_canonical_local_from_double(
 ///
 /// - **Non-string-proven write**: some `LocalSet(id, v)` where `v` is not
 ///   syntactically a definite string (mirrors
-///   `type_analysis::strings::is_definitely_string_expr`, minus the
+///   `type_analysis::strings::string_value_is_runtime_guaranteed`, minus the
 ///   ctx-dependent arms), or any `Update` (++/--) on it.
 /// - **Compare hazard** (mirrors `compare.rs`'s `other_side_is_any`
 ///   demote): the local appears on one side of an equality compare whose
@@ -719,14 +719,14 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
     }
     scan_declared(stmts, &mut declared_str);
 
-    // Ctx-free mirror of `is_definitely_string_expr` for the write / compare
+    // Ctx-free mirror of `string_value_is_runtime_guaranteed` for the write / compare
     // scans. Method calls whose NAME also exists on Array/Object (`slice`,
     // `concat`, `replace`, …) additionally require a syntactically-string
     // RECEIVER — name-only matching would classify `arr.slice()` as a
     // string write and skip the exclusion. Only the number-formatting /
     // universal-ToString family (`toString`/`toFixed`/`toPrecision`/
     // `toExponential`) stays name-only, mirroring
-    // `is_definitely_string_expr`. A misclassification here is a missed
+    // `string_value_is_runtime_guaranteed`. A misclassification here is a missed
     // exclusion, not a correctness break (every specialized lowering
     // re-checks the runtime tag and falls back) — but keeping the scan
     // honest keeps ineligible locals off the canonical rep.

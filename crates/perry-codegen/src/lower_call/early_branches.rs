@@ -267,7 +267,7 @@ pub fn try_lower_index_get_call(
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
-            || crate::type_analysis::is_definitely_string_expr(ctx, index);
+            || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, index);
 
         // #7210 (3): receiver, key and every argument are lowered in strict
         // sequence — each held as a bare SSA register while the rest lower,
@@ -380,7 +380,9 @@ pub fn try_lower_closure_typed_local_call(
     // pointer from the closure header and invokes it with the closure
     // as the first arg followed by the user args.
     if let Expr::LocalGet(id) = callee {
-        if matches!(ctx.local_types.get(id), Some(HirType::Function(_))) {
+        // The checked closure-unbox path below validates the current callee;
+        // the erased type only decides whether to try that guarded dispatch.
+        if matches!(ctx.local_type_hint(id), Some(HirType::Function(_))) {
             let recv_box = lower_expr(ctx, callee)?;
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
@@ -508,28 +510,8 @@ pub fn try_lower_closure_typed_local_call(
                     let typed_i1_param_reps = if ctx.typed_i1_closures.contains(&func_id) {
                         if let Some(reps) = ctx.typed_i1_closure_param_reps.get(&func_id) {
                             let matches_args = reps.len() == args.len()
-                                && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
-                                    crate::codegen::TypedParamRep::F64 => {
-                                        crate::type_analysis::is_numeric_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::I32 => {
-                                        matches!(
-                                            crate::type_analysis::static_type_of(ctx, arg),
-                                            Some(HirType::Int32)
-                                        ) || matches!(
-                                            arg,
-                                            Expr::Integer(n)
-                                                if (i64::from(i32::MIN)
-                                                    ..=i64::from(i32::MAX))
-                                                    .contains(n)
-                                        )
-                                    }
-                                    crate::codegen::TypedParamRep::I1 => {
-                                        crate::type_analysis::is_bool_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::StringRef => {
-                                        crate::type_analysis::is_definitely_string_expr(ctx, arg)
-                                    }
+                                && args.iter().zip(reps.iter()).all(|(arg, rep)| {
+                                    crate::codegen::typed_arg_is_guard_candidate(ctx, *rep, arg)
                                 });
                             matches_args.then(|| reps.clone())
                         } else {
@@ -538,6 +520,11 @@ pub fn try_lower_closure_typed_local_call(
                     } else {
                         None
                     };
+                    let typed_capture_reps = ctx
+                        .typed_closure_capture_reps
+                        .get(&func_id)
+                        .cloned()
+                        .unwrap_or_default();
                     let fast_value = if let Some(typed_param_reps) = typed_f64_param_reps {
                         let typed_fn = crate::codegen::typed_f64_closure_name(&closure_fn);
                         let generic_closure_fn =
@@ -548,6 +535,16 @@ pub fn try_lower_closure_typed_local_call(
                             numeric_guard = Some(match numeric_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            numeric_guard = Some(match numeric_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 
@@ -638,6 +635,16 @@ pub fn try_lower_closure_typed_local_call(
                             typed_guard = Some(match typed_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 
@@ -732,24 +739,15 @@ pub fn try_lower_closure_typed_local_call(
                                 None => ok,
                             });
                         }
-                        let capture_count = ctx
-                            .typed_string_closure_capture_counts
-                            .get(&func_id)
-                            .copied()
-                            .unwrap_or(0);
-                        if capture_count > 0 {
-                            if let Some(capture_guard) =
-                                crate::codegen::emit_typed_string_capture_guard(
-                                    ctx.block(),
-                                    &closure_handle,
-                                    capture_count,
-                                )
-                            {
-                                typed_guard = Some(match typed_guard {
-                                    Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
-                                    None => capture_guard,
-                                });
-                            }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
+                            });
                         }
 
                         let typed_idx = ctx.new_block("closure_direct.typed_string");
@@ -846,6 +844,16 @@ pub fn try_lower_closure_typed_local_call(
                             typed_guard = Some(match typed_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 

@@ -42,6 +42,14 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => {
+            // Whole-function write analysis proves these locals numeric by
+            // construction.  That proof does not depend on a TypeScript
+            // annotation and remains valid at every read, including loop
+            // counters whose back-edge update makes an initializer-only
+            // proof ineligible.
+            if ctx.integer_locals.contains(id) {
+                return true;
+            }
             // A reserved shadow slot means the local is pointer-possible even
             // if its initializer refined `local_types` to a scalar.
             //
@@ -62,14 +70,16 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             // change. The guard makes the arm exactly the old list minus
             // `Symbol`.
             !ctx.shadow_slot_map.contains_key(id)
-                && ctx.local_types.get(id).is_some_and(|ty| {
+                && ctx.stable_local_type_proof(id).is_some_and(|ty| {
                     !matches!(ty, HirType::Union(_))
                         && !crate::typed_shape::type_is_pointer_bearing(ty)
                 })
         }
         Expr::Compare { .. } | Expr::Void(_) => true,
         Expr::Unary { .. } => true,
-        Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
+        Expr::Binary { op, .. } => {
+            !matches!(op, BinaryOp::Add) || crate::type_analysis::is_numeric_expr(ctx, expr)
+        }
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never
         // a pointer — even when the receiver's static type is erased.
@@ -306,6 +316,17 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     // per-statement shadow traffic needed until the refinement is dropped
     // (see `stmt::masked_window_region`).
     if ctx.masked_region_scalar_locals.contains(&local_id) {
+        return;
+    }
+    // The element-shape clone's preheader checked this accumulator's current
+    // Number tag, and the matcher admits only numeric-preserving writes in a
+    // call-free clone. Its old shadow value may remain conservatively rooted;
+    // the slow clone resumes ordinary mirroring after the scoped fact is gone.
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.numeric_accumulator == local_id)
+    {
         return;
     }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {

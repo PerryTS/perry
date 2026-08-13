@@ -71,8 +71,16 @@ use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 /// object: a type-confused, `unbox`ed-pointer-plus-wrong-offset write,
 /// not merely a missed optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    // This predicate selects only runtime-validated typed-array helpers (or a
+    // `buffer_view_slots` proof that invalidates on assignment), as documented
+    // above. Preserve the declared kind as a hint for that dynamic fallback;
+    // the general `static_type_of` deliberately drops reassigned bindings.
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
+        _ => crate::type_analysis::static_type_of(ctx, object),
+    };
     matches!(
-        crate::type_analysis::static_type_of(ctx, object),
+        ty,
         Some(HirType::Named(name)) if matches!(
             name.as_str(),
             "Int8Array"

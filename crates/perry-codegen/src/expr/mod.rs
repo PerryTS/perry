@@ -227,11 +227,21 @@ pub(crate) struct FnCtx<'a> {
     pub native_facts: &'a NativeRegionFactGraph,
     /// Map from HIR LocalId → LLVM alloca pointer (e.g. `%r3`).
     pub locals: std::collections::HashMap<u32, String>,
-    /// Map from HIR LocalId → static HIR Type. Used by `is_string_expr` and
-    /// future type-aware dispatch sites (Phase B's "native instance flag
-    /// tracking" extension). Populated from function params and `Stmt::Let`
-    /// declarations as they're lowered.
+    /// Map from HIR LocalId → static HIR Type. This is an erased TypeScript
+    /// hint, not evidence about the value currently in the slot. Read it only
+    /// through [`FnCtx::local_type_hint`], whose exceptional consumers are
+    /// audited by `scripts/local_binding_type_audit.py`.
+    /// Populated from function params and `Stmt::Let` declarations as they're
+    /// lowered.
     pub local_types: std::collections::HashMap<u32, HirType>,
+    /// Runtime-derived type/kind evidence for the value installed by a local's
+    /// initializer. Unlike `local_types`, this map never receives a declared
+    /// annotation or a type inferred from one.
+    pub proven_local_types: std::collections::HashMap<u32, HirType>,
+    /// Module-global proofs used only by cross-thread admission. These are
+    /// collected from structural initializers with module-wide write
+    /// invalidation; ordinary local type predicates do not consult them.
+    pub module_global_proven_types: &'a std::collections::HashMap<u32, HirType>,
     /// Bindings assigned after declaration anywhere in this region.
     ///
     /// A TypeScript annotation describes the source-level contract, but an
@@ -1262,7 +1272,8 @@ pub(crate) struct FnCtx<'a> {
     pub typed_i1_closure_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
     pub typed_string_closures: &'a std::collections::HashSet<u32>,
-    pub typed_string_closure_capture_counts: &'a std::collections::HashMap<u32, usize>,
+    pub typed_closure_capture_reps:
+        &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
 
     /// True if `perry_transform::unroll_static_loops` expanded any
     /// static-trip-count for-loop in the function this FnCtx is lowering
@@ -1657,6 +1668,10 @@ pub(crate) struct ElementShapeLoopFact {
     /// binds `r` generically. `None` for the single-statement accumulator
     /// form.
     pub element_binding: Option<u32>,
+    /// Mutable accumulator whose current value the preheader proved is a
+    /// Number. The matcher admits only assignments that preserve this fact,
+    /// and the fact exists only while lowering the guarded fast clone.
+    pub numeric_accumulator: u32,
 }
 
 /// Find the innermost active element-shape loop fact covering a
@@ -1749,6 +1764,33 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    /// Return runtime-derived initializer evidence only when no write anywhere
+    /// in this region can have invalidated it.
+    ///
+    /// This deliberately uses the conservative whole-region answer rather
+    /// than statement order: a missed optimization is safe, while using a
+    /// type after a non-dominating write is a wrong-code bug (#7846). Declared
+    /// annotations are never inserted into this map, so a successful lookup is
+    /// both provenance-checked and write-stable.
+    pub(crate) fn stable_local_type_proof(&self, id: &u32) -> Option<&HirType> {
+        if self.reassigned_locals.contains(id) {
+            None
+        } else {
+            self.proven_local_types.get(id)
+        }
+    }
+
+    /// Return the binding's erased TypeScript type even if the binding is
+    /// reassigned.
+    ///
+    /// This escape hatch is for sites whose independent representation proof
+    /// or runtime guard validates the current value. Every production call is
+    /// inventoried by `scripts/local_binding_type_audit.py`; adding one without
+    /// an allowlist rationale fails CI.
+    pub(crate) fn local_type_hint(&self, id: &u32) -> Option<&HirType> {
+        self.local_types.get(id)
+    }
+
     pub(crate) fn has_imported_extern_binding(&self, name: &str) -> bool {
         self.imported_vars.contains(name)
             || self.import_function_prefixes.contains_key(name)
@@ -2262,7 +2304,7 @@ fn is_plain_f64_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.i32_counter_slots.contains_key(&id)
         && ctx.locals.contains_key(&id)
         && matches!(
-            ctx.local_types.get(&id),
+            ctx.stable_local_type_proof(&id),
             Some(HirType::Number | HirType::Int32)
         )
 }
@@ -2272,7 +2314,7 @@ fn is_plain_i1_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && ctx.i1_local_slots.contains_key(&id)
-        && matches!(ctx.local_types.get(&id), Some(HirType::Boolean))
+        && matches!(ctx.stable_local_type_proof(&id), Some(HirType::Boolean))
 }
 
 /// Whether `expr` has an existing raw-`i1` proof strong enough to apply

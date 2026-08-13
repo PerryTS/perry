@@ -169,7 +169,7 @@ fn string_clone_accepts_mixed_params_when_only_string_rep_flows_to_return() {
 }
 
 #[test]
-fn closure_clone_accepts_mixed_immutable_captures_for_numeric_return() {
+fn closure_capture_representations_are_runtime_guard_candidates() {
     let expr = Expr::Closure {
         func_id: 7,
         params: vec![param(20, "scale", Type::Number)],

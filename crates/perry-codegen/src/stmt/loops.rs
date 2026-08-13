@@ -227,7 +227,7 @@ fn match_numeric_bulk_fill_loop(
         _ => return None,
     };
     let is_numeric_array = matches!(
-        ctx.local_types.get(&array_id),
+        ctx.stable_local_type_proof(&array_id),
         Some(perry_hir::types::Type::Array(elem))
             if matches!(elem.as_ref(), perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
     );
@@ -4153,7 +4153,10 @@ fn local_array_element_type<'t>(
     ctx: &'t FnCtx<'_>,
     local_id: u32,
 ) -> Option<&'t perry_hir::types::Type> {
-    match ctx.local_types.get(&local_id) {
+    // This element type only selects versioned loop candidates. Every caller
+    // validates the live receiver and element layout in a preheader guard
+    // before entering the raw clone.
+    match ctx.local_type_hint(&local_id) {
         Some(perry_hir::types::Type::Array(elem)) => Some(elem.as_ref()),
         Some(perry_hir::types::Type::Generic { base, type_args })
             if base == "Array" && type_args.len() == 1 =>
@@ -4238,7 +4241,7 @@ pub(super) fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
 /// ineligible — their guard chains would be dead weight.
 pub(super) fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
-        ctx.local_types.get(&local_id),
+        ctx.stable_local_type_proof(&local_id),
         None | Some(perry_hir::types::Type::Any | perry_hir::types::Type::Unknown)
     )
 }
@@ -4349,9 +4352,6 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
         Expr::LocalGet(id) => *id != arr_id && crate::type_analysis::is_numeric_expr(ctx, expr),
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::Binary { left, right, .. } => {
-            if !crate::type_analysis::is_numeric_expr(ctx, expr) {
-                return false;
-            }
             expr_is_packed_f64_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
                 && expr_is_packed_f64_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
         }
@@ -4363,17 +4363,16 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
 }
 
 fn expr_is_packed_f64_loop_store_abs_rhs_safe(
-    ctx: &FnCtx<'_>,
+    _ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
     arr_id: u32,
     counter_id: u32,
 ) -> bool {
-    crate::type_analysis::is_numeric_expr(ctx, expr)
-        && matches!(
-            expr,
-            perry_hir::Expr::IndexGet { object, index }
-                if is_packed_f64_loop_index(object, index, arr_id, counter_id)
-        )
+    matches!(
+        expr,
+        perry_hir::Expr::IndexGet { object, index }
+            if is_packed_f64_loop_index(object, index, arr_id, counter_id)
+    )
 }
 
 fn expr_is_packed_i32_loop_store_rhs_safe(
@@ -4431,10 +4430,11 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
 }
 
 fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
-    matches!(
-        ctx.local_types.get(&local_id),
-        Some(perry_hir::types::Type::Int32)
-    ) || ctx.integer_locals.contains(&local_id)
+    ctx.integer_locals.contains(&local_id)
+        || matches!(
+            ctx.stable_local_type_proof(&local_id),
+            Some(perry_hir::types::Type::Int32)
+        )
 }
 
 fn expr_is_packed_f64_loop_safe(

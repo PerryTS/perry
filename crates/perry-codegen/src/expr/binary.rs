@@ -5,6 +5,7 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
+use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, LogicalOp};
 
 use crate::lower_string_concat::{
@@ -684,10 +685,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         crate::type_analysis::is_numeric_expr(ctx, right)
                             || is_bigint_expr(ctx, right)
                             || is_bool_expr(ctx, right)
+                            || matches!(
+                                right.as_ref(),
+                                Expr::LocalGet(id)
+                                    if matches!(
+                                        ctx.local_type_hint(id),
+                                        Some(HirType::Number | HirType::Int32)
+                                    )
+                            )
                     } else {
                         crate::type_analysis::is_numeric_expr(ctx, left)
                             || is_bigint_expr(ctx, left)
                             || is_bool_expr(ctx, left)
+                            || matches!(
+                                left.as_ref(),
+                                Expr::LocalGet(id)
+                                    if matches!(
+                                        ctx.local_type_hint(id),
+                                        Some(HirType::Number | HirType::Int32)
+                                    )
+                            )
                     };
                     if other_known_primitive {
                         return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);

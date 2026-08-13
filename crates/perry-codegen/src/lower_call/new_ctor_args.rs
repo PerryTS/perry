@@ -23,12 +23,14 @@ use crate::types::{DOUBLE, I32, I64};
 pub(crate) struct InlineConstructorScope {
     locals: std::collections::HashMap<u32, String>,
     local_types: std::collections::HashMap<u32, HirType>,
+    proven_local_types: std::collections::HashMap<u32, HirType>,
     boxed_vars: std::collections::HashSet<u32>,
 }
 
 pub(crate) fn restore_inline_constructor_scope(ctx: &mut FnCtx<'_>, saved: InlineConstructorScope) {
     ctx.locals = saved.locals;
     ctx.local_types = saved.local_types;
+    ctx.proven_local_types = saved.proven_local_types;
     ctx.boxed_vars = saved.boxed_vars;
 }
 
@@ -36,18 +38,47 @@ pub(crate) fn bind_inline_constructor_params(
     ctx: &mut FnCtx<'_>,
     params: &[Param],
     lowered_args: &[String],
+    source_args: &[Expr],
     capture_fill: Option<CaptureFill>,
 ) -> InlineConstructorScope {
     let saved = InlineConstructorScope {
         locals: ctx.locals.clone(),
         local_types: ctx.local_types.clone(),
+        proven_local_types: ctx.proven_local_types.clone(),
         boxed_vars: ctx.boxed_vars.clone(),
     };
+
+    // Snapshot initializer-derived evidence before installing constructor
+    // bindings. Source annotations are intentionally ignored: an inline
+    // parameter may inherit a representation only from the actual argument
+    // expression evaluated at this call site. Synthesized capture/rest/
+    // arguments-object parameters have different marshaling and stay boxed.
+    let mut visible_index = 0usize;
+    let param_proofs: Vec<Option<HirType>> = params
+        .iter()
+        .map(|param| {
+            if param.name.starts_with("__perry_cap_")
+                || param.is_rest
+                || param.arguments_object.is_some()
+            {
+                return None;
+            }
+            let proof = source_args
+                .get(visible_index)
+                .and_then(|arg| crate::type_analysis::proven_type_from_init(ctx, arg));
+            visible_index += 1;
+            proof
+        })
+        .collect();
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
-    for (param, arg_val) in params.iter().zip(values.iter()) {
+    for ((param, arg_val), proof) in params
+        .iter()
+        .zip(values.iter())
+        .zip(param_proofs.into_iter())
+    {
         let boxed_param = ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none();
         let slot = ctx
             .func
@@ -63,6 +94,10 @@ pub(crate) fn bind_inline_constructor_params(
         }
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
+        ctx.proven_local_types.remove(&param.id);
+        if let Some(proof) = proof {
+            ctx.proven_local_types.insert(param.id, proof);
+        }
     }
 
     crate::codegen::arguments::materialize_arguments_object(

@@ -285,12 +285,11 @@ pub enum ThreadClosureHazard {
     ModuleGlobalAccess(perry_hir::types::LocalId),
 }
 
-/// Types whose module-global slot value can be read from a worker thread
+/// Proven runtime kinds whose module-global slot value can be read from a worker thread
 /// without aliasing mutable main-heap structure: numbers and booleans are
 /// plain 64-bit copies; strings/bigints are immutable and permanently
-/// rooted when they back a module global. `Any` / `Unknown` / type vars are
-/// allowed because this is a best-effort AST-level check — rejecting
-/// unprovable bindings would flag every untyped numeric global.
+/// rooted when they back a module global. The input comes from structural
+/// initializer evidence, never a declared TypeScript type (#7846).
 fn is_thread_transferable_global_type(ty: &perry_hir::types::Type) -> bool {
     use perry_hir::types::Type;
     match ty {
@@ -302,10 +301,7 @@ fn is_thread_transferable_global_type(ty: &perry_hir::types::Type) -> bool {
         | Type::BigInt
         | Type::String
         | Type::StringLiteral(_)
-        | Type::Any
-        | Type::Unknown
-        | Type::Never
-        | Type::TypeVar(_) => true,
+        | Type::Never => true,
         Type::Union(members) => members.iter().all(is_thread_transferable_global_type),
         // SharedArrayBuffer is the one EXPLICIT shared-state escape hatch in
         // the threading model: its backing store is a process-global,
@@ -322,20 +318,20 @@ fn is_thread_transferable_global_type(ty: &perry_hir::types::Type) -> bool {
 }
 
 /// Compute the set of module-global LocalIds a worker closure must not
-/// touch: ids with a backing `@perry_global_*` slot whose declared/inferred
-/// type is not a thread-transferable primitive. Ids with no recorded type
-/// are allowed (best-effort — e.g. non-entry module inits don't seed
-/// `local_types`, and `module_global_types` skips `Any`).
+/// touch: ids with a backing `@perry_global_*` slot whose runtime-derived
+/// initializer proof is absent or is not a thread-transferable primitive.
+/// Missing evidence is hazardous; an erased annotation cannot admit a value
+/// into a worker heap.
 pub fn hazardous_module_global_ids(
     module_globals: &std::collections::HashMap<u32, String>,
-    local_types: &std::collections::HashMap<u32, perry_hir::types::Type>,
+    proven_types: &std::collections::HashMap<u32, perry_hir::types::Type>,
 ) -> std::collections::HashSet<perry_hir::types::LocalId> {
     module_globals
         .keys()
         .filter(|id| {
-            local_types
+            !proven_types
                 .get(id)
-                .is_some_and(|ty| !is_thread_transferable_global_type(ty))
+                .is_some_and(is_thread_transferable_global_type)
         })
         .copied()
         .collect()
@@ -491,4 +487,22 @@ fn find_thread_hazard_expr(
         }
     });
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_globals_require_runtime_derived_transfer_proof() {
+        let globals = std::collections::HashMap::from([
+            (1, "proven_number".to_string()),
+            (2, "unproven_declared_number".to_string()),
+        ]);
+        let proofs = std::collections::HashMap::from([(1, perry_hir::types::Type::Number)]);
+
+        let hazardous = hazardous_module_global_ids(&globals, &proofs);
+        assert!(!hazardous.contains(&1));
+        assert!(hazardous.contains(&2));
+    }
 }

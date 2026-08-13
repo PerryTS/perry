@@ -363,6 +363,7 @@ fn put_value_static_property_fast_path(
                 return None;
             }
             receiver_class_name(ctx, target)
+                .or_else(|| guarded_declared_class_property_candidate(ctx, target))
                 .and_then(|class_name| {
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 })
@@ -381,6 +382,7 @@ fn put_value_static_property_fast_path(
                 return None;
             }
             receiver_class_name(ctx, target)
+                .or_else(|| guarded_declared_class_property_candidate(ctx, target))
                 .and_then(|class_name| {
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 })
@@ -390,12 +392,27 @@ fn put_value_static_property_fast_path(
             if !strict {
                 return None;
             }
-            let class_name = receiver_class_name(ctx, target)?;
+            let class_name = receiver_class_name(ctx, target)
+                .or_else(|| guarded_declared_class_property_candidate(ctx, target))?;
             crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 .map(|_| property.clone())
         }
         _ => None,
     }
+}
+
+/// A source declaration may select the guarded class-field route, but it may
+/// never authorize a raw slot access itself. `PropertySet` re-checks the live
+/// receiver against the selected class/shape before touching the slot and
+/// retains the ordinary runtime fallback on guard failure.
+fn guarded_declared_class_property_candidate(ctx: &FnCtx<'_>, target: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = target else {
+        return None;
+    };
+    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
 }
 
 /// Bounded polymorphic inline cache for a static-name `PutValue` whose target

@@ -204,7 +204,7 @@ mod testing_feature_gate_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
 
-pub(crate) use closure::emit_typed_string_capture_guard;
+pub(crate) use closure::emit_typed_capture_guard;
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{
     decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
@@ -217,12 +217,12 @@ pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
-    typed_f64_function_name, typed_f64_method_name, typed_f64_receiver_method_info,
-    typed_f64_receiver_method_name, typed_i1_closure_name, typed_i1_function_name,
-    typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name, typed_i32_method_name,
-    typed_param_reps_match_args, typed_string_closure_name, typed_string_function_name,
-    typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
+    generic_function_body_name, generic_method_body_name, typed_arg_is_guard_candidate,
+    typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
+    typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
+    typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name,
+    typed_i32_method_name, typed_param_reps_match_args, typed_string_closure_name,
+    typed_string_function_name, typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
 };
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
@@ -1794,6 +1794,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         local_async_funcs,
         local_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
+        module_global_proven_types: std::collections::HashMap::new(),
         funcs_reading_dynamic_this,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
@@ -1921,7 +1922,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
         typed_string_closures: std::collections::HashSet::new(),
-        typed_string_closure_capture_counts: std::collections::HashMap::new(),
+        typed_closure_capture_reps: std::collections::HashMap::new(),
         typed_i1_closure_param_reps: std::collections::HashMap::new(),
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
@@ -2076,6 +2077,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let module_globals_emit::ModuleGlobals {
         module_globals,
         module_global_types,
+        module_global_proven_types,
         static_field_globals,
     } = module_globals_emit::emit_module_globals(
         &mut llmod,
@@ -2084,6 +2086,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &cross_module.compile_time_constants,
         &module_prefix,
     );
+    cross_module.module_global_proven_types = module_global_proven_types;
 
     // Method registry + cross-module method/getter/setter/ctor/static
     // extern declares. See `method_registry::build_method_names`.
@@ -2214,9 +2217,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     cross_module.typed_i32_closures.clear();
     cross_module.typed_i1_closures.clear();
     cross_module.typed_string_closures.clear();
-    cross_module.typed_string_closure_capture_counts.clear();
+    cross_module.typed_closure_capture_reps.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
+        if let Some(captures) =
+            typed_abi::typed_f64_closure_capture_reps(expr, &typed_abi_local_types)
+        {
+            cross_module
+                .typed_closure_capture_reps
+                .insert(*func_id, captures.into_iter().map(|(_, rep)| rep).collect());
+        }
         match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
         {
             None => {
@@ -2320,13 +2330,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                             .insert(*func_id, reps);
                     }
                 }
-                let capture_count =
-                    typed_abi::typed_string_closure_capture_reps(expr, &typed_abi_local_types)
-                        .map(|captures| captures.len())
-                        .unwrap_or(0);
-                cross_module
-                    .typed_string_closure_capture_counts
-                    .insert(*func_id, capture_count);
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,

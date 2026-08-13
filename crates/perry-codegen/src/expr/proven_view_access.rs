@@ -37,7 +37,8 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use super::{
-    attach_buffer_view_facts, can_lower_expr_as_i32, lower_expr_as_i32, lower_expr_native, FnCtx,
+    attach_buffer_view_facts, can_lower_expr_as_i32, is_numeric_expr, lower_expr,
+    lower_expr_as_i32, lower_expr_native, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::native_value::{
@@ -353,10 +354,15 @@ pub(crate) fn try_lower_proven_view_checked_store(
     {
         return Ok(None);
     }
-    if matches!(view.elem, BufferElem::F32 | BufferElem::F64)
-        && !crate::type_analysis::is_numeric_expr(ctx, value)
-    {
-        return Ok(None);
+    if matches!(view.elem, BufferElem::F32 | BufferElem::F64) {
+        let numeric_candidate = crate::codegen::typed_arg_is_guard_candidate(
+            ctx,
+            crate::codegen::TypedParamRep::F64,
+            value,
+        );
+        if !numeric_candidate {
+            return Ok(None);
+        }
     }
 
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
@@ -367,6 +373,15 @@ pub(crate) fn try_lower_proven_view_checked_store(
             ExpectedNativeRep::I32
         };
         lower_expr_native(ctx, value, expected)?
+    } else if !is_numeric_expr(ctx, value) {
+        // Source metadata may select this checked store, but only the live
+        // value may supply raw bytes. Avoid `lower_expr_native(F64)`'s legacy
+        // annotation shortcut and perform explicit ToNumber coercion.
+        let boxed = lower_expr(ctx, value)?;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)]);
+        LoweredValue::f64(coerced)
     } else {
         lower_expr_native(ctx, value, ExpectedNativeRep::F64)?
     };

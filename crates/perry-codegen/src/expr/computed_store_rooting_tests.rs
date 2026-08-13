@@ -531,10 +531,39 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     );
 }
 
+fn compile_masked_window_with_key(
+    name: &str,
+    key_ty: Type,
+    key_mutable: bool,
+    mut body: Vec<Stmt>,
+) -> String {
+    let mut params = vec![param(1, "view", Type::Any)];
+    if matches!(key_ty, Type::Int32) {
+        // The inert control needs a runtime-derived fact, not an annotation:
+        // a generic-ABI Int32 parameter can still receive an object. Keep the
+        // standalone-update controls can separately exercise the collector's
+        // literal-seeded integer recurrence proof.
+        body.insert(
+            0,
+            Stmt::Let {
+                id: 2,
+                name: "key".to_string(),
+                ty: Type::Any,
+                mutable: key_mutable,
+                init: Some(Expr::Integer(0)),
+            },
+        );
+    } else {
+        params.push(param(2, "key", key_ty));
+    }
+    compile_body_with_params(name, params, body)
+}
+
 fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
-    compile_body_with_params(
+    compile_masked_window_with_key(
         "masked_window_coercion",
-        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        key_ty,
+        false,
         vec![
             Stmt::Let {
                 id: 3,
@@ -577,16 +606,38 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
         }),
         right: Box::new(Expr::Integer(7)),
     };
-    compile_masked_window_loop(
+    compile_masked_window_with_key(
+        "masked_window_index_coercion",
         key_ty,
-        Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(Expr::LocalGet(3)),
-            right: Box::new(Expr::IndexGet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(masked_index),
-            }),
-        },
+        false,
+        vec![
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 4,
+                    name: "i".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(4)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+                update: Some(Expr::Update {
+                    id: 4,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                // A bare read isolates the property under test: whether the
+                // unary index coercion is non-collecting.
+                body: vec![Stmt::Expr(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(masked_index),
+                })],
+            },
+            Stmt::Return(Some(Expr::Integer(0))),
+        ],
     )
 }
 
@@ -642,11 +693,7 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
         body.push(Stmt::Expr(Expr::LocalSet(3, Box::new(value()))));
     }
     body.push(Stmt::Return(Some(Expr::LocalGet(3))));
-    compile_body_with_params(
-        "masked_window_rhs_coercion_region",
-        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
-        body,
-    )
+    compile_masked_window_with_key("masked_window_rhs_coercion_region", key_ty, false, body)
 }
 
 fn masked_window_pair_sum() -> Expr {
@@ -662,9 +709,10 @@ fn masked_window_pair_sum() -> Expr {
 }
 
 fn masked_window_standalone_update_loop(key_ty: Type) -> String {
-    compile_body_with_params(
+    compile_masked_window_with_key(
         "masked_window_standalone_update_loop",
-        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        key_ty,
+        true,
         vec![
             Stmt::Let {
                 id: 3,
@@ -730,17 +778,14 @@ fn masked_window_standalone_update_region(key_ty: Type) -> String {
         )));
     }
     body.push(Stmt::Return(Some(Expr::LocalGet(3))));
-    compile_body_with_params(
-        "masked_window_standalone_update_region",
-        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
-        body,
-    )
+    compile_masked_window_with_key("masked_window_standalone_update_region", key_ty, true, body)
 }
 
 /// #7640 E review follow-up — unary `+` over an `any` key can invoke user
 /// coercion even though the surrounding mask has a static index window. Such
 /// an index must decline before a typed-array tier hoists its raw data pointer;
-/// the same shape with an inert i32 key proves the fast tier remains live.
+/// the same shape with a literal-seeded integer local proves the fast tier
+/// remains live without trusting a parameter annotation.
 #[test]
 fn collecting_masked_window_index_declines_the_hoisted_pointer_tier() {
     let inert = masked_window_index_coercion_loop(Type::Int32);
@@ -808,7 +853,7 @@ fn collecting_rhs_declines_the_straight_line_masked_region() {
 
 /// A standalone update is not part of an index/RHS tree, but it executes in
 /// the same hoisted-pointer copy between masked reads. `any++` can run user
-/// ToNumeric hooks; an inert i32 update remains call-free.
+/// ToNumeric hooks; a literal-seeded integer recurrence remains call-free.
 #[test]
 fn collecting_standalone_update_declines_the_masked_loop() {
     let inert = masked_window_standalone_update_loop(Type::Int32);

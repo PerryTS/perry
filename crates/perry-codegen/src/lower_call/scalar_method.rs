@@ -46,8 +46,7 @@ fn collect_guarded_numeric_arg_locals(ctx: &FnCtx<'_>, arg: &Expr) -> Option<Vec
                     || ctx.module_globals.contains_key(id)
                     || !ctx.locals.contains_key(id)
                     || !ctx
-                        .local_types
-                        .get(id)
+                        .local_type_hint(id)
                         .is_some_and(|ty| matches!(ty, Type::Number | Type::Int32))
                 {
                     return false;
@@ -82,7 +81,9 @@ fn local_can_use_public_arg_guard(ctx: &FnCtx<'_>, id: u32, expected: Type) -> b
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && ctx.locals.contains_key(&id)
-        && ctx.local_types.get(&id).is_some_and(|ty| *ty == expected)
+        // `GuardedI32Local` / `GuardedI1Local` emit public tag guards before
+        // entering the scalar clone, so reassignment cannot make this answer.
+        && ctx.local_type_hint(&id).is_some_and(|ty| *ty == expected)
 }
 
 fn scalar_method_arg_plan(ctx: &FnCtx<'_>, arg: &Expr, param_ty: &Type) -> ScalarMethodArgPlan {
@@ -314,6 +315,7 @@ fn lower_scalar_method_inline_body(
 ) -> Result<String> {
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
+    let saved_proven_local_types = ctx.proven_local_types.clone();
     let saved_this_len = ctx.this_stack.len();
     let saved_class_len = ctx.class_stack.len();
     let saved_scalar_ctor_len = ctx.scalar_ctor_target.len();
@@ -323,6 +325,7 @@ fn lower_scalar_method_inline_body(
         ctx.block().store(DOUBLE, value, &slot);
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
+        ctx.proven_local_types.insert(param.id, param.ty.clone());
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -344,6 +347,9 @@ fn lower_scalar_method_inline_body(
                 ctx.block().store(DOUBLE, &value, &slot);
                 ctx.locals.insert(*id, slot);
                 ctx.local_types.insert(*id, ty.clone());
+                if let Some(proven) = crate::type_analysis::proven_type_from_init(ctx, init) {
+                    ctx.proven_local_types.insert(*id, proven);
+                }
             }
             perry_hir::Stmt::Expr(expr @ Expr::PropertySet { object, .. })
                 if matches!(object.as_ref(), Expr::This) =>
@@ -364,6 +370,7 @@ fn lower_scalar_method_inline_body(
     ctx.scalar_ctor_target.truncate(saved_scalar_ctor_len);
     ctx.locals = saved_locals;
     ctx.local_types = saved_local_types;
+    ctx.proven_local_types = saved_proven_local_types;
 
     let lowered = LoweredValue {
         semantic: SemanticKind::JsValue,
@@ -411,6 +418,7 @@ fn lower_scalar_method_int32_inline_body(
 ) -> Result<String> {
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
+    let saved_proven_local_types = ctx.proven_local_types.clone();
     let saved_i32_slots = ctx.i32_counter_slots.clone();
     let saved_this_len = ctx.this_stack.len();
     let saved_class_len = ctx.class_stack.len();
@@ -421,6 +429,7 @@ fn lower_scalar_method_int32_inline_body(
         ctx.block().store(I32, value, &slot);
         ctx.i32_counter_slots.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
+        ctx.proven_local_types.insert(param.id, param.ty.clone());
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -442,6 +451,7 @@ fn lower_scalar_method_int32_inline_body(
                 ctx.block().store(I32, &value, &slot);
                 ctx.i32_counter_slots.insert(*id, slot);
                 ctx.local_types.insert(*id, ty.clone());
+                ctx.proven_local_types.insert(*id, Type::Int32);
             }
             perry_hir::Stmt::Return(Some(expr)) => {
                 raw_i32 = Some(lower_expr_as_i32(ctx, expr)?);
@@ -458,6 +468,7 @@ fn lower_scalar_method_int32_inline_body(
     ctx.scalar_ctor_target.truncate(saved_scalar_ctor_len);
     ctx.locals = saved_locals;
     ctx.local_types = saved_local_types;
+    ctx.proven_local_types = saved_proven_local_types;
     ctx.i32_counter_slots = saved_i32_slots;
 
     let lowered = LoweredValue {

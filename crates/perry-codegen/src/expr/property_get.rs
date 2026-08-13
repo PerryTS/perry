@@ -65,6 +65,20 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+/// A declared class may nominate the guarded field/method route, but never a
+/// raw load by itself. Every field consumer below checks the live receiver's
+/// class id and keys token before dereferencing; method-value/runtime-member
+/// helpers retain their dynamic fallback semantics.
+fn guarded_declared_class_get_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let HirType::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
     // STORAGE, so the local's inline-storage proof stops holding from here on.
@@ -680,7 +694,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if property == "constructor" {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     let is_date = matches!(
-                        ctx.local_types.get(id),
+                        ctx.stable_local_type_proof(id),
                         Some(HirType::Named(name)) if name == "Date"
                     );
                     if is_date {
@@ -1265,7 +1279,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the property is registered as a getter, call the
             // synthesized __get_<property> method instead of doing a
             // raw field load.
-            if let Some(class_name) = receiver_class_name(ctx, object) {
+            if let Some(class_name) = receiver_class_name(ctx, object)
+                .or_else(|| guarded_declared_class_get_candidate(ctx, object))
+            {
                 if class_name == "URLPattern" && is_url_pattern_data_property(property) {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);

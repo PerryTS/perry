@@ -392,43 +392,56 @@ fn char_code_at(recv: Expr, index: Expr) -> Expr {
 /// `for (let i = 0; i < 64; i++) h = (h ^ recv.charCodeAt(i)) | 0;`
 fn hash_loop_ir(param_ty: Type) -> String {
     let recv = Expr::LocalGet(1);
-    emitted_ir(probe_module(
-        "char_code_at_unit.ts",
-        vec![typed_param(1, "s", param_ty)],
-        vec![
-            number_let(10, "h", true, Expr::Integer(0)),
-            Stmt::For {
-                init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
-                condition: Some(Expr::Compare {
-                    op: CompareOp::Lt,
-                    left: Box::new(Expr::LocalGet(11)),
-                    right: Box::new(Expr::Integer(64)),
-                }),
-                update: Some(Expr::Update {
-                    id: 11,
-                    op: UpdateOp::Increment,
-                    prefix: false,
-                }),
-                body: vec![Stmt::Expr(Expr::LocalSet(
-                    10,
-                    Box::new(Expr::Binary {
-                        op: BinaryOp::BitOr,
-                        left: Box::new(Expr::Binary {
-                            op: BinaryOp::BitXor,
-                            left: Box::new(Expr::LocalGet(10)),
-                            right: Box::new(char_code_at(recv, Expr::LocalGet(11))),
-                        }),
-                        right: Box::new(Expr::Integer(0)),
+    let (params, mut body) = if matches!(param_ty, Type::String) {
+        (
+            Vec::new(),
+            vec![Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String(
+                    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-".to_string(),
+                )),
+            }],
+        )
+    } else {
+        (vec![typed_param(1, "s", param_ty)], Vec::new())
+    };
+    body.extend([
+        number_let(10, "h", true, Expr::Integer(0)),
+        Stmt::For {
+            init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(11)),
+                right: Box::new(Expr::Integer(64)),
+            }),
+            update: Some(Expr::Update {
+                id: 11,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Expr(Expr::LocalSet(
+                10,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(Expr::Binary {
+                        op: BinaryOp::BitXor,
+                        left: Box::new(Expr::LocalGet(10)),
+                        right: Box::new(char_code_at(recv, Expr::LocalGet(11))),
                     }),
-                ))],
-            },
-            Stmt::Return(Some(Expr::LocalGet(10))),
-        ],
-    ))
+                    right: Box::new(Expr::Integer(0)),
+                }),
+            ))],
+        },
+        Stmt::Return(Some(Expr::LocalGet(10))),
+    ]);
+    emitted_ir(probe_module("char_code_at_unit.ts", params, body))
 }
 
 #[test]
-fn char_code_at_on_a_string_receiver_is_statically_numeric() {
+fn char_code_at_on_a_proven_string_receiver_is_statically_numeric() {
     // Defect 1: `is_numeric_expr` had no arm for a String-method call, so
     // `h ^ s.charCodeAt(i)` failed `expr/binary.rs`'s "both operands are
     // statically primitive" test and every iteration paid a
@@ -447,7 +460,7 @@ fn char_code_at_on_a_string_receiver_is_statically_numeric() {
 }
 
 #[test]
-fn char_code_at_on_a_string_receiver_emits_the_inline_ascii_read() {
+fn char_code_at_on_a_proven_string_receiver_emits_the_inline_ascii_read() {
     // Defect 2: even with the receiver handle resolved, each character cost
     // two more opaque calls (`js_string_index_to_i32` +
     // `js_string_char_code_at`), which also pinned the loop-invariant header
@@ -455,7 +468,7 @@ fn char_code_at_on_a_string_receiver_emits_the_inline_ascii_read() {
     let ir = hash_loop_ir(Type::String);
     assert!(
         ir.contains("cca.fast"),
-        "a string-typed receiver must get the inline ASCII charCodeAt fast \
+        "a runtime-proven string receiver must get the inline ASCII charCodeAt fast \
          path:\n{ir}"
     );
     assert!(
@@ -633,9 +646,9 @@ mod symbol_keyed_element_reads {
     }
 
     #[test]
-    fn a_numeric_index_keeps_the_inline_fast_path() {
-        // The guard against over-correcting: requiring a numeric index must
-        // not cost the ordinary `a[i]` element read its inline comparison.
+    fn a_numeric_index_keeps_the_array_fast_path_but_not_a_truthiness_claim() {
+        // A numeric index preserves the guarded array read, but its boxed
+        // fallback means the result binding still needs runtime truthiness.
         let ir = emitted_ir(probe_module(
             "numeric_element_read.ts",
             Vec::new(),
@@ -663,8 +676,16 @@ mod symbol_keyed_element_reads {
         ));
         let body = probe_body(&ir);
         assert!(
-            body.contains("fcmp one"),
-            "a numeric index must keep the inline truthiness comparison:\n{body}"
+            body.contains("arr.guard.deref") && body.contains("arr.fast"),
+            "a numeric index must keep the guarded array read:\n{body}"
+        );
+        assert!(
+            body.contains("js_is_truthy"),
+            "the result binding must use runtime truthiness:\n{body}"
+        );
+        assert!(
+            !body.contains("fcmp one"),
+            "the read's boxed fallback must not become a numeric proof:\n{body}"
         );
     }
 }

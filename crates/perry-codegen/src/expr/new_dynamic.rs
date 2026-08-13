@@ -240,7 +240,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if property == "constructor" {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         let is_date = matches!(
-                            ctx.local_types.get(id),
+                            ctx.stable_local_type_proof(id),
                             Some(HirType::Named(name)) if name == "Date"
                         );
                         if is_date {

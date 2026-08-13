@@ -25,7 +25,6 @@
 //! a fourth hand-written guard.
 
 use anyhow::Result;
-use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::nanbox::POINTER_MASK_I64;
@@ -46,6 +45,19 @@ use super::{
     lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
 };
+
+/// Metadata-only class candidate for the runtime-guarded plain-field store.
+/// Accessor calls still require a real receiver proof; a lying annotation is
+/// routed to the by-name setter path instead.
+fn guarded_declared_class_store_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
+}
 
 fn canonicalize_raw_f64_numeric_store_value(
     blk: &mut crate::block::LlBlock,
@@ -146,7 +158,9 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     if crate::codegen::full_outline_ic_enabled() {
         return Ok(None);
     }
-    let Some(class_name) = receiver_class_name(ctx, object) else {
+    let Some(class_name) = receiver_class_name(ctx, object)
+        .or_else(|| guarded_declared_class_store_candidate(ctx, object))
+    else {
         return Ok(None);
     };
     if class_has_computed_runtime_members(ctx, &class_name) {
@@ -742,15 +756,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // heap object, so mark the buffer shared here. Otherwise a
                     // later `s = s + suffix` mutates it in-place via
                     // js_string_append's refcount==1 fast path and corrupts this
-                    // field. Only a `LocalGet` of a string-typed local can carry a
-                    // uniquely-owned buffer (concat/literal results are shared).
-                    if let Expr::LocalGet(src_id) = &**value {
-                        if matches!(ctx.local_types.get(src_id), Some(HirType::String)) {
-                            ctx.block().call_void(
-                                "js_string_addref_if_heap_string",
-                                &[(DOUBLE, &val_double)],
-                            );
-                        }
+                    // field. The helper checks the runtime tag, so apply it to
+                    // every local source: an erased non-string annotation is
+                    // not proof that the current value cannot be a string.
+                    if matches!(&**value, Expr::LocalGet(_)) {
+                        ctx.block()
+                            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &val_double)]);
                     }
                     let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
@@ -827,13 +838,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // aliases the string buffer; mark it shared so a later
                         // self-append doesn't mutate it in-place and corrupt the
                         // field.
-                        if let Expr::LocalGet(src_id) = &**value {
-                            if matches!(ctx.local_types.get(src_id), Some(HirType::String)) {
-                                ctx.block().call_void(
-                                    "js_string_addref_if_heap_string",
-                                    &[(DOUBLE, &val_double)],
-                                );
-                            }
+                        if matches!(&**value, Expr::LocalGet(_)) {
+                            ctx.block().call_void(
+                                "js_string_addref_if_heap_string",
+                                &[(DOUBLE, &val_double)],
+                            );
                         }
                         let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,
@@ -887,7 +896,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // exactly like the class-field arms. Keep the zero-cost
             // `LocalGet`/`This` path, and conditionally root a compound
             // receiver across an allocating value expression.
-            if let Some(class_name) = receiver_class_name(ctx, object) {
+            let proven_class_name = receiver_class_name(ctx, object);
+            if let Some(class_name) = proven_class_name
+                .clone()
+                .or_else(|| guarded_declared_class_store_candidate(ctx, object))
+            {
                 if class_has_computed_runtime_members(ctx, &class_name) {
                     return lower_runtime_property_set_by_name(ctx, object, property, value);
                 }
@@ -901,6 +914,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .unwrap_or(false);
                 if !is_static_accessor {
                     if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
+                        if proven_class_name.is_none() {
+                            return lower_runtime_property_set_by_name(
+                                ctx, object, property, value,
+                            );
+                        }
                         return with_class_store_operands(
                             ctx,
                             object,

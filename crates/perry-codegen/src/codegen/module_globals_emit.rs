@@ -24,7 +24,30 @@ use super::ImportedClass;
 pub(crate) struct ModuleGlobals {
     pub module_globals: HashMap<u32, String>,
     pub module_global_types: HashMap<u32, perry_hir::types::Type>,
+    pub module_global_proven_types: HashMap<u32, perry_hir::types::Type>,
     pub static_field_globals: HashMap<(String, String), String>,
+}
+
+/// Runtime kinds established without consulting a TypeScript annotation.
+/// This deliberately covers only the module-global values the thread transfer
+/// check can safely permit; every unrecognized expression stays hazardous.
+fn module_global_runtime_type(init: &perry_hir::Expr) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::Type;
+    use perry_hir::Expr;
+    match init {
+        Expr::Undefined | Expr::Void(_) => Some(Type::Void),
+        Expr::Null => Some(Type::Null),
+        Expr::Bool(_) | Expr::Compare { .. } => Some(Type::Boolean),
+        Expr::Number(_) | Expr::Integer(_) => Some(Type::Number),
+        Expr::BigInt(_) => Some(Type::BigInt),
+        Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
+            Some(Type::String)
+        }
+        Expr::New { class_name, .. } if class_name == "SharedArrayBuffer" => {
+            Some(Type::Named(class_name.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// Emit module-level globals (with exported-var getters) and static-class-field
@@ -197,6 +220,7 @@ pub(crate) fn emit_module_globals(
     // so method calls in other functions fall through to the generic
     // dispatch instead of the class method registry.
     let mut module_global_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
+    let mut module_global_proven_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
     // Collect exported variable names so we can create external
     // globals + getter functions for cross-module access.
     let exported_var_names: std::collections::HashSet<String> =
@@ -239,12 +263,29 @@ pub(crate) fn emit_module_globals(
     }
     let mut init_lets: Vec<&perry_hir::Stmt> = Vec::new();
     collect_init_lets(&hir.init, &mut init_lets);
+    let let_counts = init_lets.iter().fold(HashMap::new(), |mut counts, stmt| {
+        if let perry_hir::Stmt::Let { id, .. } = stmt {
+            *counts.entry(*id).or_insert(0usize) += 1;
+        }
+        counts
+    });
+    let reassigned = crate::collectors::reassigned_locals_in_module(hir);
     for s in init_lets {
-        if let perry_hir::Stmt::Let { id, name, ty, .. } = s {
+        if let perry_hir::Stmt::Let {
+            id, name, ty, init, ..
+        } = s
+        {
             // Always record the declared type for module-level lets
             // so all functions see it (not just the entry function).
             if !matches!(ty, perry_hir::types::Type::Any) {
                 module_global_types.insert(*id, ty.clone());
+            }
+            if let Some(proven) = init
+                .as_ref()
+                .filter(|_| let_counts.get(id) == Some(&1) && !reassigned.contains(id))
+                .and_then(module_global_runtime_type)
+            {
+                module_global_proven_types.insert(*id, proven);
             }
             if referenced_from_fn.contains(id) || exported_var_names.contains(name) {
                 // A `var` redeclared at module scope (`var x = …; … var x = …;`)
@@ -449,6 +490,7 @@ pub(crate) fn emit_module_globals(
     ModuleGlobals {
         module_globals,
         module_global_types,
+        module_global_proven_types,
         static_field_globals,
     }
 }

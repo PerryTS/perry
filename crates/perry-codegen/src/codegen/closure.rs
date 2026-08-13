@@ -109,7 +109,7 @@ fn emit_public_typed_closure_trampoline(
     module_prefix: &str,
     generic_body_name: &str,
     kind: TypedFunctionTrampolineKind,
-    string_capture_count: usize,
+    capture_reps: &[TypedParamRep],
 ) -> Result<()> {
     let params = match closure_expr {
         perry_hir::Expr::Closure { params, .. } => params,
@@ -155,15 +155,11 @@ fn emit_public_typed_closure_trampoline(
                 None => ok,
             });
         }
-        if string_capture_count > 0 {
-            if let Some(capture_guard) =
-                emit_typed_string_capture_guard(blk, "%this_closure", string_capture_count)
-            {
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &capture_guard),
-                    None => capture_guard,
-                });
-            }
+        if let Some(capture_guard) = emit_typed_capture_guard(blk, "%this_closure", capture_reps) {
+            guard = Some(match guard {
+                Some(prev) => blk.and(I1, &prev, &capture_guard),
+                None => capture_guard,
+            });
         }
     }
 
@@ -253,13 +249,13 @@ fn load_typed_capture(
     }
 }
 
-pub(crate) fn emit_typed_string_capture_guard(
+pub(crate) fn emit_typed_capture_guard(
     blk: &mut crate::block::LlBlock,
     closure_handle: &str,
-    capture_count: usize,
+    capture_reps: &[TypedParamRep],
 ) -> Option<String> {
     let mut guard: Option<String> = None;
-    for idx in 0..capture_count {
+    for (idx, rep) in capture_reps.iter().enumerate() {
         let idx = idx.to_string();
         let captured_bits = blk.call(
             I64,
@@ -267,12 +263,7 @@ pub(crate) fn emit_typed_string_capture_guard(
             &[(I64, closure_handle), (I32, &idx)],
         );
         let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let raw = blk.call(
-            I32,
-            "js_typed_string_arg_guard",
-            &[(DOUBLE, captured.as_str())],
-        );
-        let ok = blk.icmp_ne(I32, &raw, "0");
+        let ok = emit_typed_arg_guard(blk, *rep, &captured);
         guard = Some(match guard {
             Some(prev) => blk.and(I1, &prev, &ok),
             None => ok,
@@ -913,6 +904,8 @@ pub(super) fn compile_closure(
         native_facts: &native_facts,
         locals,
         local_types,
+        proven_local_types: std::collections::HashMap::new(),
+        module_global_proven_types: &cross_module.module_global_proven_types,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
@@ -1092,7 +1085,7 @@ pub(super) fn compile_closure(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
-        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
+        typed_closure_capture_reps: &cross_module.typed_closure_capture_reps,
         was_unrolled: false,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
@@ -1168,15 +1161,11 @@ pub(super) fn compile_closure(
         llmod.add_raw_global(raw.clone());
     }
     if let Some(kind) = typed_public_trampoline {
-        let string_capture_count = if matches!(kind, TypedFunctionTrampolineKind::StringRef) {
-            cross_module
-                .typed_string_closure_capture_counts
-                .get(&func_id)
-                .copied()
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let capture_reps = cross_module
+            .typed_closure_capture_reps
+            .get(&func_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         emit_public_typed_closure_trampoline(
             llmod,
             func_id,
@@ -1184,7 +1173,7 @@ pub(super) fn compile_closure(
             module_prefix,
             &llvm_name,
             kind,
-            string_capture_count,
+            capture_reps,
         )?;
     }
     Ok(())

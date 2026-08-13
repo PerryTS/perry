@@ -161,15 +161,12 @@ fn pointer_analysis_array_type(elem: Type) -> Type {
 }
 
 struct PointerAnalysisFacts<'a> {
-    local_types: &'a HashMap<u32, Type>,
     local_value_types: &'a HashMap<u32, Type>,
 }
 
 impl HirTypeFacts for PointerAnalysisFacts<'_> {
     fn local_type(&self, id: u32) -> Option<&Type> {
-        self.local_value_types
-            .get(&id)
-            .or_else(|| self.local_types.get(&id))
+        self.local_value_types.get(&id)
     }
 
     fn global_type(&self, _id: u32) -> Option<&Type> {
@@ -213,20 +210,6 @@ pub fn collect_pointer_typed_locals(
     flat_const_ids: &HashSet<u32>,
 ) -> std::collections::HashMap<u32, u32> {
     use perry_hir::Stmt;
-    /// Does this local need a shadow-stack slot?
-    ///
-    /// The third copy of the pointer question, now routed to the one
-    /// definition (#7236). It was the exact complement of
-    /// [`is_definitely_non_pointer_type`] over every `Type` variant *except*
-    /// `Symbol`, which neither of them claimed — so a `Symbol` local was
-    /// simultaneously "not a pointer" (no slot here) and "pointer-bearing"
-    /// (`typed_shape`, which lays out the GC's own field masks). The
-    /// per-variant rationale that used to live here moved to
-    /// `type_is_pointer_bearing`'s doc comment with it.
-    fn is_ptr_typed(ty: &Type) -> bool {
-        crate::typed_shape::type_is_pointer_bearing(ty)
-    }
-
     fn expr_value_type(
         expr: &Expr,
         local_types: &HashMap<u32, Type>,
@@ -315,7 +298,6 @@ pub fn collect_pointer_typed_locals(
             | Expr::JsonStringifyFull(..) => Some(Type::String),
             Expr::LocalGet(id) => local_value_types
                 .get(id)
-                .or_else(|| local_types.get(id))
                 .map(pointer_analysis_type)
                 .or_else(|| {
                     if non_pointer_locals.contains(id) {
@@ -434,10 +416,7 @@ pub fn collect_pointer_typed_locals(
             }
             Expr::Void(_) => Some(Type::Void),
             _ => {
-                let facts = PointerAnalysisFacts {
-                    local_types,
-                    local_value_types,
-                };
+                let facts = PointerAnalysisFacts { local_value_types };
                 match infer_expr_type(expr, &facts) {
                     Type::Any | Type::Unknown => None,
                     ty => Some(pointer_analysis_type(&ty)),
@@ -454,6 +433,44 @@ pub fn collect_pointer_typed_locals(
     ) -> bool {
         expr_value_type(expr, local_types, local_value_types, non_pointer_locals)
             .is_some_and(|ty| is_definitely_non_pointer_type(&ty))
+    }
+
+    /// Inductive check for a local-preserving numeric recurrence such as
+    /// `let i = 0; i = i + 1`. The caller separately requires an independent
+    /// non-pointer seed definition and checks every write under this
+    /// assumption, so a declaration or a circular `x = x` is never evidence.
+    fn expr_is_known_non_pointer_assuming_local(
+        expr: &Expr,
+        assumed_id: u32,
+        local_types: &HashMap<u32, Type>,
+        local_value_types: &HashMap<u32, Type>,
+        non_pointer_locals: &HashSet<u32>,
+    ) -> bool {
+        match expr {
+            Expr::LocalGet(id) if *id == assumed_id => true,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
+                expr_is_known_non_pointer_assuming_local(
+                    left,
+                    assumed_id,
+                    local_types,
+                    local_value_types,
+                    non_pointer_locals,
+                ) && expr_is_known_non_pointer_assuming_local(
+                    right,
+                    assumed_id,
+                    local_types,
+                    local_value_types,
+                    non_pointer_locals,
+                )
+            }
+            _ => {
+                expr_is_known_non_pointer(expr, local_types, local_value_types, non_pointer_locals)
+            }
+        }
     }
 
     fn collect_expr_writes_in_closure_stmts(
@@ -801,36 +818,21 @@ pub fn collect_pointer_typed_locals(
     // under-rooting / use-after-free risk, only (rarely) one extra safe root.
     writes.retain(|id, _| local_types.contains_key(id));
 
-    let mut local_value_types: HashMap<u32, Type> = local_types
-        .iter()
-        .filter_map(|(id, ty)| {
-            if !matches!(ty, Type::Any | Type::Unknown) {
-                Some((*id, pointer_analysis_type(ty)))
-            } else {
-                None
-            }
-        })
-        .collect();
-    let mut non_pointer_locals: HashSet<u32> = local_types
-        .iter()
-        .filter_map(|(id, ty)| {
-            if is_definitely_non_pointer_type(ty) {
-                Some(*id)
-            } else {
-                None
-            }
-        })
-        .collect();
+    // Declared TypeScript types are not runtime evidence. Infer pointer-ness
+    // only from the complete write set below; until that succeeds a binding
+    // keeps a conservative shadow slot (#7846).
+    let mut local_value_types: HashMap<u32, Type> = HashMap::new();
+    let mut non_pointer_locals: HashSet<u32> = HashSet::new();
 
     // #6219 perf: BOUND the refinement fixpoint.
     //
     // This loop exists only to PROVE additional locals non-pointer (it ONLY
     // ever GROWS `non_pointer_locals`, below), which lets `walk`/param slots
-    // DROP them from the shadow frame. Every slot decision gates on
-    // `is_ptr_typed(declared_ty) && !non_pointer_locals.contains(id)`, so
-    // curtailing this loop is strictly conservative: a local that would have
-    // been proven non-pointer instead keeps a safe extra root. It never removes
-    // a needed slot — no under-rooting / use-after-free is possible.
+    // DROP them from the shadow frame. Declared types never participate in that
+    // decision, so curtailing this loop is strictly conservative: a local that
+    // would have been proven non-pointer instead keeps a safe extra root. It
+    // never removes a needed slot — no under-rooting / use-after-free is
+    // possible.
     //
     // Unbounded (`while changed`) the loop is O(locals × iterations): a long
     // def-use chain (`a = b; b = c; …`) needs one pass per link. Next.js/webpack
@@ -840,7 +842,8 @@ pub fn collect_pointer_typed_locals(
     // standalone server, still short of LLVM emission. A fixed iteration cap
     // bounds it while keeping full precision for normal frames (which converge
     // in a handful of passes); a hard size gate skips refinement entirely on the
-    // pathologically huge frames where even a few passes are wasted work.
+    // pathologically huge frames where even a few passes are wasted work. In
+    // that case every unproven binding keeps a conservative shadow slot.
     const MAX_FIXPOINT_ITERS: usize = 16;
     const MAX_FIXPOINT_LOCALS: usize = 8192;
     let mut iters = 0usize;
@@ -883,6 +886,7 @@ pub fn collect_pointer_typed_locals(
             let is_param = param_ids.contains(id);
             let mut precise_inference = !is_param;
             let mut all_non_pointer = !local_writes.is_empty() && !is_param;
+            let mut has_independent_non_pointer_seed = false;
             for write in local_writes {
                 let write_ty = match write {
                     LocalWrite::NonPointer => Some(Type::Number),
@@ -891,6 +895,17 @@ pub fn collect_pointer_typed_locals(
                             .map(|ty| pointer_analysis_type(&ty))
                     }
                 };
+                let write_is_non_pointer_assuming_self = match write {
+                    LocalWrite::NonPointer => true,
+                    LocalWrite::Expr(expr) => expr_is_known_non_pointer_assuming_local(
+                        expr,
+                        *id,
+                        &local_types,
+                        &local_value_types,
+                        &non_pointer_locals,
+                    ),
+                };
+                all_non_pointer &= write_is_non_pointer_assuming_self;
                 match write_ty {
                     Some(Type::Any | Type::Unknown) => {
                         all_non_pointer = false;
@@ -898,8 +913,7 @@ pub fn collect_pointer_typed_locals(
                         precise_inference = false;
                     }
                     Some(ty) => {
-                        all_non_pointer &=
-                            is_definitely_non_pointer_type(&ty) || non_pointer_locals.contains(id);
+                        has_independent_non_pointer_seed |= is_definitely_non_pointer_type(&ty);
                         if precise_inference {
                             match &inferred_ty {
                                 None => inferred_ty = Some(ty),
@@ -912,25 +926,23 @@ pub fn collect_pointer_typed_locals(
                         }
                     }
                     None => {
-                        all_non_pointer = false;
                         inferred_ty = None;
                         precise_inference = false;
                     }
                 }
             }
-            if matches!(local_types.get(id), Some(Type::Any | Type::Unknown)) {
-                if precise_inference {
-                    if let Some(ty) = inferred_ty {
-                        if local_value_types.get(id) != Some(&ty) {
-                            local_value_types.insert(*id, ty);
-                            changed = true;
-                        }
-                    } else if local_value_types.remove(id).is_some() {
+            all_non_pointer &= has_independent_non_pointer_seed;
+            if precise_inference {
+                if let Some(ty) = inferred_ty {
+                    if local_value_types.get(id) != Some(&ty) {
+                        local_value_types.insert(*id, ty);
                         changed = true;
                     }
                 } else if local_value_types.remove(id).is_some() {
                     changed = true;
                 }
+            } else if local_value_types.remove(id).is_some() {
+                changed = true;
             }
             if all_non_pointer && non_pointer_locals.insert(*id) {
                 changed = true;
@@ -969,7 +981,9 @@ pub fn collect_pointer_typed_locals(
         });
     }
     for p in params {
-        if is_ptr_typed(&p.ty) && !non_pointer_locals.contains(&p.id) {
+        // The incoming argument is a definition the body write walk cannot
+        // inspect, and its annotation can lie. Root every generic-ABI param.
+        if !non_pointer_locals.contains(&p.id) {
             assign_slot(&mut out, &mut next_slot, p.id);
         }
     }
@@ -982,10 +996,8 @@ pub fn collect_pointer_typed_locals(
     ) {
         for s in stmts {
             match s {
-                Stmt::Let { id, ty, .. }
-                    if is_ptr_typed(ty)
-                        && !non_pointer_locals.contains(id)
-                        && !flat_row_alias_ids.contains(id) =>
+                Stmt::Let { id, .. }
+                    if !non_pointer_locals.contains(id) && !flat_row_alias_ids.contains(id) =>
                 {
                     assign_slot(out, next_slot, *id);
                 }
@@ -1092,6 +1104,45 @@ pub fn collect_pointer_typed_locals(
 mod tests {
     use super::*;
     use perry_hir::{Function, Param, Stmt};
+
+    #[test]
+    fn declared_scalar_holding_pointer_keeps_shadow_slot() {
+        let stmts = vec![Stmt::Let {
+            id: 1,
+            name: "declared_number_holds_object".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Object(vec![(
+                "answer".to_string(),
+                Expr::Integer(42),
+            )])),
+        }];
+
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&1),
+            "a declared scalar type cannot suppress rooting for an actual object"
+        );
+    }
+
+    #[test]
+    fn declared_scalar_parameter_keeps_shadow_slot() {
+        let params = vec![Param {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::Number,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+
+        let slots = collect_pointer_typed_locals(&params, &[], &HashSet::new());
+        assert!(
+            slots.contains_key(&1),
+            "a generic-ABI argument can violate its declared scalar type"
+        );
+    }
 
     /// #6998: `const it = u8[Symbol.iterator]` binds a **heap** value —
     /// `js_object_get_symbol_property` hands back the accessor — into a local
