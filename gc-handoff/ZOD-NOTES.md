@@ -293,3 +293,653 @@ RATE=1 TIMEOUT=1800 KEEP=1 PERRY_GC_PROTECT_FROMSPACE=0 PERRY_GC_DIAG=1 \
 `PERRY_NO_AUTO_OPTIMIZE=1` is not optional: without it the auto-optimizer
 relinks the runtime without `diagnostics`, which removes the very
 `[gc-fromspace-protect]` evidence §3 depends on.
+
+---
+
+# Session 2 (2026-08-13, `wt-7803` @ `410dadd45`, v0.5.150x)
+
+Picks up §7 "left open". Worktree `/Users/amlug/projects/perry/wt-7803`, branch
+`fix/7803-zod-gc-rooting`, in-tree `target/` (not a separate `CARGO_TARGET_DIR`
+this time). Everything below was measured on a **contended box** — three other
+worktrees (`wt-1849`, `wt-5497`, `wt-7170`) were building throughout, and the
+corpus compile ran at 22% CPU — so wall times here are not comparable with
+§8's, and are quoted only to budget a repeat.
+
+## 9. The corpus/lowering matrix has an empty cell, and it is the cell #7803 lives in
+
+`gc-root-dominance.yml` emits three corpora, not four:
+
+|                        | shadow (`PERRY_RS4GC=0`)      | native (statepoints — **what ships**) |
+|------------------------|-------------------------------|---------------------------------------|
+| curated (~124 files)   | gated (dominance, allocas, `--max-stale 39`) | gated (`--statepoints --max-stale 0`) |
+| dependency-scale (zod) | gated (dominance, allocas, `--max-stale 118`) | **never emitted** |
+
+Two separate corrections landed in this file and neither reached the other's
+cell:
+
+* **#7280** — the curated corpus is the wrong POPULATION. "25 curated files
+  pass while 20 lines of stock zod fail." That added `ir-corpus-dep`.
+* **#7452** — the shadow lowering is the wrong LOWERING. Statepoints became the
+  default in #7370, so a `PERRY_RS4GC=0` corpus contains zero of the root form
+  that ships; the curated corpus "was still emitting 81 modules with 0 bind
+  call sites". That added `ir-corpus-native`, curated only.
+
+The intersection — the zod corpus compiled the way the failing binary is
+compiled — has never been generated, so its stale/unrooted population is
+unmeasured. That is not a small residual either: the curated corpus's own
+unfiltered native census reads **1123 unrooted + 321 stale** (the diagnostic
+step in the same job), against a gated arm of 21.
+
+`scratchpad/zod/dep_native_corpus.sh` emits it (compile `PERRY_RS4GC=1`, then
+the production `STATEPOINT_REWRITE_PASSES` rewrite through `opt`, single-sourced
+out of `crates/perry-codegen/src/inprocess.rs` exactly as the curated script
+does, plus the same generation-time subject-liveness assertion so an empty
+corpus cannot read as a clean one).
+
+**Status: script written, measurement not yet taken.** Do not quote a number
+here until it has run.
+
+### 9a. Measured: the empty cell reads 66, where its sibling is gated at 0
+
+`scripts/…/dep_native_corpus.sh` → 81 modules, **52,198 statepoints, 39,073
+non-empty live bundles**, 0 rewrite failures (the curated native corpus, for
+scale, is 30,033 / 17,478). Then the same mode the curated arm gates on:
+
+```
+python3 scripts/gc_root_dominance_check.py ir-corpus-dep-native \
+  --statepoints --moving-only \
+  --min-files 60 --min-funcs 1200 \
+  --min-statepoints 15000 --min-live-bundles 8000 --min-relocates 20000
+```
+
+```
+=== statepoint hazards: 66  (unrooted: 66, stale: 0)
+      28  unrooted/global      19  unrooted/rootread
+      18  unrooted/alloc        1  unrooted/capture
+      24  sink=js_new_function_construct
+      17  sink=js_closure_call1
+      16  sink=js_closure_call_apply_with_spread
+       6  sink=js_closure_call2
+       1  sink=js_array_concat   1  sink=js_rel_ge
+       1  sink=js_get_string_pointer_unified
+  (277 more suppressed by the #7210 IMMOVABLE_SOURCES box exemption)
+```
+
+**The curated corpus in the identical mode is gated at ZERO.** #7725 deleted its
+`--max-unrooted` budget precisely because "`--max-unrooted` already defaults to
+0, and a budget nobody re-measures is exactly the silently-absorbing kind", and
+`gc-root-dominance-statepoints` is green on `main` as of `81a88de40` (verified
+2026-08-13). So this is not "the instrument is noisy": it is calibrated to zero
+on the curated population and reads 66 on the dependency one.
+
+`unrooted` is the serious class — the checker's own definition is "no
+`ptr addrspace(1)` value in the register's cast chain is in the window
+statepoint's live bundle. The OBJECT is unprotected: nothing marks it, nothing
+rewrites it." That is #7207's shape, and it is the one that produces #7803's
+two observed messages:
+
+* 39 of the 66 sink into `js_closure_call1` / `js_closure_call2` /
+  `js_closure_call_apply_with_spread` → **`TypeError: value is not a function`**
+  (seed 4, both sessions);
+* 24 sink into `js_new_function_construct` → a receiver that is not the object
+  it was, which is what `Cannot read properties of undefined (reading '…')`
+  looks like downstream (seeds 1/16, and the filed `'toString'`).
+
+Zero `stale`, so `root_reload.rs` is doing its job on this corpus; the residual
+is the *unrooted* class, which a reload cannot fix — those need a root.
+
+**This does not yet prove any of the 66 is the one that kills the run.** It
+says the shipping lowering of this workload carries 66 hazards of exactly the
+right shape that no gate has ever looked at. Itemisation and cross-referencing
+against a captured backtrace is the next step, not a conclusion to skip to.
+
+## 10. The rate at HEAD: 7 of 16, not 3 of 16
+
+Same command as §4, same corpus, `zod@4.3.5` unchanged, on `410dadd45`:
+
+```
+OUTDIR=… RATE=1 TIMEOUT=2400 KEEP=1 PERRY_GC_PROTECT_FROMSPACE=0 PERRY_GC_DIAG=1 \
+  ./scripts/gc_schedule_fuzz.sh /tmp/zod-head 16
+```
+
+| seed | verdict | safepoints | moved |
+|---|---|---|---|
+| 1 | **FAIL** `…undefined (reading 'issues')` | 1930 | 271,716 |
+| 4 | **FAIL** `value is not a function` | 2602 | 353,678 |
+| 10 | **FAIL** `…(reading 'issues')` | 2592 | 352,878 |
+| 11 | **FAIL** `value is not a function` | 1581 | 230,109 |
+| 12 | **FAIL** `…(reading 'issues')` | 2520 | 345,143 |
+| 14 | **FAIL** `…(reading 'issues')` | 1234 | 187,843 |
+| 15 | **FAIL** `…(reading 'issues')` | 1641 | 237,617 |
+| 2,3,5,6,7,8,9,13,16 | pass | 6804–6931 | ~862k |
+
+**7/16 (44%)** against §4's 3/16 (19%). Fisher exact on the two sweeps is
+p≈0.06 — suggestive, not established, and the honest reading is that ONE of
+these is true and I have not separated them:
+
+* the class got worse between v0.5.1499 and `410dadd45` (20+ commits, several
+  GC-adjacent: #8014, #8023, #8024, #8026), or
+* 16 runs is simply too thin to distinguish 19% from 44%.
+
+Deciding it needs the v0.5.1499 binary rebuilt and swept on the same box in the
+same session, which is the correct A/B and was not done here. Do NOT quote
+"the rate doubled" from this table alone.
+
+Two things it DOES establish, both load-bearing:
+
+* the subject is live on `main` today, so a fix has something to close;
+* a failing run dies at safepoint 1234–2602 of the ~6850 a passing run
+  completes, i.e. **early** — inside module init / `describeAll()` /
+  `parseLoop(96)`, before the first `console.log`. §7's phase probe could not
+  localize it because the markers perturbed the schedule; the safepoint counts
+  say it without needing a probe.
+
+Note the passing runs are extremely uniform (6804–6931 safepoints, ~862k moved,
+`loop_polls` a constant 63,936). The §1 "4% drift" is the same phenomenon seen
+at a smaller sample: the schedule is stable to about ±1%, and what varies is
+whether the run survives to finish it.
+
+## 11. The debugger is not a usable instrument here — so the runtime got one
+
+The plan was: break on the two throw helpers, read the native stack, name the
+compiled JS function that read the lost value. The mechanics all work —
+
+* `js_throw_type_error_property_access` and `js_throw_type_error_not_a_function`
+  are `#[no_mangle]` globals and each resolves to exactly ONE location;
+* a healthy unscheduled run hits NEITHER (verified), so any hit is the failure
+  and nothing else, no filtering needed;
+* `--debug-symbols` keeps 1726 `_perry_fn_*` symbols in the corpus binary, so
+  the frames have names.
+
+**But the failure does not reproduce under `lldb`.** 4 seeds, all of which fail
+natively at 44%, all passed to completion under the debugger (`bt` reported
+"requires a process which is currently stopped"). 4 samples is 0.56⁴ ≈ 10% by
+chance, so this is *suspicion, not proof* — I stopped rather than spend an hour
+proving it, because the fix is the same either way. Disabling lldb's default
+ASLR-off (`settings set target.disable-aslr false`) did not bring it back, so
+address randomisation is not the discriminator.
+
+> Recorded as a mistake rather than quietly fixed: the sweep piped logs through
+> `grep -vE '^\[gc-'`, which also removed the `[gc-schedule] done:` summary —
+> the line that proves the run collected anything at all. Those four "passes"
+> therefore carry no liveness evidence of their own. (An earlier run of the same
+> harness, before the filter, did print `safepoints=6349 copying_minors=6349
+> moved_objects=847052`, so the env does reach the target under lldb.) A sweep
+> whose logs cannot show its subject ran is the vacuous-green shape, and it took
+> a second look to notice.
+
+So the instrument moved into the runtime, where it observes the run that
+actually fails: **`PERRY_UNCAUGHT_BACKTRACE=1`** (`exception.rs`) emits a
+symbolicated native backtrace on the uncaught-throw path, reusing the
+`libc::backtrace` + `backtrace_symbols_fd` pair `arena::quarantine` already
+uses. Off by default, parsed BY VALUE (`1`/`on`/`true`) — the `PERRY_GC_DIAG=0`
+footgun in §3 is one release old and does not get repeated. It fires at most
+once per process, on a path already headed for `exit(1)`.
+
+## 12. What the 66 are: two shapes, 37 of them in the functions this workload calls constantly
+
+Grouped by fingerprint (`scratchpad/zod/dep-native-verbose.txt` has all 66):
+
+| n | module | shape |
+|---|---|---|
+| 21 | `v4/classic/schemas.ts` | `unrooted:global -> js_closure_alloc` |
+| 16 | `v4/classic/schemas.ts` | `unrooted:alloc -> js_array_like_to_array` |
+| 10 | `v4/core/errors.ts` | `unrooted:rootread -> js_ctor_return_override` / `js_closure_get_capture_bits` |
+| 7 | `v4/locales/he.ts` | `unrooted:rootread -> js_object_get_field_by_name_f64` |
+| 5 | `v4/locales/lt.ts` | `unrooted:global -> js_object_get_field_by_name_f64` |
+| 2+1+1+1+1 | `core/schemas.ts`, `core/parse.ts`, `core/util.ts`, `core/doc.ts`, `classic/schemas.ts` | tail |
+
+**The 12 locale hits are almost certainly not this bug.** They are inside
+`he`/`lt` message-map closures; the corpus never selects a non-`en` locale, so
+those bodies never run and a hazard in an uncalled function cannot fire. Worth
+fixing, not worth chasing here. That leaves ~54, and 37 of them are two shapes
+in one file.
+
+### Shape A — 21× `unrooted:global`, e.g. `strictObject` / `looseObject`
+
+```llvm
+%r25 = load double, ptr @perry_global_…_classic_schemas_ts__39   ; module-level var
+;   across safepoint: js_closure_alloc, js_closure_call1,        ; ← user code runs
+;                     js_closure_set_capture_bits, js_object_alloc
+call @llvm.experimental.gc.statepoint.p0(… @js_new_function_construct, %r25-derived, …)
+```
+
+A module-level variable holding a constructor is loaded into a register; a
+closure is allocated and **called** (`js_closure_call1` — arbitrary user code,
+so an evacuating minor is entirely plausible); the pre-move register is then
+handed to `js_new_function_construct`. `@perry_global_*` IS a registered root,
+so the object survives *at a new address* — property (2) without property (3),
+#7240's shape exactly. Constructing from a recycled address yields an object
+whose fields read `undefined`, which is what `Cannot read properties of
+undefined (reading '…')` looks like one frame later.
+
+**This population is knowingly unhandled, and `root_reload.rs` says so:**
+
+> `is_string_handle_global`: "Narrow on purpose: `@perry_global_*` is a
+> module-level variable the PROGRAM assigns, so re-reading it could observe a
+> later assignment instead of the value the call was given — **that population
+> needs rooting, not reloading, and is deliberately not matched here.**"
+
+That judgement is right — a reload is unsound here — and the rooting it defers
+to was never done. What is new is the *count on a real library*: the reason to
+prioritise it could not be seen, because the corpus that exhibits it was never
+emitted under the lowering that ships.
+
+### Shape B — 16× `unrooted:alloc`, closures 146/147/…
+
+```llvm
+%r123 = <allocation result>
+;   across safepoint: js_array_like_to_array                     ; allocates
+call @llvm…statepoint(… @js_closure_call_apply_with_spread, … %r123 …)
+```
+
+A fresh object held in a bare register across the array-like→array conversion
+of a spread/`apply` call, then passed to the call. Nothing roots it at all
+(#7207's shape, the one `--unrooted-allocas` was built for). Unlike Shape A
+there is no soundness objection to fixing it — the value has no other home, so
+a temp root is simply the missing code.
+
+### Why this is a hypothesis and not yet a cause
+
+Every hazard here is a *possibility* of a stale/lost value, and the checker is
+one-sided by design. Three things would settle it, in increasing cost:
+
+1. a `PERRY_UNCAUGHT_BACKTRACE` stack from a failing run that names one of
+   these functions (in flight);
+2. fixing Shape A + Shape B and re-sweeping: 7/16 must go to 0/40 for the fix
+   to be distinguishable from luck at this rate;
+3. sabotage: re-introduce the hazard and show the rate returns.
+
+Note the two shapes have the same fix and it is NOT a reload: root the value
+(the `rooting/temp_root.rs` pool already exists and is the mechanism `#7719`
+used for the 30 `lower_call/builtin.rs` ctor arms).
+
+## 13. `--debug-symbols` SUPPRESSES the failure — the symbolized build is a different program
+
+This is the finding that explains §11's dead end, and it was found by a control
+rather than by reasoning.
+
+Three binaries, same compiler (`410dadd45`), same corpus, same `zod@4.3.5`,
+same runtime archives, swept identically
+(`RATE=1 PERRY_GC_PROTECT_FROMSPACE=0`, seeds 1..n):
+
+| binary | built with | result |
+|---|---|---|
+| `/tmp/zod-head` | plain, pre-patch runtime | **7/16 FAIL** |
+| `/tmp/zod-bt` | `--debug-symbols`, patched runtime | 0/10 fail (seeds 1–8, 14, 15) |
+| `/tmp/zod-plain2` | plain, **patched runtime** | **FAIL on seed 1 and seed 2** |
+
+The third row is the control that makes the second interpretable. Adding the
+`PERRY_UNCAUGHT_BACKTRACE` hook to `exception.rs` does NOT suppress the bug —
+the plain build carrying that exact runtime still dies at seeds 1 and 2. The
+variable that suppresses is **`--debug-symbols`**: at the base rate of 44%, ten
+consecutive passes is p ≈ 0.56¹⁰ ≈ 0.3%.
+
+So the debugger was never the problem in §11. I had changed two things at once
+(symbols AND lldb) and blamed the wrong one: `/tmp/zod-dbg` was a
+`--debug-symbols` build, so those four lldb "passes" were passes of a program
+that does not have the bug. Recorded rather than quietly corrected, because the
+mistake is instructive — **the instrument that makes a bug observable is also a
+change to the program, and it needs its own control arm.**
+
+Why `-g` should move an intermittent GC bug is not established here. It is not
+"debug info is inert": `PERRY_DEBUG_SYMBOLS` feeds the object-cache key, the
+clang invocation (`-g`), and the final `strip`, and every consumer reads it with
+`is_some()`, so there is no spelling that separates them. Two candidates, both
+unproven: DWARF changes LLVM's inlining/scheduling enough to move allocation
+sites; or the larger image shifts the layout the failure's timing depends on.
+
+### The fix for the instrument: `PERRY_KEEP_SYMBOLS`
+
+Skips ONLY the final `strip` (`post_link.rs`), leaving `-g` off and codegen
+byte-identical to the build that reproduces. That is what makes a backtrace
+from it evidence about the same program rather than about its symbolized twin.
+
+The stripped instrument already proves itself — `PERRY_UNCAUGHT_BACKTRACE=1` on
+`/tmp/zod-plain2` seed 1 emits 11 frames at the fatal throw, 7 of them the
+JS/runtime chain, just without names:
+
+```
+--- native backtrace at the uncaught throw ---
+0   zod-plain2 + 9300712
+1   zod-plain2 + 14326752
+…
+10  dyld  start + 6992
+--- end native backtrace ---
+[gc-schedule] done: seed=1 safepoints=1162 … copying_minors=1162 moved_objects=179572
+```
+
+## 14. LOCALIZED: the fatal frame, at last
+
+`PERRY_KEEP_SYMBOLS=1` (no `-g`) reproduces — seed 3 of 8 — and symbolicates
+itself. The first native backtrace of this failure in either session:
+
+```
+0  perry_runtime::exception::emit_uncaught_backtrace
+1  js_throw + 992
+2  js_timer_has_pending + 0                       ← nearest global; really the
+                                                    stripped throw helper
+3  perry_closure_…zod_src_v4_core_parse_ts__9     + 4132
+4  perry_closure_…zod_src_v4_classic_schemas_ts__108 + 76
+5  js_native_call_value + 3136
+6  js_native_call_method + 24208
+7  js_typed_feedback_native_call_method_by_id + 112
+8  perry_fn_…gc_dep_corpus_main_ts__parseLoop$spec_i32 + 2272
+9  main + 456
+```
+
+seed 3: `safepoints=2177 copying_minors=2177 moved_objects=303880`.
+
+### Reading it
+
+`parseLoop`'s `S.safeParse([...])` → the `safeParse` method
+(`classic/schemas.ts` closure 108) → `core/parse.ts` closure 9.
+
+**Closure 9 is `_safeParse`'s inner arrow.** Identified from the IR rather than
+guessed: it references `$ZodAsyncError`'s class keys (parse.ts:61) and allocates
+`perry_closure_…parse_ts__10`, which is the `(iss) => util.finalizeIssue(…)`
+callback on parse.ts:68. Only `_safeParse`'s body has both.
+
+```ts
+export const _safeParse = (_Err) => (schema, value, _ctx) => {
+  const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
+  const result = schema._zod.run({ value, issues: [] }, ctx);   // ← line 60
+  if (result instanceof Promise) throw new core.$ZodAsyncError();
+  return result.issues.length                                    // ← THROWS HERE
+```
+
+So the failing read is `result.issues` with `result` **undefined**:
+`schema._zod.run({ value, issues: [] }, ctx)` returned undefined.
+
+That reframes the search. This frame is the VICTIM, not the site — it is
+`--moving-only` clean, and nothing in §12's list names closure 9. The loss is
+upstream, in the `run` chain, and `run` is built in `core/schemas.ts` — which
+holds two of the 66 (closures 138 and 185, both `unrooted:rootread`, one
+sinking into `js_closure_call1`).
+
+Note both observed messages are the SAME loss seen one call apart: if the
+receiver `schema._zod` is a recycled object, `.run` misses and the call throws
+`value is not a function`; if the call happens but its result is lost, the
+caller reads `.issues` on undefined. That is why the two symptoms alternate
+seed to seed and why chasing them as separate bugs would have been wrong.
+
+### Sequencing note, and a correction to §10
+
+§10 read the low safepoint counts as "dies in module init". The backtrace says
+otherwise: it dies inside `parseLoop`, which is the SECOND phase. Nothing had
+printed because the corpus prints only after all three phases finish — absence
+of output was never evidence about phase. §7's marker probe was answering a
+question the stack answers directly.
+
+## 15. A hazard from §12's list is ON the stack of a failing run
+
+The other symptom, `value is not a function`, on the same binary (seed 7):
+
+```
+ 3  throw_not_callable
+ 4  closure::dispatch::validate::dispatch_proxy_callee_or_throw
+ 5  js_closure_call2
+ 6  js_native_call_value
+ 7  js_native_call_method
+ 8  dyn_eval::expr::eval_expr           ← part of zod runs INTERPRETED, not native
+ 9  dyn_eval::interp::exec_stmt
+10  dyn_eval::interp::interp_thunk
+11  closure::registry::dispatch_with_arity
+12  js_closure_call3
+13  perry_closure_…core_schemas_ts__137 + 172
+14  perry_closure_…core_schemas_ts__138 + 3904      ★
+15  js_native_call_value
+16  js_native_call_method
+17  js_typed_feedback_native_call_method_by_id
+18  perry_closure_…core_schemas_ts__115 + 4060
+```
+
+**`core/schemas.ts` closure 138 is one of the 66.** Its entry, quoted from
+§12's run, predates any of this dynamic evidence:
+
+```
+core_schemas_ts.ll::perry_closure_…core_schemas_ts__138   [unrooted]
+  source (rootread): %r801333 = gc.result(%statepoint_token332)
+  stale use        : statepoint … @js_closure_call1 …
+  across safepoint : js_closure_get_capture_bits, js_object_get_field_by_name_f64,
+                     js_object_get_field_ic_miss, js_typed_feedback_object_get_field_by_name_f64
+  MOVING           : YES
+```
+
+A value read out of a root, held across property-get helpers that can run an
+evacuating minor, then used as the callee of `js_closure_call1`. The stack
+shows 138 calling 137 which calls a closure through `js_closure_call3`, and the
+throw is `not callable` on a callee. Same function, same shape, same sink
+family.
+
+**This is corroboration, not proof.** Closure 138 is 1,939 lines of IR and the
+frame is `+3904` — being on the stack does not establish that the reported
+hazard is the instruction that failed. What it does establish is that the two
+independent methods now point at the same function, which neither did before
+today.
+
+Worth noting separately: frames 8–11 show part of `zod` executing through
+`dyn_eval` (the V8-fallback interpreter) rather than natively. Whether that
+path's roots are complete is a question this stack raises and does not answer.
+
+## 16. The quarantine still suppresses — second confirmation, and a false alarm
+
+Retried at depth 800 on `/tmp/zod-ks`, whose UNPROTECTED rate is 3/8:
+
+| seed | unprotected | protected (depth 800) |
+|---|---|---|
+| 3 | FAIL | **pass**, 6822 safepoints, `sets_held=800/800` |
+| 4 | pass | pass, 6834 safepoints, `sets_held=800/800` |
+
+Seed 3 is the discriminating cell: it fails unprotected and passes protected on
+the same binary in the same session. §3 found this at v0.5.1499 and it holds at
+`410dadd45` on a build with a 4× higher base rate. The instrument saturates
+(800/800 sets, ~7 GB held), so this is suppression, not absence of instrument.
+
+> **False alarm, recorded because it nearly went in the other direction.**
+> Seeds 5 and 6 exited 134 (`Abort trap: 6`) under the quarantine and my first
+> reading was "the protector caught it". It did not: the tail says
+> `panicked at … failed printing to stderr: No space left on device (os error
+> 28)`. The depth-800 arm holds ~7 GB and `PERRY_GC_DIAG=1` writes tens of MB
+> per run; the disk filled and the runs aborted on the write, not on a fault.
+> An abort under a fault-detecting instrument is exactly the result you want to
+> believe, which is why it needed the tail read before it was quoted.
+
+## 17. Where this leaves #7803, and what to do next
+
+### Established this session
+
+1. The class is live on `main` (`410dadd45`) and easy to hit: 7/16 on
+   `/tmp/zod-head`, 8/10 on `/tmp/zod-plain2`, 3/8 on `/tmp/zod-ks`. The rate
+   is strongly binary-dependent, so **A/B a fix on ONE binary pair, never
+   across builds.**
+2. The corpus × lowering matrix had an empty cell — the dependency corpus under
+   the shipping (statepoint) lowering. It reads **66 unrooted hazards** where
+   the curated corpus in the identical mode is gated at **0**.
+3. `--debug-symbols` suppresses the failure (0/13). Any instrument that needs
+   symbols must use `PERRY_KEEP_SYMBOLS` instead.
+4. The fatal frame is `_safeParse`'s inner arrow (`core/parse.ts:65`),
+   `result.issues` on an undefined `result` returned by `schema._zod.run(…)`.
+   Both observed messages are the same loss one call apart.
+5. `core/schemas.ts` closure 138 is both a §12 hazard and a stack frame of a
+   failing run.
+6. The from-space quarantine suppresses on this workload — confirmed twice now.
+   It cannot be the localizing instrument here; `PERRY_UNCAUGHT_BACKTRACE` can.
+
+### Next, in order
+
+1. **Pin closure 138's hazard to a source construct.** It is 1,939 lines of IR;
+   the entry names the exact `%r80` and the `js_closure_call1` statepoint.
+   Identify which of `core/schemas.ts`'s `run`/`parse`/`runChecks` bodies it is
+   and what the unrooted value holds.
+2. **Fix the two dominant shapes** (§12): 21× `unrooted:global` (needs a temp
+   root — `root_reload.rs` declines these deliberately and correctly) and 16×
+   `unrooted:alloc` across `js_array_like_to_array` (no soundness objection,
+   just missing). `rooting/temp_root.rs`'s alloca pool is the mechanism; #7719
+   is the precedent.
+3. **A/B honestly.** At 3/8 on `zod-ks`, a fix needs ~40 clean runs on the SAME
+   binary pair to be distinguishable from luck, plus the static count going
+   66 → lower. Both, not either.
+4. **Gate the cell.** Add `ir-corpus-dep-native` to `gc-root-dominance.yml`
+   with a budget that can only go down. Note the corollary CLAUDE.md gives:
+   a new gate has never been green, so run it before making it required.
+5. **The 12 locale hits** are in never-executed bodies on this workload. Fix
+   with the rest; do not use them to judge the fix.
+
+### Loose ends
+
+* `PERRY_GC_SCHEDULE_ALLOC_KB=0` (every poll a candidate, no allocation pacing)
+  was identified as a way to make the schedule replayable and was **never
+  run** — the backtrace route landed first. It is still the cheapest route to a
+  deterministic reproducer if one is wanted.
+* Why `-g` suppresses is unexplained (§13).
+* The `dyn_eval` frames in §15 mean part of this workload is interpreted.
+* Two diagnostics are uncommitted in `wt-7803`:
+  `PERRY_UNCAUGHT_BACKTRACE` (`exception.rs`) and `PERRY_KEEP_SYMBOLS`
+  (`post_link.rs`). Both are off by default and value-parsed.
+
+## 18. The fix: the CALLEE has to outlive the arguments
+
+Reading the three shapes against the lowering turned them into one defect.
+
+`rooting/temp_root.rs` already answers "root, re-derive, or reuse?" correctly
+and in one place (`operand_protection`), and it already says module globals and
+locals must be ROOTED rather than reloaded, for the reason a reload gets wrong:
+
+> `new C(g, bump())` where `bump()` sets `g` must capture `g`'s value at call
+> time; re-lowering produced the post-`bump()` value, a miscompile rather than
+> a rooting bug.
+
+The gap is not the decision, it is the POSITION it is asked about. That
+machinery protects call **operands**. Three call-lowering arms lower the
+**callee** into a bare register first, lower the arguments after it — each of
+which can allocate — and then pass the original register:
+
+```rust
+// expr/new_dynamic.rs, both js_new_function_construct arms
+let func_double = lower_expr(ctx, callee)?;                       // ← callee
+let lowered_args = args.iter().map(|a| lower_expr(ctx, a))…?;     // ← these collect
+let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args); // ← allocates
+ctx.block().call(DOUBLE, "js_new_function_construct",
+                 &[(DOUBLE, &func_double), …]);                   // ← pre-move address
+
+// expr/call_spread.rs — same shape, `cb_box` at :458 consumed at :538 across
+// the register-buffer stores, `js_array_like_to_array` and the concat.
+```
+
+Under the shipping lowering that register is in no statepoint live bundle, so
+nothing marks it and nothing relocates it. JS resolves the callee BEFORE it
+evaluates the arguments, so the fix has to preserve the call-time value: a temp
+root, never a reload. `rooting::RootedGroup` is exactly that and needed no
+extension — `adopt` for the hand-emitted callee, `lower` for the arguments,
+`reread` below the allocations, one `release` after the consuming call.
+
+### Measured: 66 → 26
+
+Same corpus, same command, `410dadd45` + these two files:
+
+| | before | after |
+|---|---|---|
+| **total hazards** | **66** | **26** |
+| `unrooted/global` | 28 | **5** |
+| `unrooted/alloc` | 18 | **2** |
+| `unrooted/rootread` | 19 | 19 |
+| `unrooted/capture` | 1 | 0 |
+| `sink=js_new_function_construct` | 24 | **0** |
+| `sink=js_closure_call_apply_with_spread` | 16 | **0** |
+| non-empty live bundles | 39,073 | **39,140** |
+
+The two sinks the change targeted are at zero, the `rootread` population it did
+NOT target is unchanged at 19, and the corpus grew 67 live bundles — the newly
+rooted values entering statepoint bundles, which is what the fix looks like from
+the collector's side rather than from the checker's. The unscheduled control run
+is byte-identical, so the rooting did not change the answer.
+
+**The residual 19 `unrooted/rootread` are the `js_box_get_bits` shape** — a
+mutable-capture box read held across property-get helpers and used as the callee
+of `js_closure_call1/2`. That is the shape on §15's failing stack
+(`core/schemas.ts` closure 138), and the same callee-outlives-arguments defect
+in a third family of arms (`lower_call/early_branches.rs:384`,
+`extern_func.rs`, `static_method.rs`). It is unfixed as of this note.
+
+## 19. The fix does NOT close #7803 — the dynamic half says so
+
+Static and dynamic disagree, and the dynamic half is the one that decides.
+
+| binary | codegen | static hazards | sweep |
+|---|---|---|---|
+| `/tmp/zod-ks` | `410dadd45` | 66 | 3/8 fail |
+| `/tmp/zod-fix` | + shapes A, B | **26** | **5/16 fail** (5, 7, 9, 11, 15) |
+| `/tmp/zod-fix3` | + shape C | (not measured) | **8/16 fail** (1,3,5,6,8,11,14,16) |
+
+40 hazards closed, two whole sinks to zero, 67 more live bundles — and the
+failure rate did not move (3/8 → 5/16 is noise at this sample size). The
+messages are unchanged, at the same early safepoints — and `zod-fix3`'s seed 6
+adds a THIRD surfacing form of the same loss, `TypeError: is not iterable`.
+
+`zod-fix3`'s 8/16 (50%) against `zod-fix`'s 5/16 (31%) is NOT evidence that
+shape C made things worse: Fisher exact gives p≈0.47, i.e. nothing. The rate is
+also strongly binary-dependent on this workload with no semantic difference
+between builds — 44% / 80% / 38% / 31% / 50% across five binaries of the same
+source — and the shape-C edit only moves a *pure* unmask below the argument
+lowering. Quoted here so the next reader does not rediscover the 31→50 step and
+read it as a regression.
+
+Seed 11 is worth one line on its own: it failed at safepoint **6137** of ~6840,
+far later than every other failure (968–2453). Whatever is lost is not confined
+to one early window.
+
+**So the three call arms are a real defect that is not this bug.** They are
+worth landing on their own terms — the invariant they violate is the one
+`docs/src/internals/gc-rooting-invariant.md` states, the fix is the mechanism
+the codebase already sanctions, and the corpus count is a ratchet — but #7803
+stays open and the cause is elsewhere.
+
+Recording the negative result at full strength because the temptation here is
+real: a 66 → 26 table looks like progress on the issue, and quoting it without
+the sweep beside it would have been the exact "gate that cannot fail" shape
+CLAUDE.md warns about, one level up — a *measurement* that cannot fail, because
+its subject was never the failure.
+
+### Where the evidence now points: the `dyn_eval` interpreter
+
+§15's stack has frames the static checker structurally cannot see:
+
+```
+ 8  dyn_eval::expr::eval_expr
+ 9  dyn_eval::interp::exec_stmt
+10  dyn_eval::interp::interp_thunk
+11  closure::registry::dispatch_with_arity
+```
+
+Part of `zod` executes through the V8-fallback INTERPRETER, not as native code.
+`scripts/gc_root_dominance_check.py` reads emitted LLVM IR, so an interpreter
+written in Rust is invisible to it — every hazard it can report is in a
+population that, on this workload, may not contain the bug at all. That is
+CLAUDE.md's own warning, and it fits every observation:
+
+* fixing 40 IR-level hazards changed nothing;
+* the quarantine suppresses (§3, §16) — recycling decides what a stale read
+  finds, whoever holds the stale pointer;
+* `--debug-symbols` suppresses (§13) — a layout/inlining sensitivity, not
+  something a rooting fix in emitted IR would move.
+
+`dyn_eval` DOES have a root scanner (`scan_dyn_eval_roots_mut`, `ROOTS`
+thread-local, plus the env/member key caches), so the question is not "are
+there roots" but **"does every interpreter-held JSValue reach `ROOTS` before a
+call that can collect"** — an `f64` local in `eval_expr` held across a call into
+user code is exactly the shape, and it is the intermittent-register kind rather
+than the reproducible-table kind.
+
+**Next investigator: audit `dyn_eval/expr.rs` and `dyn_eval/interp.rs` for
+`f64`/JSValue locals live across calls that can collect, before spending more
+on the IR corpus.** And find out WHY part of this workload is interpreted at
+all — a natively compiled `zod` would not use that path (#678 is the tracker
+for native callsites into V8-fallback modules).
+
+> **Not yet done for the three call arms**: the gap suite has NOT been run
+> against them. They change the lowering of every `new <expr>(…)`, every spread
+> call and every closure-typed-local call in the language, so `./scripts/
+> run_gap_tests.sh` plus `cargo test -p perry-codegen` gate any PR — the
+> unscheduled dep-corpus control run being byte-identical is nowhere near
+> sufficient evidence for a change with that blast radius.
