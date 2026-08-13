@@ -169,6 +169,42 @@ All on `b8a230366` (the fix), archives from ONE cargo invocation.
 | `cargo test -p perry --bin perry shared_tokio` | 11 passed |
 | `cargo test -p perry-runtime --lib gc::pin::` | 6 passed |
 
+### The full gap suite
+
+`PERRY_SKIP_BUILD=1 ./run_parity_tests.sh --filter test_gap_`, archives built with
+the harness's own recipe (`-p perry -p perry-runtime -p perry-stdlib
+-p perry-runtime-static -p perry-stdlib-static`), macOS arm64, 58 minutes:
+
+```
+Parity Pass:  538      Parity Fail: 15      Compile Fail: 1      Crashed: 0
+```
+
+**`Crashed: 0`.** All six #7629 witnesses PASS, plus `test_gap_events_import_4995`.
+
+Against the committed Linux snapshot (`test-parity/gap_snapshot.json`, 15 entries):
+
+* 14 of the 15 reproduce.
+* `test_gap_iterator_helpers_2874` passes here (host difference or fixed since).
+* **2 failures are not in the snapshot, and neither is caused by this change:**
+  * `test_gap_specabi_reassign` — an output mismatch
+    (`plain: 99 101 2` vs `plain: 0 0 2`, `captured: 77:2` vs `captured: 0:2`).
+    A spec-ABI codegen defect; nothing in this change can alter program output.
+  * `test_gap_zlib_4917_level` — `zlib.deflateRawSync` / `inflateRawSync`.
+    `js_zlib_deflate_raw_sync` and `js_zlib_inflate_raw_sync` exist **only** in
+    `perry-stdlib/src/zlib.rs`; `perry-ext-zlib` does not define them. The
+    auto-optimize flip strips `compression-gzip` from the stdlib when it routes
+    `node:zlib` to the wrapper ("the ext crate carries all codecs, so nothing is
+    lost", `driver.rs`) — which is false for the *raw* sync entry points, so the
+    link fails with two undefined symbols. Verified both ways on this tree: the
+    no-auto path links it (full stdlib supplies them, exit 0) and the
+    auto-optimize path does not. That makes it red under the DEFAULT
+    `scripts/run_gap_tests.sh` on `main` today, and it is not in the snapshot
+    either. It is deliberately **not** routed around here: excluding `zlib` from
+    the ext-routed set would hide a real API gap to make a number green.
+
+There is no `test-parity/gap_snapshot.macos.json` in the tree, so no macOS gap
+baseline has ever been recorded; the comparison above is against the Linux one.
+
 ---
 
 ## 3. #7990 — the FATAL message was wrong, and the header says why
