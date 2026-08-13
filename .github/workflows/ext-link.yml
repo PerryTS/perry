@@ -104,7 +104,7 @@ jobs:
 
       - name: Install sccache
         if: steps.scope.outputs.pkgs != ''
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache sccache objects
         if: steps.scope.outputs.pkgs != ''

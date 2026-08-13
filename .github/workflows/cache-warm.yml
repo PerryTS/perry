@@ -67,7 +67,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Save the sccache disk cache under the SAME prefix test.yml restores
       # (`sccache-<os>-perry-`). This runs on main, so the saved entry is
