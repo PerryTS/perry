@@ -744,19 +744,15 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
 // inherited the `return` label and, in a region flagged as a return-shape
 // producer, `Tier::Served` with it.
 //
-// The return-shape fact covers the function's RETURN VALUE. It says nothing
-// about an operand of a conditional, a `&&`, an `await` or a member base that
-// happens to sit inside the returned expression. Two consequences, both live:
+// The return-shape fact originally covered only the function's direct RETURN
+// VALUE. #7170 R2 additionally consumes fresh, agreeing conditional result
+// arms. It still says nothing about a conditional's condition, a `&&`, an
+// `await` or a member base that happens to sit inside the returned expression.
 //
-//   * the `return` bucket over-counts — and 323 of it was published as R1's
-//     ceiling on #7170;
-//   * servedness is decided by a string that means the wrong thing. Today no
-//     production region can hit that (`producer_return_class` admits only a
-//     bare `Expr::New` or `Expr::LocalGet` return, so a ternary/await/binary
-//     return yields no fact at all) — but that is a distant invariant in
-//     another file, and R2 widening the producer side would silently turn this
-//     into a wrong `Served` row. These tests force the producer flag on so the
-//     classifier is tested on its own terms rather than on that invariant.
+// R0 separated the syntactic bucket from the servedness bit precisely so R2
+// could make that distinction. These tests force the producer flag on so the
+// classifier is tested on its own terms rather than passing only because a
+// different producer-side guard happens to reject the region.
 
 fn ternary(a: Expr, b: Expr) -> Expr {
     Expr::Conditional {
@@ -783,10 +779,10 @@ fn c_classes() -> Class {
     class_with_fields("C", &["x"])
 }
 
-/// `return cond ? new C() : new C()` — two operands of a conditional, neither
-/// of which is the function's return value.
+/// `return cond ? new C() : new C()` — the arms retain their honest syntactic
+/// bucket, but R2 now consumes both allocations to issue the producer fact.
 #[test]
-fn a_conditional_arm_under_a_return_is_not_a_return_position() {
+fn a_conditional_result_arm_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
@@ -801,12 +797,46 @@ fn a_conditional_arm_under_a_return_is_not_a_return_position() {
             Some("return"),
             "a conditional arm is not the returned value"
         );
-        assert_ne!(
+        assert_eq!(
             e.tier,
             Some(crate::opt_report::Tier::Served),
-            "the return-shape fact does not cover a conditional arm"
+            "R2 consumes each fresh conditional result arm"
         );
     }
+}
+
+/// The condition is evaluated but is not one of the values returned. Keep its
+/// allocation unserved while both result arms are served; otherwise the R2
+/// walker has merely reintroduced R0's "every nested operand is a return"
+/// defect under a new boolean.
+#[test]
+fn a_conditional_condition_is_not_a_return_shape_source() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(Expr::Conditional {
+        condition: Box::new(new_c()),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(new_c()),
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier == Some(crate::opt_report::Tier::Served))
+            .count(),
+        2,
+        "only the two result arms feed the return-shape fact"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier != Some(crate::opt_report::Tier::Served))
+            .count(),
+        1,
+        "the conditional's allocation-valued condition stays unserved"
+    );
 }
 
 /// `return flag && new C()` — a binary operand.

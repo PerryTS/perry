@@ -293,6 +293,115 @@ fn direct_new_return_is_a_fact() {
     assert_eq!(facts.return_shape_class(3), Some("C"));
 }
 
+/// #7170 R2: both arms of a returned conditional are the complete set of
+/// values the caller can observe. When every leaf is fresh and agrees on the
+/// class, the producer carries the same fact as a direct `return new C()` and
+/// its caller is seeded.
+///
+/// The nested arm is deliberate: accepting only one syntactic conditional
+/// layer would leave the same proof structurally unreachable after transforms
+/// introduce another conditional inside a branch.
+///
+/// Sabotage: remove the `Expr::Conditional` arm from
+/// `collect_fresh_return_sources` and this fails at the producer assertion.
+#[test]
+fn agreeing_conditional_return_is_a_fact_and_seeds_its_caller() {
+    let conditional = Expr::Conditional {
+        condition: Box::new(Expr::Bool(true)),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(Expr::Conditional {
+            condition: Box::new(Expr::Bool(false)),
+            then_expr: Box::new(new_c()),
+            else_expr: Box::new(new_c()),
+        }),
+    };
+    let (facts, c) = facts_for(vec![function(
+        30,
+        "conditional",
+        vec![Stmt::Return(Some(conditional))],
+    )]);
+    assert_eq!(
+        facts.return_shape_class(30),
+        Some("C"),
+        "all conditional result arms are fresh instances of C"
+    );
+
+    let classes = classes_of(&c);
+    let caller = call_and_store(31, Expr::FuncRef(30));
+    assert!(
+        promote(&caller, &classes, &facts).contains_key(&31),
+        "the conditional-return fact must reach the caller-side seed"
+    );
+}
+
+/// A conditional fact is all-arms, not "one object-looking arm is enough".
+/// A cached/unknown value on either side may be aliased or may not be an
+/// object at all.
+///
+/// Sabotage: accept only `then_expr` in `collect_fresh_return_sources` and the
+/// first half fails; accept only `else_expr` and the second half fails.
+#[test]
+fn conditional_return_with_any_non_fresh_arm_gets_no_fact() {
+    for (fresh_first, then_expr, else_expr) in [
+        (true, new_c(), Expr::LocalGet(999)),
+        (false, Expr::LocalGet(999), new_c()),
+    ] {
+        let returned = Expr::Conditional {
+            condition: Box::new(Expr::Bool(true)),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(else_expr),
+        };
+        let (facts, _) = facts_for(vec![function(
+            31,
+            "maybe_cached",
+            vec![Stmt::Return(Some(returned))],
+        )]);
+        assert_eq!(
+            facts.return_shape_class(31),
+            None,
+            "the {} conditional arm being fresh cannot license the other arm",
+            if fresh_first { "first" } else { "second" }
+        );
+    }
+}
+
+/// Freshness is not enough when the arms have different shapes: the caller
+/// would use one fixed field-offset table for two dynamic classes.
+///
+/// Sabotage: remove the existing class-agreement check after flattening the
+/// conditional and this fails. The agreeing control keeps the test live.
+#[test]
+fn disagreeing_conditional_return_classes_get_no_fact() {
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let returned = |else_expr| Expr::Conditional {
+        condition: Box::new(Expr::Bool(true)),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(else_expr),
+    };
+    let (facts, _) = facts_for_classes(
+        vec![class_d()],
+        vec![function(
+            32,
+            "different",
+            vec![Stmt::Return(Some(returned(new_d)))],
+        )],
+    );
+    assert_eq!(facts.return_shape_class(32), None);
+
+    let (control, _) = facts_for(vec![function(
+        33,
+        "same",
+        vec![Stmt::Return(Some(returned(new_c())))],
+    )]);
+    assert_eq!(control.return_shape_class(33), Some("C"));
+}
+
 /// A producer that can fall off the end returns `undefined` on that path; a
 /// caller treating the result as a proven `C` would load a field off it.
 ///

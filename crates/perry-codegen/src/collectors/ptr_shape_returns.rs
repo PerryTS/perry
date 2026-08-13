@@ -50,9 +50,15 @@
 //!   anywhere but the returned one". It is discharged by re-running
 //!   `collect_shape_proven_ptr_locals` over the producer's body rather than
 //!   by a second, weaker approximation of it.
+//! * A conditional expression whose result leaves are fresh `New` allocations
+//!   and all agree on the same class. The condition itself cannot weaken
+//!   freshness because a branch-local allocation does not exist until after
+//!   the condition has run. A `LocalGet` leaf remains fail-closed for now:
+//!   Phase 3b exempts only a bare `return local`, not one nested in an
+//!   expression.
 //!
 //! Anything else — `return CACHE`, `return this.field`, `return mk()`,
-//! `return cond ? a : b` — yields no fact.
+//! or a conditional with a non-fresh/disagreeing arm — yields no fact.
 //!
 //! ## Why the producer must not fall off its end
 //!
@@ -323,19 +329,20 @@ fn producer_return_class(
     }
 
     // Every return must agree on one class, and each must be a fresh form.
+    // #7170 R2 treats a conditional as the set of values it can actually
+    // return, recursively. This is deliberately narrower than a generic
+    // expression walk: the condition is not a result, and logical operators
+    // can return their left operand, whose truthiness/type needs a separate
+    // proof.
+    let mut sources = Vec::new();
+    for r in &returns {
+        if !collect_fresh_return_sources(r, f.body, true, &mut sources) {
+            return None;
+        }
+    }
     let mut class_name: Option<&str> = None;
     let mut needs_body_proof: Vec<u32> = Vec::new();
-    for r in &returns {
-        let (name, local) = match r {
-            Expr::New { class_name: c, .. } => (c.as_str(), None),
-            Expr::LocalGet(id) => {
-                // Resolved against the producer's own Phase 3b proof below;
-                // find its declared class first so disagreement short-circuits.
-                let c = seeded_class_of_local(f.body, *id)?;
-                (c, Some(*id))
-            }
-            _ => return None,
-        };
+    for (name, local) in sources {
         match class_name {
             None => class_name = Some(name),
             Some(prev) if prev == name => {}
@@ -403,6 +410,50 @@ fn producer_return_class(
         }
     }
     Some(class_name.to_string())
+}
+
+/// Flatten one returned expression into the fresh values it may produce.
+///
+/// A conditional is safe exactly when both arms are safe: only one arm runs,
+/// but the caller may observe either one. Nested conditionals recurse so the
+/// proof is about the complete result set rather than one syntactic layer.
+/// Each leaf keeps the existing freshness obligation:
+///
+/// * `New` is fresh by construction;
+/// * `LocalGet` is accepted only when it is the direct return expression, then
+///   discharged by the producer's full Phase 3b containment proof in
+///   `producer_return_class`. Phase 3b does not currently exempt a local nested
+///   inside a returned expression, so conditional arms stay `New`-only.
+///
+/// `false` is fail-closed for every other expression form.
+fn collect_fresh_return_sources<'a>(
+    expr: &'a Expr,
+    body: &'a [Stmt],
+    is_direct_return: bool,
+    out: &mut Vec<(&'a str, Option<u32>)>,
+) -> bool {
+    match expr {
+        Expr::New { class_name, .. } => {
+            out.push((class_name.as_str(), None));
+            true
+        }
+        Expr::LocalGet(id) if is_direct_return => {
+            let Some(class_name) = seeded_class_of_local(body, *id) else {
+                return false;
+            };
+            out.push((class_name, Some(*id)));
+            true
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            collect_fresh_return_sources(then_expr, body, false, out)
+                && collect_fresh_return_sources(else_expr, body, false, out)
+        }
+        _ => false,
+    }
 }
 
 /// The class of the `new` that a `Stmt::Let` in `stmts` binds to `want`.
