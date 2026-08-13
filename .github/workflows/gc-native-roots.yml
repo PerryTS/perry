@@ -138,18 +138,22 @@
 #                 prologue words, which is enough to say which walker is wrong
 #                 without a second run.
 #
-#   windows-latest    FIXED. #8017 stopped linking the official archive's
+#   windows-latest    PARTIALLY FIXED. #8017 stopped linking the official archive's
 #                 incompatible /MT + rpmalloc static objects, restricted
 #                 inkwell to Perry's x86/AArch64 targets, and linked the
 #                 archive's LLVM-C.dll instead. #7985's release follow-up
 #                 keeps that DLL beside perry.exe in the Windows zip/npm
 #                 package. A SECOND, separate failure in the same arm —
 #                 Git-bash `tar` reading `D:\a\_temp` as a remote host — was a
-#                 workflow bug fixed here with `--force-local`.
+#                 workflow bug. `--force-local` is ineffective with the
+#                 runner's bsdtar; #8028 tracks normalizing the archive and
+#                 extraction paths with `cygpath`. Do not call this arm green
+#                 until that fix is merged and a complete run measures it.
 #
-# So: after #7970, #7997 and #8017 all four arms should pass. Per CLAUDE.md this
-# becomes a promotion candidate only AFTER one complete green run demonstrates
-# that claim; do not add it to branch protection based on a comment.
+# So: after #7970, #7997 and #8017 the three non-Windows arms should pass;
+# windows-latest remains unproven pending #8028. Per CLAUDE.md this becomes a
+# promotion candidate only AFTER one complete green run demonstrates all four
+# arms; do not add it to branch protection based on a comment.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
