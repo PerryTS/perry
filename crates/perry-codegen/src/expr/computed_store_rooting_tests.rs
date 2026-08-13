@@ -531,15 +531,7 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     );
 }
 
-fn masked_window_coercion_loop(key_ty: Type) -> String {
-    let masked_index = Expr::Binary {
-        op: BinaryOp::BitAnd,
-        left: Box::new(Expr::Unary {
-            op: UnaryOp::Pos,
-            operand: Box::new(Expr::LocalGet(2)),
-        }),
-        right: Box::new(Expr::Integer(7)),
-    };
+fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
     compile_body_with_params(
         "masked_window_coercion",
         vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
@@ -569,20 +561,91 @@ fn masked_window_coercion_loop(key_ty: Type) -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::LocalSet(
-                    3,
-                    Box::new(Expr::Binary {
-                        op: BinaryOp::Add,
-                        left: Box::new(Expr::LocalGet(3)),
-                        right: Box::new(Expr::IndexGet {
-                            object: Box::new(Expr::LocalGet(1)),
-                            index: Box::new(masked_index),
-                        }),
-                    }),
-                ))],
+                body: vec![Stmt::Expr(Expr::LocalSet(3, Box::new(value)))],
             },
             Stmt::Return(Some(Expr::LocalGet(3))),
         ],
+    )
+}
+
+fn masked_window_index_coercion_loop(key_ty: Type) -> String {
+    let masked_index = Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(Expr::Unary {
+            op: UnaryOp::Pos,
+            operand: Box::new(Expr::LocalGet(2)),
+        }),
+        right: Box::new(Expr::Integer(7)),
+    };
+    compile_masked_window_loop(
+        key_ty,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(3)),
+            right: Box::new(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(masked_index),
+            }),
+        },
+    )
+}
+
+fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
+    let read = |index| Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::Integer(index)),
+    };
+    compile_masked_window_loop(
+        key_ty,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(read(0)),
+                right: Box::new(Expr::Unary {
+                    op: UnaryOp::Pos,
+                    operand: Box::new(Expr::LocalGet(2)),
+                }),
+            }),
+            right: Box::new(read(1)),
+        },
+    )
+}
+
+fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
+    let value = || {
+        let read = |index| Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(index)),
+        };
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(read(0)),
+                right: Box::new(Expr::Unary {
+                    op: UnaryOp::Pos,
+                    operand: Box::new(Expr::LocalGet(2)),
+                }),
+            }),
+            right: Box::new(read(1)),
+        }
+    };
+    let mut body = vec![Stmt::Let {
+        id: 3,
+        name: "sum".into(),
+        ty: Type::Number,
+        init: Some(Expr::Number(0.0)),
+        mutable: true,
+    }];
+    for _ in 0..4 {
+        body.push(Stmt::Expr(Expr::LocalSet(3, Box::new(value()))));
+    }
+    body.push(Stmt::Return(Some(Expr::LocalGet(3))));
+    compile_body_with_params(
+        "masked_window_rhs_coercion_region",
+        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        body,
     )
 }
 
@@ -592,13 +655,13 @@ fn masked_window_coercion_loop(key_ty: Type) -> String {
 /// the same shape with an inert i32 key proves the fast tier remains live.
 #[test]
 fn collecting_masked_window_index_declines_the_hoisted_pointer_tier() {
-    let inert = masked_window_coercion_loop(Type::Int32);
+    let inert = masked_window_index_coercion_loop(Type::Int32);
     assert!(
         inert.contains("for.packed_f64_range_fast_ta_i32"),
         "the inert control must exercise the masked Int32Array tier:\n{inert}"
     );
 
-    let collecting = masked_window_coercion_loop(Type::Any);
+    let collecting = masked_window_index_coercion_loop(Type::Any);
     assert!(
         calls(&collecting, "js_number_coerce"),
         "unary + over an any key must exercise the collecting coercion witness:\n{collecting}"
@@ -607,6 +670,51 @@ fn collecting_masked_window_index_declines_the_hoisted_pointer_tier() {
         !collecting.contains("for.packed_f64_range_fast_ta_i32"),
         "a collecting masked index must decline before the tier hoists a raw backing pointer:\n\
          {collecting}"
+    );
+}
+
+/// The same proof must cover coercion BETWEEN masked reads, not only inside an
+/// index. Otherwise the second read consumes the tier's hoisted pointer after
+/// `+key` has been allowed to run user code and move or dispose its backing.
+#[test]
+fn collecting_rhs_between_masked_reads_declines_the_hoisted_pointer_tier() {
+    let inert = masked_window_rhs_coercion_loop(Type::Int32);
+    assert!(
+        inert.contains("for.packed_f64_range_fast_ta_i32"),
+        "the inert RHS control must retain the masked Int32Array tier:\n{inert}"
+    );
+
+    let collecting = masked_window_rhs_coercion_loop(Type::Any);
+    assert!(
+        calls(&collecting, "js_number_coerce"),
+        "the any-typed RHS must exercise the user-coercion witness:\n{collecting}"
+    );
+    assert!(
+        !collecting.contains("for.packed_f64_range_fast_ta_i32"),
+        "collecting coercion between masked reads must decline the hoisted-pointer tier:\n\
+         {collecting}"
+    );
+}
+
+/// The straight-line masked region installs the same pointer facts, including
+/// for later store operands. Exercise that caller independently of the loop
+/// matcher so the shared whole-expression gate cannot regress on either path.
+#[test]
+fn collecting_rhs_declines_the_straight_line_masked_region() {
+    let inert = masked_window_rhs_coercion_region(Type::Int32);
+    assert!(
+        inert.contains("masked_region.ta_i32.preheader"),
+        "the inert RHS control must retain straight-line masked versioning:\n{inert}"
+    );
+
+    let collecting = masked_window_rhs_coercion_region(Type::Any);
+    assert!(
+        calls(&collecting, "js_number_coerce"),
+        "the any-typed region RHS must exercise the user-coercion witness:\n{collecting}"
+    );
+    assert!(
+        !collecting.contains("masked_region.ta_i32.preheader"),
+        "collecting coercion must decline the straight-line masked region:\n{collecting}"
     );
 }
 

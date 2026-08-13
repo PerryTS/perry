@@ -1081,7 +1081,7 @@ fn packed_f64_range_loop_dense_body_collect(
                 init: Some(init),
                 ..
             } => {
-                if !masked_window_indices_are_non_collecting(ctx, init)
+                if !masked_window_expression_is_non_collecting(ctx, init)
                     || !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses)
                 {
                     return false;
@@ -1095,7 +1095,7 @@ fn packed_f64_range_loop_dense_body_collect(
                 if *id == counter_id || Some(*id) == bound_local {
                     return false;
                 }
-                if !masked_window_indices_are_non_collecting(ctx, value)
+                if !masked_window_expression_is_non_collecting(ctx, value)
                     || !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses)
                 {
                     return false;
@@ -1109,7 +1109,7 @@ fn packed_f64_range_loop_dense_body_collect(
                 written.insert(*id);
             }
             Stmt::Expr(expr) => {
-                if !masked_window_indices_are_non_collecting(ctx, expr)
+                if !masked_window_expression_is_non_collecting(ctx, expr)
                     || !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses)
                 {
                     return false;
@@ -1123,55 +1123,150 @@ fn packed_f64_range_loop_dense_body_collect(
         && accesses.keys().all(|arr_id| !written.contains(arr_id))
 }
 
-/// The static-window range proof says nothing about evaluating the index.
-/// Keep the masked copies that hoist a raw typed-array backing pointer behind
-/// the shared collection predicate: `(+key) & 7` has a bounded range, but when
-/// `key` is `any`, unary `+` can invoke user coercion and collect. Nested
-/// tracked reads are checked recursively for the same reason.
-pub(super) fn masked_window_indices_are_non_collecting(
+/// Prove that an expression lowered while masked-window facts are active cannot
+/// collect. The structural matcher knows each admitted `IndexGet` becomes a
+/// guarded numeric load, so the proof treats its RESULT as an inert number but
+/// still checks its INDEX expression recursively: a bounded shape such as
+/// `(+key) & 7` can invoke user coercion when `key` is `any`.
+///
+/// Checking the WHOLE operator tree matters as much as checking indexes. In
+/// `ta[0] + (+key) + ta[1]`, the tier's hoisted backing pointer crosses the
+/// middle coercion before the second load. Merely proving both indexes inert
+/// leaves that broader window open.
+pub(super) fn masked_window_expression_is_non_collecting(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
 ) -> bool {
-    use perry_hir::Expr;
+    masked_window_expression_proof(ctx, expr).is_some()
+}
+
+/// Facts about a value whose evaluation has also been proved non-collecting.
+/// `inert` means coercing the result cannot dispatch user code; `numeric` is
+/// the stronger fact needed to distinguish numeric `+` from concatenation.
+#[derive(Clone, Copy)]
+struct MaskedWindowExpressionProof {
+    inert: bool,
+    numeric: bool,
+}
+
+/// Prove the collection behavior of the whole expression while computing the
+/// two result facts its parents need. This is deliberately an allowlist:
+/// `None` is the conservative answer for forms the masked structural walkers
+/// do not admit.
+fn masked_window_expression_proof(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+) -> Option<MaskedWindowExpressionProof> {
+    use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
+    let proof = |inert, numeric| MaskedWindowExpressionProof { inert, numeric };
     match expr {
-        Expr::IndexGet { index, .. } => {
-            !crate::rooting::operand_may_collect(ctx, index)
-                && masked_window_indices_are_non_collecting(ctx, index)
+        // The structural matcher separately proves this is a tracked masked
+        // read. Under its active fact the access itself is a guarded numeric
+        // load, but evaluating the index must still pass this same whole-tree
+        // proof before that fact may be installed.
+        Expr::IndexGet { object, index } => {
+            if !matches!(object.as_ref(), Expr::LocalGet(_)) {
+                return None;
+            }
+            masked_window_expression_proof(ctx, index)?;
+            Some(proof(true, true))
         }
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. }
-        | Expr::MathImul(left, right)
-        | Expr::MathPow(left, right) => {
-            masked_window_indices_are_non_collecting(ctx, left)
-                && masked_window_indices_are_non_collecting(ctx, right)
+        Expr::Number(_) | Expr::Integer(_) => Some(proof(true, true)),
+        Expr::Bool(_) | Expr::Null | Expr::Undefined => Some(proof(true, false)),
+        Expr::LocalGet(_) => {
+            let inert = crate::rooting::expr_is_inert_primitive(ctx, expr);
+            Some(proof(
+                inert,
+                inert && crate::type_analysis::is_numeric_expr(ctx, expr),
+            ))
         }
-        Expr::Unary { operand, .. }
-        | Expr::Void(operand)
-        | Expr::TypeOf(operand)
-        | Expr::NumberCoerce(operand)
-        | Expr::BooleanCoerce(operand)
-        | Expr::MathAbs(operand)
-        | Expr::MathSqrt(operand)
-        | Expr::MathFloor(operand)
-        | Expr::MathCeil(operand)
-        | Expr::MathRound(operand)
-        | Expr::MathTrunc(operand)
-        | Expr::MathSign(operand)
-        | Expr::MathF16round(operand) => masked_window_indices_are_non_collecting(ctx, operand),
+        Expr::Binary { op, left, right } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            if matches!(op, BinaryOp::Add) {
+                if !left.numeric || !right.numeric {
+                    return None;
+                }
+            } else if !left.inert || !right.inert {
+                return None;
+            }
+            Some(proof(true, true))
+        }
+        Expr::Compare { op, left, right } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            if !matches!(op, CompareOp::Eq | CompareOp::Ne) && (!left.inert || !right.inert) {
+                return None;
+            }
+            Some(proof(true, false))
+        }
+        Expr::Unary { op, operand } => {
+            let operand = masked_window_expression_proof(ctx, operand)?;
+            if !matches!(op, UnaryOp::Not) && !operand.inert {
+                return None;
+            }
+            Some(proof(true, !matches!(op, UnaryOp::Not)))
+        }
+        Expr::Logical { left, right, .. } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            Some(proof(
+                left.inert && right.inert,
+                left.numeric && right.numeric,
+            ))
+        }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            masked_window_indices_are_non_collecting(ctx, condition)
-                && masked_window_indices_are_non_collecting(ctx, then_expr)
-                && masked_window_indices_are_non_collecting(ctx, else_expr)
+            masked_window_expression_proof(ctx, condition)?;
+            let then_expr = masked_window_expression_proof(ctx, then_expr)?;
+            let else_expr = masked_window_expression_proof(ctx, else_expr)?;
+            Some(proof(
+                then_expr.inert && else_expr.inert,
+                then_expr.numeric && else_expr.numeric,
+            ))
         }
-        Expr::MathMin(values) | Expr::MathMax(values) => values
-            .iter()
-            .all(|value| masked_window_indices_are_non_collecting(ctx, value)),
-        _ => true,
+        Expr::Void(value) | Expr::TypeOf(value) | Expr::BooleanCoerce(value) => {
+            masked_window_expression_proof(ctx, value)?;
+            Some(proof(true, false))
+        }
+        Expr::NumberCoerce(value) => {
+            let value = masked_window_expression_proof(ctx, value)?;
+            value.inert.then(|| proof(true, true))
+        }
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            for value in [left.as_ref(), right.as_ref()] {
+                if !masked_window_expression_proof(ctx, value)?.inert {
+                    return None;
+                }
+            }
+            Some(proof(true, true))
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => {
+            for value in values {
+                if !masked_window_expression_proof(ctx, value)?.inert {
+                    return None;
+                }
+            }
+            Some(proof(true, true))
+        }
+        Expr::MathAbs(value)
+        | Expr::MathSqrt(value)
+        | Expr::MathFloor(value)
+        | Expr::MathCeil(value)
+        | Expr::MathRound(value)
+        | Expr::MathTrunc(value)
+        | Expr::MathSign(value)
+        | Expr::MathF16round(value) => {
+            let value = masked_window_expression_proof(ctx, value)?;
+            if !value.inert {
+                return None;
+            }
+            Some(proof(true, true))
+        }
+        _ => None,
     }
 }
 

@@ -43,7 +43,7 @@ use anyhow::Result;
 use perry_hir::{Expr, Stmt};
 
 use super::loops::{
-    local_is_number_array, local_is_untyped_candidate, masked_window_indices_are_non_collecting,
+    local_is_number_array, local_is_untyped_candidate, masked_window_expression_is_non_collecting,
     packed_f64_range_loop_pure_expr_collect, packed_loop_array_binding_storage_is_addressable,
     record_packed_f64_range_static_access, PackedF64RangeArrayAccess,
 };
@@ -352,7 +352,7 @@ fn region_store_operand_collect(
     expr: &Expr,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
 ) -> bool {
-    if !masked_window_indices_are_non_collecting(ctx, expr) {
+    if !masked_window_expression_is_non_collecting(ctx, expr) {
         return false;
     }
     match expr {
@@ -419,7 +419,7 @@ pub(super) fn try_match_masked_window_region(
         let ok = match stmt {
             Stmt::Expr(Expr::LocalSet(id, value)) => {
                 let mut trial = accesses.clone();
-                if masked_window_indices_are_non_collecting(ctx, value)
+                if masked_window_expression_is_non_collecting(ctx, value)
                     && packed_f64_range_loop_pure_expr_collect(
                         value,
                         REGION_NO_COUNTER,
@@ -457,7 +457,7 @@ pub(super) fn try_match_masked_window_region(
                     break;
                 }
                 let mut trial = accesses.clone();
-                if masked_window_indices_are_non_collecting(ctx, expr)
+                if masked_window_expression_is_non_collecting(ctx, expr)
                     && packed_f64_range_loop_pure_expr_collect(
                         expr,
                         REGION_NO_COUNTER,
