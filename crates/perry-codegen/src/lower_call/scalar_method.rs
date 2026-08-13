@@ -7,7 +7,7 @@ use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use crate::expr::{
-    emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
+    effect_fact, emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
     nanbox_pointer_inline, FnCtx,
 };
 use crate::native_value::{
@@ -268,6 +268,40 @@ fn scalar_method_return_note(method: &perry_hir::Function) -> &'static str {
     }
 }
 
+fn scalar_method_field_write(method: &perry_hir::Function) -> Option<&str> {
+    method.body.iter().find_map(|stmt| match stmt {
+        perry_hir::Stmt::Expr(Expr::PropertySet {
+            object, property, ..
+        }) if matches!(object.as_ref(), Expr::This) => Some(property.as_str()),
+        _ => None,
+    })
+}
+
+fn scalar_method_consumed_facts(
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    method: &perry_hir::Function,
+    fact_detail: &'static str,
+) -> Vec<NativeFactUse> {
+    let mut facts = vec![scalar_method_summary_fact(
+        receiver_id,
+        class_name,
+        property,
+        "consumed",
+        fact_detail,
+    )];
+    if let Some(field) = scalar_method_field_write(method) {
+        facts.push(effect_fact(
+            Some(receiver_id),
+            "consumed",
+            &format!("scalar_method_field_write:{class_name}.{field}"),
+            None,
+        ));
+    }
+    facts
+}
+
 fn lower_scalar_method_inline_body(
     ctx: &mut FnCtx<'_>,
     receiver_id: u32,
@@ -311,11 +345,16 @@ fn lower_scalar_method_inline_body(
                 ctx.locals.insert(*id, slot);
                 ctx.local_types.insert(*id, ty.clone());
             }
+            perry_hir::Stmt::Expr(expr @ Expr::PropertySet { object, .. })
+                if matches!(object.as_ref(), Expr::This) =>
+            {
+                lower_expr(ctx, expr)?;
+            }
             perry_hir::Stmt::Return(Some(expr)) => {
                 result = Some(lower_expr(ctx, expr)?);
                 break;
             }
-            _ => unreachable!("simple scalar method summary only accepts lets and one return"),
+            _ => unreachable!("simple scalar method summary only accepts straight-line statements"),
         }
     }
     let result = result.expect("simple scalar method summary must return a value");
@@ -334,6 +373,10 @@ fn lower_scalar_method_inline_body(
     };
     let mut notes = scalar_method_notes(class_name, property);
     notes.push(scalar_method_return_note(method).to_string());
+    if let Some(field) = scalar_method_field_write(method) {
+        notes.push("summary_effect=field_write".to_string());
+        notes.push(format!("summary_write_field={field}"));
+    }
     notes.extend(extra_notes);
     ctx.record_lowered_value_with_access_mode_and_facts(
         "ScalarMethodCall",
@@ -346,13 +389,7 @@ fn lower_scalar_method_inline_body(
         None,
         None,
         None,
-        vec![scalar_method_summary_fact(
-            receiver_id,
-            class_name,
-            property,
-            "consumed",
-            fact_detail,
-        )],
+        scalar_method_consumed_facts(receiver_id, class_name, property, method, fact_detail),
         Vec::new(),
         false,
         false,

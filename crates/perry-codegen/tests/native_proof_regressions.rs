@@ -9428,6 +9428,123 @@ fn scalar_method_summary_module() -> Module {
     )
 }
 
+fn scalar_method_field_write_module() -> Module {
+    let mut counter = class(111, "Counter", vec![class_field("value", Type::Number)]);
+    counter.constructor = Some(Function {
+        id: 110,
+        name: "Counter_constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(10, "value", Type::Number)],
+        return_type: Type::Any,
+        body: vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(local(10)),
+        })],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    counter.methods.push(Function {
+        id: 111,
+        name: "bump".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                    }),
+                    right: Box::new(int(1)),
+                }),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    let bump = || Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(local(20)),
+            property: "bump".to_string(),
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    module_with_classes_and_params(
+        "scalar_method_field_write.ts",
+        vec![counter],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: vec![number(40.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Expr(bump()),
+            Stmt::Return(Some(bump())),
+        ],
+    )
+}
+
+fn scalar_method_parameterized_field_write_module() -> Module {
+    let mut module = scalar_method_field_write_module();
+    module.name = "scalar_method_parameterized_field_write.ts".to_string();
+    let method = &mut module.classes[0].methods[0];
+    method.params = vec![param(12, "delta", Type::Number)];
+    let Stmt::Expr(Expr::PropertySet { value, .. }) = &mut method.body[0] else {
+        panic!("unexpected scalar field-write fixture method body");
+    };
+    let Expr::Binary { right, .. } = value.as_mut() else {
+        panic!("unexpected scalar field-write fixture assignment");
+    };
+    **right = local(12);
+    for stmt in &mut module.functions[0].body {
+        let call = match stmt {
+            Stmt::Expr(Expr::Call { args, .. }) | Stmt::Return(Some(Expr::Call { args, .. })) => {
+                args
+            }
+            _ => continue,
+        };
+        call.push(number(1.0));
+    }
+    module
+}
+
 fn scalar_method_shadowed_by_field_module() -> Module {
     let mut module = scalar_method_summary_module();
     module.name = "scalar_method_shadowed_by_field.ts".to_string();
@@ -12755,6 +12872,92 @@ fn artifact_records_scalar_replaced_method_summary_inline() {
                 })
         }),
         "expected scalar method summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_replaced_field_write_method_updates_slot_without_dispatch_or_allocation() {
+    let ir = String::from_utf8(
+        compile_module(&scalar_method_field_write_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_scalar_method_field_write_ts__probe");
+    assert!(
+        !probe_ir.contains("call double @js_native_call_method")
+            && !probe_ir
+                .contains("call double @perry_method_scalar_method_field_write_ts__Counter__bump"),
+        "scalar-replaced field-write method should inline without dispatch:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_object_alloc")
+            && !probe_ir.contains("call ptr @js_inline_arena_slow_alloc"),
+        "scalar-replaced field-write receiver should not heap-allocate:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.matches("fadd double").count() >= 2,
+        "both field updates should remain scalar numeric arithmetic:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_scalar_replaced_field_write_effect() {
+    let artifact = compile_artifact_json_for_module(scalar_method_field_write_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records
+            .iter()
+            .filter(|record| {
+                record["expr_kind"] == "ScalarMethodCall"
+                    && record["consumer"] == "scalar_method_summary_inline"
+                    && record["local_id"] == 20
+                    && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                    && record_has_note(record, "method=bump")
+                    && record_has_note(record, "summary_effect=field_write")
+                    && record_has_note(record, "summary_write_field=value")
+                    && record["consumed_facts"].as_array().is_some_and(|facts| {
+                        facts.iter().any(|fact| {
+                            fact["kind"] == "effect"
+                                && fact["state"] == "consumed"
+                                && fact["detail"] == "scalar_method_field_write:Counter.value"
+                        })
+                    })
+            })
+            .count()
+            == 2,
+        "both inlined calls should record the consumed field-write effect:\n{artifact:#}"
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|record| {
+                record["expr_kind"] == "ScalarThisFieldSet"
+                    && record["consumer"] == "scalar_object_field_store.raw_f64"
+                    && record["local_id"] == 20
+                    && record_has_note(record, "field=value")
+                    && record_has_note(record, "raw_f64_field=1")
+            })
+            .count()
+            >= 2,
+        "the inlined field writes should retain raw-f64 scalar-slot evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_field_write_rejects_parameterized_fallback_shape() {
+    let module = scalar_method_parameterized_field_write_module();
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_scalar_method_parameterized_field_write_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_object_alloc"),
+        "parameterized mutation must keep a heap receiver because a guarded fallback could stale scalar slots:\n{probe_ir}"
+    );
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        !artifact_has_scalar_method_inline(&artifact, "bump"),
+        "parameterized mutation must not claim scalar method effect-summary consumption:\n{artifact:#}"
     );
 }
 
