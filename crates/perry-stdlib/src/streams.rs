@@ -90,6 +90,8 @@ extern "C" {
         arguments: *const f64,
         argument_count: usize,
     ) -> f64;
+    #[link_name = "js_implicit_this_set"]
+    fn provider_js_implicit_this_set(value: f64) -> f64;
     #[link_name = "js_promise_new"]
     fn provider_js_promise_new() -> *mut Promise;
     #[link_name = "js_promise_all"]
@@ -218,6 +220,10 @@ fn js_native_call_value(function: f64, arguments: *const f64, argument_count: us
         arguments,
         argument_count
     ))
+}
+
+fn js_implicit_this_set(value: f64) -> f64 {
+    provider_call!(provider_js_implicit_this_set(value))
 }
 
 fn js_promise_new() -> *mut Promise {
@@ -1485,9 +1491,9 @@ unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     if !is_callable_value(method) {
         return None;
     }
-    let prev_this = perry_runtime::object::js_implicit_this_set(value);
+    let prev_this = js_implicit_this_set(value);
     let iterator = js_native_call_value(method, std::ptr::null(), 0);
-    perry_runtime::object::js_implicit_this_set(prev_this);
+    js_implicit_this_set(prev_this);
     if iterator.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -1541,9 +1547,9 @@ unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
     let next_val = js_object_get_field_by_name(iter_obj, next_key);
     let next = f64::from_bits(next_val.bits());
     if is_callable_value(next) {
-        let prev_this = perry_runtime::object::js_implicit_this_set(iterator);
+        let prev_this = js_implicit_this_set(iterator);
         let result = js_native_call_value(next, std::ptr::null(), 0);
-        perry_runtime::object::js_implicit_this_set(prev_this);
+        js_implicit_this_set(prev_this);
         Some(result)
     } else {
         Some(perry_runtime::object::js_native_call_method(

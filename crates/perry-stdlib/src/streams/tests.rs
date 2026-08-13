@@ -260,6 +260,7 @@ fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
     for forbidden in [
         "perry_runtime::array::js_",
         "perry_runtime::closure::js_",
+        "perry_runtime::object::js_implicit_this_set",
         "perry_runtime::promise::js_",
     ] {
         assert!(
