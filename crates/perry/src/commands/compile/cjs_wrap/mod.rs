@@ -76,7 +76,7 @@ mod tests {
         module_reexport_specs,
     };
     use super::extract_requires::{
-        extract_require_aliases_with_ranges, extract_require_specifiers,
+        extract_require_aliases_with_ranges, extract_require_specifiers, function_local_specs,
     };
     use super::hoist_classes::{
         extract_top_level_class_decls, source_has_top_level_return, top_level_class_names,
@@ -459,6 +459,16 @@ module.exports = inner;
         let src = r#"var a = require('./a'); var b = require("./b"); var c = require('./a');"#;
         let specs = extract_require_specifiers(src);
         assert_eq!(specs, vec!["./a".to_string(), "./b".to_string()]);
+    }
+
+    #[test]
+    fn ignores_require_text_split_across_string_concatenation() {
+        // Next's webpack HMR runtime uses this warning. The closing quote
+        // after `require(` and the opening quote before `)` look like a
+        // static string argument to a regexp-only extractor.
+        let src = r#"console.warn("[HMR] unexpected require(" + request + ") from disposed module " + moduleId);"#;
+        assert!(extract_require_specifiers(src).is_empty());
+        assert!(function_local_specs(src).is_empty());
     }
 
     #[test]
