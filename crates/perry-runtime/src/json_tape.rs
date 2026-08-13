@@ -669,9 +669,12 @@ unsafe fn materialize_object(
     idx: &mut usize,
     end_idx: usize,
 ) -> JSValue {
+    let field_count = count_object_fields(source, *idx, end_idx);
     let obj = crate::object::js_object_alloc(0, 0);
     let obj_handle = scope.root_raw_mut_ptr(obj);
     json_tape_safepoint(JsonTapeSafepoint::MaterializeObjectRooted, obj as usize);
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+    crate::object::reserve_object_spill(obj as usize, field_count);
     while *idx < end_idx {
         let Some(key_entry) = source.entry(*idx) else {
             break;
@@ -697,6 +700,32 @@ unsafe fn materialize_object(
     *idx = end_idx + 1;
     let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     JSValue::object_ptr(obj as *mut u8)
+}
+
+/// Count only this object's keys, hopping over nested values through their
+/// matching-container links. The walk allocates nothing, so it is safe for a
+/// lazy source whose backing pointers may be refreshed through a GC handle.
+unsafe fn count_object_fields(source: &TapeSource<'_, '_>, mut idx: usize, end_idx: usize) -> u32 {
+    let mut count = 0u32;
+    while idx < end_idx {
+        let Some(key) = source.entry(idx) else {
+            break;
+        };
+        if key.kind != KIND_KEY {
+            break;
+        }
+        count = count.saturating_add(1);
+        idx += 1;
+        let Some(value) = source.entry(idx) else {
+            break;
+        };
+        if value.kind == KIND_OBJ_START || value.kind == KIND_ARR_START {
+            idx = value.link as usize + 1;
+        } else {
+            idx += 1;
+        }
+    }
+    count
 }
 
 unsafe fn materialize_array(

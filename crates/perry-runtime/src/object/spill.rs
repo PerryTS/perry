@@ -152,6 +152,56 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     }
 }
 
+/// Reserve exact-width overflow storage for a freshly allocated object whose
+/// final key count is already known.
+///
+/// Dynamic objects normally discover their width one property at a time, so
+/// the first overflow store uses an array with general-purpose growth
+/// headroom. JSON tapes already encode the matching container boundary and can
+/// count an object's top-level keys before materializing it. Keeping the
+/// primary object at [`INLINE_SLOT_FLOOR`] avoids the measured regression from
+/// widening every object, while an exact spill avoids padding every record's
+/// side allocation to [`crate::array::MIN_ARRAY_CAPACITY`].
+pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
+    if !object_spill_enabled()
+        || field_count as usize > SPILL_MAX_FIELD_INDEX
+        || unsafe { !spill_capable_owner(obj_ptr) }
+    {
+        return;
+    }
+
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
+        let inline_capacity =
+            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        if field_count <= inline_capacity {
+            return;
+        }
+
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        object_meta_ensure(obj);
+
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let meta = (*obj).meta;
+        if (*meta).spill != 0 {
+            return;
+        }
+
+        let spill = crate::array::js_array_alloc_with_length_exact(field_count);
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let meta = (*obj).meta;
+        if (*meta).spill == 0 {
+            (*meta).spill = spill as u64;
+            crate::gc::runtime_write_barrier_slot(
+                meta as usize,
+                &(*meta).spill as *const _ as usize,
+                spill as u64,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) type SpillSafepointHook = fn(usize);
 

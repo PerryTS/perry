@@ -116,6 +116,47 @@ fn tape_top_level_scalars() {
 }
 
 #[test]
+fn recursive_materializer_reserves_exact_spill_per_object_depth() {
+    let input = br#"{"a":1,"nested":{"n0":0,"n1":1,"n2":2,"n3":3,"n4":4},"b":2}"#;
+    let tape = build_tape(input).expect("valid tape");
+    let nested_key = crate::string::js_string_from_bytes(b"nested".as_ptr(), 6);
+
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize(&tape, input) };
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let nested = crate::object::js_object_get_field_by_name(object, nested_key);
+    let nested = (nested.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+
+    unsafe {
+        assert_eq!(
+            (*object).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32,
+            "known width must not enlarge the primary object"
+        );
+        let spill =
+            crate::object::test_spill_buffer_addr(object as usize) as *const crate::ArrayHeader;
+        assert!(!spill.is_null());
+        assert_eq!((*spill).capacity, 3, "count only outer-object keys");
+        assert_eq!((*spill).length, 3);
+
+        assert_eq!(
+            (*nested).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32
+        );
+        let nested_spill =
+            crate::object::test_spill_buffer_addr(nested as usize) as *const crate::ArrayHeader;
+        assert!(!nested_spill.is_null());
+        assert_eq!(
+            (*nested_spill).capacity,
+            5,
+            "reserve the nested width exactly"
+        );
+        assert_eq!((*nested_spill).length, 5);
+    }
+    crate::gc::gc_unsuppress();
+}
+
+#[test]
 fn iterative_materializer_preserves_nested_objects_arrays_and_duplicate_keys() {
     let input = br#"{"a":[1,true,"x"],"a":{"b":2}}"#;
     let tape = build_tape(input).expect("valid tape");
@@ -134,6 +175,28 @@ fn iterative_materializer_preserves_nested_objects_arrays_and_duplicate_keys() {
     assert_eq!(f64::from_bits(b.bits()), 2.0);
 
     crate::json::parse_root_restore(saved_roots);
+}
+
+#[test]
+fn iterative_materializer_reserves_exact_spill_without_widening_object() {
+    let input = br#"{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4}"#;
+    let tape = build_tape(input).expect("valid tape");
+
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize_iterative(&tape.entries, input) }.expect("materializes");
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    unsafe {
+        assert_eq!(
+            (*object).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32
+        );
+        let spill =
+            crate::object::test_spill_buffer_addr(object as usize) as *const crate::ArrayHeader;
+        assert!(!spill.is_null());
+        assert_eq!((*spill).capacity, 5);
+        assert_eq!((*spill).length, 5);
+    }
+    crate::gc::gc_unsuppress();
 }
 
 /// `TapeEntry` is 12 bytes (u32 + u8 + padding + u32). Keeping

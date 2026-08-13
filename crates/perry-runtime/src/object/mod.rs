@@ -130,6 +130,7 @@ mod regex_proto_thunks;
 mod spill;
 pub(crate) use spill::{
     learned_inline_field_count, learned_inline_fields_hot_addr, overflow_get, overflow_set,
+    reserve_object_spill,
 };
 #[cfg(test)]
 use spill::{object_spill_enabled, spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
