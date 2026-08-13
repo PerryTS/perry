@@ -55,25 +55,34 @@ Three different tokios in the middle row, one per `cargo build -p <one crate>`.
   which is the same predicate the #507 rebuild uses, so check and fix cannot
   drift. The report records what it compared, so "compared nothing" is
   distinguishable from "found no mismatch".
-* `optimized_libs/no_auto.rs` no longer builds a tokio-using wrapper on its own
-  under `PERRY_NO_AUTO_OPTIMIZE` (`cargo build -p perry-ext-http`, which is
-  what manufactured the split). It cannot repair the situation either —
-  building the wrapper *with* `perry-stdlib-static` would overwrite the
-  prebuilt stdlib with this invocation's feature set and drop the
-  `external-*-pump` features, trading an abort for a hang — so it says what to
-  run instead.
+* `optimized_libs/no_auto.rs` now warns before building a tokio-using wrapper
+  on its own under `PERRY_NO_AUTO_OPTIMIZE` (`cargo build -p perry-ext-http`,
+  which is what manufactured the split), naming the hazard and the command that
+  avoids it, then lets the link check decide. It deliberately does not refuse:
+  refusing there is a prediction, and two invocations *can* unify to the same
+  tokio. It cannot repair the situation either — building the wrapper *with*
+  `perry-stdlib-static` would overwrite the prebuilt stdlib with this
+  invocation's feature set and drop the `external-*-pump` features, trading an
+  abort for a hang.
 * `run_parity_tests.sh`: `-p perry-ext-net` moves into `BUILD_PACKAGES`
   (it was a *second* `cargo build -p perry-ext-net -j1`, i.e. the same split);
   `PERRY_SKIP_BUILD=1` now verifies the required ext archives are present in
   `PERRY_RUNTIME_DIR` before running anything, with the exact command; and the
-  no-auto gap path exports `PERRY_FORCE_WELL_KNOWN=events,http,net,ws,zlib`.
+  23 of 554 gap tests that import an ext-routed module take the auto-optimize
+  path per test.
 
-That last one is a second, independent defect the first fix uncovered: the
-`external-*-pump` features are a property of the ONE prebuilt stdlib while
+That last one addresses a second, independent defect the first fix uncovered:
+the `external-*-pump` features are a property of the ONE prebuilt stdlib while
 archive selection is per-import, so a stdlib built with `external-zlib-pump`
 failed to link any test that did not import `node:zlib` (five undefined
-`_js_ext_zlib_*`). The auto-optimize path never hits it because it enables a
-pump only when it is also routing that module.
+`_js_ext_zlib_*`), and one built without them links but never drains the
+wrapper's queues. No subset serves a mixed corpus, so the "build the ext
+packages too" compensation this script documented had never worked. Forcing
+every wrapper archive onto every link (`PERRY_FORCE_WELL_KNOWN`) does fix it and
+was measured at 2.2 s -> 37.7 s per compile — 17x, which is the whole point of
+`PERRY_SKIP_BUILD` — so the per-test route was taken instead. The auto-optimize
+path never hits the defect because it enables a pump only when it is also
+routing that module.
 
 **Why CI stayed green.** The 8 gap shards run on `ubuntu-latest` and build
 every archive in one `cargo build`, so the invariant held there by accident.
@@ -112,3 +121,13 @@ case built from #7990's exact header bytes. The underlying fault is not fixed �
 this makes the abort point at the right investigation. No CI gate was added: at
 ~6% of runs it would go red on a healthy tree often enough to be ignored, the
 same reasoning that declined to gate #7803's 19%.
+
+### Validation
+
+Full gap suite on macOS arm64 (`PERRY_SKIP_BUILD=1 ./run_parity_tests.sh
+--filter test_gap_`): **538 pass / 15 parity-fail / 1 compile-fail / 0 crashed**.
+All six witnesses pass. 14 of the Linux snapshot's 15 entries reproduce; two
+failures outside it are unrelated to this change and are filed as #8005
+(`perry-ext-zlib` has no `deflateRawSync`/`inflateRawSync`, so the `node:zlib`
+flip breaks the link — red under the default runner too) and #8006
+(`test_gap_specabi_reassign` reads reassigned values back as 0).
