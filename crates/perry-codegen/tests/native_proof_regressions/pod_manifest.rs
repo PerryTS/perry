@@ -295,6 +295,44 @@ fn native_pod_view_explicit_public_type_lowers_without_left_hand_annotation() {
 }
 
 #[test]
+fn native_pod_view_length_survives_immutable_local_alias() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let view_ty = pod_view_type(packet_ty);
+    let module = module(
+        "native_public_pod_view_length_alias.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(4096), false),
+            native_pod_view_let(2, "direct", view_ty.clone(), 1, int(0), int(8)),
+            Stmt::Let {
+                id: 3,
+                name: "alias".to_string(),
+                ty: view_ty,
+                mutable: false,
+                init: Some(local(2)),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(3)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            })),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_pod_view_length"),
+        "an immutable PodView alias must use the validating length helper:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_object_get_field_ic_miss"),
+        "a PodView alias must not enter the ordinary object-property PIC:\n{ir}"
+    );
+}
+
+#[test]
 fn native_pod_view_embedded_type_survives_any_expected_type() {
     let packet_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

@@ -1826,6 +1826,20 @@ pub(crate) fn lower_let(
                             count_source: pod_view_count_source(ctx, count),
                         },
                     );
+                } else if let perry_hir::Expr::LocalGet(source_id) = init_expr {
+                    // An immutable local-to-local assignment preserves the
+                    // exact NativePodView value. Carry its provenance to the
+                    // alias so `.length` and native pod+count boundaries keep
+                    // using validating helpers instead of the object PIC.
+                    if let Some(source_view) = ctx.pod_views.get(source_id).cloned() {
+                        ctx.pod_views.insert(
+                            id,
+                            crate::native_value::PodViewLocal {
+                                view_slot: slot.clone(),
+                                ..source_view
+                            },
+                        );
+                    }
                 }
             }
             v

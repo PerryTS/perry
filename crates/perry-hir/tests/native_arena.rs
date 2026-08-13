@@ -382,6 +382,33 @@ fn perry_native_imports_reuse_canonical_pod_lowering() {
 }
 
 #[test]
+fn perry_native_imports_are_hoisted_before_type_and_value_lowering() {
+    let module = lower_src(
+        r#"
+        type Packet = NativeRecord<{ tag: Word; }>;
+        const packetSize = sizeOf<Packet>();
+
+        import {
+            type u32 as Word,
+            type pod as NativeRecord,
+            sizeof as sizeOf,
+        } from "perry/native";
+        "#,
+    )
+    .expect("perry/native imports should be registered before their first source use");
+
+    assert!(matches!(
+        find_let(&module, "packetSize"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutSizeOf {
+                ty: Type::Generic { base, .. },
+            }),
+            ..
+        } if base == "PerryPod"
+    ));
+}
+
+#[test]
 fn native_arena_pod_layout_constants_preserve_generic_pod_type_param() {
     let module = lower_src(
         r#"

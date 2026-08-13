@@ -15,7 +15,7 @@ use crate::ir::*;
 // Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
-mod native_profile_import;
+pub(super) mod native_profile_import;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.

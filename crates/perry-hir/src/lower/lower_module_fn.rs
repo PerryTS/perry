@@ -484,6 +484,10 @@ pub fn lower_module_full(
     // same `__perry_cap_*` symbols.
     let mut ctx =
         LoweringContext::with_class_id_start_salted(source_file_path, name, start_class_id);
+    // Static imports are hoisted. Register `perry/native` type and value
+    // aliases before any pre-pass extracts annotations or lowers expressions,
+    // including when the declaration appears after its first source use.
+    module_decl::native_profile_import::pre_register_native_profile_imports(&mut ctx, ast_module);
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
