@@ -745,9 +745,10 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
 // producer, `Tier::Served` with it.
 //
 // The return-shape fact originally covered only the function's direct RETURN
-// VALUE. #7170 R2 additionally consumes fresh, agreeing conditional result
-// arms. It still says nothing about a conditional's condition, a `&&`, an
-// `await` or a member base that happens to sit inside the returned expression.
+// VALUE. #7170 R2 additionally consumes fresh, agreeing conditional and
+// logical result allocations. It still says nothing about a conditional's
+// condition, a consumed short-circuit operand, an `await` or a member base
+// that happens to sit inside the returned expression.
 //
 // R0 separated the syntactic bucket from the servedness bit precisely so R2
 // could make that distinction. These tests force the producer flag on so the
@@ -839,9 +840,12 @@ fn a_conditional_condition_is_not_a_return_shape_source() {
     );
 }
 
-/// `return flag && new C()` — a binary operand.
+/// `return true && new C()` — the right operand is the only value this
+/// expression can return, so the logical-return proof consumes it. It keeps
+/// the honest operand-position label rather than masquerading as a bare
+/// return.
 #[test]
-fn a_logical_operand_under_a_return_is_not_a_return_position() {
+fn a_logical_result_operand_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
@@ -855,7 +859,48 @@ fn a_logical_operand_under_a_return_is_not_a_return_position() {
     let rows = alloc_rows(&entries);
     assert_eq!(rows.len(), 1);
     assert_ne!(rows[0].alloc_context.as_deref(), Some("return"));
-    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// A fresh left operand is always truthy. In `new C() || new D()` it is the
+/// returned value and the right allocation is consumed by short-circuiting.
+/// Marking both served would put a structurally unreachable site back into the
+/// population R0 corrected.
+#[test]
+fn a_consumed_logical_operand_is_not_a_return_shape_source() {
+    let c = c_classes();
+    let d = class_with_fields("D", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    classes.insert("D".to_string(), &d);
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let stmts = vec![Stmt::Return(Some(Expr::Logical {
+        op: perry_hir::LogicalOp::Or,
+        left: Box::new(new_c()),
+        right: Box::new(new_d),
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier == Some(crate::opt_report::Tier::Served))
+            .count(),
+        1,
+        "only the allocation that can become the logical result is served"
+    );
+    let served = rows
+        .iter()
+        .find(|e| e.tier == Some(crate::opt_report::Tier::Served))
+        .expect("one served allocation");
+    assert!(served.name.contains("C"));
 }
 
 /// `return await new C()` — the awaited operand is not the returned value

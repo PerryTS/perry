@@ -56,9 +56,15 @@
 //!   the condition has run. A `LocalGet` leaf remains fail-closed for now:
 //!   Phase 3b exempts only a bare `return local`, not one nested in an
 //!   expression.
+//! * A short-circuiting `&&` / `||` expression when every value that can
+//!   actually escape the expression is fresh. The proof tracks truthy and
+//!   falsy outcomes separately: `flag && new C()` is refused because `flag`
+//!   can escape on the falsy path, while `(flag && new C()) || new C()` is
+//!   admitted because the outer fallback replaces that path with a fresh `C`.
 //!
 //! Anything else — `return CACHE`, `return this.field`, `return mk()`,
-//! or a conditional with a non-fresh/disagreeing arm — yields no fact.
+//! `return flag && new C()`, or an expression with a non-fresh/disagreeing
+//! result — yields no fact.
 //!
 //! ## Why the producer must not fall off its end
 //!
@@ -94,7 +100,7 @@
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::Type;
-use perry_hir::{Class, Expr, Module, Stmt};
+use perry_hir::{Class, Expr, LogicalOp, Module, Stmt};
 
 use super::ptr_shape::{chain_admissible, ptr_shape_locals_enabled};
 use super::ptr_shape_report as report;
@@ -328,21 +334,24 @@ fn producer_return_class(
         return None;
     }
 
-    // Every return must agree on one class, and each must be a fresh form.
-    // #7170 R2 treats a conditional as the set of values it can actually
-    // return, recursively. This is deliberately narrower than a generic
-    // expression walk: the condition is not a result, and logical operators
-    // can return their left operand, whose truthiness/type needs a separate
-    // proof.
+    // Every return must agree on one class, and each possible result must be
+    // fresh. #7170 R2 models conditionals and short-circuiting logical
+    // expressions as the set of values they can actually return, recursively.
     let mut sources = Vec::new();
     for r in &returns {
-        if !collect_fresh_return_sources(r, f.body, true, &mut sources) {
+        let outcomes = collect_return_outcomes(r, f.body, true);
+        if !outcomes.is_all_fresh() {
             return None;
         }
+        sources.extend(outcomes.sources);
     }
     let mut class_name: Option<&str> = None;
     let mut needs_body_proof: Vec<u32> = Vec::new();
-    for (name, local) in sources {
+    for source in sources {
+        let (name, local) = match source {
+            FreshReturnSource::New { class_name, .. } => (class_name, None),
+            FreshReturnSource::Local { id, class_name } => (class_name, Some(id)),
+        };
         match class_name {
             None => class_name = Some(name),
             Some(prev) if prev == name => {}
@@ -412,12 +421,81 @@ fn producer_return_class(
     Some(class_name.to_string())
 }
 
-/// Flatten one returned expression into the fresh values it may produce.
+#[derive(Clone, Copy)]
+enum FreshReturnSource<'a> {
+    New { expr: &'a Expr, class_name: &'a str },
+    Local { id: u32, class_name: &'a str },
+}
+
+/// Abstract result set of one returned expression.
+///
+/// Fresh allocations are always truthy. Non-fresh results are split by
+/// truthiness because a surrounding logical expression may consume one half
+/// rather than return it: `||` consumes falsy left results, while `&&`
+/// consumes truthy left results.
+struct ReturnOutcomes<'a> {
+    sources: Vec<FreshReturnSource<'a>>,
+    non_fresh_truthy: bool,
+    non_fresh_falsy: bool,
+}
+
+impl<'a> ReturnOutcomes<'a> {
+    fn fresh(source: FreshReturnSource<'a>) -> Self {
+        Self {
+            sources: vec![source],
+            non_fresh_truthy: false,
+            non_fresh_falsy: false,
+        }
+    }
+
+    fn non_fresh(truthy: bool) -> Self {
+        Self {
+            sources: Vec::new(),
+            non_fresh_truthy: truthy,
+            non_fresh_falsy: !truthy,
+        }
+    }
+
+    fn unknown() -> Self {
+        Self {
+            sources: Vec::new(),
+            non_fresh_truthy: true,
+            non_fresh_falsy: true,
+        }
+    }
+
+    fn may_be_truthy(&self) -> bool {
+        !self.sources.is_empty() || self.non_fresh_truthy
+    }
+
+    fn may_be_falsy(&self) -> bool {
+        self.non_fresh_falsy
+    }
+
+    fn is_all_fresh(&self) -> bool {
+        !self.sources.is_empty() && !self.non_fresh_truthy && !self.non_fresh_falsy
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.sources.extend(other.sources);
+        self.non_fresh_truthy |= other.non_fresh_truthy;
+        self.non_fresh_falsy |= other.non_fresh_falsy;
+        self
+    }
+}
+
+/// Flatten one returned expression into the values it may produce.
 ///
 /// A conditional is safe exactly when both arms are safe: only one arm runs,
 /// but the caller may observe either one. Nested conditionals recurse so the
 /// proof is about the complete result set rather than one syntactic layer.
-/// Each leaf keeps the existing freshness obligation:
+/// Logical operators preserve their JavaScript operand-value semantics:
+///
+/// * `left && right` returns a falsy `left`, otherwise `right`;
+/// * `left || right` returns a truthy `left`, otherwise `right`.
+///
+/// This makes the proof path-sensitive without trusting erased TypeScript
+/// types. Each fresh leaf keeps the existing freshness obligation:
 ///
 /// * `New` is fresh by construction;
 /// * `LocalGet` is accepted only when it is the direct return expression, then
@@ -425,35 +503,93 @@ fn producer_return_class(
 ///   `producer_return_class`. Phase 3b does not currently exempt a local nested
 ///   inside a returned expression, so conditional arms stay `New`-only.
 ///
-/// `false` is fail-closed for every other expression form.
-fn collect_fresh_return_sources<'a>(
+/// Every unsupported expression is conservatively both truthy and falsy. `??`
+/// remains unsupported because it needs a separate nullish outcome partition.
+fn collect_return_outcomes<'a>(
     expr: &'a Expr,
     body: &'a [Stmt],
     is_direct_return: bool,
-    out: &mut Vec<(&'a str, Option<u32>)>,
-) -> bool {
+) -> ReturnOutcomes<'a> {
     match expr {
-        Expr::New { class_name, .. } => {
-            out.push((class_name.as_str(), None));
-            true
-        }
+        Expr::New { class_name, .. } => ReturnOutcomes::fresh(FreshReturnSource::New {
+            expr,
+            class_name: class_name.as_str(),
+        }),
         Expr::LocalGet(id) if is_direct_return => {
             let Some(class_name) = seeded_class_of_local(body, *id) else {
-                return false;
+                return ReturnOutcomes::unknown();
             };
-            out.push((class_name, Some(*id)));
-            true
+            ReturnOutcomes::fresh(FreshReturnSource::Local {
+                id: *id,
+                class_name,
+            })
         }
         Expr::Conditional {
             then_expr,
             else_expr,
             ..
-        } => {
-            collect_fresh_return_sources(then_expr, body, false, out)
-                && collect_fresh_return_sources(else_expr, body, false, out)
+        } => collect_return_outcomes(then_expr, body, false)
+            .merge(collect_return_outcomes(else_expr, body, false)),
+        Expr::Logical { op, left, right } => {
+            let left = collect_return_outcomes(left, body, false);
+            match op {
+                LogicalOp::And => {
+                    let left_may_be_truthy = left.may_be_truthy();
+                    if !left_may_be_truthy {
+                        return left;
+                    }
+                    let right = collect_return_outcomes(right, body, false);
+                    ReturnOutcomes {
+                        // A truthy left operand is consumed by `&&`; only the
+                        // right operand can supply a fresh result.
+                        sources: right.sources,
+                        non_fresh_truthy: right.non_fresh_truthy,
+                        non_fresh_falsy: left.non_fresh_falsy || right.non_fresh_falsy,
+                    }
+                }
+                LogicalOp::Or => {
+                    let left_may_be_falsy = left.may_be_falsy();
+                    if !left_may_be_falsy {
+                        return left;
+                    }
+                    let right = collect_return_outcomes(right, body, false);
+                    let mut sources = left.sources;
+                    sources.extend(right.sources);
+                    ReturnOutcomes {
+                        // A falsy left operand is consumed by `||`; a truthy
+                        // fresh left allocation remains a possible result.
+                        sources,
+                        non_fresh_truthy: left.non_fresh_truthy || right.non_fresh_truthy,
+                        non_fresh_falsy: right.non_fresh_falsy,
+                    }
+                }
+                LogicalOp::Coalesce => ReturnOutcomes::unknown(),
+            }
         }
-        _ => false,
+        Expr::Undefined | Expr::Null => ReturnOutcomes::non_fresh(false),
+        Expr::Bool(value) => ReturnOutcomes::non_fresh(*value),
+        Expr::Integer(value) => ReturnOutcomes::non_fresh(*value != 0),
+        Expr::Number(value) => ReturnOutcomes::non_fresh(*value != 0.0 && !value.is_nan()),
+        Expr::String(value) => ReturnOutcomes::non_fresh(!value.is_empty()),
+        _ => ReturnOutcomes::unknown(),
     }
+}
+
+/// Fresh allocation nodes that may be the final value of this expression.
+///
+/// The optimization report uses this structural view only after the enclosing
+/// region is known to carry a return-shape fact. Keeping the source selection
+/// here prevents its logical-expression accounting from drifting away from
+/// the producer proof above.
+pub(super) fn possible_return_shape_new_sources(expr: &Expr) -> Vec<&Expr> {
+    collect_return_outcomes(expr, &[], true)
+        .sources
+        .into_iter()
+        .filter_map(|source| match source {
+            FreshReturnSource::New { expr, .. } => Some(expr),
+            FreshReturnSource::Local { .. } => None,
+        })
+        .collect()
 }
 
 /// The class of the `new` that a `Stmt::Let` in `stmts` binds to `want`.

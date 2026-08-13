@@ -549,10 +549,10 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
 /// The allocation IS the function's return value: `return new C(...)`.
 const RETURN: &str = "return";
 /// The allocation sits *inside* a returned expression but is not the returned
-/// value — a conditional arm, a `&&` operand, an awaited operand, a member
-/// access base. #7170 R2 consumes conditional *result* arms as return-shape
-/// sources, but they remain in this syntactic bucket rather than being
-/// mislabeled as direct returns.
+/// value — a conditional arm, a logical operand, an awaited operand, a member
+/// access base. #7170 R2 consumes conditional and logical *result* allocations
+/// as return-shape sources, but they remain in this syntactic bucket rather
+/// than being mislabeled as direct returns.
 ///
 /// Split out in review of #7176. `RETURN` was set once, at
 /// `Stmt::Return(Some(e))`, and `scan_expr` propagates its context unchanged
@@ -601,9 +601,10 @@ pub(super) struct NewSite {
     /// see [`crate::opt_report::Entry::alloc_ordinal`].
     pub ordinal: u32,
     /// This allocation is one of the fresh values a return-shape fact proves:
-    /// either the direct expression of a `Stmt::Return`, or a result arm of a
-    /// returned conditional (#7170 R2). An allocation in the condition, a
-    /// constructor argument, or another nested operand is not a source.
+    /// either the direct expression of a `Stmt::Return`, or a possible result
+    /// allocation of a returned conditional / logical expression (#7170 R2).
+    /// An allocation in a condition, a constructor argument, or a consumed
+    /// short-circuit operand is not a source.
     ///
     /// Set only by [`scan_return`] and its result-arm walker. Deriving
     /// servedness from the context label instead would be wrong: conditional
@@ -747,41 +748,26 @@ fn scan_stmts(
 /// Scan the expression of a `Stmt::Return`.
 ///
 /// The direct expression of a `return` is the function's return value. #7170
-/// R2 additionally proves the result arms of a conditional when every leaf is
-/// a fresh allocation of one class. The condition and every non-result nested
-/// expression remain ordinary operands.
+/// R2 additionally proves possible result allocations of conditional and
+/// short-circuiting logical expressions. Conditions and every non-result
+/// nested expression remain ordinary operands.
 ///
 /// This is the only entry into the served-source classification.
 fn scan_return(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
-    match e {
-        Expr::New {
-            class_name,
-            args,
-            byte_offset,
-            ..
-        } => {
-            push_new_site(out, class_name, RETURN, depth, *byte_offset, true);
-            let arg_ctx = arg_context(class_name);
-            for a in args {
-                scan_expr(a, depth, arg_ctx, out);
-            }
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            scan_expr(condition, depth, RETURNED_OPERAND, out);
-            scan_conditional_result(then_expr, depth, out);
-            scan_conditional_result(else_expr, depth, out);
-        }
-        _ => scan_expr(e, depth, RETURNED_OPERAND, out),
-    }
+    let sources = super::ptr_shape_returns::possible_return_shape_new_sources(e);
+    scan_return_result(e, depth, true, &sources, out);
 }
 
-/// Scan one result arm of a returned conditional. Nested conditionals keep
-/// their result leaves in the source set, but their conditions do not.
-fn scan_conditional_result(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
+/// Scan a returned expression while preserving which nested allocations can
+/// actually become its result. `direct` controls only the position label; the
+/// source bit comes from the producer proof's own outcome analysis.
+fn scan_return_result(
+    e: &Expr,
+    depth: u32,
+    direct: bool,
+    sources: &[&Expr],
+    out: &mut Vec<NewSite>,
+) {
     match e {
         Expr::New {
             class_name,
@@ -789,7 +775,15 @@ fn scan_conditional_result(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
             byte_offset,
             ..
         } => {
-            push_new_site(out, class_name, RETURNED_OPERAND, depth, *byte_offset, true);
+            let is_source = sources.iter().any(|source| std::ptr::eq(*source, e));
+            push_new_site(
+                out,
+                class_name,
+                if direct { RETURN } else { RETURNED_OPERAND },
+                depth,
+                *byte_offset,
+                is_source,
+            );
             let arg_ctx = arg_context(class_name);
             for a in args {
                 scan_expr(a, depth, arg_ctx, out);
@@ -801,8 +795,12 @@ fn scan_conditional_result(e: &Expr, depth: u32, out: &mut Vec<NewSite>) {
             else_expr,
         } => {
             scan_expr(condition, depth, RETURNED_OPERAND, out);
-            scan_conditional_result(then_expr, depth, out);
-            scan_conditional_result(else_expr, depth, out);
+            scan_return_result(then_expr, depth, false, sources, out);
+            scan_return_result(else_expr, depth, false, sources, out);
+        }
+        Expr::Logical { left, right, .. } => {
+            scan_return_result(left, depth, false, sources, out);
+            scan_return_result(right, depth, false, sources, out);
         }
         _ => scan_expr(e, depth, RETURNED_OPERAND, out),
     }

@@ -402,6 +402,151 @@ fn disagreeing_conditional_return_classes_get_no_fact() {
     assert_eq!(control.return_shape_class(33), Some("C"));
 }
 
+/// #7170 R2: `&&` and `||` return operand values, not booleans. A statically
+/// truthy left side of `&&` and a statically falsy left side of `||` both make
+/// the fresh right allocation the only observable result.
+///
+/// Sabotage: remove the `Expr::Logical` arm from
+/// `collect_return_outcomes` and both producer assertions fail.
+#[test]
+fn deterministic_logical_return_is_a_fact_and_seeds_its_caller() {
+    let logical = |op, left| Expr::Logical {
+        op,
+        left: Box::new(left),
+        right: Box::new(new_c()),
+    };
+    let (facts, c) = facts_for(vec![
+        function(
+            34,
+            "and_fresh",
+            vec![Stmt::Return(Some(logical(
+                perry_hir::LogicalOp::And,
+                Expr::Bool(true),
+            )))],
+        ),
+        function(
+            35,
+            "or_fresh",
+            vec![Stmt::Return(Some(logical(
+                perry_hir::LogicalOp::Or,
+                Expr::Bool(false),
+            )))],
+        ),
+    ]);
+    assert_eq!(facts.return_shape_class(34), Some("C"));
+    assert_eq!(facts.return_shape_class(35), Some("C"));
+
+    let classes = classes_of(&c);
+    let caller = call_and_store(36, Expr::FuncRef(34));
+    assert!(
+        promote(&caller, &classes, &facts).contains_key(&36),
+        "a logical-return fact must reach the caller-side seed"
+    );
+}
+
+/// A logical expression may filter a non-object intermediate without letting
+/// it escape. `(flag && new C()) || new C()` returns the inner allocation when
+/// `flag` is truthy and the fallback allocation otherwise, so every complete
+/// path is fresh even though neither `flag && new C()` nor `flag || new C()`
+/// is independently a return-shape producer.
+///
+/// Sabotage: flatten logical operands like conditional arms instead of
+/// tracking truthiness and the positive assertion fails.
+#[test]
+fn nested_logical_fallback_returns_only_fresh_objects() {
+    let flag = Expr::LocalGet(999);
+    let inner = Expr::Logical {
+        op: perry_hir::LogicalOp::And,
+        left: Box::new(flag.clone()),
+        right: Box::new(new_c()),
+    };
+    let with_fallback = Expr::Logical {
+        op: perry_hir::LogicalOp::Or,
+        left: Box::new(inner),
+        right: Box::new(new_c()),
+    };
+    let (facts, _) = facts_for(vec![
+        function(36, "with_fallback", vec![Stmt::Return(Some(with_fallback))]),
+        function(
+            37,
+            "and_without_fallback",
+            vec![Stmt::Return(Some(Expr::Logical {
+                op: perry_hir::LogicalOp::And,
+                left: Box::new(flag.clone()),
+                right: Box::new(new_c()),
+            }))],
+        ),
+        function(
+            38,
+            "or_without_guard",
+            vec![Stmt::Return(Some(Expr::Logical {
+                op: perry_hir::LogicalOp::Or,
+                left: Box::new(flag),
+                right: Box::new(new_c()),
+            }))],
+        ),
+    ]);
+    assert_eq!(facts.return_shape_class(36), Some("C"));
+    assert_eq!(facts.return_shape_class(37), None);
+    assert_eq!(facts.return_shape_class(38), None);
+}
+
+/// A fresh object is always truthy. Therefore `new D() && new C()` returns
+/// only `C`, while `new C() || new D()` also returns only `C`. The consumed
+/// allocation must not make the classes appear to disagree.
+#[test]
+fn consumed_logical_allocation_does_not_set_the_return_class() {
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let (facts, _) = facts_for_classes(
+        vec![class_d()],
+        vec![
+            function(
+                39,
+                "and_consumes_left",
+                vec![Stmt::Return(Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::And,
+                    left: Box::new(new_d.clone()),
+                    right: Box::new(new_c()),
+                }))],
+            ),
+            function(
+                40,
+                "or_consumes_right",
+                vec![Stmt::Return(Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::Or,
+                    left: Box::new(new_c()),
+                    right: Box::new(new_d),
+                }))],
+            ),
+        ],
+    );
+    assert_eq!(facts.return_shape_class(39), Some("C"));
+    assert_eq!(facts.return_shape_class(40), Some("C"));
+}
+
+/// `??` branches on nullishness rather than truthiness and deliberately stays
+/// outside this increment. Treating it as `||` would be wrong for `0`, `false`
+/// and the empty string.
+#[test]
+fn nullish_coalescing_return_remains_fail_closed() {
+    let (facts, _) = facts_for(vec![function(
+        41,
+        "coalesce",
+        vec![Stmt::Return(Some(Expr::Logical {
+            op: perry_hir::LogicalOp::Coalesce,
+            left: Box::new(Expr::Null),
+            right: Box::new(new_c()),
+        }))],
+    )]);
+    assert_eq!(facts.return_shape_class(41), None);
+}
+
 /// A producer that can fall off the end returns `undefined` on that path; a
 /// caller treating the result as a proven `C` would load a field off it.
 ///
