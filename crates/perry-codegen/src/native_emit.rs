@@ -557,6 +557,45 @@ fn debug_dump(module: &Module<'_>, module_prefix: &str) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::module::LlModule;
+    use crate::types::{I64, VOID};
+
+    #[test]
+    fn split_units_emit_and_merge_init_body_pointer_constant() {
+        // Production webpack modules are large enough to use split native
+        // codegen. Every non-entry module's guard passes `__init_body` to the
+        // exception boundary as an i64 constant expression. Keep the callee
+        // and wrapper in separate units so this covers declaration lookup,
+        // relocatable ptrtoint construction, object emission, and the partial
+        // link -- a parse-only test would miss the production-graph failure
+        // tracked in #8057.
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function("js_run_module_init_catching", VOID, &[I64]);
+
+        let body = module.define_function("fixture_js__init_body", VOID, vec![]);
+        body.create_block("entry").ret_void();
+
+        let wrapper = module.define_function("fixture_js__init", VOID, vec![]);
+        let entry = wrapper.create_block("entry");
+        entry.call_void(
+            "js_run_module_init_catching",
+            &[(I64, "ptrtoint (ptr @fixture_js__init_body to i64)")],
+        );
+        entry.ret_void();
+
+        let object =
+            compile_module_units_native(&mut module, 2, None, "split_ptrtoint_init_body_fixture")
+                .expect("split native units must emit and partial-link");
+        assert!(
+            !object.is_empty(),
+            "merged object must contain emitted code"
+        );
+    }
+}
+
 /// Differential harness: text-parsed arm vs natively-built arm, same LLVM,
 /// same plan. The verdict is **emitted object bytes** — the C-API builder
 /// constant-folds at construction (`zext i1 false`, `select i1 false, ...`),

@@ -202,6 +202,48 @@ pub(super) fn constant<'ctx>(
         }
         bail!("reference to unknown global @{name}");
     }
+    // LLVM constant expressions can appear anywhere an ordinary constant is
+    // accepted. Perry emits this exact form when a non-entry module passes its
+    // `__init_body` function pointer through the integer-valued runtime ABI:
+    //
+    //   call void @js_run_module_init_catching(
+    //       i64 ptrtoint (ptr @module__init_body to i64))
+    //
+    // The text backend has always delegated this to LLVM's assembler. The
+    // in-process reader used to feed the whole expression to `i128::parse`, so
+    // only split native codegen units failed, late in a large build, with
+    // `bad integer ptrtoint (...)`. Materialize the relocatable constant with
+    // LLVM's constant API; using a runtime instruction would be invalid here
+    // because this is an operand constant, not an SSA definition.
+    if let Some(body) = tok
+        .strip_prefix("ptrtoint (")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        let (source, destination) = body
+            .rsplit_once(" to ")
+            .ok_or_else(|| anyhow!("bad ptrtoint constant `{tok}`"))?;
+        let (source_ty, source_value) = ty_and_val(source)?;
+        let source_ty = basic_type(ctx, source_ty)?;
+        if !source_ty.is_pointer_type() {
+            bail!("ptrtoint source is not a pointer in `{tok}`");
+        }
+        let destination_ty = basic_type(ctx, destination.trim())?;
+        let BasicTypeEnum::IntType(destination_ty) = destination_ty else {
+            bail!("ptrtoint destination is not an integer in `{tok}`");
+        };
+        let BasicTypeEnum::IntType(expected_ty) = ty else {
+            bail!("ptrtoint constant used as non-integer {ty:?}");
+        };
+        if destination_ty != expected_ty {
+            bail!(
+                "ptrtoint destination type {} disagrees with operand type {}",
+                destination_ty.print_to_string(),
+                expected_ty.print_to_string()
+            );
+        }
+        let source = constant(ctx, module, source_ty, source_value)?.into_pointer_value();
+        return Ok(source.const_to_int(destination_ty).into());
+    }
     Ok(match tok {
         // The null of the OPERAND's type, not of address space 0: RS4GC emits
         // `store ptr addrspace(1) null, ptr %slot`, and an addrspace(0) null
