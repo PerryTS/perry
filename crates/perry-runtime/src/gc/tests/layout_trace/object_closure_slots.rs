@@ -216,6 +216,105 @@ unsafe fn typed_two_slot_object() -> (*mut crate::object::ObjectHeader, *mut u64
 }
 
 #[test]
+fn test_plain_f64_typed_stores_skip_descriptor_probes() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { typed_two_slot_object() };
+    test_reset_typed_slot_descriptor_probes();
+
+    // The same plain-double bits are valid in both representations: slot 0 is
+    // raw-f64 and slot 1 is a boxed, pointer-masked JSValue slot. Neither store
+    // changes pointer-ness, so both can be classified from the intact header
+    // bit and ObjectHeader::field_count without touching either descriptor map.
+    runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, 12.25f64.to_bits());
+    let slot1 = unsafe { fields.add(1) };
+    runtime_store_jsvalue_slot(obj as usize, slot1 as usize, 1, 13.25f64.to_bits());
+
+    assert!(
+        layout_has_typed_descriptor(obj as usize),
+        "plain f64 stores into either typed representation must keep the descriptor intact"
+    );
+    assert_eq!(
+        test_typed_slot_descriptor_probes(),
+        0,
+        "the O(1) header proof must make the per-store descriptor lookup unreachable"
+    );
+}
+
+#[test]
+fn test_tagged_typed_store_keeps_descriptor_probe() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { typed_two_slot_object() };
+    test_reset_typed_slot_descriptor_probes();
+
+    // `true` is valid in the boxed pointer-masked slot, but it is not raw-f64
+    // compatible. The descriptor must still decide that this particular slot
+    // accepts it; the new header-only proof is deliberately insufficient.
+    let slot1 = unsafe { fields.add(1) };
+    runtime_store_jsvalue_slot(obj as usize, slot1 as usize, 1, crate::value::TAG_TRUE);
+
+    assert!(
+        layout_has_typed_descriptor(obj as usize),
+        "a tagged scalar in a boxed slot conforms without downgrading"
+    );
+    assert_eq!(
+        test_typed_slot_descriptor_probes(),
+        1,
+        "tagged stores must retain the descriptor fallback"
+    );
+}
+
+#[test]
+fn test_pointer_like_f64_bits_do_not_take_plain_f64_layout_proof() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, fields) = unsafe { alloc_old_test_object(2) };
+    unsafe {
+        *fields = 0.0f64.to_bits();
+        *fields.add(1) = crate::value::TAG_UNDEFINED;
+    }
+    // Slot 0 is boxed but not pointer-masked; slot 1 is pointer-masked.
+    let pointer_mask = [0b10u64];
+    js_gc_init_typed_shape_layout(
+        obj as u64,
+        2,
+        std::ptr::null(),
+        0,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+    assert!(layout_has_typed_descriptor(obj as usize));
+    test_reset_typed_slot_descriptor_probes();
+
+    // An aligned low word is accepted by `layout_raw_f64_bits`, but the
+    // conservative raw-pointer classifier also treats it as pointer-bearing.
+    // Slot 0 does not admit pointers, so the descriptor path must downgrade.
+    layout_note_slot(obj as usize, 0, 0x2000);
+
+    assert!(
+        !layout_has_typed_descriptor(obj as usize),
+        "pointer-like raw words outside the pointer mask must still downgrade"
+    );
+    assert_eq!(test_typed_slot_descriptor_probes(), 1);
+}
+
+#[test]
+fn test_out_of_bounds_plain_f64_store_keeps_descriptor_probe() {
+    let _guard = GcTestIsolationGuard::new();
+    let (obj, _fields) = unsafe { typed_two_slot_object() };
+    test_reset_typed_slot_descriptor_probes();
+
+    // Do not perform an actual out-of-bounds write; exercise the layout note
+    // directly. The descriptor must reject slot_count itself even though the
+    // value is an otherwise universally compatible plain double.
+    layout_note_slot(obj as usize, 2, 1.25f64.to_bits());
+
+    assert!(
+        !layout_has_typed_descriptor(obj as usize),
+        "an out-of-bounds note must still downgrade the typed layout"
+    );
+    assert_eq!(test_typed_slot_descriptor_probes(), 1);
+}
+
+#[test]
 fn test_int32_store_into_raw_f64_slot_keeps_typed_descriptor() {
     let _guard = GcTestIsolationGuard::new();
     let (obj, fields) = unsafe { typed_two_slot_object() };

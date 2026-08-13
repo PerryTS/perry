@@ -130,6 +130,7 @@ pub(super) struct TypedLayoutDescriptor {
 #[cfg(test)]
 thread_local! {
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
+    static TYPED_SLOT_DESCRIPTOR_PROBES: Cell<usize> = const { Cell::new(0) };
 }
 
 // #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
@@ -595,6 +596,33 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // still tolerates a `None` defensively, so a transiently desynced bit
         // can only cost an extra fall-through, never mis-track a slot.
         if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+            // #5094: a plain, non-pointer-bearing double is representation-
+            // compatible with every in-bounds typed object slot. A raw-f64
+            // slot consumes the bits directly; a boxed slot consumes the same
+            // bits as an ordinary NaN-boxed number; and neither case changes
+            // the pointer mask. The descriptor's slot_count was pinned equal
+            // to ObjectHeader::field_count when INTACT was installed (also a
+            // requirement of the descriptor-free pointer-free allocation
+            // bake), so this header + bounds check proves the same `Conforms`
+            // verdict without resolving either thread-local descriptor map.
+            //
+            // Keep the raw-pointer classifier in the predicate. Some aligned
+            // low words are both valid f64 bit patterns and conservatively
+            // pointer-bearing; a boxed slot outside the pointer mask must
+            // still take the descriptor path and downgrade on such a store.
+            if layout_raw_f64_bits(value_bits)
+                && !layout_pointer_bearing_bits(value_bits)
+                // ObjectFields currently has exactly one concrete type. Use
+                // the byte already in the hot header instead of walking the
+                // type-info table a second time after layout_header_for_user.
+                && (*header).obj_type == GC_TYPE_OBJECT
+            {
+                let object = parent_user as *const crate::object::ObjectHeader;
+                if slot_index < (*object).field_count as usize {
+                    return;
+                }
+            }
+
             // #6893: per-object descriptor (diverged/ambiguous objects) OR the
             // shared shape descriptor (the common INTACT case). Exactly one is
             // present for an INTACT object.
@@ -607,6 +635,8 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             // allocates on every store. The per-object probe is also skipped
             // outright while [`PER_OBJECT_LAYOUTS_NONEMPTY`] proves that map
             // empty, which on a monomorphic workload is always.
+            #[cfg(test)]
+            TYPED_SLOT_DESCRIPTOR_PROBES.with(|c| c.set(c.get() + 1));
             let verdict = {
                 let classify = |typed: &TypedLayoutDescriptor| {
                     if slot_index >= typed.slot_count {
@@ -1799,4 +1829,14 @@ pub(super) fn test_reset_trace_slot_reads() {
 #[cfg(test)]
 pub(super) fn test_trace_slot_reads() -> usize {
     TRACE_SLOT_READS.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(super) fn test_reset_typed_slot_descriptor_probes() {
+    TYPED_SLOT_DESCRIPTOR_PROBES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_typed_slot_descriptor_probes() -> usize {
+    TYPED_SLOT_DESCRIPTOR_PROBES.with(Cell::get)
 }
