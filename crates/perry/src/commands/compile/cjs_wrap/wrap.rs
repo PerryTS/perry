@@ -942,8 +942,10 @@ const _cjs = (function() {{
 }
 
 fn target_node_platform(target: Option<&str>) -> Option<&'static str> {
+    if super::super::is_windows_target(target) {
+        return Some("win32");
+    }
     match target {
-        Some("windows") | Some("windows-winui") => Some("win32"),
         Some("linux") | Some("linux-x86_64") | Some("linux-arm64") | Some("linux-aarch64")
         // musl shares node's `process.platform === "linux"` (#4826).
         | Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {

@@ -88,7 +88,7 @@ pub fn windows_wizard(accept_license: bool) -> Result<()> {
     let mut cmd = Command::new(&xwin);
     cmd.arg("--accept-license")
         .arg("--arch")
-        .arg("x86_64")
+        .arg("x86_64,aarch64")
         .arg("splat")
         .arg("--disable-symlinks")
         .arg("--output")

@@ -564,6 +564,10 @@ pub fn platform_artifact_name() -> Option<&'static str> {
     {
         return Some("perry-windows-x86_64.zip");
     }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        return Some("perry-windows-aarch64.zip");
+    }
     #[allow(unreachable_code)]
     None
 }

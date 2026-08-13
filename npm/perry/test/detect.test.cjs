@@ -98,6 +98,10 @@ check("win32-x64 unaffected", () => {
   const got = detectPlatform({ platform: "win32", arch: "x64", hasGlibcField: false });
   assert.deepStrictEqual(got.candidates, ["win32-x64"]);
 });
+check("win32-arm64 selects its native package", () => {
+  const got = detectPlatform({ platform: "win32", arch: "arm64", hasGlibcField: false });
+  assert.deepStrictEqual(got.candidates, ["win32-arm64"]);
+});
 
 console.log("\nhosts that don't report a glibc version");
 check("no report header + alpine os-release → musl", () => {
@@ -170,8 +174,8 @@ check("every platform package is an optionalDependency of @perryts/perry", () =>
     assert.ok(optional.includes(pkg), `${pkg} missing from optionalDependencies`);
   }
 });
-check("the musl packages the fallback targets have publishable manifests", () => {
-  for (const key of ["linux-x64-musl", "linux-arm64-musl"]) {
+check("every detected platform package has a publishable manifest", () => {
+  for (const key of Object.keys(PLATFORM_PACKAGES)) {
     const dir = path.join(REPO_ROOT, "npm", "perry-" + key);
     const tmpl = JSON.parse(
       fs.readFileSync(path.join(dir, "package.json.tmpl"), "utf8").replace(/__VERSION__/g, "0.0.0")

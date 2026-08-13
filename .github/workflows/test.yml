@@ -1263,6 +1263,51 @@ jobs:
             exit 1
           }
 
+  # Native Windows ARM64 coverage for #4482. The x64 Windows gate above cannot
+  # execute an ARM binary, so keep a focused native job that proves the
+  # compiler, runtime ABI, final linker, and advertised target all agree.
+  windows-arm64-build:
+    runs-on: windows-11-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build ARM64 compiler and static libraries (perry-dev)
+        run: cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+
+      - name: Run ARM64 setjmp ABI tests
+        run: 'cargo test --profile perry-dev --lib -p perry-runtime ffi::setjmp::tests:: -- --test-threads=1'
+
+      - name: Compile and run a Perry ARM64 executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Keep this a runtime-only smoke. The full runtime+stdlib COFF archive
+          # composition has its own gate; this job's contract is the ARM ABI,
+          # target selection, SDK discovery, final PE link, and execution.
+          New-Item -ItemType Directory -Force 'target/windows-arm64-smoke-libs' | Out-Null
+          Copy-Item 'target/perry-dev/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
+          $env:PERRY_RUNTIME_DIR = (Resolve-Path 'target/windows-arm64-smoke-libs').Path
+          target/perry-dev/perry.exe compile tests/release/link_smoke/fixture.ts `
+            --target windows-aarch64 `
+            --no-auto-optimize `
+            -o target/windows-arm64-smoke.exe
+          $output = target/windows-arm64-smoke.exe
+          if ($output.Trim() -ne 'ok') {
+            throw "unexpected ARM64 smoke output: '$output'"
+          }
+
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #

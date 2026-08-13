@@ -793,7 +793,7 @@ pub fn select_linker_command(
                     ));
                 }
             }
-        } else if let Some(path) = find_msvc_link_exe() {
+        } else if let Some(path) = find_msvc_link_exe(target) {
             path
         } else if is_cross_windows {
             eprintln!("Warning: lld-link not found for cross-compilation. Install: rustup component add llvm-tools");
@@ -852,9 +852,11 @@ pub fn select_linker_command(
         // silently ignores /IGNORE codes it doesn't implement, so the flag
         // is safe on both linker paths.
         .arg("/IGNORE:4006");
-        // Set up MSVC library search paths if LIB env isn't already configured
-        if std::env::var("LIB").is_err() {
-            if let Some(lib_paths) = find_msvc_lib_paths() {
+        // A developer shell's LIB points at the host architecture. Always
+        // replace it for cross-architecture Windows targets; otherwise an x64
+        // prompt silently feeds x64 import libraries to an ARM64 link.
+        if std::env::var("LIB").is_err() || !is_native_windows_target(target) {
+            if let Some(lib_paths) = find_msvc_lib_paths(target) {
                 c.env("LIB", lib_paths);
             } else if is_cross_windows {
                 eprintln!("Warning: No Windows SDK library paths found. Set PERRY_WINDOWS_SYSROOT to your xwin sysroot.");

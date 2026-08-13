@@ -106,7 +106,8 @@ pub struct CompileArgs {
     /// Target platform: ios-simulator, ios, visionos-simulator, visionos,
     /// android, android-x86_64, ios-widget, ios-widget-simulator, watchos-widget,
     /// watchos-widget-simulator, android-widget, wearos-tile, web, wasm,
-    /// windows, linux (default: native host). See docs/src/cli/flags.md
+    /// windows, windows-x86_64, windows-aarch64, linux (default: native host).
+    /// See docs/src/cli/flags.md
     /// for the full target table.
     #[arg(long)]
     pub target: Option<String>,

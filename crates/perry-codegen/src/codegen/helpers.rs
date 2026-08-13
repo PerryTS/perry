@@ -825,6 +825,8 @@ pub(crate) fn default_target_triple() -> String {
         "x86_64-unknown-linux-gnu".to_string()
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         "aarch64-unknown-linux-gnu".to_string()
+    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        "aarch64-pc-windows-msvc".to_string()
     } else if cfg!(target_os = "windows") {
         "x86_64-pc-windows-msvc".to_string()
     } else {
@@ -890,7 +892,11 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "linux-aarch64-musl" => Some("aarch64-unknown-linux-musl".to_string()),
         "macos" => Some("arm64-apple-macosx15.0.0".to_string()),
         "macos-x86_64" => Some("x86_64-apple-macosx15.0.0".to_string()),
-        "windows" | "windows-winui" => Some("x86_64-pc-windows-msvc".to_string()),
+        "windows" | "windows-winui" if cfg!(target_os = "windows") => Some(default_target_triple()),
+        "windows" | "windows-winui" | "windows-x86_64" => {
+            Some("x86_64-pc-windows-msvc".to_string())
+        }
+        "windows-aarch64" | "windows-arm64" => Some("aarch64-pc-windows-msvc".to_string()),
         _ => None,
     }
 }
@@ -1701,6 +1707,20 @@ mod resolve_target_triple_tests {
         );
         // Unknown targets still fall through to None.
         assert_eq!(resolve_target_triple("android-mips"), None);
+    }
+
+    #[test]
+    fn explicit_windows_targets_resolve_to_coff_triples() {
+        assert_eq!(
+            resolve_target_triple("windows-x86_64").as_deref(),
+            Some("x86_64-pc-windows-msvc")
+        );
+        for target in ["windows-aarch64", "windows-arm64"] {
+            assert_eq!(
+                resolve_target_triple(target).as_deref(),
+                Some("aarch64-pc-windows-msvc")
+            );
+        }
     }
 }
 

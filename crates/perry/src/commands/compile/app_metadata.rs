@@ -9,11 +9,14 @@
 use std::fs;
 use std::path::Path;
 
-use super::{android_target, is_android_target};
+use super::{android_target, is_android_target, is_windows_target, windows_target_arch};
 
 pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str> {
     if is_android_target(target) {
         return Some("android");
+    }
+    if is_windows_target(target) {
+        return Some("windows");
     }
     match target {
         Some("ios") | Some("ios-simulator") => Some("ios"),
@@ -21,8 +24,6 @@ pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str
         Some("watchos") | Some("watchos-simulator") => Some("watchos"),
         Some("tvos") | Some("tvos-simulator") => Some("tvos"),
         Some("macos") => Some("macos"),
-        // WinUI shares the [windows] perry.toml section (#4680).
-        Some("windows") | Some("windows-winui") => Some("windows"),
         // musl variants share the [linux] perry.toml section (#4826).
         Some("linux")
         | Some("linux-musl")
@@ -159,6 +160,9 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
     if let Some(android) = android_target(target) {
         return Some(android.rust_triple);
     }
+    if let Some(windows) = windows_target_arch(target) {
+        return Some(windows.rust_triple());
+    }
     match target {
         Some("ios-simulator") | Some("ios-widget-simulator") => Some("aarch64-apple-ios-sim"),
         Some("ios") | Some("ios-widget") => Some("aarch64-apple-ios"),
@@ -183,7 +187,6 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         // .a files for these triples are built by release-packages.yml.
         Some("linux-musl") | Some("linux-x86_64-musl") => Some("x86_64-unknown-linux-musl"),
         Some("linux-aarch64-musl") => Some("aarch64-unknown-linux-musl"),
-        Some("windows") | Some("windows-winui") => Some("x86_64-pc-windows-msvc"),
         Some("macos") => Some("aarch64-apple-darwin"),
         _ => None,
     }
@@ -206,6 +209,21 @@ mod app_metadata_tests {
         assert_eq!(
             rust_target_triple(Some("android-x86_64")),
             Some("x86_64-linux-android")
+        );
+    }
+
+    #[test]
+    fn windows_aarch64_uses_windows_metadata_and_rust_target() {
+        for target in ["windows-aarch64", "windows-arm64"] {
+            assert_eq!(target_bundle_section(Some(target)), Some("windows"));
+            assert_eq!(
+                rust_target_triple(Some(target)),
+                Some("aarch64-pc-windows-msvc")
+            );
+        }
+        assert_eq!(
+            rust_target_triple(Some("windows-x86_64")),
+            Some("x86_64-pc-windows-msvc")
         );
     }
 

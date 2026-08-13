@@ -8,7 +8,8 @@ use crate::OutputFormat;
 
 use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env, host_target_triple};
 use super::super::{
-    find_perry_workspace_root, is_android_target, rust_target_triple, CompilationContext,
+    find_perry_workspace_root, is_android_target, is_windows_target, rust_target_triple,
+    CompilationContext,
 };
 
 /// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
@@ -547,14 +548,10 @@ pub(crate) fn build_optimized_libs(
                 );
             }
             if matches!(format, OutputFormat::Text) && verbose > 0 {
-                let (rt_name, std_name) = match target {
-                    Some("windows") | Some("windows-winui") => {
-                        ("perry_runtime.lib", "perry_stdlib.lib")
-                    }
-                    None if cfg!(target_os = "windows") => {
-                        ("perry_runtime.lib", "perry_stdlib.lib")
-                    }
-                    _ => ("libperry_runtime.a", "libperry_stdlib.a"),
+                let (rt_name, std_name) = if is_windows_target(target) {
+                    ("perry_runtime.lib", "perry_stdlib.lib")
+                } else {
+                    ("libperry_runtime.a", "libperry_stdlib.a")
                 };
                 eprintln!(
                     "  auto-optimize: Perry workspace source not found, \
@@ -668,17 +665,15 @@ pub(crate) fn build_optimized_libs(
     } else {
         target_dir.join("release")
     };
-    let runtime_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_runtime.lib",
-        _ => "libperry_runtime.a",
+    let runtime_name = if is_windows_target(target) {
+        "perry_runtime.lib"
+    } else {
+        "libperry_runtime.a"
     };
-    let stdlib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_stdlib.lib",
-        _ => "libperry_stdlib.a",
+    let stdlib_name = if is_windows_target(target) {
+        "perry_stdlib.lib"
+    } else {
+        "libperry_stdlib.a"
     };
     let runtime_path = release_dir.join(runtime_name);
     let stdlib_path = release_dir.join(stdlib_name);
@@ -1211,7 +1206,7 @@ pub(crate) fn build_optimized_libs(
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",
                 Some("windows-winui") => "perry-ui-windows-winui",
-                Some("windows") => "perry-ui-windows",
+                target if is_windows_target(target) => "perry-ui-windows",
                 Some("macos") => "perry-ui-macos",
                 _ => {
                     if cfg!(target_os = "linux") {

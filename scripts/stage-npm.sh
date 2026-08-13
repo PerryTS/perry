@@ -68,6 +68,7 @@ PLATFORMS=(
   "linux-x64-musl:perry-linux-x86_64-musl:libperry_ui_gtk4.a"
   "linux-arm64-musl:perry-linux-aarch64-musl:libperry_ui_gtk4.a"
   "win32-x64:perry-windows-x86_64:perry_ui_windows.lib"
+  "win32-arm64:perry-windows-aarch64:perry_ui_windows.lib"
 )
 
 # Unix libs shared across platforms (runtime + stdlib). The UI lib is

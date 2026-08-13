@@ -156,7 +156,7 @@ if (raw) {
 
 // ANCHOR: manifest-shape
 // The manifest is a single JSON file you serve over HTTPS. Each platform
-// triple is `<os>-<arch>` (darwin-aarch64, darwin-x86_64, windows-x86_64,
+// triple is `<os>-<arch>` (darwin-aarch64, windows-x86_64, windows-aarch64,
 // linux-x86_64, linux-aarch64). The wrapper picks the entry matching the
 // running host and ignores the rest.
 //

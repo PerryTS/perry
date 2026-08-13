@@ -29,7 +29,10 @@ use crate::OutputFormat;
 // `rust_target_triple` and `find_perry_workspace_root` still live in
 // the compile.rs orchestrator. Pull them in as private parent-module
 // items so the search helpers below can reach them.
-use super::{android_target, find_perry_workspace_root, is_android_target, rust_target_triple};
+use super::{
+    android_target, find_perry_workspace_root, is_android_target, is_native_windows_target,
+    is_windows_target, rust_target_triple, windows_target_arch, WindowsTargetArch,
+};
 
 /// Resolve the host's Rust target triple by parsing `rustc -vV`.
 ///
@@ -111,8 +114,7 @@ pub(crate) fn locate_native_lib_artifact(
 /// cargo lib name (refs issue #792).
 fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
     let mut out = vec![lib_name.to_string()];
-    let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
-        || (target.is_none() && cfg!(target_os = "windows"));
+    let is_windows = is_windows_target(target);
     let is_macos = matches!(
         target,
         Some("ios")
@@ -311,13 +313,18 @@ fn versioned_llvm_bin_dirs(parent: &str, prefix: &str, names: &[String]) -> Vec<
 /// On Windows, the PATH may contain a GNU `link` utility (e.g. from Git Bash/MSYS2)
 /// which is not the MSVC linker. This function searches for the real MSVC link.exe.
 #[cfg(target_os = "windows")]
-pub(super) fn msvc_vswhere_installation_path_args() -> [&'static str; 8] {
+pub(super) fn msvc_vswhere_installation_path_args(
+    target_arch: WindowsTargetArch,
+) -> [&'static str; 8] {
     [
         "-products",
         "*",
         // Without the VC tools filter, `-latest` can select Management Studio.
         "-requires",
-        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        match target_arch {
+            WindowsTargetArch::X86_64 => "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            WindowsTargetArch::Aarch64 => "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+        },
         "-latest",
         "-property",
         "installationPath",
@@ -326,7 +333,8 @@ pub(super) fn msvc_vswhere_installation_path_args() -> [&'static str; 8] {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn find_msvc_link_exe() -> Option<PathBuf> {
+pub(super) fn find_msvc_link_exe(target: Option<&str>) -> Option<PathBuf> {
+    let target_arch = windows_target_arch(target)?;
     // Try vswhere.exe first (most reliable)
     let vswhere_paths = [
         PathBuf::from(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"),
@@ -335,20 +343,33 @@ pub(super) fn find_msvc_link_exe() -> Option<PathBuf> {
     for vswhere in &vswhere_paths {
         if vswhere.exists() {
             if let Ok(output) = Command::new(vswhere)
-                .args(msvc_vswhere_installation_path_args())
+                .args(msvc_vswhere_installation_path_args(target_arch))
                 .output()
             {
                 let install_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !install_path.is_empty() {
-                    // Search for link.exe under VC/Tools/MSVC/*/bin/Hostx64/x64/
+                    // Prefer a linker native to the host, but allow the other
+                    // host binary because Windows can run x64 tools on ARM64.
                     let msvc_dir = PathBuf::from(&install_path).join(r"VC\Tools\MSVC");
                     if let Ok(entries) = std::fs::read_dir(&msvc_dir) {
                         let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
                         versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                        let host_dirs = if cfg!(target_arch = "aarch64") {
+                            ["Hostarm64", "Hostx64"]
+                        } else {
+                            ["Hostx64", "Hostarm64"]
+                        };
                         for entry in versions {
-                            let link = entry.path().join(r"bin\Hostx64\x64\link.exe");
-                            if link.exists() {
-                                return Some(link);
+                            for host_dir in host_dirs {
+                                let link = entry
+                                    .path()
+                                    .join("bin")
+                                    .join(host_dir)
+                                    .join(target_arch.msvc_dir())
+                                    .join("link.exe");
+                                if link.exists() {
+                                    return Some(link);
+                                }
                             }
                         }
                     }
@@ -360,7 +381,7 @@ pub(super) fn find_msvc_link_exe() -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(super) fn find_msvc_link_exe() -> Option<PathBuf> {
+pub(super) fn find_msvc_link_exe(_target: Option<&str>) -> Option<PathBuf> {
     find_llvm_tool("lld-link")
 }
 
@@ -407,7 +428,7 @@ pub(super) fn find_lld_link() -> Option<PathBuf> {
 /// Windows-target archive is built with llvm-lib / llvm-ar instead.
 #[cfg(target_os = "windows")]
 pub(super) fn find_msvc_lib_exe() -> Option<PathBuf> {
-    if let Some(link_exe) = find_msvc_link_exe() {
+    if let Some(link_exe) = find_msvc_link_exe(None) {
         let lib = link_exe.with_file_name("lib.exe");
         if lib.exists() {
             return Some(lib);
@@ -496,8 +517,8 @@ pub(super) fn windows_archiver_command(archiver: &WindowsArchiver, out: &Path) -
 }
 
 /// Location where `perry setup windows` writes the xwin'd Microsoft CRT +
-/// Windows SDK. Returns `Some(root)` only when `<root>/crt/lib/x86_64` exists,
-/// so callers can treat `Some` as "toolchain is complete and ready to link."
+/// Windows SDK. Returns `Some(root)` only when a supported architecture's CRT
+/// directory exists, so callers can treat `Some` as "toolchain is complete."
 ///
 /// Default location is `%LOCALAPPDATA%\perry\windows-sdk` on Windows; can be
 /// overridden via `PERRY_WINDOWS_SYSROOT` (same env var already used by the
@@ -514,8 +535,9 @@ pub(super) fn find_perry_windows_sdk() -> Option<PathBuf> {
         // Sanity-check: xwin splat populates crt/lib/x86_64 (or crt/lib/x64 with
         // --preserve-ms-arch-notation). If neither exists, the directory isn't a
         // completed xwin output — skip it.
-        if candidate.join("crt").join("lib").join("x86_64").exists()
-            || candidate.join("crt").join("lib").join("x64").exists()
+        if ["x86_64", "x64", "aarch64", "arm64"]
+            .iter()
+            .any(|arch| candidate.join("crt").join("lib").join(arch).exists())
         {
             return Some(candidate);
         }
@@ -587,21 +609,18 @@ pub(super) fn windows_pe_subsystem_flag(needs_ui: bool, min_windows_version: &st
 /// Given a sysroot directory populated by `xwin splat` (or a compatible layout),
 /// return the lib search paths for MSVC / lld-link's LIB env var. Callers pass
 /// the directory root (e.g. `%LOCALAPPDATA%\perry\windows-sdk`) and get back a
-/// `Vec<String>` of absolute lib dirs: `<root>/crt/lib/x86_64`,
-/// `<root>/sdk/lib/um/x86_64`, `<root>/sdk/lib/ucrt/x86_64`. Falls through to
+/// `Vec<String>` of absolute lib dirs for the selected target architecture.
+/// Falls through to
 /// `<root>/lib` and finally `<root>` itself if the structured layout isn't
 /// present (e.g. a user pointed PERRY_WINDOWS_SYSROOT at a custom dir).
-pub(super) fn xwin_sysroot_lib_paths(root: &Path) -> Vec<String> {
+pub(super) fn xwin_sysroot_lib_paths(root: &Path, target_arch: WindowsTargetArch) -> Vec<String> {
     let mut paths = Vec::new();
 
     // xwin default layout — also covers --preserve-ms-arch-notation (x64 suffix).
-    for (crt_sub, um_sub, ucrt_sub) in &[
-        ("crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"),
-        ("crt/lib/x64", "sdk/lib/um/x64", "sdk/lib/ucrt/x64"),
-    ] {
-        let crt = root.join(crt_sub);
-        let um = root.join(um_sub);
-        let ucrt = root.join(ucrt_sub);
+    for arch in [target_arch.xwin_dir(), target_arch.msvc_dir()] {
+        let crt = root.join("crt").join("lib").join(arch);
+        let um = root.join("sdk").join("lib").join("um").join(arch);
+        let ucrt = root.join("sdk").join("lib").join("ucrt").join(arch);
         if crt.exists() || um.exists() || ucrt.exists() {
             if crt.exists() {
                 paths.push(crt.to_string_lossy().to_string());
@@ -614,6 +633,16 @@ pub(super) fn xwin_sysroot_lib_paths(root: &Path) -> Vec<String> {
             }
             return paths;
         }
+    }
+
+    // A structured xwin sysroot that contains only a different architecture
+    // is not a valid flat fallback. Returning the root here would make the
+    // linker search it directly and hide the missing target CRT.
+    if root.join("crt").join("lib").is_dir()
+        || root.join("sdk").join("lib").join("um").is_dir()
+        || root.join("sdk").join("lib").join("ucrt").is_dir()
+    {
+        return paths;
     }
 
     let flat_lib = root.join("lib");
@@ -633,12 +662,13 @@ pub(super) fn xwin_sysroot_lib_paths(root: &Path) -> Vec<String> {
 /// (matches the "lightweight toolchain" opt-in mental model), then falls back
 /// to vswhere-located Visual Studio install paths.
 #[cfg(target_os = "windows")]
-pub(super) fn find_msvc_lib_paths() -> Option<String> {
+pub(super) fn find_msvc_lib_paths(target: Option<&str>) -> Option<String> {
+    let target_arch = windows_target_arch(target)?;
     // If the user ran `perry setup windows`, use that sysroot — they've
     // expressed intent to use the lightweight LLVM + xwin path even if MSVC
     // is also installed. Same precedence as find_msvc_link_exe_or_lld_link().
     if let Some(sysroot) = find_perry_windows_sdk() {
-        let paths = xwin_sysroot_lib_paths(&sysroot);
+        let paths = xwin_sysroot_lib_paths(&sysroot, target_arch);
         if !paths.is_empty() {
             return Some(paths.join(";"));
         }
@@ -654,7 +684,7 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
     for vswhere in &vswhere_paths {
         if vswhere.exists() {
             if let Ok(output) = Command::new(vswhere)
-                .args(msvc_vswhere_installation_path_args())
+                .args(msvc_vswhere_installation_path_args(target_arch))
                 .output()
             {
                 let install_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -664,7 +694,7 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
                         let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
                         versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
                         if let Some(entry) = versions.first() {
-                            let lib_path = entry.path().join(r"lib\x64");
+                            let lib_path = entry.path().join("lib").join(target_arch.msvc_dir());
                             if lib_path.exists() {
                                 paths.push(lib_path.to_string_lossy().to_string());
                             }
@@ -711,8 +741,8 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
             let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
             versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
             if let Some(entry) = versions.first() {
-                let um_path = entry.path().join(r"um\x64");
-                let ucrt_path = entry.path().join(r"ucrt\x64");
+                let um_path = entry.path().join("um").join(target_arch.msvc_dir());
+                let ucrt_path = entry.path().join("ucrt").join(target_arch.msvc_dir());
                 if um_path.exists() {
                     paths.push(um_path.to_string_lossy().to_string());
                     sdk_added = true;
@@ -733,13 +763,14 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
         // about user32.lib. Tell the user exactly what we tried and what
         // the workarounds are.
         eprintln!(
-            "Warning: Windows SDK lib path (Windows Kits\\10\\Lib\\<ver>\\um\\x64) not found.\n\
+            "Warning: Windows SDK lib path (Windows Kits\\10\\Lib\\<ver>\\um\\{}) not found.\n\
              Tried: {}\n\
              Linker will likely fail with LNK1181 (e.g. cannot open user32.lib).\n\
              Workarounds:\n\
              - Run `vcvars64.bat` before `perry compile` (sets `LIB` env)\n\
              - Install Windows 10/11 SDK via Visual Studio Installer\n\
-             - Set the `LIB` env var manually to your SDK's `um\\x64;ucrt\\x64` paths",
+             - Set the `LIB` env var manually to your SDK's matching `um` and `ucrt` paths",
+            target_arch.msvc_dir(),
             sdk_roots
                 .iter()
                 .map(|p| p.display().to_string())
@@ -830,7 +861,7 @@ pub(super) fn find_windows_sdk_mt_dir() -> Option<PathBuf> {
 }
 
 /// Given a Windows SDK `bin` root, return the arch dir holding `mt.exe`: the
-/// newest versioned subdir's `x64` (then `x86`, which runs fine on x64 hosts),
+/// newest versioned subdir's native architecture (then compatible fallbacks),
 /// falling back to the unversioned `bin\<arch>` layout of pre-10.0.15063 SDKs.
 /// The newest-version pick mirrors the descending file-name sort
 /// `find_msvc_lib_paths` uses for `Lib\<ver>`. Host-independent so the
@@ -843,14 +874,24 @@ pub(super) fn newest_mt_dir_under(bin_root: &Path) -> Option<PathBuf> {
     };
     version_dirs.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
     for dir in version_dirs {
-        for arch in ["x64", "x86"] {
+        let arches = if cfg!(target_arch = "aarch64") {
+            ["arm64", "x64", "x86"]
+        } else {
+            ["x64", "arm64", "x86"]
+        };
+        for arch in arches {
             let cand = dir.join(arch);
             if cand.join("mt.exe").is_file() {
                 return Some(cand);
             }
         }
     }
-    for arch in ["x64", "x86"] {
+    let arches = if cfg!(target_arch = "aarch64") {
+        ["arm64", "x64", "x86"]
+    } else {
+        ["x64", "arm64", "x86"]
+    };
+    for arch in arches {
         let cand = bin_root.join(arch);
         if cand.join("mt.exe").is_file() {
             return Some(cand);
@@ -860,7 +901,8 @@ pub(super) fn newest_mt_dir_under(bin_root: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(super) fn find_msvc_lib_paths() -> Option<String> {
+pub(super) fn find_msvc_lib_paths(target: Option<&str>) -> Option<String> {
+    let target_arch = windows_target_arch(target)?;
     let sysroot = std::env::var("PERRY_WINDOWS_SYSROOT").ok()?;
     let root = PathBuf::from(&sysroot);
     if !root.exists() {
@@ -871,7 +913,7 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
         return None;
     }
 
-    Some(xwin_sysroot_lib_paths(&root).join(";"))
+    Some(xwin_sysroot_lib_paths(&root, target_arch).join(";"))
 }
 
 /// Find a library by name, optionally searching cross-compilation target directories.
@@ -1008,7 +1050,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         // also check the default target/release/ directory since native builds
         // put libraries there without the triple subdirectory.
         #[cfg(target_os = "windows")]
-        if matches!(target, Some("windows") | Some("windows-winui")) {
+        if is_native_windows_target(target) {
             candidates.push(PathBuf::from(format!("target/release/{}", name)));
             candidates.push(PathBuf::from(format!("target/debug/{}", name)));
             candidates.extend(winget_lib_candidates(name));
@@ -1135,11 +1177,10 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
 
 /// Find the runtime library for linking
 pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
-    let lib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_runtime.lib",
-        _ => "libperry_runtime.a",
+    let lib_name = if is_windows_target(target) {
+        "perry_runtime.lib"
+    } else {
+        "libperry_runtime.a"
     };
     find_library_with_candidates(lib_name, target).map_err(|searched| {
         let extra = if target.is_some() {
@@ -1176,11 +1217,7 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
 /// reachable and stdlib is not linked). Unix-only: Windows always links
 /// stdlib, which is built panic=unwind.
 pub(super) fn find_runtime_abort_library(target: Option<&str>) -> Option<PathBuf> {
-    if matches!(target, Some("windows") | Some("windows-winui")) {
-        return None;
-    }
-    #[cfg(target_os = "windows")]
-    if target.is_none() {
+    if is_windows_target(target) {
         return None;
     }
     find_library("libperry_runtime_abort.a", target)
@@ -1188,11 +1225,10 @@ pub(super) fn find_runtime_abort_library(target: Option<&str>) -> Option<PathBuf
 
 /// Find the stdlib library for linking (optional - only needed for native modules)
 pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
-    let lib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_stdlib.lib",
-        _ => "libperry_stdlib.a",
+    let lib_name = if is_windows_target(target) {
+        "perry_stdlib.lib"
+    } else {
+        "libperry_stdlib.a"
     };
     find_library(lib_name, target)
 }
@@ -1200,11 +1236,10 @@ pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
 /// Find the wasmi-based WebAssembly host library (optional — only needed
 /// when `--enable-wasm-runtime` is set, see issue #76).
 pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
-    let lib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_wasm_host.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_wasm_host.lib",
-        _ => "libperry_wasm_host.a",
+    let lib_name = if is_windows_target(target) {
+        "perry_wasm_host.lib"
+    } else {
+        "libperry_wasm_host.a"
     };
     find_library(lib_name, target)
 }
@@ -1282,11 +1317,10 @@ pub(super) fn build_wasm_host_library(
     // CARGO_TARGET_DIR + cross-target triple subdir) so the returned archive
     // is unambiguously the one we built. Fall back to the standard search so a
     // non-standard layout still resolves.
-    let lib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_wasm_host.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_wasm_host.lib",
-        _ => "libperry_wasm_host.a",
+    let lib_name = if is_windows_target(target) {
+        "perry_wasm_host.lib"
+    } else {
+        "libperry_wasm_host.a"
     };
     let mut release_dir = match std::env::var_os("CARGO_TARGET_DIR") {
         Some(raw) if !raw.is_empty() => {
@@ -1338,9 +1372,7 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
         // perry-ui-windows Win32 symbols today (scaffold), so the FFI surface
         // is identical to the `windows` lib.
         Some("windows-winui") => "perry_ui_windows_winui.lib",
-        Some("windows") => "perry_ui_windows.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_ui_windows.lib",
+        target if is_windows_target(target) => "perry_ui_windows.lib",
         _ => {
             if cfg!(target_os = "linux") {
                 "libperry_ui_gtk4.a"
@@ -1637,9 +1669,7 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
 }
 
 pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows") | Some("windows-winui"))
-        || cfg!(target_os = "windows")
-    {
+    let name = if is_windows_target(target) {
         "perry_ui_geisterhand.lib"
     } else {
         "libperry_ui_geisterhand.a"
@@ -1648,9 +1678,7 @@ pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> 
 }
 
 pub(super) fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows") | Some("windows-winui"))
-        || cfg!(target_os = "windows")
-    {
+    let name = if is_windows_target(target) {
         "perry_runtime.lib"
     } else {
         "libperry_runtime.a"
@@ -1668,9 +1696,7 @@ pub(super) fn find_geisterhand_stdlib(target: Option<&str>) -> Option<PathBuf> {
     // so we never select the auto-optimized stdlib, whose feature set is
     // computed from the app's TS imports and omits async-runtime when the async
     // surface comes from a native binding — the #1383 link failure.
-    let name = if matches!(target, Some("windows") | Some("windows-winui"))
-        || cfg!(target_os = "windows")
-    {
+    let name = if is_windows_target(target) {
         "perry_stdlib.lib"
     } else {
         "libperry_stdlib.a"
@@ -1689,7 +1715,7 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
         "libperry_ui_gtk4.a"
     } else if matches!(target, Some("windows-winui")) {
         "perry_ui_windows_winui.lib"
-    } else if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
+    } else if is_windows_target(target) {
         "perry_ui_windows.lib"
     } else {
         "libperry_ui_macos.a"
@@ -1709,7 +1735,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         target if is_android_target(target) => "perry-ui-android",
         Some("linux") => "perry-ui-gtk4",
         Some("windows-winui") => "perry-ui-windows-winui",
-        Some("windows") => "perry-ui-windows",
+        target if is_windows_target(target) => "perry-ui-windows",
         _ if cfg!(target_os = "linux") => "perry-ui-gtk4",
         _ if cfg!(target_os = "windows") => "perry-ui-windows",
         _ => "perry-ui-macos",

@@ -296,6 +296,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: perry-windows-aarch64
 
     runs-on: ${{ matrix.os }}
     env:
@@ -562,11 +565,11 @@ jobs:
       # `%ANDROID_NDK_HOME%`; we point cargo at its `aarch64-linux-android-*`
       # clang as the cross-linker.
       - name: Install aarch64-linux-android Rust target (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: rustup target add aarch64-linux-android
       - name: Build Android cross-compile libraries (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         env:
           # API level 24 matches every other Android leg we cross-build for
@@ -770,7 +773,7 @@ jobs:
               $signtool = $signtoolCommand.Source
             } else {
               $kitsBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-              $signtool = Get-ChildItem "$kitsBin\*\x64\signtool.exe" |
+              $signtool = Get-ChildItem "$kitsBin\*\arm64\signtool.exe", "$kitsBin\*\x64\signtool.exe" |
                 Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
                 Select-Object -First 1 -ExpandProperty FullName
             }
@@ -1066,12 +1069,15 @@ jobs:
             ui_lib: libperry_ui_android.a
             tier3: false
           # --- Windows MSVC (native runner) ---------------------------------
-          # Only x86_64 today. perry's compile.rs maps `--target windows`
-          # to `x86_64-pc-windows-msvc` (compile.rs:1009); ARM64 Windows
-          # support is a separate follow-up — re-add `aarch64-pc-windows-msvc`
-          # here once the CLI knows about it.
+          # Both native Windows architectures use their matching hosted runner
+          # so Rust, LLVM, MSVC, and the packaged executable all agree.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            ui_crate: perry-ui-windows
+            ui_lib: perry_ui_windows.lib
+            tier3: false
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             ui_crate: perry-ui-windows
             ui_lib: perry_ui_windows.lib
             tier3: false
@@ -1999,9 +2005,9 @@ jobs:
           echo "Hub response: ${RESPONSE}"
 
   # ---------------------------------------------------------------------------
-  # Publish npm packages (@perryts/perry + 7 per-platform packages)
+  # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
-  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 8
+  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 9
   # package names must be registered on npmjs.com with this repo + workflow
   # as a Trusted Publisher. See npm/README.md for the one-time setup.
   # ---------------------------------------------------------------------------

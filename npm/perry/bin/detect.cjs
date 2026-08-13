@@ -13,6 +13,7 @@ const PLATFORM_PACKAGES = {
   "linux-x64": "@perryts/perry-linux-x64",
   "linux-x64-musl": "@perryts/perry-linux-x64-musl",
   "win32-x64": "@perryts/perry-win32-x64",
+  "win32-arm64": "@perryts/perry-win32-arm64",
 };
 
 // Minimum glibc the prebuilt *glibc* Linux binaries can run on.

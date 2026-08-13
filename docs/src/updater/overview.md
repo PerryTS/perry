@@ -73,6 +73,7 @@ Platform keys are canonical Rust-style triples:
 | Apple Silicon mac | `darwin-aarch64` |
 | Intel mac | `darwin-x86_64` |
 | Windows 10/11 64-bit | `windows-x86_64` |
+| Windows 11 ARM64 | `windows-aarch64` |
 | Linux 64-bit | `linux-x86_64` |
 | Linux ARM64 | `linux-aarch64` |
 
