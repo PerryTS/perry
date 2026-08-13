@@ -1211,3 +1211,50 @@ is invisible to the static checker.
 locals** — §21 already did that and found the discipline sound. Start at the
 BOUNDARY: `dyn_eval/bridge.rs`, `closure::registry::dispatch_with_arity`, and
 whatever caches the interpreted-closure dispatch path populates.
+
+## 24. What is verified, what is not, and the one thing blocking the codegen PR
+
+### Verified in this session
+
+| claim | how |
+|---|---|
+| #7803 live on `410dadd45` | 7/16, 8/16, 6/8 across builds |
+| fatal frame is `parse.ts:65` | symbolicated native backtrace, §14 |
+| both messages are one loss | same stack, two surfacing points, §14/§15 |
+| the failure needs the `new Function` path | 0/16 jitless vs 8/16, instrument hot, §20 |
+| the dep corpus × native lowering was ungated | four-cell matrix, §9 |
+| that cell read 66 unrooted, curated reads 0 | §9a, gate green on main |
+| three call arms lose the callee | source read + 66→3 after the fix, §18/§22 |
+| the interpreter had no safepoints | `loop_polls` 24,029 → 93,210, §21 |
+| more interpreter collection does NOT worsen it | 6/8 → 2/8, §23 |
+| `--debug-symbols` suppresses it | 0/13 vs 44%, §13 |
+| the quarantine suppresses it | seed 3 fails unprotected, passes protected, §16 |
+
+### NOT verified — and the codegen change must not land until it is
+
+**The gap suite has not run against the three call arms.** They change the
+lowering of every `new <expr>(…)`, every spread call and every closure-typed
+local call in the language. This box could not give a trustworthy run: load
+average **60** with 47 sibling worktrees building, and the suite went from 25
+tests in 3 minutes to 30 in 19. A timeout-flake red under that load is worse
+than no run, so it was stopped rather than finished badly.
+
+**Partial: 30/554, 0 failures** (`scratchpad/zod/gap-partial.log`). That is
+evidence of nothing except that the first 30 do not crash.
+
+Before the codegen commit (`95d9fbb9d` + the `early_branches.rs` arm) goes into
+a PR: `./scripts/run_gap_tests.sh` and `cargo test -p perry-codegen`, on a
+quiet host.
+
+### Still open, and where to look next
+
+The cause. §23 narrows it: the failure needs the interpreted path, but the
+interpreter's own frames are neither obviously the holder (§21's audit) nor
+made worse by collecting in them (§23). The remaining surface is the
+**boundary** — `dyn_eval/bridge.rs`, `closure::registry::dispatch_with_arity`,
+and any runtime cache the interpreted-dispatch path populates. A runtime-side
+cache of a raw heap pointer is invisible to the static checker by construction,
+and CLAUDE.md's rule of thumb applies in reverse here: this bug is intermittent,
+which argues for a register rather than a table — but a table reached only from
+the interpreted path would also present intermittently, because the path itself
+is only taken 96 times.
