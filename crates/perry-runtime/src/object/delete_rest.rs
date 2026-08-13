@@ -724,20 +724,23 @@ mod shape_transition_tests_6759 {
             }
             let keys_before = (*obj).keys_array;
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
-            assert!(
-                !is_shape_id((*obj).parent_class_id),
-                "test premise: a FRESH instance carries its allocation-time \
-                 parent_class_id — rung 1's stamp is lazy, not a birth stamp"
-            );
-
-            // Lazy stamp: the first by-name resolve installs a ShapeId over the
-            // (now readerless — rung 0/#7981) inheritance word.
-            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_y"));
             let before = (*obj).parent_class_id;
             assert!(
                 is_shape_id(before),
-                "a class instance was NOT stamped by its first by-name resolve \
-                 (got {before:#x}) — rung 1's whole subject is inert"
+                "test premise: a class instance is stamped AT BIRTH (got \
+                 {before:#x}). Rung 2 (#8009 for the compiled path, and the \
+                 runtime allocators alongside it) exists because a LAZY stamp \
+                 splits the shape's population — see \
+                 `shapes::birth_stamp_object_shape`"
+            );
+            // A by-name resolve must not change it: the birth stamp is already
+            // the id every later resolve would have minted.
+            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_y"));
+            assert_eq!(
+                (*obj).parent_class_id,
+                before,
+                "a resolve re-stamped an already-stamped instance with a \
+                 DIFFERENT id — every site holding the birth token would miss"
             );
 
             assert_eq!(js_object_delete_field(obj, key("del6759_x")), 1);
@@ -857,10 +860,14 @@ mod shape_transition_tests_6759 {
             // prelude instead); MID→BASE has no instance here, so register it
             // the way that prelude does.
             crate::object::register_class(MID, BASE);
-            assert_eq!(
-                (*leaf).parent_class_id,
-                MID,
-                "test premise: the header word starts as inheritance data"
+            // Rung 2: the word is a ShapeId from BIRTH, so the parent edge is
+            // already only in the registry before anything below runs. That
+            // makes this test stronger than when the word still started as
+            // inheritance data — there is no window in which it was correct.
+            assert!(
+                is_shape_id((*leaf).parent_class_id),
+                "test premise: the newborn's header word was not clobbered by a \
+                 birth stamp, so the chain is not actually being stressed"
             );
 
             let boxed = crate::value::js_nanbox_pointer(leaf as i64);
@@ -869,11 +876,11 @@ mod shape_transition_tests_6759 {
             assert!(truthy(crate::object::js_instanceof(boxed, MID)));
             assert!(truthy(crate::object::js_instanceof(boxed, BASE)));
 
-            // Clobber the word with a stamp.
+            // …and it stays clobbered across a resolve.
             let _ = crate::object::js_object_get_field_by_name(leaf, key("chain6759_p"));
             assert!(
                 is_shape_id((*leaf).parent_class_id),
-                "test premise: the resolve did not stamp, so nothing is being tested"
+                "test premise: the word stopped being a stamp, so nothing is being tested"
             );
 
             assert!(

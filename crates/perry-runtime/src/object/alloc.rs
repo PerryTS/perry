@@ -296,8 +296,15 @@ fn object_alloc_class_inline_keys_impl(
 }
 
 /// Compatibility entry point for runtime callers that do not have a
-/// module-init ShapeId. Their first by-name resolve retains rung 1's lazy
-/// self-heal; compiled allocations use the stamped entry point below.
+/// module-init ShapeId.
+///
+/// It mints the id from the canonical keys array instead of receiving it, so
+/// the instance is still stamped AT BIRTH. Leaving it to rung 1's lazy
+/// self-heal would split this class's population between stamped and newborn
+/// receivers, which the emitted PIC cannot tolerate — see
+/// `shapes::birth_stamp_object_shape`. The mint is one shape-table probe and
+/// this is not the compiled hot path (compiled `new C(…)` sites call
+/// `js_object_alloc_class_inline_keys_stamped` with a module-init id).
 #[no_mangle]
 pub extern "C" fn js_object_alloc_class_inline_keys(
     class_id: u32,
@@ -305,7 +312,18 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
-    object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array)
+    let ptr =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
+    if !keys_array.is_null() {
+        unsafe {
+            let id = crate::object::shapes::shape_id_for_keys_ensure(
+                keys_array as *const ArrayHeader,
+                (*keys_array).length,
+            );
+            crate::object::shapes::birth_stamp_object_shape(ptr, id);
+        }
+    }
+    ptr
 }
 
 /// The compiled-class allocation entry point after #6759 C3 rung 2.
@@ -462,9 +480,9 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         .wrapping_mul(10007)
         .wrapping_add(field_count.wrapping_mul(100003))
         .wrapping_add(1000000);
-    let cached = shape_cache_get(shape_id);
-    let keys_arr = if !cached.is_null() {
-        cached
+    let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
+    let (keys_arr, runtime_shape_id) = if !cached.is_null() {
+        (cached, cached_runtime_id)
     } else {
         let keys_bytes =
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
@@ -492,11 +510,18 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             }
         }
         shape_cache_insert(shape_id, arr);
-        arr
+        (arr, shape_cache_get_with_id(shape_id).1)
     };
 
     unsafe {
         set_object_keys_array(ptr, keys_arr);
+        // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
+        // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
+        // and left this one lazily self-healing, which is a SPLIT population
+        // for every class that lands here — and a split population is a
+        // permanent PIC miss, not a slow start. See
+        // `shapes::birth_stamp_object_shape`.
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
     }
     remember_class_keys_array(class_id, field_count, keys_arr);
     ptr
@@ -559,9 +584,9 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     // from the own-only shape (`+ 2_000_000`) so it can't collide with the
     // `js_build_class_keys_array` / `js_object_alloc_class_with_keys` shapes.
     let shape_id = class_id.wrapping_mul(10007).wrapping_add(2_000_000);
-    let cached = shape_cache_get(shape_id);
-    let (merged_arr, field_count) = if !cached.is_null() {
-        (cached, unsafe { (*cached).length })
+    let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
+    let (merged_arr, field_count, runtime_shape_id) = if !cached.is_null() {
+        (cached, unsafe { (*cached).length }, cached_runtime_id)
     } else {
         let own_keys: Vec<&[u8]> = if own_packed_keys.is_null() || own_packed_keys_len == 0 {
             Vec::new()
@@ -599,7 +624,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             }
         }
         shape_cache_insert(shape_id, arr);
-        (arr, merged_len as u32)
+        (arr, merged_len as u32, shape_cache_get_with_id(shape_id).1)
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
@@ -621,6 +646,9 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         }
         set_object_keys_array(ptr, merged_arr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        // The dynamically-parented subclass shape needs the same birth stamp
+        // as every other class instance, or its sites split the same way.
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
     }
     remember_class_keys_array(class_id, field_count, merged_arr);
     ptr

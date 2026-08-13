@@ -215,6 +215,51 @@ pub(crate) unsafe fn stamp_object_shape(
     id
 }
 
+/// Birth-stamp a NEWBORN receiver with an already-minted ShapeId. A zero id —
+/// no shape-cache record yet, or the id range exhausted — leaves the word
+/// alone, which preserves the pre-stamp fallback rather than inventing one.
+///
+/// ★ **A shape's population must be UNIFORMLY stamped or uniformly not.** The
+/// emitted read PIC derives its ENTIRE cache token from this word
+/// (`perry-codegen/src/expr/property_get/generic_dispatch.rs`):
+///
+/// ```text
+/// is_stamp = (parent_class_id - 0x8000_0000) u< 0x4000_0000
+/// token    = is_stamp ? (parent_class_id | 1<<62) : keys_array
+/// ```
+///
+/// so a stamped receiver and an unstamped one OF THE SAME SHAPE compute two
+/// DIFFERENT tokens, and a site that sees both can never hold a hit. It is not
+/// a slow start — it is a permanent 0% hit rate: instance #1 misses, is
+/// stamped, primes the id token; instance #2 is newborn, computes the
+/// keys-pointer token, misses; the handler re-primes the same id; instance #3
+/// misses. Forever.
+///
+/// #6759 C3 rung 1 (#7983) stamped class instances only LAZILY, at the first
+/// by-name resolve, and that is exactly what it cost — measured in
+/// instructions retired, isolated against its own parent: `cycles` +54.3%,
+/// `deeplist` +45.2%, `interp` +28.3%, `pipeline` +23.9%, `iso_miss` +22.9%,
+/// while the object-literal benchmarks (`churn` +1.2%, `retain` +0.2%) and
+/// `fib40` (+0.04%) did not move — literals have been birth-stamped since
+/// #6804, so their population was always uniform.
+///
+/// Rung 2 (#8009) closed the compiled path. **Every OTHER allocator that
+/// installs a shape-cached keys array on a fresh `ObjectHeader` must call this
+/// too**, or its classes keep the split.
+///
+/// No `shape_word_is_writable` check: the callers have just written
+/// `object_type`/`class_id` into a header they allocated, so the receiver is a
+/// genuine `ObjectHeader` and never the `RegExpHeader` alias.
+#[inline]
+pub(crate) unsafe fn birth_stamp_object_shape(
+    obj: *mut crate::object::ObjectHeader,
+    runtime_shape_id: u32,
+) {
+    if is_shape_id(runtime_shape_id) {
+        (*obj).parent_class_id = runtime_shape_id;
+    }
+}
+
 /// Drop the stamp iff the word currently holds one, leaving a real
 /// `parent_class_id` untouched. Returns true when a stamp was cleared.
 ///

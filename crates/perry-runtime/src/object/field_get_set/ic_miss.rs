@@ -1575,6 +1575,106 @@ mod c3c_pic_tests {
             assert_eq!(c_compacted[1], 1, "compacted `c` slot");
         }
     }
+
+    /// The PIC cache token the EMITTED code computes for `obj`, transcribed
+    /// from `perry-codegen/src/expr/property_get/generic_dispatch.rs`:
+    ///
+    /// ```text
+    /// is_stamp = (parent_class_id - 0x8000_0000) u< 0x4000_0000
+    /// token    = is_stamp ? (parent_class_id | 1<<62) : keys_array
+    /// ```
+    ///
+    /// The runtime never calls this; it exists so a test can compare what the
+    /// miss handler PRIMES against what the hit path will COMPUTE, which is
+    /// the only pair whose agreement decides whether a site can ever hit.
+    unsafe fn emitted_pic_token(obj: *const super::ObjectHeader) -> u64 {
+        let word = (*obj).parent_class_id;
+        if crate::object::shapes::is_shape_id(word) {
+            word as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT
+        } else {
+            (*obj).keys_array as u64
+        }
+    }
+
+    /// ★ The invariant #6759 C3 rung 1 broke, asserted where it broke.
+    ///
+    /// A shape's population must be UNIFORMLY stamped: the token the miss
+    /// handler primes from one instance is only useful if a DIFFERENT,
+    /// freshly-allocated instance of the same class computes the same token.
+    /// Rung 1 (#7983) stamped class instances lazily while their allocator
+    /// still wrote the real `parent_class_id`, so instance #1 primed an id
+    /// token and every newborn sibling computed its keys pointer instead —
+    /// `token_eq` failed at every site reading a field of a fresh instance,
+    /// forever. Measured cost before the birth stamp: `cycles` +54%,
+    /// `deeplist` +45%, `interp` +28% in instructions retired.
+    ///
+    /// This is deliberately NOT "the newborn carries a stamp" — that is a
+    /// presence check two different states satisfy (both-stamped and
+    /// both-unstamped are each fine; the mixture is the bug). Comparing the
+    /// primed token against a fresh sibling's COMPUTED token is what fails
+    /// under either half of the split.
+    #[test]
+    fn a_fresh_class_instance_computes_the_token_the_miss_handler_primed() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let packed = b"picbirth_x\0picbirth_y";
+            let mk = || {
+                crate::object::js_object_alloc_class_with_keys(
+                    0x6082,
+                    0,
+                    2,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            let key = crate::string::js_string_from_bytes(b"picbirth_x".as_ptr(), 10);
+
+            let primed_from = mk();
+            crate::object::js_object_set_field(
+                primed_from,
+                0,
+                crate::JSValue::from_bits(5.0f64.to_bits()),
+            );
+            assert_eq!(
+                (*primed_from).class_id,
+                0x6082,
+                "test premise: the receiver is a class instance, not a literal"
+            );
+
+            let mut cache = [0i64; super::PIC_CACHE_WORDS];
+            assert_eq!(
+                super::js_object_get_field_ic_miss(primed_from, key, &mut cache),
+                5.0,
+                "test premise: the miss handler resolved the field"
+            );
+            assert_ne!(
+                cache[0], 0,
+                "test premise: the miss handler primed SOMETHING — a zero token \
+                 never hits, so the comparison below would be vacuous"
+            );
+
+            // The next `new C(...)`. Nothing has resolved a field on it.
+            let fresh = mk();
+            assert_eq!(
+                emitted_pic_token(fresh),
+                cache[0] as u64,
+                "a freshly allocated instance of the SAME class computes a \
+                 different PIC token than the one primed from its sibling, so \
+                 every read of a newborn instance's field misses the cache and \
+                 takes the full miss handler — #7983's split population"
+            );
+
+            // And the same must hold once the fresh one has itself resolved:
+            // priming from either instance is interchangeable.
+            let mut cache2 = [0i64; super::PIC_CACHE_WORDS];
+            super::js_object_get_field_ic_miss(fresh, key, &mut cache2);
+            assert_eq!(
+                cache2[0], cache[0],
+                "two instances of one class primed two different tokens — the \
+                 site thrashes between them"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
