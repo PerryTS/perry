@@ -123,6 +123,7 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // probe gates backstop the audit.
         "js_closure_alloc_singleton"
         | "js_object_alloc_class_inline_keys"
+        | "js_object_alloc_class_inline_keys_stamped"
         | "js_array_push_f64"
         | "js_array_length"
         | "js_array_slice_values"

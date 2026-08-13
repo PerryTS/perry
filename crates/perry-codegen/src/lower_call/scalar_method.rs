@@ -545,44 +545,47 @@ fn materialize_scalar_receiver(
         .and_then(|parent| ctx.class_ids.get(parent).copied())
         .unwrap_or(0);
     let parent_class_id_str = parent_class_id.to_string();
-    let (obj_handle, has_stable_keys) =
-        if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-            let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
-                slot
-            } else {
-                let slot = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), slot.clone());
-                slot
-            };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
-            ctx.pending_declares.push((
-                "js_object_alloc_class_inline_keys".to_string(),
-                I64,
-                vec![I32, I32, I32, I64],
-            ));
-            let obj_handle = ctx.block().call(
-                I64,
-                "js_object_alloc_class_inline_keys",
-                &[
-                    (I32, &class_id_str),
-                    (I32, &parent_class_id_str),
-                    (I32, &field_count_str),
-                    (I64, &keys_ptr),
-                ],
-            );
-            emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
-            (obj_handle, true)
+    let (obj_handle, has_stable_keys) = if let Some(keys_global_name) =
+        ctx.class_keys_globals.get(class_name).cloned()
+    {
+        let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
+            slot
         } else {
-            (
-                ctx.block().call(
-                    I64,
-                    "js_object_alloc",
-                    &[(I32, &class_id_str), (I32, &field_count_str)],
-                ),
-                false,
-            )
+            let slot = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
+            ctx.class_keys_slots
+                .insert(class_name.to_string(), slot.clone());
+            slot
         };
+        let keys_ptr = ctx.block().load(I64, &keys_slot);
+        let shape_id = super::new_alloc::load_class_shape_id(ctx, class_name, &keys_global_name);
+        ctx.pending_declares.push((
+            "js_object_alloc_class_inline_keys_stamped".to_string(),
+            I64,
+            vec![I32, I32, I32, I64, I32],
+        ));
+        let obj_handle = ctx.block().call(
+            I64,
+            "js_object_alloc_class_inline_keys_stamped",
+            &[
+                (I32, &class_id_str),
+                (I32, &parent_class_id_str),
+                (I32, &field_count_str),
+                (I64, &keys_ptr),
+                (I32, &shape_id),
+            ],
+        );
+        emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
+        (obj_handle, true)
+    } else {
+        (
+            ctx.block().call(
+                I64,
+                "js_object_alloc",
+                &[(I32, &class_id_str), (I32, &field_count_str)],
+            ),
+            false,
+        )
+    };
 
     for (field, slot) in field_slots {
         let value = ctx.block().load(DOUBLE, &slot);

@@ -475,6 +475,22 @@ pub(super) fn emit_string_pool(
         // the evacuation `try_rewrite_value` raw fallback already handle).
         let addr_i64 = blk.ptrtoint(&global_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+
+        // #6759 C3 rung 2: mint the canonical ShapeId beside the canonical
+        // keys array. Every compiled `new C()` path loads this immutable u32
+        // and writes it into the receiver's shape word at birth. The keys
+        // global is registered first, so the shape record and every future
+        // instance refer to the rooted/rewriteable canonical array.
+        let shape_id = blk.call(
+            I32,
+            "js_object_shape_id_for_keys",
+            &[(I64, &arr), (I32, &fc_str)],
+        );
+        let shape_global = format!(
+            "@{}",
+            crate::typed_shape::shape_id_global_name_from_keys_global(global_name)
+        );
+        blk.store(I32, &shape_id, &shape_global);
     }
 
     // Register the parent-class chain for every class with a parent.

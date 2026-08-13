@@ -37,7 +37,7 @@ use perry_hir::Module as HirModule;
 use crate::module::LlModule;
 use crate::runtime_decls;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I32, I64};
 
 pub(crate) mod arguments;
 mod artifacts;
@@ -841,6 +841,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");
+        llmod.add_internal_global(
+            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
 
         // Build the packed-keys string. Format: each field name
         // followed by `\0`. Parent classes contribute their fields
@@ -1019,6 +1024,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");
+        llmod.add_internal_global(
+            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
         let mut total_field_count = c.fields.len() as u32;

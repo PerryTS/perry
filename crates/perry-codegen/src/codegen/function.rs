@@ -800,6 +800,7 @@ pub(super) fn compile_function(
         temp_roots: crate::rooting::TempRootPool::default(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
+        class_shape_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),

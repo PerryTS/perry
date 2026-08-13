@@ -35,6 +35,12 @@ const INLINE_SLOW_CALL: &str = "call ptr @js_inline_arena_slow_alloc(";
 const INLINE_FAST_BLOCK: &str = "\nalloc.fast";
 /// Emitted only by the outlined allocator.
 const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
+/// Rung 2's outlined entry has an explicit ShapeId argument.
+const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys_stamped(";
+/// One mint per class at module init, never per allocation.
+const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_keys(";
+/// The immutable id is hoisted to the function-entry setup like keys_array.
+const SHAPE_GLOBAL_LOAD: &str = "load i32, ptr @perry_class_shape_id_";
 
 const N_ID: u32 = 11;
 const WALK_ID: u32 = 700;
@@ -296,6 +302,11 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
         "the outlined allocator is still emitted for the recursive function's \
          only `new` site:\n{ir}"
     );
+    assert!(
+        ir.contains(SHAPE_MINT_CALL) && ir.contains(SHAPE_GLOBAL_LOAD),
+        "the inline allocator did not consume the class ShapeId minted at module init; \
+         newborn instances would keep the allocation-time parent word until a lazy lookup:\n{ir}"
+    );
 }
 
 /// The anti-bloat half. Identical module minus the self-call: one call site, no
@@ -314,6 +325,13 @@ fn a_cold_straight_line_function_keeps_the_outlined_allocator() {
     assert!(
         !ir.contains(INLINE_SLOW_CALL),
         "the inline bump allocator reached a cold site:\n{ir}"
+    );
+    assert!(
+        ir.contains(STAMPED_OUTLINED_CALL)
+            && ir.contains(SHAPE_MINT_CALL)
+            && ir.contains(SHAPE_GLOBAL_LOAD),
+        "the cold allocation did not pass its module-init ShapeId to the stamped \
+         outlined allocator:\n{ir}"
     );
 }
 

@@ -126,6 +126,17 @@ pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32)
         .shape_id
 }
 
+/// Mint (or retrieve) the stable ShapeId paired with a canonical keys array.
+///
+/// Codegen calls this once per class during module initialization and stores
+/// the result beside `@perry_class_keys_*`. It deliberately takes a raw u64
+/// rather than `*const ArrayHeader`: Perry's textual LLVM ABI represents the
+/// rooted keys global as an integer heap word on every target.
+#[no_mangle]
+pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 {
+    shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count)
+}
+
 // ---------------------------------------------------------------------------
 // #6759 C3 rung 1 — THE SHAPE WORD IS UNIFORM.
 //
@@ -452,6 +463,38 @@ mod c3c_tests {
         assert!(!is_shape_id(0xFFFF_0005));
         shape_drop(a as *const ArrayHeader);
         shape_drop(b as *const ArrayHeader);
+    }
+
+    /// #6759 C3 rung 2: the codegen-facing allocator receives the id minted
+    /// beside its canonical keys global and installs it before the newborn
+    /// instance is published to user code. No by-name lookup is allowed in
+    /// this fixture: observing a stamp therefore proves it was present at
+    /// birth rather than lazily self-healed by rung 1.
+    #[test]
+    fn compiled_class_allocator_stamps_the_canonical_shape_at_birth() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7902;
+        let packed = b"birth_a\0birth_b";
+        let keys =
+            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
+        let shape_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+        assert!(
+            is_shape_id(shape_id),
+            "module init must mint a real ShapeId"
+        );
+
+        let obj =
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id);
+        let birth_word = unsafe { (*obj).parent_class_id };
+        assert_eq!(
+            birth_word, shape_id,
+            "a fresh compiled class instance waited for a by-name lookup to stamp"
+        );
+        assert_eq!(
+            unsafe { (*obj).keys_array },
+            keys,
+            "the stamp and canonical keys global must describe the same shape"
+        );
     }
 
     /// #6759 C3c stamp invariant on a REAL object through the real

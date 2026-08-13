@@ -369,3 +369,17 @@ pub(crate) fn raw_f64_mask_global_name_from_keys_global(keys_global_name: &str) 
         .map(|suffix| format!("perry_typed_shape_raw_f64_mask_{}", suffix))
         .unwrap_or_else(|| format!("perry_typed_shape_raw_f64_mask_{}", keys_global_name))
 }
+
+/// The module-global ShapeId paired with one canonical class keys array.
+///
+/// Keeping the name derived from the already-unique keys global means aliases
+/// and sanitized-name collisions necessarily share the same pair. The id is
+/// minted once, immediately after `js_build_class_keys_array`, and loaded by
+/// every compiled construction path so class instances arrive birth-stamped
+/// instead of waiting for their first by-name lookup (#6759 C3 rung 2).
+pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> String {
+    keys_global_name
+        .strip_prefix("perry_class_keys_")
+        .map(|suffix| format!("perry_class_shape_id_{}", suffix))
+        .unwrap_or_else(|| format!("perry_class_shape_id_{}", keys_global_name))
+}

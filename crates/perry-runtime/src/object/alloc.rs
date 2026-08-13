@@ -240,8 +240,8 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
 /// (`PERRY_LLVM_BITCODE_LINK=1`) inline the entire body — including
 /// the `arena_alloc_gc` call — into the user's `new ClassName()`
 /// site, eliminating function-call overhead from the hot loop.
-#[no_mangle]
-pub extern "C" fn js_object_alloc_class_inline_keys(
+#[inline]
+fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
@@ -291,6 +291,45 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+    ptr
+}
+
+/// Compatibility entry point for runtime callers that do not have a
+/// module-init ShapeId. Their first by-name resolve retains rung 1's lazy
+/// self-heal; compiled allocations use the stamped entry point below.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_inline_keys(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+) -> *mut ObjectHeader {
+    object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array)
+}
+
+/// The compiled-class allocation entry point after #6759 C3 rung 2.
+///
+/// `shape_id` is minted once from the same canonical `keys_array` at module
+/// initialization. Installing it after the existing allocator returns keeps
+/// every allocation/rooting/layout invariant above in one implementation,
+/// while making a fresh class instance immediately usable by ShapeId guards.
+/// A zero/exhausted id preserves the allocation-time parent word and therefore
+/// falls back to the pre-rung-2 lazy-stamping behavior.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+    shape_id: u32,
+) -> *mut ObjectHeader {
+    let ptr =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
+    if crate::object::shapes::is_shape_id(shape_id) {
+        unsafe {
+            (*ptr).parent_class_id = shape_id;
+        }
     }
     ptr
 }

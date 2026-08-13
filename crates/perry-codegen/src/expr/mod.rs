@@ -794,6 +794,11 @@ pub(crate) struct FnCtx<'a> {
     /// subsequent sites for the same class load from the slot.
     pub class_keys_slots: std::collections::HashMap<String, String>,
 
+    /// Per-class cached ShapeId global slots, paired one-for-one with
+    /// [`Self::class_keys_slots`]. Shape ids are scalar metadata rather than GC
+    /// pointers, so these entry-hoisted copies need no shadow-slot binding.
+    pub class_shape_slots: std::collections::HashMap<String, String>,
+
     /// Per-arr-local cached `arr.length` slots — populated by
     /// `lower_for` when it spots the well-known shape
     /// `for (...; i < arr.length; ...) { body }` and proves via
