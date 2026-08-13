@@ -116,6 +116,9 @@ jobs:
             benchmarks/honest_bench/harness/run_http_bench.sh \
             tests/test_benchmark_peer_fallback.sh
 
+      - name: Validate Windows LLVM runtime npm staging
+        run: ./tests/test_stage_npm_windows_llvm.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

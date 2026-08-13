@@ -799,8 +799,34 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = "target/${{ matrix.target }}/dist/perry.exe"
+          $llvmBin = Join-Path $env:LLVM_SYS_221_PREFIX 'bin'
+          $llvmReadObj = Join-Path $llvmBin 'llvm-readobj.exe'
+          $llvmRuntime = Join-Path $llvmBin 'LLVM-C.dll'
+
+          foreach ($required in @($binary, $llvmReadObj, $llvmRuntime)) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Windows release prerequisite is missing: $required"
+            }
+          }
+
+          # #7985: the official LLVM archive's static libraries use /MT and
+          # bundle rpmalloc, so Perry links its LLVM C surface dynamically on
+          # Windows. Prove the release binary has the expected import before
+          # copying the matching DLL; otherwise this step could ship either a
+          # loader-broken executable or a stale, unused 70 MB runtime.
+          $imports = (& $llvmReadObj --coff-imports $binary | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "llvm-readobj failed while inspecting $binary"
+          }
+          if ($imports -notmatch '(?m)^\s*Name:\s+LLVM-C\.dll\s*$') {
+            throw "$binary does not import LLVM-C.dll; refusing to package an unverified LLVM runtime"
+          }
+
           New-Item -ItemType Directory -Force -Path staging
-          Copy-Item "target/${{ matrix.target }}/dist/perry.exe" staging/
+          Copy-Item $binary staging/
+          Copy-Item $llvmRuntime staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
           # Include static libraries for linking (runtime, stdlib, UI)
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_ui_windows.lib")

@@ -138,19 +138,18 @@
 #                 prologue words, which is enough to say which walker is wrong
 #                 without a second run.
 #
-#   windows-latest    REAL DEFECT, filed as #7985 (`perry.exe` cannot link
-#                 against the official LLVM 22 release: /MT-vs-/MD CRT mismatch,
-#                 bundled rpmalloc redefining malloc, and inkwell referencing
-#                 target backends the release does not build). A SECOND,
-#                 separate failure in the same arm — Git-bash `tar` reading
-#                 `D:\a\_temp` as a remote host — was a workflow bug and is
-#                 fixed here with `--force-local`.
+#   windows-latest    FIXED. #8017 stopped linking the official archive's
+#                 incompatible /MT + rpmalloc static objects, restricted
+#                 inkwell to Perry's x86/AArch64 targets, and linked the
+#                 archive's LLVM-C.dll instead. #7985's release follow-up
+#                 keeps that DLL beside perry.exe in the Windows zip/npm
+#                 package. A SECOND, separate failure in the same arm —
+#                 Git-bash `tar` reading `D:\a\_temp` as a remote host — was a
+#                 workflow bug fixed here with `--force-local`.
 #
-# So: after #7970 and #7997 three of the four arms should pass and only
-# windows-latest should remain red, on #7985. This workflow is therefore still
-# NOT a promotion candidate — promoting it while #7985 is open would block every
-# PR. Promote only once all four arms are green, and per CLAUDE.md, run it green
-# once BEFORE adding it to branch protection.
+# So: after #7970, #7997 and #8017 all four arms should pass. Per CLAUDE.md this
+# becomes a promotion candidate only AFTER one complete green run demonstrates
+# that claim; do not add it to branch protection based on a comment.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
