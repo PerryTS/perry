@@ -1177,3 +1177,37 @@ The gate now carries `--max-unrooted 3 --max-stale 0`.
 
 **None of this closes #7803** (§19): the failure rate is unmoved. Two separate
 true statements, and the second one is the one the issue is about.
+
+## 23. The interpreter-safepoint A/B, which points AWAY from the obvious reading
+
+One binary, one variable, quarantine off, seeds 1–8:
+
+| `PERRY_GC_INTERP_SAFEPOINTS` | failures |
+|---|---|
+| off | **6/8** |
+| on | **2/8** |
+
+Collecting *more* often inside the interpreter made the workload fail *less*.
+That is the opposite of what "the interpreter holds the unrooted value"
+predicts — if interpreted frames were the hazard, adding ~69,000 collection
+opportunities inside them should have raised the rate, not halved it.
+
+n=8 and p≈0.13, so it settles nothing on its own. But taken with §20 it means
+the honest position is narrower than "the interpreter is the culprit":
+
+* §20 shows the failure needs the `new Function` PATH (0/16 without it);
+* §23 shows that collecting inside the interpreter does not make it worse.
+
+Both can hold if the lost value is not held by the interpreter at all but by
+something the interpreted path *reaches* — the bridge between the two worlds,
+or a compiled callee invoked from interpreted code, or a runtime cache keyed on
+a value the interpreter passed. Note §15's stack crosses that boundary twice
+(`js_native_call_method` → `dispatch_with_arity` → `interp_thunk` → back out
+through `js_native_call_method`), and CLAUDE.md's own warning applies to the
+runtime side of it: a thread-local or side table holding a `*mut` into the heap
+is invisible to the static checker.
+
+**So the next investigator should not start by auditing `dyn_eval`'s own
+locals** — §21 already did that and found the discipline sound. Start at the
+BOUNDARY: `dyn_eval/bridge.rs`, `closure::registry::dispatch_with_arity`, and
+whatever caches the interpreted-closure dispatch path populates.
