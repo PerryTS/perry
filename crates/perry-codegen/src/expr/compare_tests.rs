@@ -120,7 +120,7 @@ fn strict_eq_rereads_a_map_operand_below_an_allocating_right_operand() {
     let right_producer = producer_line(&ir, &right);
     assert!(
         left_producer > right_producer,
-        "js_eq's Map operand ({left}) is produced at line {left_producer}, above the right \
+        "js_eq's Map operand ({left}) is produced at line {left_producer}, below the right \
          operand ({right}) at line {right_producer}. An intervening collection would leave \
          the comparison holding a retired Map address (#7990).\n{ir}"
     );
