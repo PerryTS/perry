@@ -1102,8 +1102,11 @@ fn packed_f64_range_loop_dense_body_collect(
                 }
                 written.insert(*id);
             }
-            Stmt::Expr(Expr::Update { id, .. }) => {
+            Stmt::Expr(expr @ Expr::Update { id, .. }) => {
                 if *id == counter_id || Some(*id) == bound_local {
+                    return false;
+                }
+                if !masked_window_expression_is_non_collecting(ctx, expr) {
                     return false;
                 }
                 written.insert(*id);
@@ -1179,6 +1182,12 @@ fn masked_window_expression_proof(
                 inert,
                 inert && crate::type_analysis::is_numeric_expr(ctx, expr),
             ))
+        }
+        // `++` / `--` execute ToNumeric before mutating their local. The
+        // shared inert predicate admits only a non-pointer primitive local;
+        // an `any` target can dispatch valueOf/Symbol.toPrimitive and collect.
+        Expr::Update { .. } => {
+            crate::rooting::expr_is_inert_primitive(ctx, expr).then(|| proof(true, true))
         }
         Expr::Binary { op, left, right } => {
             let left = masked_window_expression_proof(ctx, left)?;

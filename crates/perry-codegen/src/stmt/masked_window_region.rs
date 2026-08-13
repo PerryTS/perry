@@ -434,9 +434,9 @@ pub(super) fn try_match_masked_window_region(
                     false
                 }
             }
-            Stmt::Expr(Expr::Update { id, .. }) => {
+            Stmt::Expr(expr @ Expr::Update { id, .. }) => {
                 written.insert(*id);
-                true
+                masked_window_expression_is_non_collecting(ctx, expr)
             }
             Stmt::Expr(expr) => {
                 if let Some((receiver_id, index, value)) = proven_view_store_parts(ctx, expr) {

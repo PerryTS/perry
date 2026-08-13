@@ -8,5 +8,5 @@ while fresh inline Buffer and TypedArray storage keeps its existing fast path.
 Computed-access IR regressions now trace each protected receiver and key through
 its exact root slot. Masked-window tiers also prove every admitted expression
 non-collecting before hoisting a raw typed-array pointer, including coercions
-between element reads, while inert numeric expressions keep their zero-root
-direct loads.
+between element reads and standalone updates, while inert numeric expressions
+keep their zero-root direct loads.

@@ -649,6 +649,94 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     )
 }
 
+fn masked_window_pair_sum() -> Expr {
+    let read = |index| Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::Integer(index)),
+    };
+    Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(read(0)),
+        right: Box::new(read(1)),
+    }
+}
+
+fn masked_window_standalone_update_loop(key_ty: Type) -> String {
+    compile_body_with_params(
+        "masked_window_standalone_update_loop",
+        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        vec![
+            Stmt::Let {
+                id: 3,
+                name: "sum".into(),
+                ty: Type::Number,
+                init: Some(Expr::Number(0.0)),
+                mutable: true,
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 4,
+                    name: "i".into(),
+                    ty: Type::Any,
+                    init: Some(Expr::Integer(0)),
+                    mutable: true,
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(4)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+                update: Some(Expr::Update {
+                    id: 4,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(3, Box::new(masked_window_pair_sum()))),
+                    Stmt::Expr(Expr::Update {
+                        id: 2,
+                        op: UpdateOp::Increment,
+                        prefix: false,
+                    }),
+                    Stmt::Expr(Expr::LocalSet(3, Box::new(masked_window_pair_sum()))),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    )
+}
+
+fn masked_window_standalone_update_region(key_ty: Type) -> String {
+    let mut body = vec![Stmt::Let {
+        id: 3,
+        name: "sum".into(),
+        ty: Type::Number,
+        init: Some(Expr::Number(0.0)),
+        mutable: true,
+    }];
+    body.push(Stmt::Expr(Expr::LocalSet(
+        3,
+        Box::new(masked_window_pair_sum()),
+    )));
+    body.push(Stmt::Expr(Expr::Update {
+        id: 2,
+        op: UpdateOp::Increment,
+        prefix: false,
+    }));
+    for _ in 0..3 {
+        body.push(Stmt::Expr(Expr::LocalSet(
+            3,
+            Box::new(masked_window_pair_sum()),
+        )));
+    }
+    body.push(Stmt::Return(Some(Expr::LocalGet(3))));
+    compile_body_with_params(
+        "masked_window_standalone_update_region",
+        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        body,
+    )
+}
+
 /// #7640 E review follow-up — unary `+` over an `any` key can invoke user
 /// coercion even though the surrounding mask has a static index window. Such
 /// an index must decline before a typed-array tier hoists its raw data pointer;
@@ -715,6 +803,49 @@ fn collecting_rhs_declines_the_straight_line_masked_region() {
     assert!(
         !collecting.contains("masked_region.ta_i32.preheader"),
         "collecting coercion must decline the straight-line masked region:\n{collecting}"
+    );
+}
+
+/// A standalone update is not part of an index/RHS tree, but it executes in
+/// the same hoisted-pointer copy between masked reads. `any++` can run user
+/// ToNumeric hooks; an inert i32 update remains call-free.
+#[test]
+fn collecting_standalone_update_declines_the_masked_loop() {
+    let inert = masked_window_standalone_update_loop(Type::Int32);
+    assert!(
+        inert.contains("for.packed_f64_range_fast_ta_i32"),
+        "an inert standalone update must retain the masked loop tier:\n{inert}"
+    );
+
+    let collecting = masked_window_standalone_update_loop(Type::Any);
+    assert!(
+        calls(&collecting, "js_to_numeric"),
+        "an any-typed standalone update must exercise collecting ToNumeric:\n{collecting}"
+    );
+    assert!(
+        !collecting.contains("for.packed_f64_range_fast_ta_i32"),
+        "collecting standalone update must decline the hoisted-pointer loop tier:\n{collecting}"
+    );
+}
+
+/// Straight-line region matching has its own standalone-Update arm and must
+/// apply the identical inert-target gate before spanning later masked reads.
+#[test]
+fn collecting_standalone_update_declines_the_masked_region() {
+    let inert = masked_window_standalone_update_region(Type::Int32);
+    assert!(
+        inert.contains("masked_region.ta_i32.preheader"),
+        "an inert standalone update must retain straight-line versioning:\n{inert}"
+    );
+
+    let collecting = masked_window_standalone_update_region(Type::Any);
+    assert!(
+        calls(&collecting, "js_to_numeric"),
+        "an any-typed region update must exercise collecting ToNumeric:\n{collecting}"
+    );
+    assert!(
+        !collecting.contains("masked_region.ta_i32.preheader"),
+        "collecting standalone update must decline the straight-line masked region:\n{collecting}"
     );
 }
 
