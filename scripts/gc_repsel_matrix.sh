@@ -71,7 +71,31 @@
 #                               [--pressure <MB>] [--jobs N] [--no-build]
 #                               [--profile <cargo profile>] [--json <path>]
 #                               [--list-arms] [--liveness-report-only]
+#                               [--self-test-liveness-parser]
 set -uo pipefail
+
+# Sum objects actually relocated by completed copying minors. The diagnostic
+# line is a key/value record, not a positional format: #7744 inserted
+# `in_place=...` before `copied_objects`, which made the old exact-prefix grep
+# read every live run as zero. Object-by-object promotions MOVE just like
+# survivor copies (#7657); whole-block in-place promotions do not.
+sum_copy_minor_moved() {
+    awk '
+        /\[gc-copy-minor\] ran / {
+            copied = 0
+            promoted = 0
+            in_place = "false"
+            for (i = 1; i <= NF; i++) {
+                split($i, kv, "=")
+                if (kv[1] == "copied_objects") copied = kv[2] + 0
+                if (kv[1] == "promoted_objects") promoted = kv[2] + 0
+                if (kv[1] == "in_place") in_place = kv[2]
+            }
+            if (in_place != "true") moved += copied + promoted
+        }
+        END { print moved + 0 }
+    ' "$@"
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -87,6 +111,7 @@ DO_BUILD=1
 JSON_OUT=""
 PROFILE="release"
 LIVENESS_REPORT_ONLY=0
+SELF_TEST_LIVENESS_PARSER=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -98,6 +123,7 @@ while [ $# -gt 0 ]; do
         --no-build) DO_BUILD=0; shift ;;
         --json) JSON_OUT="$2"; shift 2 ;;
         --list-arms) ARMS_SEL="__list__"; shift ;;
+        --self-test-liveness-parser) SELF_TEST_LIVENESS_PARSER=1; shift ;;
         # Local exploration only (e.g. a `--filter` narrow enough that an arm
         # legitimately has nothing to bite). CI never passes this: the whole
         # point of #7255 is that an inert arm must be able to turn a run red.
@@ -107,6 +133,22 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "$SELF_TEST_LIVENESS_PARSER" = 1 ]; then
+    got="$(sum_copy_minor_moved <<'EOF'
+[gc-copy-minor] eligible=true fallback=none
+[gc-copy-minor] ran copied_objects=4 copied_bytes=64 promoted_objects=3 promoted_bytes=48
+[gc-copy-minor] ran in_place=false untraced=false copied_objects=0 copied_bytes=0 promoted_objects=5 promoted_bytes=80
+[gc-copy-minor] ran in_place=true untraced=false copied_objects=0 copied_bytes=0 promoted_objects=999 promoted_bytes=15984
+EOF
+)"
+    if [ "$got" != 12 ]; then
+        echo "gc_repsel_matrix liveness parser self-test: expected 12 moved objects, got $got" >&2
+        exit 1
+    fi
+    echo "gc_repsel_matrix liveness parser self-test: OK (legacy, current, promoted, and in-place forms)"
+    exit 0
+fi
+
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 [ -t 1 ] || { RED=""; GREEN=""; YELLOW=""; NC=""; }
 
@@ -114,8 +156,8 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # Arms.  Format:  id | compile-env | run-env | liveness-requirement | note
 #
 # liveness requirement:
-#   scavenge the arm claims the COPYING MINOR runs -> require
-#            `[gc-copy-minor] ran copied_objects=` > 0. Strictly stronger than
+#   scavenge the arm claims the COPYING MINOR runs -> require a non-in-place
+#            `[gc-copy-minor] ran` with copied+promoted objects > 0. Strictly stronger than
 #            `move`, which the C4b mark-sweep evacuation satisfies on its own
 #            (#7025) -- `default` reported `moved=7 610 512` while running zero
 #            copying minors. Any arm whose subject is the relocating young-gen
@@ -458,17 +500,18 @@ while [ "$ai" -lt "$NARMS" ]; do
             #                inside the mark-sweep collector -- the pre-existing
             #                non-moving-minor path that relocates tenured objects
             #                during a full cycle.
-            #   scavenged= : `[gc-copy-minor] ran copied_objects=` from the
-            #                copying young-gen minor -- the path #7019 made
-            #                default-on, and the one the evacuating arms exist
-            #                to exercise.
+            #   scavenged= : copied+promoted objects from non-in-place
+            #                `[gc-copy-minor] ran` records. Both destinations
+            #                relocate (#7657); whole-block promotion does not.
+            #                This is the copying young-gen minor -- the path
+            #                #7019 made default-on, and the one the evacuating
+            #                arms exist to exercise.
             # A cell showing `evacuated=N scavenged=0` did relocate something,
             # but it did NOT run a copying minor, and the distinction is exactly
             # what tells you whether the arm bit.
             evacuated=$(grep -oE 'moved_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null \
                         | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
-            scavenged=$(grep -oE '\[gc-copy-minor\] ran copied_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null \
-                        | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
+            scavenged=$(sum_copy_minor_moved "$WORK/out/$b.$id.err")
             # #7017: `cycles>0` cannot tell a mid-program collection from a
             # teardown one. On a small corpus file the shipped configuration
             # completes exactly one cycle, at the event-loop boundary AFTER the

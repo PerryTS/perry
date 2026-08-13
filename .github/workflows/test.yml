@@ -431,6 +431,7 @@ jobs:
       - name: GC matrix liveness gate
         if: ${{ !cancelled() }}
         run: |
+          ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
 
