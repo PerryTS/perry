@@ -261,12 +261,15 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         {
             return None;
         }
-        if super::super::class_registry::CLASS_PROTOTYPE_METHODS
-            .read()
-            .ok()
-            .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
-            .unwrap_or(false)
-        {
+        let has_prototype_methods =
+            super::super::class_registry::CLASS_PROTOTYPE_METHODS.with(|table| {
+                table
+                    .read()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
+                    .unwrap_or(false)
+            });
+        if has_prototype_methods {
             return None;
         }
     }

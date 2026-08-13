@@ -42,94 +42,118 @@ use super::class_registry::{
 /// stay as side-tables + rooted here rather than moved in-object, since the
 /// inheritance walk reads them by `class_id`, not by an in-object slot.
 pub fn scan_class_inheritance_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
-        if let Some(map) = guard.as_mut() {
-            for ptr in map.values_mut() {
-                visitor.visit_usize_slot(ptr);
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for ptr in map.values_mut() {
+                    visitor.visit_usize_slot(ptr);
+                }
             }
         }
-    }
-    if let Ok(mut guard) = CLASS_DECL_PROTOTYPE_OBJECTS.write() {
-        if let Some(map) = guard.as_mut() {
-            for ptr in map.values_mut() {
-                visitor.visit_usize_slot(ptr);
+    });
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for ptr in map.values_mut() {
+                    visitor.visit_usize_slot(ptr);
+                }
             }
         }
-    }
-    if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
-        if let Some(map) = guard.as_mut() {
-            for ptr in map.values_mut() {
-                visitor.visit_usize_slot(ptr);
+    });
+    CLASS_PARENT_CLOSURES.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for ptr in map.values_mut() {
+                    visitor.visit_usize_slot(ptr);
+                }
             }
         }
-    }
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_class_inheritance_roots(proto_cid: u32, proto_ptr: usize) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors CLASS_PROTOTYPE_OBJECTS values scanned by scan_class_inheritance_roots_mut.
-    let mut guard = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
-    guard
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(proto_cid, proto_ptr);
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        let mut guard = table.write().unwrap();
+        guard
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(proto_cid, proto_ptr);
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_decl_class_prototype_root(class_id: u32, proto_ptr: usize) {
-    let mut guard = CLASS_DECL_PROTOTYPE_OBJECTS.write().unwrap();
-    guard
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(class_id, proto_ptr);
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        let mut guard = table.write().unwrap();
+        guard
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(class_id, proto_ptr);
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_class_parent_closure_root(closure_cid: u32, closure_ptr: usize) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors CLASS_PARENT_CLOSURES values scanned by scan_class_inheritance_roots_mut.
-    let mut guard = CLASS_PARENT_CLOSURES.write().unwrap();
-    guard
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(closure_cid, closure_ptr);
+    CLASS_PARENT_CLOSURES.with(|table| {
+        let mut guard = table.write().unwrap();
+        guard
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(closure_cid, closure_ptr);
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_class_prototype_object_root(proto_cid: u32) -> usize {
-    CLASS_PROTOTYPE_OBJECTS
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&proto_cid).copied())
-        .unwrap_or(0)
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        table
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&proto_cid).copied())
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn test_decl_class_prototype_root(class_id: u32) -> usize {
-    CLASS_DECL_PROTOTYPE_OBJECTS
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&class_id).copied())
-        .unwrap_or(0)
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        table
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&class_id).copied())
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn test_class_parent_closure_root(closure_cid: u32) -> usize {
-    CLASS_PARENT_CLOSURES
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&closure_cid).copied())
-        .unwrap_or(0)
+    CLASS_PARENT_CLOSURES.with(|table| {
+        table
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&closure_cid).copied())
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_class_inheritance_roots(proto_cid: u32, closure_cid: u32) {
-    if let Some(m) = CLASS_PROTOTYPE_OBJECTS.write().unwrap().as_mut() {
-        m.remove(&proto_cid);
-    }
-    if let Some(m) = CLASS_DECL_PROTOTYPE_OBJECTS.write().unwrap().as_mut() {
-        m.remove(&proto_cid);
-    }
-    if let Some(m) = CLASS_PARENT_CLOSURES.write().unwrap().as_mut() {
-        m.remove(&closure_cid);
-    }
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Some(m) = table.write().unwrap().as_mut() {
+            m.remove(&proto_cid);
+        }
+    });
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        if let Some(m) = table.write().unwrap().as_mut() {
+            m.remove(&proto_cid);
+        }
+    });
+    CLASS_PARENT_CLOSURES.with(|table| {
+        if let Some(m) = table.write().unwrap().as_mut() {
+            m.remove(&closure_cid);
+        }
+    });
 }

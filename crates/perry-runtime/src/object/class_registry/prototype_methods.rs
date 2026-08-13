@@ -24,7 +24,7 @@ pub unsafe extern "C" fn js_class_register_static_field(
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
-per_test_global! {
+crate::perry_thread_local! {
     /// Issue #838: JS-classic prototype method assignment.
     ///
     /// `Class.prototype.method = function() {…}` (and the aliased form
@@ -50,6 +50,9 @@ per_test_global! {
     /// `*ClosureHeader` shapes.
     pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
         RwLock::new(None);
+}
+
+per_test_global! {
     pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 }
@@ -79,8 +82,8 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    {
-        let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        let mut guard = table.write().unwrap();
         if guard.is_none() {
             *guard = Some(HashMap::new());
         }
@@ -90,7 +93,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
             .entry(class_id)
             .or_default()
             .insert(name.clone(), value_bits);
-    }
+    });
     invalidate_class_prototype_fast_guards();
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
     // #5024: the side table makes the method dispatchable, but own-key
@@ -356,22 +359,26 @@ pub(crate) fn synthetic_class_id_for_function(func_value: f64) -> u32 {
     if !is_callable_function_value(func_value) {
         return 0;
     }
-    {
-        let read = FUNCTION_CLASS_IDS.read().unwrap();
+    let existing = FUNCTION_CLASS_IDS.with(|table| {
+        let read = table.read().unwrap();
         if let Some(map) = read.as_ref() {
             if let Some(&existing) = map.get(&func_bits) {
-                return existing;
+                return Some(existing);
             }
         }
+        None
+    });
+    if let Some(existing) = existing {
+        return existing;
     }
     let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    {
-        let mut write = FUNCTION_CLASS_IDS.write().unwrap();
+    FUNCTION_CLASS_IDS.with(|table| {
+        let mut write = table.write().unwrap();
         if write.is_none() {
             *write = Some(HashMap::new());
         }
         write.as_mut().unwrap().insert(func_bits, new_cid);
-    }
+    });
     unsafe { js_register_class_id(new_cid) };
     new_cid
 }

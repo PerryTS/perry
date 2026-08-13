@@ -73,11 +73,13 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
         const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
         let bits = parent_value.to_bits();
         if bits != TAG_UNDEFINED && class_id != 0 {
-            let mut guard = CLASS_DYNAMIC_PARENT_VALUE.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(HashMap::new());
-            }
-            guard.as_mut().unwrap().insert(class_id, bits);
+            CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+                let mut guard = table.write().unwrap();
+                if guard.is_none() {
+                    *guard = Some(HashMap::new());
+                }
+                guard.as_mut().unwrap().insert(class_id, bits);
+            });
         }
     }
     // A globalThis builtin constructor closure is a valid superclass
@@ -389,11 +391,12 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    {
-        let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
-        if let Some(&bits) = guard.as_ref().and_then(|m| m.get(&class_id)) {
-            return f64::from_bits(bits);
-        }
+    let dynamic_parent = CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+        let guard = table.read().unwrap();
+        guard.as_ref().and_then(|m| m.get(&class_id).copied())
+    });
+    if let Some(bits) = dynamic_parent {
+        return f64::from_bits(bits);
     }
     // #5957/#806: no dynamic VALUE stashed — fall back to the STATIC
     // parent-id edge as a ClassRef. An `extends <call>(...)` mixin
@@ -539,8 +542,8 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
-        {
-            let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
+        CLASS_SYMBOL_METHODS.with(|table| {
+            let mut guard = table.write().unwrap();
             if guard.is_none() {
                 *guard = Some(HashMap::new());
             }
@@ -548,7 +551,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 (class_id, sym_key, is_static != 0),
                 (func_ptr as usize, param_count as u32, has_rest != 0),
             );
-        }
+        });
         // A computed key that evaluates to a WELL-KNOWN symbol — e.g. the
         // minified `[(gm = new WeakMap, Symbol.asyncIterator)]() {…}` comma
         // form, whose key expression the lowering can't see through
@@ -676,21 +679,23 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
-        let mut guard = CLASS_SYMBOL_ACCESSORS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        let entry = guard
-            .as_mut()
-            .unwrap()
-            .entry((class_id, sym_key, is_static != 0))
-            .or_insert((0, 0));
-        if getter_ptr != 0 {
-            entry.0 = getter_ptr as usize;
-        }
-        if setter_ptr != 0 {
-            entry.1 = setter_ptr as usize;
-        }
+        CLASS_SYMBOL_ACCESSORS.with(|table| {
+            let mut guard = table.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(HashMap::new());
+            }
+            let entry = guard
+                .as_mut()
+                .unwrap()
+                .entry((class_id, sym_key, is_static != 0))
+                .or_insert((0, 0));
+            if getter_ptr != 0 {
+                entry.0 = getter_ptr as usize;
+            }
+            if setter_ptr != 0 {
+                entry.1 = setter_ptr as usize;
+            }
+        });
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
@@ -787,23 +792,25 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
     sym_key: usize,
     is_static: bool,
 ) -> Option<(usize, u32, bool)> {
-    let guard = CLASS_SYMBOL_METHODS.read().ok()?;
-    let map = guard.as_ref()?;
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(&entry) = map.get(&(cid, sym_key, is_static)) {
-            return Some(entry);
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
+    CLASS_SYMBOL_METHODS.with(|table| {
+        let guard = table.read().ok()?;
+        let map = guard.as_ref()?;
+        let mut cid = class_id;
+        let mut depth = 0usize;
+        while cid != 0 && depth < 32 {
+            if let Some(&entry) = map.get(&(cid, sym_key, is_static)) {
+                return Some(entry);
             }
-            _ => break,
+            match get_parent_class_id(cid) {
+                Some(p) if p != 0 && p != cid => {
+                    cid = p;
+                    depth += 1;
+                }
+                _ => break,
+            }
         }
-    }
-    None
+        None
+    })
 }
 
 /// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
@@ -824,19 +831,23 @@ pub(crate) fn class_has_symbol_member_in_chain(
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
         let key = (cid, sym_key, is_static);
-        let in_methods = CLASS_SYMBOL_METHODS
-            .read()
-            .ok()
-            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
-            .unwrap_or(false);
+        let in_methods = CLASS_SYMBOL_METHODS.with(|table| {
+            table
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+                .unwrap_or(false)
+        });
         if in_methods {
             return true;
         }
-        let in_accessors = CLASS_SYMBOL_ACCESSORS
-            .read()
-            .ok()
-            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
-            .unwrap_or(false);
+        let in_accessors = CLASS_SYMBOL_ACCESSORS.with(|table| {
+            table
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+                .unwrap_or(false)
+        });
         if in_accessors {
             return true;
         }
@@ -853,24 +864,28 @@ pub(crate) fn class_has_symbol_member_in_chain(
 
 pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Vec<usize> {
     let mut keys = Vec::new();
-    if let Ok(methods) = CLASS_SYMBOL_METHODS.read() {
-        if let Some(map) = methods.as_ref() {
-            for &(cid, sym_key, static_flag) in map.keys() {
-                if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
-                    keys.push(sym_key);
+    CLASS_SYMBOL_METHODS.with(|table| {
+        if let Ok(methods) = table.read() {
+            if let Some(map) = methods.as_ref() {
+                for &(cid, sym_key, static_flag) in map.keys() {
+                    if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
+                        keys.push(sym_key);
+                    }
                 }
             }
         }
-    }
-    if let Ok(accessors) = CLASS_SYMBOL_ACCESSORS.read() {
-        if let Some(map) = accessors.as_ref() {
-            for &(cid, sym_key, static_flag) in map.keys() {
-                if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
-                    keys.push(sym_key);
+    });
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        if let Ok(accessors) = table.read() {
+            if let Some(map) = accessors.as_ref() {
+                for &(cid, sym_key, static_flag) in map.keys() {
+                    if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
+                        keys.push(sym_key);
+                    }
                 }
             }
         }
-    }
+    });
     keys.sort_by_key(|sym_key| unsafe {
         let ptr = *sym_key as *const crate::symbol::SymbolHeader;
         if ptr.is_null() {
@@ -888,36 +903,38 @@ pub(crate) unsafe fn class_symbol_getter_value(
     receiver: f64,
     is_static: bool,
 ) -> Option<f64> {
-    let guard = CLASS_SYMBOL_ACCESSORS.read().ok()?;
-    let map = guard.as_ref()?;
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(&(getter, _)) = map.get(&(cid, sym_key, is_static)) {
-            if getter == 0 {
-                return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        let guard = table.read().ok()?;
+        let map = guard.as_ref()?;
+        let mut cid = class_id;
+        let mut depth = 0usize;
+        while cid != 0 && depth < 32 {
+            if let Some(&(getter, _)) = map.get(&(cid, sym_key, is_static)) {
+                if getter == 0 {
+                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+                }
+                let result = if is_static {
+                    let prev_this = crate::object::js_implicit_this_set(receiver);
+                    let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
+                    let result = f();
+                    crate::object::js_implicit_this_set(prev_this);
+                    result
+                } else {
+                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+                    f(receiver)
+                };
+                return Some(result);
             }
-            let result = if is_static {
-                let prev_this = crate::object::js_implicit_this_set(receiver);
-                let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
-                let result = f();
-                crate::object::js_implicit_this_set(prev_this);
-                result
-            } else {
-                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
-                f(receiver)
-            };
-            return Some(result);
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
+            match get_parent_class_id(cid) {
+                Some(p) if p != 0 && p != cid => {
+                    cid = p;
+                    depth += 1;
+                }
+                _ => break,
             }
-            _ => break,
         }
-    }
-    None
+        None
+    })
 }
 
 pub(crate) unsafe fn class_symbol_setter_apply(
@@ -927,39 +944,41 @@ pub(crate) unsafe fn class_symbol_setter_apply(
     value: f64,
     is_static: bool,
 ) -> bool {
-    let guard = match CLASS_SYMBOL_ACCESSORS.read() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let Some(map) = guard.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
-            if setter != 0 {
-                if is_static {
-                    let prev_this = crate::object::js_implicit_this_set(receiver);
-                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
-                    let _ = f(value);
-                    crate::object::js_implicit_this_set(prev_this);
-                } else {
-                    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
-                    let _ = f(receiver, value);
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        let guard = match table.read() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(map) = guard.as_ref() else {
+            return false;
+        };
+        let mut cid = class_id;
+        let mut depth = 0usize;
+        while cid != 0 && depth < 32 {
+            if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
+                if setter != 0 {
+                    if is_static {
+                        let prev_this = crate::object::js_implicit_this_set(receiver);
+                        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
+                        let _ = f(value);
+                        crate::object::js_implicit_this_set(prev_this);
+                    } else {
+                        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
+                        let _ = f(receiver, value);
+                    }
                 }
+                return true;
             }
-            return true;
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
+            match get_parent_class_id(cid) {
+                Some(p) if p != 0 && p != cid => {
+                    cid = p;
+                    depth += 1;
+                }
+                _ => break,
             }
-            _ => break,
         }
-    }
-    false
+        false
+    })
 }
 
 pub(crate) unsafe fn class_static_accessor_getter_value(
@@ -1657,12 +1676,14 @@ pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
     if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
-    if let Ok(guard) = CLASS_PROTOTYPE_OBJECTS.read() {
-        if let Some(map) = guard.as_ref() {
-            return map.values().any(|&p| p == ptr);
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                return map.values().any(|&p| p == ptr);
+            }
         }
-    }
-    false
+        false
+    })
 }
 
 /// Walk the prototype chain of `class_id` and return the id of the class that

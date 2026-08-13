@@ -67,12 +67,14 @@ pub(crate) fn ensure_function_prototype_object(
     // them as ordinary own properties so enumeration sees them; later
     // registrations write through via class_prototype_method_root_store.
     let registered: Vec<(String, u64)> = {
-        let guard = CLASS_PROTOTYPE_METHODS.read().unwrap();
-        guard
-            .as_ref()
-            .and_then(|map| map.get(&class_id))
-            .map(|per_class| per_class.iter().map(|(k, &v)| (k.clone(), v)).collect())
-            .unwrap_or_default()
+        CLASS_PROTOTYPE_METHODS.with(|table| {
+            let guard = table.read().unwrap();
+            guard
+                .as_ref()
+                .and_then(|map| map.get(&class_id))
+                .map(|per_class| per_class.iter().map(|(k, &v)| (k.clone(), v)).collect())
+                .unwrap_or_default()
+        })
     };
     for (name, value_bits) in registered {
         let enumerable = class_prototype_method_is_enumerable(class_id, &name);
@@ -227,35 +229,39 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
     // multiple times in pathological code; we keep the FIRST mapping
     // and quietly ignore subsequent calls so existing parent edges
     // don't dangle.
-    {
-        let read = FUNCTION_CLASS_IDS.read().unwrap();
+    let existing = FUNCTION_CLASS_IDS.with(|table| {
+        let read = table.read().unwrap();
         if let Some(map) = read.as_ref() {
             if let Some(&existing) = map.get(&func_bits) {
-                // Update the prototype object (allow re-pointing)
-                // without changing the class_id.
-                class_prototype_object_root_store(existing, proto_ptr);
-                let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
-                if func_ptr != 0 {
-                    crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
-                    set_builtin_property_attrs(
-                        func_ptr,
-                        "prototype".to_string(),
-                        PropertyAttrs::new(true, false, false),
-                    );
-                }
-                crate::typed_feedback::invalidate_method_change(existing);
-                return existing;
+                return Some(existing);
             }
         }
+        None
+    });
+    if let Some(existing) = existing {
+        // Update the prototype object (allow re-pointing) without changing the
+        // class_id.
+        class_prototype_object_root_store(existing, proto_ptr);
+        let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+        if func_ptr != 0 {
+            crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+            set_builtin_property_attrs(
+                func_ptr,
+                "prototype".to_string(),
+                PropertyAttrs::new(true, false, false),
+            );
+        }
+        crate::typed_feedback::invalidate_method_change(existing);
+        return existing;
     }
     let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    {
-        let mut write = FUNCTION_CLASS_IDS.write().unwrap();
+    FUNCTION_CLASS_IDS.with(|table| {
+        let mut write = table.write().unwrap();
         if write.is_none() {
             *write = Some(HashMap::new());
         }
         write.as_mut().unwrap().insert(func_bits, new_cid);
-    }
+    });
     class_prototype_object_root_store(new_cid, proto_ptr);
     let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
     if func_ptr != 0 {
@@ -284,12 +290,14 @@ pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
     // must redirect or `x.constructor` and `Object.getPrototypeOf` disagree
     // about whether the specialization is `Gen`.
     let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
-    if let Ok(read) = CLASS_PROTOTYPE_OBJECTS.read() {
-        if let Some(map) = read.as_ref() {
-            return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(read) = table.read() {
+            if let Some(map) = read.as_ref() {
+                return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
+            }
         }
-    }
-    std::ptr::null_mut()
+        std::ptr::null_mut()
+    })
 }
 
 /// #711 / #809: resolve `key` by walking the synthetic-class-id prototype
@@ -495,22 +503,26 @@ pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> 
 #[inline]
 pub(crate) fn function_class_id(value: f64) -> u32 {
     let bits = value.to_bits();
-    if let Ok(read) = FUNCTION_CLASS_IDS.read() {
-        if let Some(map) = read.as_ref() {
-            return map.get(&bits).copied().unwrap_or(0);
+    FUNCTION_CLASS_IDS.with(|table| {
+        if let Ok(read) = table.read() {
+            if let Some(map) = read.as_ref() {
+                return map.get(&bits).copied().unwrap_or(0);
+            }
         }
-    }
-    0
+        0
+    })
 }
 
 pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
     if class_id == 0 {
         return None;
     }
-    FUNCTION_CLASS_IDS.read().ok().and_then(|guard| {
-        guard.as_ref().and_then(|map| {
-            map.iter()
-                .find_map(|(&bits, &cid)| (cid == class_id).then_some(f64::from_bits(bits)))
+    FUNCTION_CLASS_IDS.with(|table| {
+        table.read().ok().and_then(|guard| {
+            guard.as_ref().and_then(|map| {
+                map.iter()
+                    .find_map(|(&bits, &cid)| (cid == class_id).then_some(f64::from_bits(bits)))
+            })
         })
     })
 }

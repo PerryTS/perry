@@ -84,15 +84,17 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
 
-    if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
-        if let Some(map) = guard.as_mut() {
-            for methods in map.values_mut() {
-                for value_bits in methods.values_mut() {
-                    visitor.visit_nanbox_u64_slot(value_bits);
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for methods in map.values_mut() {
+                    for value_bits in methods.values_mut() {
+                        visitor.visit_nanbox_u64_slot(value_bits);
+                    }
                 }
             }
         }
-    }
+    });
 
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -101,21 +103,25 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
 
-    if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
-        if let Some(map) = guard.as_mut() {
-            for proto_addr in map.values_mut() {
-                visitor.visit_usize_slot(proto_addr);
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for proto_addr in map.values_mut() {
+                    visitor.visit_usize_slot(proto_addr);
+                }
             }
         }
-    }
+    });
 
-    if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
-        if let Some(map) = guard.as_mut() {
-            for closure_addr in map.values_mut() {
-                visitor.visit_usize_slot(closure_addr);
+    CLASS_PARENT_CLOSURES.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for closure_addr in map.values_mut() {
+                    visitor.visit_usize_slot(closure_addr);
+                }
             }
         }
-    }
+    });
 
     // The dynamic-parent value stash (`class X extends _mod.default`) holds
     // raw NaN-boxed parent-constructor bits. For a ClassRef (INT32-tagged)
@@ -123,65 +129,73 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     // `extends <runtime value>`) is a live heap pointer that a moving GC must
     // visit + forward — otherwise `js_get_dynamic_parent_value` later hands
     // `super()` a stale pointer.
-    if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
-        if let Some(map) = guard.as_mut() {
-            for value_bits in map.values_mut() {
-                visitor.visit_nanbox_u64_slot(value_bits);
+    CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for value_bits in map.values_mut() {
+                    visitor.visit_nanbox_u64_slot(value_bits);
+                }
             }
         }
-    }
+    });
 
     // #6530: cid → per-evaluation class OBJECT (`instance.constructor`
     // identity for capture-carrying classes). Same liveness/forwarding needs
     // as the dynamic-parent stash above: the entries are heap objects a
     // moving GC must visit + forward.
-    if let Ok(mut guard) = CLASS_OBJECT_VALUES.write() {
-        if let Some(map) = guard.as_mut() {
-            for value_bits in map.values_mut() {
-                visitor.visit_nanbox_u64_slot(value_bits);
+    CLASS_OBJECT_VALUES.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for value_bits in map.values_mut() {
+                    visitor.visit_nanbox_u64_slot(value_bits);
+                }
             }
         }
-    }
+    });
 
     scan_class_symbol_member_keys_mut(visitor);
     scan_function_class_id_keys_mut(visitor);
 }
 
 fn scan_class_symbol_member_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if let Ok(mut guard) = CLASS_SYMBOL_METHODS.write() {
-        if let Some(map) = guard.as_mut() {
-            let mut rewrites = Vec::new();
-            for key in map.keys().copied().collect::<Vec<_>>() {
-                let (class_id, sym_key, is_static) = key;
-                let mut new_sym_key = sym_key;
-                if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
-                    rewrites.push((key, (class_id, new_sym_key, is_static)));
+    CLASS_SYMBOL_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                let mut rewrites = Vec::new();
+                for key in map.keys().copied().collect::<Vec<_>>() {
+                    let (class_id, sym_key, is_static) = key;
+                    let mut new_sym_key = sym_key;
+                    if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
+                        rewrites.push((key, (class_id, new_sym_key, is_static)));
+                    }
                 }
-            }
-            for (old_key, new_key) in rewrites {
-                if let Some(entry) = map.remove(&old_key) {
-                    map.insert(new_key, entry);
-                }
-            }
-        }
-    }
-    if let Ok(mut guard) = CLASS_SYMBOL_ACCESSORS.write() {
-        if let Some(map) = guard.as_mut() {
-            let mut rewrites = Vec::new();
-            for key in map.keys().copied().collect::<Vec<_>>() {
-                let (class_id, sym_key, is_static) = key;
-                let mut new_sym_key = sym_key;
-                if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
-                    rewrites.push((key, (class_id, new_sym_key, is_static)));
-                }
-            }
-            for (old_key, new_key) in rewrites {
-                if let Some(entry) = map.remove(&old_key) {
-                    map.insert(new_key, entry);
+                for (old_key, new_key) in rewrites {
+                    if let Some(entry) = map.remove(&old_key) {
+                        map.insert(new_key, entry);
+                    }
                 }
             }
         }
-    }
+    });
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                let mut rewrites = Vec::new();
+                for key in map.keys().copied().collect::<Vec<_>>() {
+                    let (class_id, sym_key, is_static) = key;
+                    let mut new_sym_key = sym_key;
+                    if visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key {
+                        rewrites.push((key, (class_id, new_sym_key, is_static)));
+                    }
+                }
+                for (old_key, new_key) in rewrites {
+                    if let Some(entry) = map.remove(&old_key) {
+                        map.insert(new_key, entry);
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
@@ -199,18 +213,20 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
-    if let Ok(guard) = CLASS_PROTOTYPE_METHODS.read() {
-        if let Some(map) = guard.as_ref() {
-            for (&class_id, methods) in map.iter() {
-                for name in methods.keys() {
-                    slots.push(ClassSideTableRootSlot::PrototypeMethod {
-                        class_id,
-                        name: name.clone(),
-                    });
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for (&class_id, methods) in map.iter() {
+                    for name in methods.keys() {
+                        slots.push(ClassSideTableRootSlot::PrototypeMethod {
+                            class_id,
+                            name: name.clone(),
+                        });
+                    }
                 }
             }
         }
-    }
+    });
 
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let cache = cache.borrow();
@@ -222,76 +238,90 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
-    if let Ok(guard) = CLASS_PROTOTYPE_OBJECTS.read() {
-        if let Some(map) = guard.as_ref() {
-            for &class_id in map.keys() {
-                slots.push(ClassSideTableRootSlot::PrototypeObject { class_id });
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &class_id in map.keys() {
+                    slots.push(ClassSideTableRootSlot::PrototypeObject { class_id });
+                }
             }
         }
-    }
+    });
 
-    if let Ok(guard) = CLASS_PARENT_CLOSURES.read() {
-        if let Some(map) = guard.as_ref() {
-            for &class_id in map.keys() {
-                slots.push(ClassSideTableRootSlot::ParentClosure { class_id });
+    CLASS_PARENT_CLOSURES.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &class_id in map.keys() {
+                    slots.push(ClassSideTableRootSlot::ParentClosure { class_id });
+                }
             }
         }
-    }
+    });
 
     // Step twin of the CLASS_DYNAMIC_PARENT_VALUE block in
     // `scan_class_side_table_roots_mut`. Cycle-based collections run only
     // this snapshot machine, so omitting the stash meant a heap parent
     // (`class X extends someRuntimeValue()`) reachable only through it was
     // swept/left stale — `super()` then dereferenced freed/moved memory.
-    if let Ok(guard) = CLASS_DYNAMIC_PARENT_VALUE.read() {
-        if let Some(map) = guard.as_ref() {
-            for &class_id in map.keys() {
-                slots.push(ClassSideTableRootSlot::DynamicParentValue { class_id });
+    CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &class_id in map.keys() {
+                    slots.push(ClassSideTableRootSlot::DynamicParentValue { class_id });
+                }
             }
         }
-    }
+    });
 
     // Step twin of the CLASS_OBJECT_VALUES block in
     // `scan_class_side_table_roots_mut` (#6530).
-    if let Ok(guard) = CLASS_OBJECT_VALUES.read() {
-        if let Some(map) = guard.as_ref() {
-            for &class_id in map.keys() {
-                slots.push(ClassSideTableRootSlot::ClassObjectValue { class_id });
+    CLASS_OBJECT_VALUES.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &class_id in map.keys() {
+                    slots.push(ClassSideTableRootSlot::ClassObjectValue { class_id });
+                }
             }
         }
-    }
+    });
 
-    if let Ok(guard) = CLASS_SYMBOL_METHODS.read() {
-        if let Some(map) = guard.as_ref() {
-            for &(class_id, sym_key, is_static) in map.keys() {
-                slots.push(ClassSideTableRootSlot::ClassSymbolMethod {
-                    class_id,
-                    sym_key,
-                    is_static,
-                });
+    CLASS_SYMBOL_METHODS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &(class_id, sym_key, is_static) in map.keys() {
+                    slots.push(ClassSideTableRootSlot::ClassSymbolMethod {
+                        class_id,
+                        sym_key,
+                        is_static,
+                    });
+                }
             }
         }
-    }
+    });
 
-    if let Ok(guard) = CLASS_SYMBOL_ACCESSORS.read() {
-        if let Some(map) = guard.as_ref() {
-            for &(class_id, sym_key, is_static) in map.keys() {
-                slots.push(ClassSideTableRootSlot::ClassSymbolAccessor {
-                    class_id,
-                    sym_key,
-                    is_static,
-                });
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &(class_id, sym_key, is_static) in map.keys() {
+                    slots.push(ClassSideTableRootSlot::ClassSymbolAccessor {
+                        class_id,
+                        sym_key,
+                        is_static,
+                    });
+                }
             }
         }
-    }
+    });
 
-    if let Ok(guard) = FUNCTION_CLASS_IDS.read() {
-        if let Some(map) = guard.as_ref() {
-            for &bits in map.keys() {
-                slots.push(ClassSideTableRootSlot::FunctionClassIdKey { bits });
+    FUNCTION_CLASS_IDS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &bits in map.keys() {
+                    slots.push(ClassSideTableRootSlot::FunctionClassIdKey { bits });
+                }
             }
         }
-    }
+    });
 
     slots
 }
@@ -313,15 +343,17 @@ fn scan_class_side_table_root_slot(
             });
         }
         ClassSideTableRootSlot::PrototypeMethod { class_id, name } => {
-            if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
-                if let Some(value_bits) = guard
-                    .as_mut()
-                    .and_then(|map| map.get_mut(class_id))
-                    .and_then(|methods| methods.get_mut(name))
-                {
-                    visitor.visit_nanbox_u64_slot(value_bits);
+            CLASS_PROTOTYPE_METHODS.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(value_bits) = guard
+                        .as_mut()
+                        .and_then(|map| map.get_mut(class_id))
+                        .and_then(|methods| methods.get_mut(name))
+                    {
+                        visitor.visit_nanbox_u64_slot(value_bits);
+                    }
                 }
-            }
+            });
         }
         ClassSideTableRootSlot::PrototypeMethodValue { class_id, name } => {
             CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
@@ -331,32 +363,41 @@ fn scan_class_side_table_root_slot(
             });
         }
         ClassSideTableRootSlot::PrototypeObject { class_id } => {
-            if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
-                if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                    visitor.visit_usize_slot(proto_addr);
+            CLASS_PROTOTYPE_OBJECTS.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                        visitor.visit_usize_slot(proto_addr);
+                    }
                 }
-            }
+            });
         }
         ClassSideTableRootSlot::ParentClosure { class_id } => {
-            if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
-                if let Some(closure_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                    visitor.visit_usize_slot(closure_addr);
+            CLASS_PARENT_CLOSURES.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(closure_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id))
+                    {
+                        visitor.visit_usize_slot(closure_addr);
+                    }
                 }
-            }
+            });
         }
         ClassSideTableRootSlot::DynamicParentValue { class_id } => {
-            if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
-                if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                    visitor.visit_nanbox_u64_slot(value_bits);
+            CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                        visitor.visit_nanbox_u64_slot(value_bits);
+                    }
                 }
-            }
+            });
         }
         ClassSideTableRootSlot::ClassObjectValue { class_id } => {
-            if let Ok(mut guard) = CLASS_OBJECT_VALUES.write() {
-                if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                    visitor.visit_nanbox_u64_slot(value_bits);
+            CLASS_OBJECT_VALUES.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                        visitor.visit_nanbox_u64_slot(value_bits);
+                    }
                 }
-            }
+            });
         }
         ClassSideTableRootSlot::ClassSymbolMethod {
             class_id,
@@ -390,13 +431,15 @@ fn rewrite_class_symbol_method_key_if_forwarded(
     if !visitor.visit_usize_slot(&mut new_sym_key) || new_sym_key == sym_key {
         return;
     }
-    if let Ok(mut guard) = CLASS_SYMBOL_METHODS.write() {
-        if let Some(map) = guard.as_mut() {
-            if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
-                map.insert((class_id, new_sym_key, is_static), entry);
+    CLASS_SYMBOL_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
+                    map.insert((class_id, new_sym_key, is_static), entry);
+                }
             }
         }
-    }
+    });
 }
 
 fn rewrite_class_symbol_accessor_key_if_forwarded(
@@ -409,13 +452,15 @@ fn rewrite_class_symbol_accessor_key_if_forwarded(
     if !visitor.visit_usize_slot(&mut new_sym_key) || new_sym_key == sym_key {
         return;
     }
-    if let Ok(mut guard) = CLASS_SYMBOL_ACCESSORS.write() {
-        if let Some(map) = guard.as_mut() {
-            if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
-                map.insert((class_id, new_sym_key, is_static), entry);
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                if let Some(entry) = map.remove(&(class_id, sym_key, is_static)) {
+                    map.insert((class_id, new_sym_key, is_static), entry);
+                }
             }
         }
-    }
+    });
 }
 
 fn scan_function_class_id_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -423,22 +468,24 @@ fn scan_function_class_id_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         return;
     }
     let mut rewrites = Vec::new();
-    if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
-        let Some(map) = guard.as_mut() else {
-            return;
-        };
-        for old_bits in map.keys().copied().collect::<Vec<_>>() {
-            let mut new_bits = old_bits;
-            if visit_metadata_nanbox_key(visitor, &mut new_bits) && new_bits != old_bits {
-                rewrites.push((old_bits, new_bits));
+    FUNCTION_CLASS_IDS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            let Some(map) = guard.as_mut() else {
+                return;
+            };
+            for old_bits in map.keys().copied().collect::<Vec<_>>() {
+                let mut new_bits = old_bits;
+                if visit_metadata_nanbox_key(visitor, &mut new_bits) && new_bits != old_bits {
+                    rewrites.push((old_bits, new_bits));
+                }
+            }
+            for (old_bits, new_bits) in rewrites {
+                if let Some(class_id) = map.remove(&old_bits) {
+                    map.insert(new_bits, class_id);
+                }
             }
         }
-        for (old_bits, new_bits) in rewrites {
-            if let Some(class_id) = map.remove(&old_bits) {
-                map.insert(new_bits, class_id);
-            }
-        }
-    }
+    });
 }
 
 fn rewrite_function_class_id_key_if_forwarded(
@@ -452,13 +499,15 @@ fn rewrite_function_class_id_key_if_forwarded(
     if !visit_metadata_nanbox_key(visitor, &mut new_bits) || new_bits == old_bits {
         return;
     }
-    if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
-        if let Some(map) = guard.as_mut() {
-            if let Some(class_id) = map.remove(&old_bits) {
-                map.insert(new_bits, class_id);
+    FUNCTION_CLASS_IDS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                if let Some(class_id) = map.remove(&old_bits) {
+                    map.insert(new_bits, class_id);
+                }
             }
         }
-    }
+    });
 }
 
 fn visit_metadata_nanbox_key(
@@ -489,25 +538,37 @@ pub(crate) fn test_clear_class_side_table_roots() {
     CLASS_DYNAMIC_PROPS.with(|m| m.borrow_mut().clear());
     CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
-    if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
-        *guard = None;
-    }
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
-    if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
-        *guard = None;
-    }
-    if let Ok(mut guard) = CLASS_PROTOTYPE_OBJECTS.write() {
-        *guard = None;
-    }
-    if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
-        *guard = None;
-    }
-    if let Ok(mut guard) = CLASS_SYMBOL_METHODS.write() {
-        *guard = None;
-    }
-    if let Ok(mut guard) = CLASS_SYMBOL_ACCESSORS.write() {
-        *guard = None;
-    }
+    FUNCTION_CLASS_IDS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
+    CLASS_PARENT_CLOSURES.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
+    CLASS_SYMBOL_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
+    CLASS_SYMBOL_ACCESSORS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
     if let Ok(mut guard) = CLASS_STATIC_ACCESSORS.write() {
         *guard = None;
     }
@@ -537,17 +598,19 @@ pub(crate) fn test_seed_class_prototype_method_root(class_id: u32, name: &str, v
 
 #[cfg(test)]
 pub(crate) fn test_class_prototype_method_root_bits(class_id: u32, name: &str) -> u64 {
-    CLASS_PROTOTYPE_METHODS
-        .read()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .as_ref()
-                .and_then(|map| map.get(&class_id))
-                .and_then(|methods| methods.get(name))
-                .copied()
-        })
-        .unwrap_or(0)
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .and_then(|map| map.get(&class_id))
+                    .and_then(|methods| methods.get(name))
+                    .copied()
+            })
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
@@ -577,41 +640,49 @@ pub(crate) fn test_seed_class_prototype_object_root(class_id: u32, addr: usize) 
 
 #[cfg(test)]
 pub(crate) fn test_class_prototype_object_root_addr(class_id: u32) -> usize {
-    CLASS_PROTOTYPE_OBJECTS
-        .read()
-        .ok()
-        .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
-        .unwrap_or(0)
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn test_class_parent_closure_root_addr(class_id: u32) -> usize {
-    CLASS_PARENT_CLOSURES
-        .read()
-        .ok()
-        .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
-        .unwrap_or(0)
+    CLASS_PARENT_CLOSURES.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_function_class_id_key(func_bits: u64, class_id: u32) {
-    let mut guard = FUNCTION_CLASS_IDS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    guard.as_mut().unwrap().insert(func_bits, class_id);
+    FUNCTION_CLASS_IDS.with(|table| {
+        let mut guard = table.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard.as_mut().unwrap().insert(func_bits, class_id);
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_function_class_id_key_for_class(class_id: u32) -> u64 {
-    FUNCTION_CLASS_IDS
-        .read()
-        .ok()
-        .and_then(|guard| {
-            guard.as_ref().and_then(|map| {
-                map.iter()
-                    .find_map(|(&bits, &cid)| (cid == class_id).then_some(bits))
+    FUNCTION_CLASS_IDS.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| {
+                guard.as_ref().and_then(|map| {
+                    map.iter()
+                        .find_map(|(&bits, &cid)| (cid == class_id).then_some(bits))
+                })
             })
-        })
-        .unwrap_or(0)
+            .unwrap_or(0)
+    })
 }

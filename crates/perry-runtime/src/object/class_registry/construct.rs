@@ -1937,23 +1937,25 @@ pub extern "C" fn js_function_prototype_value_for_read(func_value: f64) -> f64 {
 /// parent-class chain so methods registered on a base class are found
 /// via subclass instances.
 pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> {
-    let guard = CLASS_PROTOTYPE_METHODS.read().ok()?;
-    let map = guard.as_ref()?;
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while depth < 32 {
-        if let Some(per_class) = map.get(&cid) {
-            if let Some(&bits) = per_class.get(name) {
-                return Some(f64::from_bits(bits));
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        let guard = table.read().ok()?;
+        let map = guard.as_ref()?;
+        let mut cid = class_id;
+        let mut depth = 0usize;
+        while depth < 32 {
+            if let Some(per_class) = map.get(&cid) {
+                if let Some(&bits) = per_class.get(name) {
+                    return Some(f64::from_bits(bits));
+                }
+            }
+            match crate::object::class_generic_origin(cid).or_else(|| get_parent_class_id(cid)) {
+                Some(p) if p != 0 && p != cid => {
+                    cid = p;
+                    depth += 1;
+                }
+                _ => break,
             }
         }
-        match crate::object::class_generic_origin(cid).or_else(|| get_parent_class_id(cid)) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    None
+        None
+    })
 }
