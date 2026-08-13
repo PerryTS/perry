@@ -49,6 +49,60 @@ pub fn restore_context(snapshot: AsyncContextSnapshot) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// AsyncLocalStorage provider ABI
+// ---------------------------------------------------------------------------
+//
+// These entry points deliberately keep the active context and its throw guards
+// in perry-runtime.  An app-only dylib calls the AsyncLocalStorage methods in a
+// separately loaded perry-stdlib provider, while promises, timers and
+// microtasks snapshot context in the runtime provider.  Calling this module's
+// Rust-private symbols directly from perry-stdlib either makes that provider
+// fail eager relocation or makes it link a second runtime whose thread-local
+// ACTIVE_CONTEXT is invisible to the schedulers.  The C ABI is therefore the
+// ownership boundary: every image resolves these calls to the one runtime
+// provider loaded by the host.
+
+/// Enter an `AsyncLocalStorage#run` scope and register its throw-safe restore.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_run_enter(handle: i64, store: f64) {
+    push_store(handle, store);
+    push_context_guard(ContextGuardAction::PopStore(handle));
+}
+
+/// Enter an `AsyncLocalStorage#exit` scope and register its throw-safe restore.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_exit_enter(handle: i64) {
+    let saved = take_store(handle);
+    push_context_guard(ContextGuardAction::RestoreStores(handle, saved));
+}
+
+/// Leave the most recently entered ALS `run`/`exit` scope normally.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_scope_leave() {
+    if let Some(action) = pop_context_guard() {
+        apply_context_guard(action);
+    }
+}
+
+/// Return the current store for one ALS instance, or JavaScript `undefined`.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_get_store(handle: i64) -> f64 {
+    get_store(handle).unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// Implement `AsyncLocalStorage#enterWith` in the runtime-owned context.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_enter_with(handle: i64, store: f64) {
+    enter_with(handle, store);
+}
+
+/// Remove one ALS instance from the runtime-owned active context.
+#[no_mangle]
+pub extern "C" fn js_async_context_als_clear(handle: i64) {
+    clear_store(handle);
+}
+
 pub fn push_store(handle: i64, store: f64) {
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
@@ -346,4 +400,35 @@ pub(crate) fn test_snapshot_first_store(snapshot: &AsyncContextSnapshot) -> Opti
         .entries
         .first()
         .and_then(|entry| entry.stores.first().copied())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn als_provider_abi_keeps_nested_run_and_exit_scopes_balanced() {
+        let handle = -8037;
+        js_async_context_als_clear(handle);
+        js_async_context_als_enter_with(handle, 1.0);
+
+        js_async_context_als_run_enter(handle, 2.0);
+        assert_eq!(js_async_context_als_get_store(handle), 2.0);
+        js_async_context_als_scope_leave();
+        assert_eq!(js_async_context_als_get_store(handle), 1.0);
+
+        js_async_context_als_exit_enter(handle);
+        assert_eq!(
+            js_async_context_als_get_store(handle).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        js_async_context_als_scope_leave();
+        assert_eq!(js_async_context_als_get_store(handle), 1.0);
+
+        js_async_context_als_clear(handle);
+        assert_eq!(
+            js_async_context_als_get_store(handle).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
 }
