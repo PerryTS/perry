@@ -444,6 +444,17 @@ fn is_windows_import_archive_member(member: &str) -> bool {
         })
 }
 
+/// Whether an rlib archive member is one of rustc's codegen units.
+///
+/// Rust currently names these members `<crate>.<opaque>.<cgu>.rcgu.o`; older
+/// toolchains also put a literal `-cgu.` or `.cgu.` segment before the same
+/// suffix. Checking for those older segments caused every UI codegen unit
+/// produced by current Windows toolchains to be mistaken for an allocator
+/// shim, leaving the rebuilt archive without any `perry_ui_*` exports.
+fn is_rust_codegen_unit(member: &str) -> bool {
+    member.ends_with(".rcgu.o")
+}
+
 /// On Windows, build a trimmed UI lib using the rlib (not staticlib).
 ///
 /// perry-ui-windows builds as both rlib and staticlib. The staticlib bundles
@@ -451,8 +462,8 @@ fn is_windows_import_archive_member(member: &str) -> bool {
 /// perry-stdlib also bundles these. Linking both causes hundreds of duplicate
 /// symbols, and /FORCE:MULTIPLE produces corrupt binaries.
 ///
-/// The rlib contains only the UI crate's own code (1 object). We extract it
-/// and combine with UI-only deps (windows, serde, regex...) from the staticlib.
+/// The rlib contains only the UI crate's own code (one or more CGU objects).
+/// We extract it and combine with UI-only deps (windows, serde, regex...) from the staticlib.
 /// All shared deps come from perry-stdlib. No /FORCE:MULTIPLE needed.
 ///
 /// **Dedup decision** (Tier 3.1, v0.5.331): when `llvm-nm` is available, drop a
@@ -802,8 +813,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         let mut rlib_extracted = 0usize;
         let mut rlib_skipped = 0usize;
         for (member_index, member) in rlib_objects.iter().enumerate() {
-            let is_alloc_shim = !member.contains(".cgu.") && !member.contains("-cgu.");
-            if is_alloc_shim {
+            if !is_rust_codegen_unit(member) {
                 rlib_skipped += 1;
                 continue;
             }
@@ -1869,6 +1879,14 @@ empty_marker.o:
             find_llvm_tool_or_beside_lld("llvm-nm").expect("Windows LLVM must provide llvm-nm");
         let runtime = temp.path().join("perry_runtime.lib");
         let ui = temp.path().join("perry_ui_windows.lib");
+        let ui_rlib = temp.path().join("libperry_ui_windows.rlib");
+        // Current rustc uses opaque CGU components such as
+        // `.1v150fxu9jccif28r12uax7fb.02s2fqd.rcgu.o`, without the literal
+        // `.cgu.` / `-cgu.` segments recognized by the old extraction code.
+        let current_rustc_cgu = temp
+            .path()
+            .join("perry_ui_windows-deadbeef.opaque.codegen.rcgu.o");
+        std::fs::copy(&unique_object, &current_rustc_cgu).unwrap();
         rebuild_archive(
             &llvm_ar,
             &runtime,
@@ -1883,11 +1901,30 @@ empty_marker.o:
             true,
         )
         .unwrap();
+        rebuild_archive(
+            &llvm_ar,
+            &ui_rlib,
+            std::slice::from_ref(&current_rustc_cgu),
+            true,
+        )
+        .unwrap();
 
         let trimmed = strip_duplicate_objects_from_lib(&ui).expect("COFF dedup must succeed");
         let symbols = collect_archive_symbols_flat(&llvm_nm, &trimmed);
         assert!(symbols.contains("ui_only_symbol"));
         assert!(!symbols.contains("runtime_canonical"));
+    }
+
+    #[test]
+    fn rust_codegen_unit_recognizes_current_and_legacy_member_names() {
+        assert!(super::is_rust_codegen_unit(
+            "perry_ui_windows-deadbeef.opaque.codegen.rcgu.o"
+        ));
+        assert!(super::is_rust_codegen_unit(
+            "perry_ui_windows-deadbeef.perry_ui_windows.hash-cgu.0.rcgu.o"
+        ));
+        assert!(!super::is_rust_codegen_unit("allocator_shim.o"));
+        assert!(!super::is_rust_codegen_unit("lib.rmeta"));
     }
 
     #[test]
