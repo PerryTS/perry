@@ -73,6 +73,10 @@ pub(crate) fn lower_generic_property_get(
     // the receiver so a nested `a.b.c` chain keeps the inner `.b` access's more
     // specific location when *it* is the throwing read.
     crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    // #7640 section E audit: this helper lowers only `object`; the property
+    // name is compile-time data. The optional debug-location call above only
+    // updates TLS (`js_set_call_location`) and cannot allocate or collect, so
+    // there is no second user-expression window requiring an operand group.
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();

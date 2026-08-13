@@ -15,6 +15,7 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsProof, BoundsState, BufferAccessMode, LoweredValue, NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::types::{DOUBLE, I1, I32, I64};
 
 use super::{lower_expr, lower_expr_as_i32, raw_f64_layout_fact, FnCtx};
@@ -115,16 +116,26 @@ pub(crate) fn try_lower_num_array_guard_free_get(
         return Ok(None);
     };
     if num_array_index_statically_in_bounds(ctx, &fact, index) {
-        let arr_box = lower_expr(ctx, &Expr::LocalGet(*arr_id))?;
-        let idx_i32 = lower_expr_as_i32(ctx, index)?;
-        return Ok(Some(lower_num_array_guard_free_get(
+        // #7640 section E: an `int_range_expr` proof may come from a nested
+        // typed-array read or a registered clamp call. Those indexes can lower
+        // user code, so retain the receiver across the native-i32 lowering and
+        // derive its raw handle only from the re-read.
+        return rooting::with_operands_rooted_across(
             ctx,
-            *arr_id,
-            &arr_box,
-            &idx_i32,
-            &fact,
-            BoundsProof::MinLength,
-        )));
+            &[object],
+            &[index],
+            |ctx| lower_expr_as_i32(ctx, index),
+            |ctx, vals, idx_i32| {
+                Ok(Some(lower_num_array_guard_free_get(
+                    ctx,
+                    *arr_id,
+                    &vals[0],
+                    &idx_i32,
+                    &fact,
+                    BoundsProof::MinLength,
+                )))
+            },
+        );
     }
     if let Expr::LocalGet(idx_id) = index {
         if ctx
@@ -191,31 +202,44 @@ pub(crate) fn try_lower_num_array_guard_free_set(
     if !statically && bounded_slot.is_none() {
         return Ok(None);
     }
-    // JS evaluation order: target ref → key → value.
-    let arr_box = lower_expr(ctx, &Expr::LocalGet(*arr_id))?;
-    let (idx_i32, proof) = if statically {
-        (lower_expr_as_i32(ctx, index)?, BoundsProof::MinLength)
-    } else {
-        (
-            ctx.block().load(I32, &bounded_slot.unwrap()),
-            BoundsProof::LoopGuard,
-        )
-    };
-    let val_double = lower_expr(ctx, value)?;
-    {
-        let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-        let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let with_header = blk.add(I64, &byte_offset, "8");
-        let element_addr = blk.add(I64, &arr_handle, &with_header);
-        let element_ptr = blk.inttoptr(I64, &element_addr);
-        // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 store under the
-        // `Ptr<NumArray>` local proof — never a GC pointer, no barrier, no
-        // layout note, and no length bump (in-bounds ⇒ length unchanged).
-        blk.store(DOUBLE, &val_double, &element_ptr);
-    }
+    // JS evaluation order: target ref → key → value. `int_range_expr`
+    // admits collecting index shapes, and a canonical numeric RHS may itself
+    // be a call. Keep the receiver across both custom-representation lowerings;
+    // safe loop counters/literals still emit no root traffic.
+    let bounded_slot = bounded_slot.clone();
+    let (val_double, proof) = rooting::with_operands_rooted_across(
+        ctx,
+        &[object],
+        &[index, value],
+        |ctx| {
+            let (idx_i32, proof) = if statically {
+                (lower_expr_as_i32(ctx, index)?, BoundsProof::MinLength)
+            } else {
+                (
+                    ctx.block()
+                        .load(I32, bounded_slot.as_ref().expect("bounded slot")),
+                    BoundsProof::LoopGuard,
+                )
+            };
+            let val_double = lower_expr(ctx, value)?;
+            Ok((idx_i32, proof, val_double))
+        },
+        |ctx, vals, (idx_i32, proof, val_double)| {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
+            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+            let idx_i64 = blk.zext(I32, &idx_i32, I64);
+            let byte_offset = blk.shl(I64, &idx_i64, "3");
+            let with_header = blk.add(I64, &byte_offset, "8");
+            let element_addr = blk.add(I64, &arr_handle, &with_header);
+            let element_ptr = blk.inttoptr(I64, &element_addr);
+            // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 store under the
+            // `Ptr<NumArray>` local proof — never a GC pointer, no barrier, no
+            // layout note, and no length bump (in-bounds ⇒ length unchanged).
+            blk.store(DOUBLE, &val_double, &element_ptr);
+            Ok((val_double, proof))
+        },
+    )?;
     let stored = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: NativeRep::F64,

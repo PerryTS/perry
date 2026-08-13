@@ -666,7 +666,10 @@ pub(crate) fn lower_index_set_fast(
         let new_box = nanbox_pointer_inline(blk, &new_handle);
         blk.store(DOUBLE, &new_box, &slot);
         let val_bits = blk.bitcast_double_to_i64(val_double);
-        emit_write_barrier_slot_on_block(blk, &arr_handle, "0", &val_bits);
+        // #7640 section E: the grow helper can return a replacement allocation.
+        // The pre-call raw handle then names the forwarding source, not the array
+        // that received the value. Use the returned live head for the barrier.
+        emit_write_barrier_slot_on_block(blk, &new_handle, "0", &val_bits);
         blk.br(&merge_label);
     }
 

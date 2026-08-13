@@ -460,6 +460,9 @@ pub(crate) fn lower_buffer_store(
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
+    // #7640 section E audit: `proof` contains stable slot metadata and the
+    // lowered native index, not a receiver JSValue or raw backing-store
+    // pointer. Lower the RHS before `emit_buffer_access_pointer` loads either.
     let val_i32 = lower_value_i32(ctx, value_expr)?;
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
     let byte_val = ctx.block().trunc(I32, &val_i32, I8);
@@ -696,58 +699,67 @@ pub(crate) fn lower_typed_array_store(
     let Some(proof) = lower_buffer_access_proof(ctx, array_expr, index_expr, spec)? else {
         return Ok(None);
     };
+    let expected = match proof.view.elem {
+        BufferElem::I8 | BufferElem::U8 | BufferElem::I16 | BufferElem::U16 | BufferElem::I32 => {
+            ExpectedNativeRep::I32
+        }
+        BufferElem::U32 => ExpectedNativeRep::U32,
+        BufferElem::F32 | BufferElem::F64 => ExpectedNativeRep::F64,
+        BufferElem::U8Clamped => return Ok(None),
+    };
+    // #7640 section E: do not derive `data_ptr` / `elem_ptr` until after the
+    // RHS has been evaluated. A numeric RHS can still be a call, and a raw
+    // backing-store pointer cannot be repaired by the JSValue rooting API.
+    // The view proof guarantees this binding/data slot is stable, so loading it
+    // here preserves the already-selected receiver without holding a raw pointer
+    // across the call.
+    let result = lower_expr_native(ctx, value_expr, expected)?;
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
-    let (stored, result) = match proof.view.elem {
+    let stored = match proof.view.elem {
         BufferElem::I8 | BufferElem::U8 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
-            let byte = ctx.block().trunc(I32, &value.value, I8);
+            let byte = ctx.block().trunc(I32, &result.value, I8);
             ctx.block().emit_raw(format!(
                 "store i8 {}, ptr {}{}",
                 byte, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::u8(byte), value)
+            LoweredValue::u8(byte)
         }
         BufferElem::I16 | BufferElem::U16 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
-            let half = ctx.block().trunc(I32, &value.value, I16);
+            let half = ctx.block().trunc(I32, &result.value, I16);
             ctx.block().emit_raw(format!(
                 "store i16 {}, ptr {}{}",
                 half, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::i32(value.value.clone()), value)
+            LoweredValue::i32(result.value.clone())
         }
         BufferElem::I32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
             ctx.block().emit_raw(format!(
                 "store i32 {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::i32(value.value.clone()), value)
+            LoweredValue::i32(result.value.clone())
         }
         BufferElem::U32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::U32)?;
             ctx.block().emit_raw(format!(
                 "store i32 {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::u32(value.value.clone()), value)
+            LoweredValue::u32(result.value.clone())
         }
         BufferElem::F32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::F64)?;
-            let narrow = ctx.block().fptrunc(DOUBLE, &value.value, F32);
+            let narrow = ctx.block().fptrunc(DOUBLE, &result.value, F32);
             ctx.block().emit_raw(format!(
                 "store float {}, ptr {}{}",
                 narrow, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::f32(narrow), value)
+            LoweredValue::f32(narrow)
         }
         BufferElem::F64 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::F64)?;
             ctx.block().emit_raw(format!(
                 "store double {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::f64(value.value.clone()), value)
+            LoweredValue::f64(result.value.clone())
         }
         BufferElem::U8Clamped => return Ok(None),
     };

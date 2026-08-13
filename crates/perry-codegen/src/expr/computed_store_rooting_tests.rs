@@ -1,5 +1,6 @@
-//! Rooting coverage for the three computed-store arms slice 4 repaired
-//! (#7637, #7638, #7639), built from HIR rather than from TypeScript.
+//! Rooting coverage for the computed-store arms repaired in slice 4 (#7637,
+//! #7638, #7639) and the remaining #7640 read/write windows, built from HIR
+//! rather than from TypeScript.
 //!
 //! # Why these are unit tests and not gap tests
 //!
@@ -23,9 +24,10 @@
 //!
 //! # What each test asserts, and why it cannot pass vacuously
 //!
-//! Each builds the SAME store twice, changing one thing: the right-hand side is
-//! either an allocating `Expr::Object` or an inert `Expr::Number`. Then it
-//! compares the shadow-frame width the function reserves.
+//! Each differential test builds the SAME access twice, changing one thing:
+//! a later operand is either allocating or inert. Then it compares the
+//! shadow-frame width the function reserves. The realloc-barrier regression at
+//! the end instead names the exact SSA head consumed by its barrier.
 //!
 //! - `Expr::Number` ⇒ `expr_may_trigger_gc` is false ⇒ `operand_protection`
 //!   returns `Reuse` ⇒ the combinator emits nothing at all, which is the
@@ -39,16 +41,20 @@
 //! width measured over a store that never got emitted would be hazard 4.
 
 use perry_hir::types::Type;
-use perry_hir::{Expr, Function, Module as HirModule, Stmt};
+use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
 
 /// Compile a one-function module and return its LLVM IR.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
+    compile_body_with_params(name, Vec::new(), body)
+}
+
+fn compile_body_with_params(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
-        params: Vec::new(),
+        params,
         return_type: Type::Any,
         body,
         is_async: false,
@@ -66,6 +72,18 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     };
     let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
     String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+}
+
+fn param(id: u32, name: &str, ty: Type) -> Param {
+    Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }
 }
 
 /// How many root slots the module's code reserves.
@@ -218,5 +236,144 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
                 }),
             ]
         },
+    );
+}
+
+/// #7640 B tail — declared typed-array dispatch still accepts an arbitrary
+/// property key. Evaluating that key may collect before the runtime helper
+/// consumes the receiver.
+#[test]
+fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
+    let compile = |label: &str, key: Expr| {
+        compile_body_with_params(
+            label,
+            vec![param(1, "ta", Type::Named("Int32Array".to_string()))],
+            vec![Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(key),
+            }))],
+        )
+    };
+    let collecting = compile("ta_runtime_key_collecting", allocating_value());
+    let inert = compile("ta_runtime_key_inert", Expr::Undefined);
+    let callee = "@js_typed_array_index_get_dynamic(";
+    assert!(
+        collecting.contains(callee) && inert.contains(callee),
+        "both fixtures must reach the typed-array runtime-key arm:\n{collecting}\n{inert}"
+    );
+    assert!(
+        root_slots(&collecting) > root_slots(&inert),
+        "an allocating runtime key must protect the typed-array receiver"
+    );
+}
+
+/// #7640 A tail — the runtime-key store consumes receiver, key, and value only
+/// after all three JavaScript operands have been evaluated.
+#[test]
+fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
+    let compile = |label: &str, value: Expr| {
+        compile_body_with_params(
+            label,
+            vec![
+                param(1, "ta", Type::Named("Int32Array".to_string())),
+                param(2, "key", Type::Any),
+            ],
+            vec![Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+                value: Box::new(value),
+            })],
+        )
+    };
+    let collecting = compile("ta_runtime_store_collecting", allocating_value());
+    let inert = compile("ta_runtime_store_inert", inert_value());
+    let callee = "@js_typed_array_index_set_dynamic(";
+    assert!(
+        collecting.contains(callee) && inert.contains(callee),
+        "both fixtures must reach the typed-array runtime-key store arm:\n{collecting}\n{inert}"
+    );
+    assert!(
+        root_slots(&collecting) > root_slots(&inert),
+        "an allocating RHS must protect the typed-array receiver and key"
+    );
+}
+
+/// #7640 A tail — the #5525 inline dynamic typed-array route accepts erased
+/// receiver/key types, then lowers a custom-representation RHS before either
+/// is consumed by the guard diamond.
+#[test]
+fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
+    let compile = |label: &str, value: Expr| {
+        compile_body_with_params(
+            label,
+            vec![param(1, "receiver", Type::Any), param(2, "key", Type::Any)],
+            vec![Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+                value: Box::new(value),
+            })],
+        )
+    };
+    let collecting = compile("erased_store_collecting", allocating_value());
+    let inert = compile("erased_store_inert", inert_value());
+    let callee = "@js_dyn_index_set(";
+    assert!(
+        collecting.contains(callee) && inert.contains(callee),
+        "both fixtures must reach the #5525 inline dynamic-store arm:\n{collecting}\n{inert}"
+    );
+    let extra_slots = root_slots(&collecting).saturating_sub(root_slots(&inert));
+    assert!(
+        extra_slots >= 2,
+        "an allocating RHS must protect both erased operands; expected at least two extra slots, got {extra_slots}"
+    );
+}
+
+/// #7640 E — the array-grow helper may return a replacement allocation. The
+/// write barrier on that path must therefore shade through the returned head,
+/// not the raw receiver handle computed before the call.
+#[test]
+fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
+    let ir = compile_body(
+        "array_grow_barrier_head",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Undefined])),
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(8)),
+                value: Box::new(allocating_value()),
+            }),
+        ],
+    );
+    let realloc_call = ir
+        .lines()
+        .find(|line| line.contains(" = call i64 @js_array_set_f64_extend"))
+        .unwrap_or_else(|| panic!("fixture never emitted the realloc path:\n{ir}"));
+    let new_head = realloc_call
+        .split_once(" = ")
+        .map(|(result, _)| result.trim())
+        .expect("realloc call has an SSA result");
+    let realloc_label = ir
+        .lines()
+        .position(|line| line.starts_with("idxset.realloc."))
+        .unwrap_or_else(|| panic!("fixture never emitted an idxset.realloc block:\n{ir}"));
+    let realloc_body = ir
+        .lines()
+        .skip(realloc_label + 1)
+        .take_while(|line| line.starts_with(char::is_whitespace) || line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let barrier = realloc_body
+        .lines()
+        .find(|line| line.contains("@js_write_barrier_slot("))
+        .unwrap_or_else(|| panic!("realloc path lost its write barrier:\n{realloc_body}"));
+    assert!(
+        barrier.contains(&format!("i64 {new_head}")),
+        "the realloc-path barrier must use {new_head}, returned by the grow helper; got `{barrier}`"
     );
 }

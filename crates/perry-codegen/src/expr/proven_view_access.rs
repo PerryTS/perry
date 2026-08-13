@@ -229,6 +229,10 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
     let Some((id, view)) = proven_view_for(ctx, object, index) else {
         return Ok(None);
     };
+    // #7640 section E audit: `proven_view_for` only reads compile-time facts;
+    // no receiver value or backing-store pointer has been materialized yet.
+    // Lower both user expressions first, then load `data_slot` below, so even
+    // a collecting proven index/value leaves no movable or raw address live.
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
     let (data_ptr, len) = load_data_and_len(ctx, &view);
 
