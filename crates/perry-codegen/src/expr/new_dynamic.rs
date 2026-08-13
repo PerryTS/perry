@@ -688,21 +688,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::UnknownCallEscape,
                     );
                 }
-                let func_double = lower_expr(ctx, callee)?;
-                let lowered_args: Vec<String> = args
-                    .iter()
-                    .map(|a| lower_expr(ctx, a))
-                    .collect::<Result<Vec<_>>>()?;
-                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
-                // #5253: locate a not-a-constructor throw from the runtime
-                // construct path (a `LocalGet` callee holding `undefined`, a
-                // non-callable value, etc.).
-                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-                let result = ctx.block().call(
-                    DOUBLE,
-                    "js_new_function_construct",
-                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
-                );
+                // #7803: the CALLEE has to outlive the arguments.
+                //
+                // This arm used to lower `callee` into a bare register, lower
+                // every argument, build the argument array — each of which can
+                // allocate and therefore evacuate — and only then pass the
+                // original register to the helper. Under the shipping
+                // (statepoint) lowering that register is in no live bundle, so
+                // nothing marks it and nothing relocates it, and the constructor
+                // handed to `js_new_function_construct` is a pre-move address.
+                //
+                // It is the largest single population the dependency-scale
+                // corpus reports: 21 `unrooted:global` hazards in
+                // `zod/src/v4/classic/schemas.ts` alone (`strictObject`,
+                // `looseObject`, `union`, `record`, …), every one a
+                // `load @perry_global_*` held across `js_closure_alloc` /
+                // `js_closure_call1` / `js_object_alloc`.
+                //
+                // A ROOT, not a reload: JS resolves the callee before it
+                // evaluates the arguments, so re-reading the global below them
+                // would hand the call whatever an argument assigned — a
+                // miscompile in place of a rooting bug. That is exactly why
+                // `operand_is_reloadable` refuses module globals, and the
+                // group's `operand_protection` answers it the same way here.
+                let result = crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
+                    let func_double = lower_expr(ctx, callee)?;
+                    let callee_root = g.adopt(ctx, callee, &func_double, true);
+                    let mut arg_ids = Vec::with_capacity(args.len());
+                    for a in args {
+                        arg_ids.push(g.lower(ctx, a, true)?);
+                    }
+                    let lowered_args: Vec<String> = arg_ids
+                        .iter()
+                        .map(|i| g.reread(ctx, *i))
+                        .collect::<Result<Vec<_>>>()?;
+                    let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                    // #5253: locate a not-a-constructor throw from the runtime
+                    // construct path (a `LocalGet` callee holding `undefined`, a
+                    // non-callable value, etc.).
+                    crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                    // Below `lower_js_args_array`, which allocates.
+                    let func_double = g.reread(ctx, callee_root)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_new_function_construct",
+                        &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                    ))
+                })?;
                 return Ok(result);
             }
 
@@ -723,21 +755,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     MaterializationReason::UnknownCallEscape,
                 );
             }
-            let func_double = lower_expr(ctx, callee)?;
-            let lowered_args: Vec<String> = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>>>()?;
-            let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
-            // #5253: locate the not-a-constructor throw for `new <primitive>` /
-            // `new <non-constructor-value>` rejected inside the runtime helper.
-            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-            let result = ctx.block().call(
-                DOUBLE,
-                "js_new_function_construct",
-                &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
-            );
-            Ok(result)
+            // #7803: same callee-outlives-arguments fix as the arm above.
+            crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
+                let func_double = lower_expr(ctx, callee)?;
+                let callee_root = g.adopt(ctx, callee, &func_double, true);
+                let mut arg_ids = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_ids.push(g.lower(ctx, a, true)?);
+                }
+                let lowered_args: Vec<String> = arg_ids
+                    .iter()
+                    .map(|i| g.reread(ctx, *i))
+                    .collect::<Result<Vec<_>>>()?;
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                // #5253: locate the not-a-constructor throw for `new <primitive>` /
+                // `new <non-constructor-value>` rejected inside the runtime helper.
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                let func_double = g.reread(ctx, callee_root)?;
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_new_function_construct",
+                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                ))
+            })
         }
 
         // `this` — load from the topmost `this` slot in the constructor

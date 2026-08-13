@@ -455,7 +455,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // The signature must match `runtime_decls.rs`:
             //   fn(closure_box: f64, regs_ptr: ptr, reg_count: i64,
             //      spread_arr_handle: i64) -> f64
+            // #7803: the callee outlives everything below it — the register
+            // buffer stores, `js_array_like_to_array` on the spread source, and
+            // `bundle_args_rooted`'s concat — all of which allocate. Held in a
+            // bare register it is in no statepoint live bundle, so the closure
+            // this helper is handed is a pre-move address; the dependency-scale
+            // corpus reports 16 of exactly this shape
+            // (`unrooted:alloc -> js_array_like_to_array`, sinking into
+            // `js_closure_call_apply_with_spread`).
+            //
+            // `open_rooted_group` rather than `with_rooted_group`: the release
+            // has to sit below the consuming call, which is past the end of the
+            // spread/regs marshalling block rather than inside it.
+            let mut callee_group = crate::rooting::open_rooted_group(1);
             let cb_box = lower_expr(ctx, callee)?;
+            let cb_root = callee_group.adopt(ctx, callee, &cb_box, true);
 
             // `js_closure_call_apply_with_spread` appends the spread array
             // AFTER the register args, which silently reorders interleaved
@@ -531,6 +545,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 (regs_ptr, regs_len, spread_handle)
             };
 
+            // Re-read below every allocation above: the slot is a mutable root
+            // an evacuating cycle rewrites in place.
+            let cb_box = callee_group.reread(ctx, cb_root)?;
             let result = ctx.block().call(
                 DOUBLE,
                 "js_closure_call_apply_with_spread",
@@ -541,6 +558,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I64, &spread_handle),
                 ],
             );
+            // After the call: the helper allocates while it reads the slot.
+            callee_group.release(ctx);
             Ok(result)
         }
 

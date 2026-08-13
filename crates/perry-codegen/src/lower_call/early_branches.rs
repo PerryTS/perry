@@ -383,7 +383,22 @@ pub fn try_lower_closure_typed_local_call(
         // The checked closure-unbox path below validates the current callee;
         // the erased type only decides whether to try that guarded dispatch.
         if matches!(ctx.local_type_hint(id), Some(HirType::Function(_))) {
+            // #7803: the callee outlives the arguments here too, and this is
+            // the arm on the failing stack — `core/schemas.ts` closure 138,
+            // whose callee is a mutable-capture box read (`js_box_get_bits`)
+            // held across the argument lowering below and then unmasked into
+            // `closure_handle`. root_reload.rs's #7664 note is about exactly
+            // that unmask: it is where the value leaves the tracked domain, so
+            // a stale `recv_box` produces a stale handle no relocation fixes,
+            // and the sink is `js_closure_call1` — "value is not a function".
+            //
+            // A root rather than a reload for the same reason as the other two
+            // arms: re-lowering `LocalGet` below the arguments re-reads the box
+            // and would observe an assignment an argument made, when JS
+            // resolved the callee before them.
+            let mut callee_group = crate::rooting::open_rooted_group(1);
             let recv_box = lower_expr(ctx, callee)?;
+            let callee_root = callee_group.adopt(ctx, callee, &recv_box, true);
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
@@ -408,6 +423,9 @@ pub fn try_lower_closure_typed_local_call(
                     lowered_args.len()
                 );
             }
+            // Re-read below the argument lowering, THEN unmask: the unmask
+            // must consume the post-relocation address.
+            let recv_box = callee_group.reread(ctx, callee_root)?;
             let closure_handle = {
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
@@ -1013,6 +1031,9 @@ pub fn try_lower_closure_typed_local_call(
                     if let Some(prev) = prev_this {
                         crate::rooting::implicit_this_restore(ctx, prev);
                     }
+                    // Below both arms' calls, in the merge that post-dominates
+                    // them — which is why this group is `open_rooted_group`.
+                    callee_group.release(ctx);
                     return Ok(Some(merged));
                 }
             }
@@ -1028,6 +1049,7 @@ pub fn try_lower_closure_typed_local_call(
             }
             let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
             crate::rooting::implicit_this_restore(ctx, prev_this);
+            callee_group.release(ctx);
             return Ok(Some(result));
         }
     }
