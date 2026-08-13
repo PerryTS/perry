@@ -14,6 +14,25 @@ fn pod_layout_intrinsic_is_shadowed(ctx: &LoweringContext, name: &str) -> bool {
         || ctx.lookup_imported_func(name).is_some()
 }
 
+fn pod_layout_intrinsic_name(ctx: &LoweringContext, local_name: &str) -> Option<&'static str> {
+    if matches!(local_name, "sizeof" | "alignof" | "offsetof")
+        && !pod_layout_intrinsic_is_shadowed(ctx, local_name)
+    {
+        return match local_name {
+            "sizeof" => Some("sizeof"),
+            "alignof" => Some("alignof"),
+            "offsetof" => Some("offsetof"),
+            _ => None,
+        };
+    }
+    match ctx.lookup_native_module(local_name) {
+        Some(("perry/native", Some("sizeof"))) => Some("sizeof"),
+        Some(("perry/native", Some("alignof"))) => Some("alignof"),
+        Some(("perry/native", Some("offsetof"))) => Some("offsetof"),
+        _ => None,
+    }
+}
+
 fn explicit_single_type_arg(
     ctx: &LoweringContext,
     call: &ast::CallExpr,
@@ -75,13 +94,10 @@ pub(crate) fn try_pod_layout_constants(
     let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
         return Ok(None);
     };
-    let name = ident.sym.as_ref();
-    if !matches!(name, "sizeof" | "alignof" | "offsetof") {
+    let local_name = ident.sym.as_ref();
+    let Some(name) = pod_layout_intrinsic_name(ctx, local_name) else {
         return Ok(None);
-    }
-    if pod_layout_intrinsic_is_shadowed(ctx, name) {
-        return Ok(None);
-    }
+    };
     if has_spread {
         crate::lower_bail!(call.span, "{}(...) does not accept spread arguments", name);
     }
@@ -167,6 +183,15 @@ fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
         || ctx.lookup_class("NativeArena").is_some()
 }
 
+fn is_native_arena_constructor_ident(ctx: &LoweringContext, ident: &ast::Ident) -> bool {
+    let name = ident.sym.as_ref();
+    (name == "NativeArena" && !native_arena_global_is_shadowed(ctx))
+        || matches!(
+            ctx.lookup_native_module(name),
+            Some(("perry/native", Some("NativeArena")))
+        )
+}
+
 fn native_memory_global_is_shadowed(ctx: &LoweringContext) -> bool {
     ctx.lookup_local("NativeMemory").is_some()
         || ctx.lookup_func("NativeMemory").is_some()
@@ -242,9 +267,8 @@ fn is_native_arena_alloc_call(ctx: &LoweringContext, call: &ast::CallExpr) -> bo
     let ast::Expr::Member(member) = callee_expr.as_ref() else {
         return false;
     };
-    matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+    matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if is_native_arena_constructor_ident(ctx, obj))
         && matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "alloc")
-        && !native_arena_global_is_shadowed(ctx)
 }
 
 fn native_arena_owner_type(ty: &crate::types::Type) -> bool {
@@ -286,8 +310,9 @@ pub(crate) fn try_native_arena_public_api(
     };
     let method = prop.sym.as_ref();
 
-    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena") {
-        if method != "alloc" || native_arena_global_is_shadowed(ctx) {
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if is_native_arena_constructor_ident(ctx, obj))
+    {
+        if method != "alloc" {
             return Ok(None);
         }
         if has_spread {

@@ -312,6 +312,76 @@ fn pod_layout_constants_lower_to_compile_time_hir_nodes() {
 }
 
 #[test]
+fn perry_native_imports_reuse_canonical_pod_lowering() {
+    let module = lower_src(
+        r#"
+        import {
+            type u32 as Word,
+            type f32,
+            type pod as NativeRecord,
+            type PodView,
+            NativeArena as Arena,
+            sizeof as sizeOf,
+            alignof as alignOf,
+            offsetof as offsetOf,
+        } from "perry/native";
+
+        type Packet = NativeRecord<{ tag: Word; gain: f32; }>;
+        const packetSize = sizeOf<Packet>();
+        const packetAlign = alignOf<Packet>();
+        const gainOffset = offsetOf<Packet>("gain");
+        const arena = Arena.alloc(packetSize);
+        const view: PodView<Packet> = arena.podView(0, 1);
+        "#,
+    )
+    .expect("perry/native imports should lower through the existing POD pipeline");
+
+    assert!(matches!(
+        find_let(&module, "packetSize"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutSizeOf {
+                ty: Type::Generic { base, .. },
+            }),
+            ..
+        } if base == "PerryPod"
+    ));
+    assert!(matches!(
+        find_let(&module, "packetAlign"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutAlignOf {
+                ty: Type::Generic { base, .. },
+            }),
+            ..
+        } if base == "PerryPod"
+    ));
+    assert!(matches!(
+        find_let(&module, "gainOffset"),
+        Stmt::Let {
+            init: Some(Expr::PodLayoutOffsetOf { ty, field_path }),
+            ..
+        } if matches!(ty, Type::Generic { base, .. } if base == "PerryPod")
+            && field_path == &vec!["gain".to_string()]
+    ));
+    assert!(matches!(
+        find_let(&module, "arena"),
+        Stmt::Let {
+            init: Some(Expr::NativeArenaAlloc(_)),
+            ty: Type::Named(name),
+            ..
+        } if name == "NativeArena"
+    ));
+    assert!(matches!(
+        find_let(&module, "view"),
+        Stmt::Let {
+            init: Some(Expr::NativePodView { .. }),
+            ty: Type::Generic { base, type_args },
+            ..
+        } if base == "PerryPodView"
+            && matches!(type_args.as_slice(), [Type::Generic { base, .. }] if base == "PerryPod")
+    ));
+}
+
+#[test]
 fn native_arena_pod_layout_constants_preserve_generic_pod_type_param() {
     let module = lower_src(
         r#"

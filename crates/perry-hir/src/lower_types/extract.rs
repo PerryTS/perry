@@ -96,7 +96,7 @@ pub(crate) fn extract_ts_type_with_ctx(
 
         // Type reference: Array<T>, MyClass, T (type param), etc.
         TsTypeRef(type_ref) => {
-            let name = match &type_ref.type_name {
+            let mut name = match &type_ref.type_name {
                 ast::TsEntityName::Ident(ident) => ident.sym.to_string(),
                 ast::TsEntityName::TsQualifiedName(qname) => {
                     // Qualified names like Foo.Bar
@@ -134,6 +134,17 @@ pub(crate) fn extract_ts_type_with_ctx(
                     }
                     return Type::TypeVar(name);
                 }
+            }
+
+            // `perry/native` is a compiler-owned module, so its declaration
+            // file is not lowered as source HIR. Canonicalize its imported
+            // author-facing names here, before generic handling, so both
+            // `pod<T>` and scalar fields such as `u32` flow through the same
+            // proven representation path as their legacy `Perry*` spellings.
+            if let Some(canonical) =
+                ctx.and_then(|context| context.resolve_native_profile_type_alias(&name))
+            {
+                name = canonical.to_string();
             }
 
             // Check for built-in generic types or generic instantiations

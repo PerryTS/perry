@@ -93,6 +93,7 @@ impl LoweringContext {
             pending_body_enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            native_profile_type_aliases: HashMap::new(),
             immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
@@ -1286,6 +1287,34 @@ impl LoweringContext {
             let (_, m, method) = &self.native_modules[idx];
             (m.as_str(), method.as_ref().map(|s| s.as_str()))
         })
+    }
+
+    pub(crate) fn register_native_profile_type_alias(
+        &mut self,
+        local_name: String,
+        imported_name: &str,
+    ) {
+        let canonical = match imported_name {
+            "u32" => "PerryU32",
+            "u64" => "PerryU64",
+            "usize" => "PerryUSize",
+            "i32" => "PerryI32",
+            "i64" => "PerryI64",
+            "f32" => "PerryF32",
+            "f64" => "PerryF64",
+            "pod" => "PerryPod",
+            "PodView" => "PerryPodView",
+            "NativeArena" => "NativeArena",
+            _ => return,
+        };
+        self.native_profile_type_aliases
+            .insert(local_name, canonical.to_string());
+    }
+
+    pub(crate) fn resolve_native_profile_type_alias(&self, name: &str) -> Option<&str> {
+        self.native_profile_type_aliases
+            .get(name)
+            .map(String::as_str)
     }
 
     /// #wall5: shadow a native-module name for the current scope IF it is a

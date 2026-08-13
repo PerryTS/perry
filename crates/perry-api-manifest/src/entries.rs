@@ -138,6 +138,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/i18n",     // internationalization runtime
     "worker_threads", // (Node builtin) OS-thread workers
     "perry/thread",   // perry-native threading (parallelMap/spawn)
+    "perry/native",   // exact native layouts and arena-backed POD values
     // `perry/gc` — explicit GC control (collect / minor / idleHint).
     // Served entirely by perry-runtime; a no-op-style Perry-native
     // surface like `perry/thread` (doesn't resolve under Node/Bun).
@@ -254,6 +255,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/widget",
     "perry/i18n",
     "perry/thread",
+    "perry/native",
     "perry/gc",
     "perry/media",
     "perry/audio",

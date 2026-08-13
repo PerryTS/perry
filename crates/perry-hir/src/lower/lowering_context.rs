@@ -171,6 +171,15 @@ pub struct LoweringContext {
     pub(crate) interfaces: Vec<(String, InterfaceId)>,
     /// Type aliases: name -> (id, type_params, aliased_type)
     pub(crate) type_aliases: Vec<(String, TypeAliasId, Vec<TypeParam>, Type)>,
+    /// Type names imported from `perry/native`: local name -> the canonical
+    /// compiler marker (`u32` -> `PerryU32`, `pod` -> `PerryPod`, ...).
+    ///
+    /// Native modules do not have source HIR declarations, so type-only
+    /// imports are otherwise erased before type extraction. Keeping this
+    /// small alias table lets the public module spellings reuse the existing
+    /// native-representation and POD pipeline without teaching every
+    /// downstream pass a second vocabulary.
+    pub(crate) native_profile_type_aliases: HashMap<String, String>,
     /// Issue #179 typed-parse: interface name → field names in AST
     /// source order. Populated alongside `interfaces` during
     /// `lower_interface_decl`. `ObjectType::properties` is a HashMap

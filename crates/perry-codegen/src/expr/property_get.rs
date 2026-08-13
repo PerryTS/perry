@@ -133,6 +133,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet {
             object, property, ..
+        } if property == "length"
+            && matches!(object.as_ref(), Expr::LocalGet(id) if ctx.pod_views.contains_key(id)) =>
+        {
+            // A NativePodView is a verifier-owned GC object, not a normal JS
+            // object with a property table. Read its record count through the
+            // validating runtime helper so the public `PodView.length`
+            // declaration has the promised observable behavior and disposed
+            // owners are still rejected.
+            let view = lower_expr(ctx, object)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_native_pod_view_length", &[(DOUBLE, &view)]))
+        }
+        Expr::PropertyGet {
+            object, property, ..
         } if matches!(object.as_ref(), Expr::LocalGet(id)
                 if ctx.pod_records.get(id).is_some_and(|local| local
                     .layout

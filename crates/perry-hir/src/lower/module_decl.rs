@@ -15,6 +15,7 @@ use crate::ir::*;
 // Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
+mod native_profile_import;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -125,6 +126,7 @@ pub(crate) fn lower_module_decl(
             // method registry — `obj.method()` worked only via the
             // CLASS_VTABLE_REGISTRY runtime fallback (#392 followup) and
             // `typeof obj.method` returned `"undefined"`. Issue #446.
+            native_profile_import::register_native_profile_type_imports(ctx, &source, import_decl);
             if import_decl.type_only && is_native {
                 return Ok(());
             }

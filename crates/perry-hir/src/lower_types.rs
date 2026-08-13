@@ -54,6 +54,15 @@ fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
         || ctx.lookup_class("NativeArena").is_some()
 }
 
+fn is_native_arena_constructor_ident(ctx: &LoweringContext, ident: &ast::Ident) -> bool {
+    let name = ident.sym.as_ref();
+    (name == "NativeArena" && !native_arena_global_is_shadowed(ctx))
+        || matches!(
+            ctx.lookup_native_module(name),
+            Some(("perry/native", Some("NativeArena")))
+        )
+}
+
 fn native_arena_owner_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
 }
@@ -62,7 +71,7 @@ fn expr_may_infer_to_native_arena_owner(expr: &ast::Expr, ctx: &LoweringContext)
     match expr {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
-            if name == "NativeArena" && !native_arena_global_is_shadowed(ctx) {
+            if is_native_arena_constructor_ident(ctx, ident) {
                 return true;
             }
             ctx.lookup_local_type(name)
@@ -81,7 +90,7 @@ fn expr_may_infer_to_native_arena_owner(expr: &ast::Expr, ctx: &LoweringContext)
             matches!(
                 (member.obj.as_ref(), method.sym.as_ref()),
                 (ast::Expr::Ident(obj), "alloc")
-                    if obj.sym.as_ref() == "NativeArena" && !native_arena_global_is_shadowed(ctx)
+                    if is_native_arena_constructor_ident(ctx, obj)
             )
         }
         ast::Expr::Member(member) if matches!(member.obj.as_ref(), ast::Expr::This(_)) => {
@@ -151,9 +160,8 @@ fn infer_native_arena_call_return_type(
     };
     let method_name = method.sym.as_ref();
 
-    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if is_native_arena_constructor_ident(ctx, obj))
         && method_name == "alloc"
-        && !native_arena_global_is_shadowed(ctx)
     {
         return Some(Type::Named("NativeArena".to_string()));
     }

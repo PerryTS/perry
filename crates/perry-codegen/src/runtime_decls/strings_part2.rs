@@ -125,6 +125,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_native_arena_alloc", I64, &[I64]);
     module.declare_function("js_native_arena_view", I64, &[I64, I32, I64, I64]);
     module.declare_function("js_native_pod_view", I64, &[I64, I64, I64, I64, I64, I64]);
+    module.declare_function("js_native_pod_view_length", DOUBLE, &[DOUBLE]);
     module.declare_function("js_native_abi_check_pod_view_data_ptr", PTR, &[DOUBLE, I64]);
     module.declare_function(
         "js_native_abi_check_pod_view_record_count",
