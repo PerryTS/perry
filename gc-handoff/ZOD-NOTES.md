@@ -1040,3 +1040,80 @@ Second question, worth its own issue: **why does a compile-as-package build
 interpret zod's hot parse path at all?** `Doc.compile`'s generated source is
 known at build time for a static schema; #678 tracks native callsites into
 V8-fallback modules. That is a performance finding independent of this bug.
+
+## 21. The architectural finding: the interpreter had no GC safepoints at all
+
+Auditing `dyn_eval` by hand first, because a fix needs a defect and I had a
+hypothesis rather than one. The interpreter's rooting discipline is **better
+than expected** — the hazardous shapes are all handled:
+
+* `eval_binary` roots the LHS before evaluating the RHS and re-reads both from
+  `roots` afterwards;
+* `eval_call` roots the receiver before `eval_args`, re-reads it for the
+  dispatch, and `eval_args` roots every argument as it is produced;
+* `set_prop_by_name` roots the VALUE before evaluating a computed key;
+* `js_native_call_method`, the bridge's dispatch target, opens a
+  `RuntimeHandleScope`, roots receiver and args on entry, and (#7528) re-reads
+  them per use rather than once at the top.
+
+A mechanical scan for "value produced, used below an intervening call" over all
+of `expr.rs` / `interp.rs` / `bridge.rs` / `env.rs` returned ~40 candidates and
+every one I checked was a non-allocating probe (`truthy`, `to_number` on a
+number) or already rooted. **I did not find the hole by reading.**
+
+### What I found instead
+
+The interpreter offers the collector **no cooperative safepoints whatsoever**.
+Compiled code polls at loop back-edges (default on since #7721). Interpreted
+code polls nowhere, so a collection can only reach it at an *allocation* point
+— and the alloc-point arm forces a conservative stack scan, which finds Rust
+locals and makes the copying minor ineligible.
+
+The consequence is not that the interpreter is safe. It is that the
+interpreter is **untestable**:
+
+| instrument | reaches compiled code | reaches `dyn_eval` |
+|---|---|---|
+| `gc_root_dominance_check.py` (3 modes) | yes | no — there is no IR |
+| `PERRY_GC_ZEAL` | yes, at back-edge polls | **no — no safepoints** |
+| `PERRY_GC_SCHEDULE_SEED` | yes | **no — no safepoints** |
+| `PERRY_GC_PROTECT_FROMSPACE` | yes | only via compiled frames |
+
+So the one rooting domain with no static checker also had no dynamic one, and
+`mod.rs`'s claim — "interpreter frames hold **every** live JSValue in a rooted
+thread-local value stack" — was unfalsifiable by anything in the tree. That is
+the architectural defect, independent of what #7803's own root cause turns out
+to be.
+
+### `PERRY_GC_INTERP_SAFEPOINTS=1`
+
+`dyn_eval::interp_safepoint()`, called at every `eval_expr` node and every
+`exec_stmt`. It routes through `js_gc_loop_safepoint` deliberately rather than
+collecting directly, so every entry guard (in-alloc, root-lock, unsafe-FFI
+zone, budgeted cycle) and the seeded-schedule ordinal apply exactly as they do
+to a compiled back-edge: an interpreter safepoint is the *same* safepoint, not
+a second kind. Both existing instruments now reach the interpreter for free.
+
+**Subject asserted live** — seed 2, rate 1, same binary:
+
+| | `loop_polls` | safepoints | moved |
+|---|---|---|---|
+| off | 24,029 | 2,725 | 369,076 |
+| **on** | **93,210** | **6,973** | **866,480** |
+
+69,181 additional polls, ~4× the compiled ones. That number IS the size of the
+blind spot: on this workload the interpreter was where most of the potential
+safepoints were, and none of them existed.
+
+Output is byte-identical in both modes.
+
+### Why it is opt-in and not on
+
+If the interpreter's rooting is complete, default-on is strictly better — the
+copying minor becomes eligible where only a conservative sweep could run. If it
+is not, flipping it turns a latent hole into a live crash for exactly the
+workloads `dyn_eval` exists to serve (ajv, fast-json-stringify, find-my-way,
+every fastify app). Shipping that before the rooting is verified trades a quiet
+bug for a loud one in someone else's server. So it lands as an instrument, and
+the flip is a separate evidence-gated decision — the same sequencing
+`PERRY_GC_MOVING_LOOP_POLLS` had between #7161 and #7721.
