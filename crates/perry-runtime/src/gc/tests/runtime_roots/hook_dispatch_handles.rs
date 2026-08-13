@@ -134,6 +134,53 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
 }
 
 #[test]
+fn test_timer_tick_roots_the_complete_detached_expired_batch() {
+    let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
+
+    let collecting_callback =
+        crate::closure::js_closure_alloc(test_timer_force_minor_gc as *const u8, 0);
+    let second_callback = crate::closure::js_closure_alloc(test_timer_capture_arg as *const u8, 0);
+    let second_callback_original = second_callback as usize;
+    let second_arg = test_string_value(b"detached-timer-batch");
+    let second_arg_original = (second_arg.to_bits() & POINTER_MASK) as usize;
+    let second_args = [second_arg];
+
+    let first_id = crate::timer::js_set_timeout_callback(collecting_callback as i64, 0.0);
+    let second_id = unsafe {
+        crate::timer::js_set_timeout_callback_args(
+            second_callback as i64,
+            0.0,
+            second_args.as_ptr(),
+            1,
+        )
+    };
+    TEST_TIMER_ARG_BITS.with(|slot| slot.set(0));
+    TEST_TIMER_CALLED.with(|slot| slot.set(false));
+    TEST_TIMER_CALLBACK_PTR.with(|slot| slot.set(0));
+
+    assert_eq!(crate::timer::js_callback_timer_tick(), 2);
+    assert!(TEST_TIMER_CALLED.with(|slot| slot.get()));
+    let dispatched_callback = TEST_TIMER_CALLBACK_PTR.with(|slot| slot.get());
+    assert_ne!(
+        dispatched_callback, second_callback_original,
+        "detached timer callback should be refreshed after copied-minor GC"
+    );
+    assert!(crate::closure::is_closure_ptr(dispatched_callback));
+    assert_moved_string_value(
+        f64::from_bits(TEST_TIMER_ARG_BITS.with(|slot| slot.get())),
+        second_arg_original,
+        b"detached-timer-batch",
+    );
+
+    crate::timer::clearTimeout(first_id);
+    crate::timer::clearTimeout(second_id);
+}
+
+#[test]
 fn test_next_tick_previous_context_survives_hook_gc() {
     const ALS_HANDLE: i64 = -8_502;
 

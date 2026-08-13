@@ -1688,26 +1688,48 @@ pub fn try_lower_extern_func_call(
     // an arrow-bound exported value (hono's `mergePath` from utils/url.js,
     // any `export const foo = () => …` cross-module use).
     if ctx.imported_vars.contains(name) {
-        ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
-        let closure_box = ctx.block().call(DOUBLE, &fname, &[]);
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
-        }
-        if lowered_args.len() > 16 {
+        if args.len() > 16 {
             anyhow::bail!(
                 "perry-codegen Phase D.1: closure call with {} args (max 16)",
-                lowered_args.len()
+                args.len()
             );
         }
-        let blk = ctx.block();
-        let closure_handle = unbox_to_i64(blk, &closure_box);
-        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-        for v in &lowered_args {
-            call_args.push((DOUBLE, v.as_str()));
-        }
-        return Ok(Some(blk.call(DOUBLE, &runtime_fn, &call_args)));
+        ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
+        // Fetch the callee before evaluating arguments, as JavaScript requires,
+        // but keep that closure rooted while argument expressions run. Next's
+        // App Route exports are commonly `export const GET = ...`; constructing
+        // a request argument can allocate and evacuate the closure before this
+        // path finally dispatches it (#8036).
+        let closure_box = ctx.block().call(DOUBLE, &fname, &[]);
+        let arg_refs: Vec<&Expr> = args.iter().collect();
+        let lowered_args = std::cell::RefCell::new(Vec::<String>::new());
+        let result = crate::rooting::with_rooted_accumulator(
+            ctx,
+            crate::rooting::Repr::Boxed,
+            &closure_box,
+            crate::rooting::any_operand_may_collect(ctx, args.iter()),
+            |ctx, _closure| {
+                crate::rooting::with_operands_rooted(ctx, &arg_refs, |_ctx, vals| {
+                    *lowered_args.borrow_mut() = vals.to_vec();
+                    Ok(())
+                })
+            },
+            |ctx, closure_box| {
+                // Re-read and unbox only after every collecting argument and
+                // after the argument group's own re-reads have completed.
+                let lowered = lowered_args.borrow();
+                let blk = ctx.block();
+                let closure_handle = unbox_to_i64(blk, closure_box);
+                let runtime_fn = format!("js_closure_call{}", lowered.len());
+                let mut call_args: Vec<(crate::types::LlvmType, &str)> =
+                    vec![(I64, &closure_handle)];
+                for value in lowered.iter() {
+                    call_args.push((DOUBLE, value.as_str()));
+                }
+                Ok(blk.call(DOUBLE, &runtime_fn, &call_args))
+            },
+        )?;
+        return Ok(Some(result));
     }
     // Record the cross-module call so the caller can add a `declare`
     // line for it after the &mut LlFunction borrow is released. The

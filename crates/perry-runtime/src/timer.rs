@@ -1116,24 +1116,55 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // #6287: timers phase (by deadline) before check phase (FIFO immediates).
     order_expired_callback_batch(&mut expired);
 
+    // #8036: draining removes the WHOLE expired batch from CALLBACK_TIMERS
+    // before the first callback runs. A callback can run arbitrary JS and the
+    // microtask checkpoint below can collect, so rooting only the timer being
+    // dispatched leaves every later callback, argument, and captured async
+    // context sitting in an ordinary Rust Vec the collector cannot see. With
+    // concurrent request timers, the first resolve callback's checkpoint moved
+    // the next resolve closure and the second timer called its from-space
+    // address (`TypeError: value is not a function`). Protect the complete
+    // detached batch for the complete dispatch loop.
+    let batch_scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handles: Vec<_> = expired
+        .iter()
+        .map(|timer| {
+            batch_scope.root_raw_const_ptr(timer.callback as *const crate::closure::ClosureHeader)
+        })
+        .collect();
+    let arg_handles: Vec<_> = expired
+        .iter()
+        .map(|timer| batch_scope.root_nanbox_f64_slice(&timer.args))
+        .collect();
+    let context_roots: Vec<_> = expired
+        .iter()
+        .map(|timer| crate::async_context::root_snapshot(&batch_scope, &timer.context))
+        .collect();
+
     let mut fired = 0;
     // Call the callbacks, forwarding any trailing args captured at
     // `setTimeout(fn, delay, ...args)` time. Refs #665.
-    for timer in expired {
+    for (index, mut timer) in expired.into_iter().enumerate() {
         if !timer.cleared {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let cb_handle =
-                scope.root_raw_const_ptr(timer.callback as *const crate::closure::ClosureHeader);
-            let arg_handles = scope.root_nanbox_f64_slice(&timer.args);
+            crate::async_context::refresh_snapshot_from_roots(
+                &mut timer.context,
+                &context_roots[index],
+            );
             let previous = crate::async_context::enter_context(&timer.context);
             let mut previous = previous;
-            let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+            let previous_roots = crate::async_context::root_snapshot(&batch_scope, &previous);
             crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
-            let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-            let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
             let prev_this = crate::object::js_implicit_this_set(timer_handle_value(timer.id));
             enter_timer_callback_dispatch();
             with_timer_uncaught_trap(|| {
+                // Installing the timer receiver above is itself a collecting
+                // boundary. Re-read both roots inside the trap, immediately
+                // before dispatch, so this callback cannot be evacuated in
+                // between the handle read and js_closure_callN.
+                let a =
+                    crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles[index]);
+                let cb =
+                    callback_handles[index].get_raw_const_ptr::<crate::closure::ClosureHeader>();
                 match a.len() {
                     0 => {
                         js_closure_call0(cb);

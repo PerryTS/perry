@@ -4313,6 +4313,22 @@ pub fn run_with_parse_cache(
             }
             if references_interface {
                 for (src_pathbuf, src_hir) in &ctx.native_modules {
+                    // #8036: this augmentation supplies FOREIGN implementors
+                    // to a consumer's polymorphic dispatch tower. Feeding the
+                    // module its own exported classes back through
+                    // `imported_classes` creates a second, imported-constructor
+                    // identity for each local class. `lower_new` then treats a
+                    // local class as cross-module and calls its standalone
+                    // constructor metadata instead of the local implicit-super
+                    // path. That is observably wrong for native-backed derived
+                    // classes such as Next's ReadonlyURLSearchParams: the local
+                    // path installs the URLSearchParams backing, while the
+                    // accidental self-import path loses it. Local classes are
+                    // already present in codegen's class table, so they must
+                    // never be added by this foreign-class fallback.
+                    if src_pathbuf == path {
+                        continue;
+                    }
                     let src_path = src_pathbuf.to_string_lossy().to_string();
                     for class in &src_hir.classes {
                         if !class.is_exported {

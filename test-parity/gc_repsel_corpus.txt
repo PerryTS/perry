@@ -311,6 +311,11 @@ test_gap_gc_closure_call_argument_rooting
 # mistake. Registering the file is the whole fix.
 test_gap_gc_call_argument_rooting
 
+# #8036: a NextRequest-shaped class crosses a generated-route-style re-export
+# into an imported sync/async handler and stays live through allocation,
+# dynamic import, promise/timer continuations, and body reads.
+test_gap_gc_next_request_import
+
 # --- #7270's two witnesses, registered here rather than dark -----------------
 # `rest_argument_rooting` and `same_module_call_argument_rooting` shipped with
 # #7270. Registering them at merge rather than after: they are the FOURTH
