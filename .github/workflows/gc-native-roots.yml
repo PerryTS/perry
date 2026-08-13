@@ -335,25 +335,27 @@ jobs:
             # archive — one directory, so opt and clang cannot skew.
             exe=".exe"
             llvm_ver=22.1.3
-            llvm_root="$RUNNER_TEMP/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
+            # Git Bash exposes RUNNER_TEMP as a native `D:\...` path. Convert
+            # it before any Unix tool sees it: the runner's bsdtar still treats
+            # `D:` as a remote host even when passed GNU tar's --force-local.
+            runner_temp_posix="$(cygpath -u "$RUNNER_TEMP")"
+            llvm_root="$runner_temp_posix/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
             if [ ! -x "$llvm_root/bin/opt.exe" ]; then
-              curl -sSL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" \
+              curl -sSL --retry 3 -o "$runner_temp_posix/llvm.tar.xz" \
                 "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_ver/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc.tar.xz"
-              # --force-local: this step runs under Git-bash, where $RUNNER_TEMP
-              # is a WINDOWS path (`D:\a\_temp`). GNU tar reads `D:` as a remote
-              # `host:path` and tries to rsh to a host named `D`, which is the
-              # 2026-08-11 failure verbatim:
+              # The old --force-local workaround was ineffective because the
+              # Windows runner supplies bsdtar, not GNU tar. Passing the
+              # cygpath-normalized archive and destination avoids the remote
+              # `host:path` grammar entirely. The previous failure was:
               #     tar (child): Cannot connect to D: resolve failed
               #     xz: (stdin): File format not recognized
               #     tar: Error is not recoverable: exiting now      (exit 2)
-              # `-C` is not parsed for a remote spec, so only the ARCHIVE path
-              # needs the flag. Verify the extraction rather than trusting it:
-              # a half-extracted tree would otherwise surface as the much more
-              # confusing "no matched opt+clang pair" error below.
-              tar --force-local -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+              # Verify extraction rather than trusting it: a half-extracted
+              # tree otherwise becomes a misleading tool-pair error below.
+              tar -xJf "$runner_temp_posix/llvm.tar.xz" -C "$runner_temp_posix"
               if [ ! -x "$llvm_root/bin/opt.exe" ]; then
-                echo "::error::extracted $RUNNER_TEMP/llvm.tar.xz but $llvm_root/bin/opt.exe is still missing — the archive layout changed, or the download was truncated"
-                ls -la "$RUNNER_TEMP" | head -20
+                echo "::error::extracted $runner_temp_posix/llvm.tar.xz but $llvm_root/bin/opt.exe is still missing — the archive layout changed, or the download was truncated"
+                ls -la "$runner_temp_posix" | head -20
                 exit 1
               fi
             fi
