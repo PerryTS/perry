@@ -218,7 +218,7 @@ jobs:
       # else in that file -- not a fixture invented for this job.
       # `--ignore-scripts` because nothing here needs a lifecycle script to
       # run, and a corpus generator is a bad place to execute one.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
       - name: Install the npm dependencies the dep corpus compiles
