@@ -64,9 +64,14 @@ Validated so far (all against this worktree/target):
 - all four `gc::tests::lazy_intrinsic_towers` tests: 4/4 pass.
 - `object_cache_roots_survive_a_guard_clear_on_another_thread`: pass.
 - `test_gc_init_mutable_scanner_families_rewrite_runtime_slots`: pass.
-- `scripts/check_test_registration.py`, `scripts/check_gc_doc_claims.py`,
-  `scripts/gc_store_site_inventory.py`, and
-  `scripts/gc_runtime_root_holders.py`: pass.
+- `scripts/check_test_registration.py` and
+  `scripts/check_gc_doc_claims.py`: pass.
+- `scripts/gc_runtime_root_holders.py`: pass after deleting the six stale
+  iterator-root exemptions; the new handle type is directly classified.
+- `scripts/gc_store_site_inventory.py`: blocked on pre-existing main line
+  `crates/perry-codegen/src/expr/property_set.rs:1475` (introduced by
+  `5fcd94289`, untouched by this branch), which lacks a `GC_STORE_AUDIT`
+  marker. This branch does not claim that unrelated inventory gate as green.
 
 The required combined static-archive/compiler build passed for
 `-p perry -p perry-runtime-static -p perry-stdlib-static`. The pinned artifacts
@@ -105,5 +110,18 @@ stdlib-static build was then rerun from restored source; its log compiled
 mtimes are 2026-08-14 00:04:01 (`perry`), 00:03:48
 (`libperry_runtime.a`), and 00:04:02 (`libperry_stdlib.a`).
 
-The current-main landing-equivalent rerun is still pending; do not treat this
-note as a merge claim yet.
+## Landing-equivalent result
+
+On the branch rebased onto `fe0d49792`, all four optimized
+`gc::tests::lazy_intrinsic_towers` tests passed, including the two-agent and
+three no-move gates. The exact combined static build recompiled all three
+required packages and produced fresh artifacts at 00:12:44 (`perry`), 00:11:43
+(`libperry_runtime.a`), and 00:11:54 (`libperry_stdlib.a`). The registered
+parity test passed against them.
+
+Fresh direct stress runs from those rebased artifacts remained byte-identical:
+
+- protect-fromspace: 1,406 copying minors, 32,047 moved objects, 60,040 loop
+  polls, and 1,406 quarantined page-set retirements.
+- verify-evacuation: 1,400 copying minors, 32,047 moved objects, 60,040 loop
+  polls, and 22,239 copied-object events in diagnostics.

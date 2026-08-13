@@ -87,48 +87,6 @@
       "why": "Inline-cache invalidation epoch. Epoch invalidation is the third rooting strategy this tree uses (see object/prop_plan.rs) \u2014 the cache is discarded on bump rather than scanned."
     },
     {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141, the six-slot loop)",
-      "why": "All six %IteratorPrototype%-style singletons are visited by one loop in object/mod.rs."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "One of the six %IteratorPrototype%-style singletons visited by a single loop in object/mod.rs. Every iterator instance's [[Prototype]] points at one of them, so all six must stay live for the lifetime of any iterator."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "MAP_ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "SET_ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "STRING_ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
-    },
-    {
       "file": "crates/perry-runtime/src/process.rs",
       "name": "MODULE_LOADER_NEXT_RESOLVE",
       "verdict": "covered_elsewhere",
