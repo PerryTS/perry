@@ -398,8 +398,8 @@ fn put_value_static_property_fast_path(
     }
 }
 
-/// Monomorphic inline cache for a static-name `PutValue` whose target and
-/// receiver are the same expression.
+/// Bounded polymorphic inline cache for a static-name `PutValue` whose target
+/// and receiver are the same expression.
 ///
 /// Sloppy script writes cannot reuse `PropertySet` because its fallback throws
 /// on rejected writes. This diamond keeps the strict-aware runtime on every
@@ -455,6 +455,12 @@ fn lower_put_value_static_write_ic(
         .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
     ctx.ic_globals.push(cache_name.clone());
     let cache_ref = format!("@{}", cache_name);
+    // Keep the first four ways inline. Shapes 5–8 use a separate cache in a
+    // compact outlined helper, avoiding four more copies of the generated
+    // receiver guards while preventing the fourth inline way from thrashing.
+    let tail_cache_name = format!("perry_ic_{}_poly_tail", site_id);
+    ctx.ic_globals.push(tail_cache_name.clone());
+    let tail_cache_ref = format!("@{}", tail_cache_name);
 
     // Branch before the first header load so primitives, forged non-pointer
     // bit patterns, and native handle ids can never be dereferenced by the
@@ -470,11 +476,13 @@ fn lower_put_value_static_write_ic(
     let fallback_idx = ctx.new_block("put.pic.fallback");
     let dispatch3_idx = ctx.new_block("put.pic.dispatch3");
     let dispatch4_idx = ctx.new_block("put.pic.dispatch4");
+    let dispatch5_idx = ctx.new_block("put.pic.dispatch5");
     let hit_idx = ctx.new_block("put.pic.hit");
     let miss_idx = ctx.new_block("put.pic.miss");
     let miss2_idx = ctx.new_block("put.pic.miss2");
     let miss3_idx = ctx.new_block("put.pic.miss3");
     let miss4_idx = ctx.new_block("put.pic.miss4");
+    let tail_idx = ctx.new_block("put.pic.tail");
     let merge_idx = ctx.new_block("put.pic.merge");
     let guard_label = ctx.block_label(guard_idx);
     let guard2_label = ctx.block_label(guard2_idx);
@@ -483,11 +491,13 @@ fn lower_put_value_static_write_ic(
     let fallback_label = ctx.block_label(fallback_idx);
     let dispatch3_label = ctx.block_label(dispatch3_idx);
     let dispatch4_label = ctx.block_label(dispatch4_idx);
+    let dispatch5_label = ctx.block_label(dispatch5_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let miss2_label = ctx.block_label(miss2_idx);
     let miss3_label = ctx.block_label(miss3_idx);
     let miss4_label = ctx.block_label(miss4_idx);
+    let tail_label = ctx.block_label(tail_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block()
         .cond_br(&heap_candidate, &guard_label, &miss_label);
@@ -647,7 +657,12 @@ fn lower_put_value_static_write_ic(
     hit4 = ctx.block().and(I1, &hit4, &token4_match);
     hit4 = ctx.block().and(I1, &hit4, &token4_nonzero);
     hit4 = ctx.block().and(I1, &hit4, &slot4_in_bounds);
-    ctx.block().cond_br(&hit4, &hit_label, &miss4_label);
+    ctx.block().cond_br(&hit4, &hit_label, &dispatch5_label);
+
+    ctx.current_block = dispatch5_idx;
+    let fourth_empty = ctx.block().icmp_eq(I64, &cached4_token, "0");
+    ctx.block()
+        .cond_br(&fourth_empty, &miss4_label, &tail_label);
 
     ctx.current_block = hit_idx;
     let selected_slot = ctx.block().phi(
@@ -756,6 +771,21 @@ fn lower_put_value_static_write_ic(
     let miss4_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    ctx.current_block = tail_idx;
+    let tail_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_poly_tail",
+        &[
+            (PTR, &tail_cache_ref),
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+        ],
+    );
+    let tail_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
     ctx.current_block = merge_idx;
     let result = ctx.block().phi(
         DOUBLE,
@@ -765,6 +795,7 @@ fn lower_put_value_static_write_ic(
             (&miss2_value, &miss2_end_label),
             (&miss3_value, &miss3_end_label),
             (&miss4_value, &miss4_end_label),
+            (&tail_value, &tail_end_label),
         ],
     );
     Ok(Some(result))

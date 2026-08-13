@@ -24,6 +24,7 @@ CASES = [
     ("Receiver shapes", "monomorphic", "shape_monomorphic"),
     ("Receiver shapes", "2-shape", "shape_two"),
     ("Receiver shapes", "4-shape", "shape_four"),
+    ("Receiver shapes", "8-shape", "shape_eight"),
     ("Receiver shapes", "transition before loop", "shape_transition_before_loop"),
     ("Fields/iteration", "1", "fields_one"),
     ("Fields/iteration", "2", "fields_two"),

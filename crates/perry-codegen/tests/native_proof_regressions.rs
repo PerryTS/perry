@@ -13707,8 +13707,14 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         ir.contains("put.pic.guard2")
             && ir.contains("put.pic.guard3")
             && ir.contains("put.pic.guard4")
-            && ir.contains("put.pic.miss4"),
-        "the write PIC should retain four bounded shape entries"
+            && ir.contains("put.pic.miss4")
+            && ir.contains("put.pic.tail")
+            && ir.contains("call double @js_put_value_set_ic_poly_tail"),
+        "the write PIC should retain four inline entries plus a bounded outlined tail"
+    );
+    assert!(
+        ir.contains("@perry_ic_0_poly_tail = private global"),
+        "the outlined ways must use a distinct zero-initialized cache:\n{ir}"
     );
 }
 

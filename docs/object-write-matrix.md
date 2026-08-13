@@ -18,7 +18,7 @@ lack of benefit.
    no calls/allocations/labels; preflight proves dense same-shape prefix,
    writable own slots, layout. Strongest path: call-free, barrier-free body.
 2. **Static-key write PIC** (`expr/proxy_reflect.rs::lower_put_value_static_write_ic`,
-   4-entry polymorphic since #6823; miss/priming
+   four inline entries plus four outlined entries; miss/priming
    `proxy/put_value.rs::js_put_value_set_ic_miss`): static (interned/const)
    key, target ≡ receiver expression, safepoint-free RHS, heap object,
    non-forwarded, blocking flags clear (frozen/sealed/no-extend/descriptors/
@@ -44,7 +44,7 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 | w7_mut_alias | `let o = objs[i]` | *(pre-#6830 baseline)* generic → whole-loop clone | 70 → 6 | 8 | 8.8 → **0.75** | BEATS node (#6830: matched region structurally forbids reassignment) |
 | w8_helper_mono | writes inside helper fn, mono | *(pre-#6812-w8 baseline)* per-write PIC → whole-loop clone | 47 → 6 | 8 | 5.9 → **0.75** | BEATS node — the inliner's temp `let`s are admitted by substitution, so inlined helper bodies clone |
 | w9_poly2 | 2 shapes through one site | *(pre-multi-group baseline)* PIC → per-group whole-loop clone | 27 → 5-8 | 6 | 4.5 → **~1.0** | Ties/beats node — the inliner's two-array body matches as two monomorphic groups, one guard call each (idle 15-run pending for the exact ratio) |
-| w10_poly8 | 8 shapes through one site | PIC exhausted → runtime miss | 27 | 19 | 1.4 | close; megamorphic path is decent |
+| w10_poly8 | 8 shapes through one site | *(pre-tail baseline)* PIC exhausted → 4 inline + 4 outlined ways | 27 (pre-tail) | 19 | 1.4 (pre-tail) | bounded tail prevents fourth-way thrashing; the scaled 60M-write follow-up drops Perry 2,359 → 768 ms (67%) |
 | w11_stable_dynkey | `o[k]`, `const k = "c"` | clone (const-string local = static) | 6 | 8 | **0.75** | BEATS node |
 | w12_arb_dynkey | rotating keys from array | *(pre-IC baseline)* generic → dyn-key IC → key-table clone lane | 84 → 3 | 18 | 4.7 → **0.17** | BEATS node 6× — the 3-way dynamic-key IC covers scattered writes; a loop-invariant key array upgrades to the clone via the resolved slot table (integer-domain index, no fmod) |
 | w13_int_key | `o[7]` on plain object | *(pre-spill-lanes baseline)* generic → peel + whole-loop clone with spill lanes | 160 → 7 | 13 | 12.3 → **0.54** | BEATS node — integer static keys (#6841), first-iteration peel (#6841), object-owned spill (#6849), and guard/emitter spill lanes make the append-past-capacity array clone-eligible |
@@ -68,8 +68,9 @@ Ratio = perry/node median (fill from measurement; `<1` = beating node).
 - **A coherent 5–9× family** (w3–w8): each is one narrow eligibility rule of
   the clone matcher; per-write PIC at ~10 ns/write is the shared floor. The
   fix is widening clone eligibility, not touching the PIC.
-- **Megamorphic (w10) and allocating-RHS (w17) are near-node already** —
-  deprioritize.
+- **Eight-shape polymorphism (w10) now settles without duplicating four more
+  generated guard sequences.** Shape 9+ remains on the bounded semantic
+  fallback. Allocating-RHS (w17) remains near-node and is deprioritized.
 
 Not modeled as micros (justified fallbacks unless measurement says otherwise):
 symbol keys (separate table semantics), frozen/sealed/descriptor receivers

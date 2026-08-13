@@ -264,7 +264,7 @@ pub extern "C" fn js_put_value_set(
     value_handle.get_nanbox_f64()
 }
 
-/// Miss path for the codegen-emitted monomorphic PutValue store cache.
+/// Miss path for one way of the codegen-emitted polymorphic PutValue cache.
 ///
 /// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
 /// ordinary class-instance own-data overwrite may prime `[shape_token, slot]`;
@@ -408,6 +408,46 @@ pub extern "C" fn js_put_value_set_ic_miss(
     }
 
     result
+}
+
+const STATIC_PIC_TAIL_WAYS: usize = 4;
+
+/// Outlined ways 5–8 for the static-key write PIC.
+///
+/// The generated function keeps its first four shape guards inline. Once
+/// those are full, this helper validates up to four additional cached
+/// `(shape_token, slot)` pairs before falling back to full `[[Set]]`
+/// semantics. Empty ways are filled in order and a full cache is never
+/// overwritten, so a stable eight-shape site settles instead of continuously
+/// replacing its fourth entry.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_ic_poly_tail(
+    cache: *mut [i64; 8],
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    if !cache.is_null() {
+        unsafe {
+            let c = &mut *cache;
+            for way in 0..STATIC_PIC_TAIL_WAYS {
+                let word = way * 2;
+                let token = c[word] as u64;
+                if token == 0 {
+                    let entry = c.as_mut_ptr().add(word) as *mut [i64; 2];
+                    return js_put_value_set_ic_miss(target, key, value, strict, entry);
+                }
+                if let Some(result) = dyn_ic_try_store(target, token, c[word + 1] as u32, value) {
+                    return result;
+                }
+            }
+        }
+    }
+
+    // More than eight stable shapes remain bounded and semantically correct:
+    // execute the ordinary write without evicting a useful settled entry.
+    js_put_value_set_ic_miss(target, key, value, strict, std::ptr::null_mut())
 }
 
 // ---------------------------------------------------------------------------

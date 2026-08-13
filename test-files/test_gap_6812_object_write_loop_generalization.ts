@@ -85,6 +85,58 @@ for (let r = 0; r < 5; r++) {
 }
 console.log("mixed", fieldSum(mixed, ["x"]));
 
+// The static write PIC settles four inline and four outlined shape entries.
+const mixedEight: any[] = [
+  { x: 0, a: 1 },
+  { x: 0, b: 2 },
+  { x: 0, c: 3 },
+  { x: 0, d: 4 },
+  { x: 0, e: 5 },
+  { x: 0, f: 6 },
+  { x: 0, g: 7 },
+  { x: 0, h: 8 },
+];
+for (let r = 0; r < 5; r++) {
+  for (let i = 0; i < mixedEight.length; i++) {
+    const object: any = mixedEight[i];
+    object.x = r + i;
+  }
+}
+console.log("mixed-eight", fieldSum(mixedEight, ["x"]));
+
+let tailFrozenThrew = false;
+Object.freeze(mixedEight[7]);
+try {
+  for (let i = 0; i < mixedEight.length; i++) {
+    const object: any = mixedEight[i];
+    object.x = 100 + i;
+  }
+} catch (error) {
+  tailFrozenThrew = error instanceof TypeError;
+}
+console.log("tail-frozen", tailFrozenThrew, mixedEight[7].x);
+
+// A ninth shape takes the bounded semantic fallback without evicting the
+// settled eight ways.
+const mixedNine: any[] = [
+  { x: 0, a: 1 },
+  { x: 0, b: 2 },
+  { x: 0, c: 3 },
+  { x: 0, d: 4 },
+  { x: 0, e: 5 },
+  { x: 0, f: 6 },
+  { x: 0, g: 7 },
+  { x: 0, h: 8 },
+  { x: 0, i: 9 },
+];
+for (let r = 0; r < 5; r++) {
+  for (let i = 0; i < mixedNine.length; i++) {
+    const object: any = mixedNine[i];
+    object.x = r + i;
+  }
+}
+console.log("mixed-nine", fieldSum(mixedNine, ["x"]));
+
 let holeThrew = false;
 const hole: any[] = [{ x: 0 }, , { x: 0 }];
 try {
