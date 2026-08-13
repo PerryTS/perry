@@ -872,12 +872,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
 
     // Wall 54: self-register this compiled module's exports under its absolute
     // source path so a runtime `require(absolutePath.js)` (turbopack/Next.js
-    // page+chunk loading) resolves to it. `{:?}` debug-quotes to a valid JS
-    // string literal.
-    let path_register = format!(
-        "__perry_register_path_module({:?}, __cjs_module.exports);",
-        source_path.to_string_lossy()
-    );
+    // page+chunk loading) resolves to it. Reuse the exact literal used for the
+    // partial publication above so both registry operations have one key.
+    let path_register =
+        format!("__perry_register_path_module({module_path_literal}, __cjs_module.exports);");
     let wrapped = if let Some(flat_class) = &flat_default_class {
         // Issue #4933 — flat emission. Drop the IIFE and run the CommonJS body
         // at ESM module scope: `module.exports = {flat_class}` then resolves to

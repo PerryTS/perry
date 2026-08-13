@@ -247,6 +247,14 @@ enum PathModuleStatus {
     Failed(u64),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PathModuleRequireError {
+    Initializer(u64),
+    /// Defensive fail-closed result for a state that would otherwise make the
+    /// logical loader owner wait on a foreign initializer.
+    OwnershipConflict,
+}
+
 #[derive(Debug)]
 struct PathModuleEntry {
     init_addr: Option<usize>,
@@ -254,6 +262,10 @@ struct PathModuleEntry {
     /// initialized CommonJS export and must not be confused with a miss.
     exports: Option<u64>,
     status: PathModuleStatus,
+    /// A generated initializer claimed through `require_with`. Wrapper
+    /// partial/final publication also runs for eagerly initialized modules, so
+    /// `init_addr` alone cannot distinguish the two completion boundaries.
+    active_claim: Option<std::thread::ThreadId>,
 }
 
 #[derive(Default)]
@@ -275,6 +287,10 @@ struct PathModuleState {
 struct PathModuleRegistry {
     state: std::sync::Mutex<PathModuleState>,
     ready: std::sync::Condvar,
+    /// Perry heaps and mutable-root scanners are thread-local. The provider
+    /// registry is process-global for app-dylib symbol resolution, but its JS
+    /// values must remain confined to the one runtime thread that owns them.
+    runtime_owner: std::sync::OnceLock<std::thread::ThreadId>,
 }
 
 impl Default for PathModuleRegistry {
@@ -282,6 +298,7 @@ impl Default for PathModuleRegistry {
         Self {
             state: std::sync::Mutex::new(PathModuleState::default()),
             ready: std::sync::Condvar::new(),
+            runtime_owner: std::sync::OnceLock::new(),
         }
     }
 }
@@ -293,6 +310,17 @@ impl PathModuleRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn bind_runtime_owner(&self) -> bool {
+        let current = std::thread::current().id();
+        self.runtime_owner.get_or_init(|| current) == &current
+    }
+
+    fn is_runtime_owner(&self) -> bool {
+        self.runtime_owner
+            .get()
+            .is_some_and(|owner| *owner == std::thread::current().id())
+    }
+
     /// Register one canonical path -> initializer mapping. The same mapping is
     /// idempotent. A second address for the same canonical file is rejected so
     /// an alias can never create a second logical module initialization.
@@ -302,6 +330,7 @@ impl PathModuleRegistry {
             init_addr: None,
             exports: None,
             status: PathModuleStatus::Registered,
+            active_claim: None,
         });
         if let Some(existing) = entry.init_addr {
             return existing == init_addr;
@@ -313,20 +342,32 @@ impl PathModuleRegistry {
     /// Publish the initial CommonJS `exports` object before the wrapper body.
     /// Only same-thread recursive loads may observe it; unrelated waiters stay
     /// parked while the status is `Initializing`.
-    fn register_partial_exports(&self, key: String, exports: u64) {
+    fn register_partial_exports(&self, key: String, exports: u64) -> bool {
+        let current = std::thread::current().id();
         let stored = {
             let mut state = self.lock();
+            if state.loader_owner.is_some_and(|owner| owner != current) {
+                // Generated code on a second thread must not create a foreign
+                // `Initializing` entry while the logical loader is owned. If
+                // it did, the owner could wait for this entry while this
+                // thread waits for the owner's module. The FFI caller turns
+                // this rejection into a JS exception.
+                return false;
+            }
             let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
                 init_addr: None,
                 exports: None,
                 status: PathModuleStatus::Registered,
+                active_claim: None,
             });
-            if matches!(entry.status, PathModuleStatus::Failed(_)) {
+            if matches!(entry.status, PathModuleStatus::Failed(_))
+                || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
+            {
                 false
             } else {
                 entry.exports = Some(exports);
                 if entry.status == PathModuleStatus::Registered {
-                    entry.status = PathModuleStatus::Initializing(std::thread::current().id());
+                    entry.status = PathModuleStatus::Initializing(current);
                 }
                 true
             }
@@ -337,25 +378,37 @@ impl PathModuleRegistry {
         if stored {
             crate::gc::runtime_write_barrier_root_nanbox(exports);
         }
+        stored
     }
 
     /// Store the wrapper's final `module.exports`. Lazy modules remain owned by
     /// `require_with` until the generated init function returns (namespace
-    /// population can still follow the CJS body). Eager modules have no
-    /// registered init address, so this call is their completion boundary.
-    fn register_final_exports(&self, key: String, exports: u64) {
+    /// population can still follow the CJS body). A wrapper running without an
+    /// active lazy claim is eager, so this call is its completion boundary even
+    /// if path lookup also registered the initializer's address.
+    fn register_final_exports(&self, key: String, exports: u64) -> bool {
+        let current = std::thread::current().id();
         let (stored, completed_eager) = {
             let mut state = self.lock();
             let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
                 init_addr: None,
                 exports: None,
                 status: PathModuleStatus::Registered,
+                active_claim: None,
             });
-            if matches!(entry.status, PathModuleStatus::Failed(_)) {
+            if matches!(entry.status, PathModuleStatus::Failed(_))
+                || entry.active_claim.is_some_and(|owner| owner != current)
+                || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
+            {
                 (false, false)
             } else {
                 entry.exports = Some(exports);
-                let completed_eager = entry.init_addr.is_none();
+                // Every CJS wrapper publishes a partial/final pair. A final
+                // store completes an eager execution, even when an init
+                // address was also registered for path lookup. A lazy claim
+                // remains `Initializing` until its generated init returns, so
+                // a later namespace-population throw is still cached.
+                let completed_eager = entry.active_claim.is_none();
                 if completed_eager {
                     entry.status = PathModuleStatus::Initialized;
                 }
@@ -368,6 +421,7 @@ impl PathModuleRegistry {
         if completed_eager {
             self.ready.notify_all();
         }
+        stored
     }
 
     /// Return the value for `key`, initializing it once when necessary.
@@ -379,7 +433,7 @@ impl PathModuleRegistry {
         &self,
         key: &str,
         initialize: &dyn Fn(usize) -> Result<(), u64>,
-    ) -> Result<Option<u64>, u64> {
+    ) -> Result<Option<u64>, PathModuleRequireError> {
         let current = std::thread::current().id();
         let init_addr = loop {
             let mut state = self.lock();
@@ -388,12 +442,17 @@ impl PathModuleRegistry {
             };
             match entry.status {
                 PathModuleStatus::Initialized => return Ok(entry.exports),
-                PathModuleStatus::Failed(error) => return Err(error),
+                PathModuleStatus::Failed(error) => {
+                    return Err(PathModuleRequireError::Initializer(error));
+                }
                 PathModuleStatus::Initializing(owner) if owner == current => {
                     // CommonJS cycle: the owner sees its own partial exports.
                     return Ok(entry.exports);
                 }
                 PathModuleStatus::Initializing(_) => {
+                    if state.loader_owner == Some(current) {
+                        return Err(PathModuleRequireError::OwnershipConflict);
+                    }
                     drop(
                         self.ready
                             .wait(state)
@@ -404,6 +463,23 @@ impl PathModuleRegistry {
                     let Some(addr) = entry.init_addr else {
                         return Ok(entry.exports);
                     };
+                    if state.entries.values().any(|candidate| {
+                        matches!(
+                            candidate.status,
+                            PathModuleStatus::Initializing(owner) if owner != current
+                        )
+                    }) {
+                        // An eager initializer started without a lazy-loader
+                        // claim. Let it finish before granting ownership; it
+                        // can recursively claim the loader itself without
+                        // forming an A-waits-B / B-waits-A cycle.
+                        drop(
+                            self.ready
+                                .wait(state)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                        continue;
+                    }
                     match state.loader_owner {
                         Some(owner) if owner != current => {
                             drop(
@@ -424,6 +500,7 @@ impl PathModuleRegistry {
                         .get_mut(key)
                         .expect("path entry disappeared while claiming loader ownership");
                     entry.status = PathModuleStatus::Initializing(current);
+                    entry.active_claim = Some(current);
                     break addr;
                 }
             }
@@ -438,6 +515,8 @@ impl PathModuleRegistry {
                 .entries
                 .get_mut(key)
                 .expect("path initializer entry disappeared while it was running");
+            debug_assert_eq!(entry.active_claim, Some(current));
+            entry.active_claim = None;
             let (result, failed_error) = match outcome {
                 Ok(()) => {
                     entry.status = PathModuleStatus::Initialized;
@@ -446,7 +525,7 @@ impl PathModuleRegistry {
                 Err(error) => {
                     entry.exports = None;
                     entry.status = PathModuleStatus::Failed(error);
-                    (Err(error), Some(error))
+                    (Err(PathModuleRequireError::Initializer(error)), Some(error))
                 }
             };
             debug_assert_eq!(state.loader_owner, Some(current));
@@ -494,6 +573,16 @@ impl PathModuleRegistry {
 static MODULE_PATH_REGISTRY: std::sync::LazyLock<PathModuleRegistry> =
     std::sync::LazyLock::new(PathModuleRegistry::default);
 
+fn require_path_module_runtime_owner(operation: &str) {
+    if MODULE_PATH_REGISTRY.bind_runtime_owner() {
+        return;
+    }
+    let message = format!(
+        "Perry path-module {operation} must run on the runtime thread that owns the JavaScript heap"
+    );
+    crate::fs::validate::throw_error_with_code(&message, "ERR_PERRY_PATH_MODULE_THREAD")
+}
+
 fn canonicalize_module_path(path: &str) -> String {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
@@ -510,6 +599,7 @@ fn canonicalize_module_path(path: &str) -> String {
 /// initializer (from `ptrtoint` of the symbol).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i64, init_addr: i64) {
+    require_path_module_runtime_owner("initializer registration");
     let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
     let path = String::from_utf8_lossy(slice).into_owned();
     let key = canonicalize_module_path(&path);
@@ -524,9 +614,15 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 /// generated initializer to complete.
 #[no_mangle]
 pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
+    require_path_module_runtime_owner("partial-export publication");
     let path = value_to_string(path_value, "path");
     let key = canonicalize_module_path(&path);
-    MODULE_PATH_REGISTRY.register_partial_exports(key, exports.to_bits());
+    if !MODULE_PATH_REGISTRY.register_partial_exports(key, exports.to_bits()) {
+        crate::fs::validate::throw_error_with_code(
+            "Perry rejected path-module partial exports from a non-owner initializer",
+            "ERR_PERRY_PATH_MODULE_OWNER",
+        );
+    }
 }
 
 /// Codegen FFI: register an AOT-compiled module's exports under its absolute
@@ -534,9 +630,15 @@ pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64)
 /// [`MODULE_PATH_REGISTRY`].
 #[no_mangle]
 pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
+    require_path_module_runtime_owner("final-export publication");
     let path = value_to_string(path_value, "path");
     let key = canonicalize_module_path(&path);
-    MODULE_PATH_REGISTRY.register_final_exports(key, exports.to_bits());
+    if !MODULE_PATH_REGISTRY.register_final_exports(key, exports.to_bits()) {
+        crate::fs::validate::throw_error_with_code(
+            "Perry rejected path-module final exports from a non-owner initializer",
+            "ERR_PERRY_PATH_MODULE_OWNER",
+        );
+    }
 }
 
 fn directory_module_candidates(key: &str) -> Vec<String> {
@@ -572,7 +674,7 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
     .map_err(f64::to_bits)
 }
 
-fn require_path_key(key: &str) -> Result<Option<u64>, u64> {
+fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
     MODULE_PATH_REGISTRY.require_with(key, &run_path_initializer)
 }
 
@@ -581,18 +683,35 @@ fn require_path_key(key: &str) -> Result<Option<u64>, u64> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    require_path_module_runtime_owner("require");
     let path = value_to_string(path_value, "id");
     let key = canonicalize_module_path(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return f64::from_bits(bits),
-        Err(error) => crate::exception::js_throw(f64::from_bits(error)),
+        Err(PathModuleRequireError::Initializer(error)) => {
+            crate::exception::js_throw(f64::from_bits(error))
+        }
+        Err(PathModuleRequireError::OwnershipConflict) => {
+            crate::fs::validate::throw_error_with_code(
+                "Perry rejected a cross-owner path-module initialization cycle",
+                "ERR_PERRY_PATH_MODULE_OWNER",
+            )
+        }
         Ok(None) => {}
     }
     for candidate in directory_module_candidates(&key) {
         let candidate = canonicalize_module_path(&candidate);
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return f64::from_bits(bits),
-            Err(error) => crate::exception::js_throw(f64::from_bits(error)),
+            Err(PathModuleRequireError::Initializer(error)) => {
+                crate::exception::js_throw(f64::from_bits(error))
+            }
+            Err(PathModuleRequireError::OwnershipConflict) => {
+                crate::fs::validate::throw_error_with_code(
+                    "Perry rejected a cross-owner path-module initialization cycle",
+                    "ERR_PERRY_PATH_MODULE_OWNER",
+                )
+            }
             Ok(None) => {}
         }
     }
@@ -604,6 +723,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
 /// returned value is undefined to distinguish that value from a registry miss.
 #[no_mangle]
 pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
+    require_path_module_runtime_owner("presence lookup");
     let path = value_to_string(path_value, "id");
     let key = canonicalize_module_path(&path);
     let found = MODULE_PATH_REGISTRY.has_exports(&key)
@@ -617,12 +737,15 @@ pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
 /// Keep path-registry exports and cached exception values alive and rewrite
 /// them when a copying collection moves their referents.
 pub fn scan_module_path_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    MODULE_PATH_REGISTRY.scan_roots(visitor);
+    if MODULE_PATH_REGISTRY.is_runtime_owner() {
+        MODULE_PATH_REGISTRY.scan_roots(visitor);
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn test_store_path_module_root(key: &str, value_bits: u64) {
-    MODULE_PATH_REGISTRY.register_final_exports(key.to_string(), value_bits);
+    assert!(MODULE_PATH_REGISTRY.bind_runtime_owner());
+    assert!(MODULE_PATH_REGISTRY.register_final_exports(key.to_string(), value_bits));
 }
 
 #[cfg(test)]
@@ -914,14 +1037,21 @@ mod path_module_registry_tests {
             _ => panic!("unexpected initializer address {addr}"),
         };
         calls[call_index].fetch_add(1, Ordering::Relaxed);
-        registry.register_partial_exports(key.into(), partial);
+        assert!(registry.register_partial_exports(key.into(), partial));
         let observed = registry.require_with(other_key, &|next_addr| {
             initialize_two_key_cycle(registry, gate, calls, partial_observations, next_addr)
-        })?;
+        });
+        let observed = match observed {
+            Ok(value) => value,
+            Err(PathModuleRequireError::Initializer(error)) => return Err(error),
+            Err(PathModuleRequireError::OwnershipConflict) => {
+                panic!("loader serialization admitted a cross-owner cycle")
+            }
+        };
         if observed == Some(other_partial) {
             partial_observations.fetch_add(1, Ordering::Relaxed);
         }
-        registry.register_final_exports(key.into(), final_value);
+        assert!(registry.register_final_exports(key.into(), final_value));
         Ok(())
     }
 
@@ -935,12 +1065,14 @@ mod path_module_registry_tests {
             .require_with("route.js", &|addr| {
                 assert_eq!(addr, 7);
                 calls.fetch_add(1, Ordering::Relaxed);
-                registry.register_partial_exports("route.js".into(), 0xA1);
+                assert!(registry.register_partial_exports("route.js".into(), 0xA1));
                 let recursive = registry.require_with("route.js", &|_| {
                     panic!("recursive load must not execute the initializer")
-                })?;
+                });
+                let recursive =
+                    recursive.expect("same-owner recursive load must return partial exports");
                 assert_eq!(recursive, Some(0xA1));
-                registry.register_final_exports("route.js".into(), 0xA2);
+                assert!(registry.register_final_exports("route.js".into(), 0xA2));
                 Ok(())
             })
             .unwrap();
@@ -971,10 +1103,10 @@ mod path_module_registry_tests {
                 registry.require_with("chunk.js", &|addr| {
                     assert_eq!(addr, 11);
                     calls.fetch_add(1, Ordering::Relaxed);
-                    registry.register_partial_exports("chunk.js".into(), 0xB1);
+                    assert!(registry.register_partial_exports("chunk.js".into(), 0xB1));
                     init_entered.wait();
                     release_init.wait();
-                    registry.register_final_exports("chunk.js".into(), 0xB2);
+                    assert!(registry.register_final_exports("chunk.js".into(), 0xB2));
                     Ok(())
                 })
             }));
@@ -1055,13 +1187,82 @@ mod path_module_registry_tests {
     }
 
     #[test]
+    fn foreign_partial_publication_is_rejected_while_loader_is_owned() {
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.register_init("a.js".into(), 41));
+        assert!(registry.register_init("b.js".into(), 43));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let release = Arc::new(Barrier::new(2));
+
+        let worker_registry = Arc::clone(&registry);
+        let worker_release = Arc::clone(&release);
+        let worker = std::thread::spawn(move || {
+            worker_registry.require_with("a.js", &|addr| {
+                assert_eq!(addr, 41);
+                assert!(worker_registry.register_partial_exports("a.js".into(), 0xA1));
+                entered_tx.send(()).unwrap();
+                worker_release.wait();
+                assert_eq!(
+                    worker_registry.require_with("b.js", &|nested_addr| {
+                        assert_eq!(nested_addr, 43);
+                        assert!(worker_registry.register_partial_exports("b.js".into(), 0xB1));
+                        assert!(worker_registry.register_final_exports("b.js".into(), 0xB2));
+                        Ok(())
+                    }),
+                    Ok(Some(0xB2))
+                );
+                assert!(worker_registry.register_final_exports("a.js".into(), 0xA2));
+                Ok(())
+            })
+        });
+
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("loader owner did not enter generated initialization");
+        assert!(
+            !registry.register_partial_exports("b.js".into(), 0xDEAD),
+            "a foreign initializer must not publish while the loader is owned"
+        );
+        release.wait();
+        assert_eq!(worker.join().unwrap(), Ok(Some(0xA2)));
+    }
+
+    #[test]
+    fn registered_initializer_can_complete_through_an_eager_wrapper_pair() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("eager.js".into(), 47));
+        assert!(registry.register_partial_exports("eager.js".into(), 0xE1));
+        assert!(registry.register_final_exports("eager.js".into(), 0xE2));
+        assert_eq!(
+            registry.require_with("eager.js", &|_| panic!(
+                "eager module must already be complete"
+            )),
+            Ok(Some(0xE2))
+        );
+    }
+
+    #[test]
+    fn provider_registry_binds_to_one_runtime_thread() {
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.bind_runtime_owner());
+        assert!(registry.is_runtime_owner());
+        let worker_registry = Arc::clone(&registry);
+        assert!(
+            !std::thread::spawn(move || worker_registry.bind_runtime_owner())
+                .join()
+                .unwrap()
+        );
+        assert!(registry.is_runtime_owner());
+    }
+
+    #[test]
     fn undefined_export_is_present_and_distinct_from_a_miss() {
         let registry = PathModuleRegistry::default();
         assert!(registry.register_init("undefined.js".into(), 13));
         let value = registry
             .require_with("undefined.js", &|_| {
-                registry.register_partial_exports("undefined.js".into(), TAG_UNDEFINED);
-                registry.register_final_exports("undefined.js".into(), TAG_UNDEFINED);
+                assert!(registry.register_partial_exports("undefined.js".into(), TAG_UNDEFINED));
+                assert!(registry.register_final_exports("undefined.js".into(), TAG_UNDEFINED));
                 Ok(())
             })
             .unwrap();
@@ -1108,13 +1309,16 @@ mod path_module_registry_tests {
         init_entered.wait();
         release_init.wait();
         for worker in workers {
-            assert_eq!(worker.join().unwrap(), Err(error));
+            assert_eq!(
+                worker.join().unwrap(),
+                Err(PathModuleRequireError::Initializer(error))
+            );
         }
         assert_eq!(
             registry.require_with("throws.js", &|_| {
                 panic!("failed path modules use the explicit no-retry policy")
             }),
-            Err(error)
+            Err(PathModuleRequireError::Initializer(error))
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
@@ -1145,7 +1349,7 @@ mod path_module_registry_tests {
         assert_eq!(
             registry.require_with(&direct, &|addr| {
                 seen.store(addr, Ordering::Relaxed);
-                registry.register_final_exports(direct.clone(), 0xC1);
+                assert!(registry.register_final_exports(direct.clone(), 0xC1));
                 Ok(())
             }),
             Ok(Some(0xC1))

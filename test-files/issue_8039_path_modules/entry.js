@@ -5,6 +5,9 @@ async function request(id) {
 }
 
 async function verifyPass(label) {
+    // This exercises same-event-loop re-entrancy and once-only initialization.
+    // OS-thread waiters and logical loader ownership are covered by the
+    // PathModuleRegistry tests in perry-runtime/src/module_require.rs.
     const values = await Promise.all(
         Array.from({ length: 20 }, (_, index) => request(label + "-" + index)),
     );
