@@ -1154,13 +1154,10 @@ pub(crate) fn lower_let(
                 let bptr = blk.load(I64, &slot_clone);
                 if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
                     let init_i32 = crate::expr::lower_i32_control_store_value(ctx, init_expr)?;
-                    ctx.block()
-                        .call_void("js_i32_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                    crate::expr::store_async_i32_control_cell(ctx, &bptr, &init_i32);
                 } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, id) {
                     let init_i1 = crate::expr::lower_i1_control_store_value(ctx, init_expr)?;
-                    let init_i32 = ctx.block().zext(I1, &init_i1, I32);
-                    ctx.block()
-                        .call_void("js_bool_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                    crate::expr::store_async_i1_control_cell(ctx, &bptr, &init_i1);
                 } else {
                     let init_val =
                         lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;

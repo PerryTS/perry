@@ -2297,6 +2297,40 @@ pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<O
     Ok(None)
 }
 
+/// Load a compiler-private async i32 control cell directly.
+///
+/// These cells are allocated by `Stmt::PreallocateBoxes` before the generated
+/// state-machine closures are created. Unlike a general user capture, the
+/// pointer is therefore compiler-minted and its pointee representation is
+/// proven: the `I32Box` value is the first (and only) field. Keep ordinary
+/// boxes on the checked runtime path; this helper is deliberately reachable
+/// only from the `is_compiler_private_async_i32_control_local` arms below.
+pub(crate) fn load_async_i32_control_cell(ctx: &mut FnCtx<'_>, cell: &str) -> String {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().load(I32, &ptr)
+}
+
+/// Store a compiler-private async i32 control cell directly. See
+/// `load_async_i32_control_cell` for the allocation/provenance proof.
+pub(crate) fn store_async_i32_control_cell(ctx: &mut FnCtx<'_>, cell: &str, value: &str) {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().store(I32, value, &ptr);
+}
+
+/// Load a compiler-private async boolean control cell directly. `BoolBox`'s
+/// value is a Rust `bool`, represented as LLVM i1 at the FFI boundary.
+pub(crate) fn load_async_i1_control_cell(ctx: &mut FnCtx<'_>, cell: &str) -> String {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().load(I1, &ptr)
+}
+
+/// Store a compiler-private async boolean control cell directly. See
+/// `load_async_i1_control_cell` for the representation proof.
+pub(crate) fn store_async_i1_control_cell(ctx: &mut FnCtx<'_>, cell: &str, value: &str) {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().store(I1, value, &ptr);
+}
+
 pub(crate) fn box_i1_for_compat_shadow(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let bits = ctx.block().select(
         I1,
@@ -2381,7 +2415,7 @@ fn lower_async_i32_control_const_compare(
     let Some(ptr) = load_boxed_local_pointer(ctx, id)? else {
         return Ok(None);
     };
-    let value = ctx.block().call(I32, "js_i32_box_get", &[(I64, &ptr)]);
+    let value = load_async_i32_control_cell(ctx, &ptr);
     let constant_s = constant.to_string();
     let (lhs, rhs) = if local_on_left {
         (value.as_str(), constant_s.as_str())
@@ -2921,7 +2955,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value = ctx.block().call(I32, "js_i32_box_get", &[(I64, &ptr)]);
+            let value = load_async_i32_control_cell(ctx, &ptr);
             let lowered = LoweredValue::i32(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -2941,8 +2975,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value_i32 = ctx.block().call(I32, "js_bool_box_get", &[(I64, &ptr)]);
-            let value = ctx.block().icmp_ne(I32, &value_i32, "0");
+            let value = load_async_i1_control_cell(ctx, &ptr);
             let lowered = LoweredValue::i1(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -3009,8 +3042,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i32 = lower_i32_control_store_value(ctx, value)?;
-            ctx.block()
-                .call_void("js_i32_box_set", &[(I64, &ptr), (I32, &value_i32)]);
+            store_async_i32_control_cell(ctx, &ptr, &value_i32);
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             record_int_facts_for_local_set(ctx, *id, value);
             let lowered = LoweredValue::i32(value_i32);
@@ -3035,9 +3067,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i1 = lower_i1_control_store_value(ctx, value)?;
-            let value_i32 = ctx.block().zext(I1, &value_i1, I32);
-            ctx.block()
-                .call_void("js_bool_box_set", &[(I64, &ptr), (I32, &value_i32)]);
+            store_async_i1_control_cell(ctx, &ptr, &value_i1);
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             let lowered = LoweredValue::i1(value_i1);
             ctx.record_lowered_value(

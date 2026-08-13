@@ -7095,19 +7095,31 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         compiler_private_async_control_body(),
     );
 
-    for symbol in [
-        "call i64 @js_i32_box_alloc",
-        "call i32 @js_i32_box_get",
-        "call void @js_i32_box_set",
-        "call i64 @js_bool_box_alloc",
-        "call i32 @js_bool_box_get",
-        "call void @js_bool_box_set",
-    ] {
+    for symbol in ["call i64 @js_i32_box_alloc", "call i64 @js_bool_box_alloc"] {
         assert!(
             ir.contains(symbol),
             "expected compiler-private control lowering to emit {symbol}:\n{ir}"
         );
     }
+    for checked_access in [
+        "call i32 @js_i32_box_get",
+        "call void @js_i32_box_set",
+        "call i32 @js_bool_box_get",
+        "call void @js_bool_box_set",
+    ] {
+        assert!(
+            !ir.contains(checked_access),
+            "proven compiler-private control cells must bypass checked box access ({checked_access}):\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("inttoptr i64")
+            && ir.contains("load i32, ptr")
+            && ir.contains("store i32")
+            && ir.contains("load i1, ptr")
+            && ir.contains("store i1"),
+        "compiler-private controls should use direct typed cell loads/stores:\n{ir}"
+    );
     assert!(
         ir.contains("icmp eq i32"),
         "__gen_state constant comparisons should stay as i32 compares:\n{ir}"
