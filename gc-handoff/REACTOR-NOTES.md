@@ -189,6 +189,7 @@ Against the committed Linux snapshot (`test-parity/gap_snapshot.json`, 15 entrie
   * `test_gap_specabi_reassign` — an output mismatch
     (`plain: 99 101 2` vs `plain: 0 0 2`, `captured: 77:2` vs `captured: 0:2`).
     A spec-ABI codegen defect; nothing in this change can alter program output.
+    Filed as **#8006**.
   * `test_gap_zlib_4917_level` — `zlib.deflateRawSync` / `inflateRawSync`.
     `js_zlib_deflate_raw_sync` and `js_zlib_inflate_raw_sync` exist **only** in
     `perry-stdlib/src/zlib.rs`; `perry-ext-zlib` does not define them. The
@@ -201,6 +202,7 @@ Against the committed Linux snapshot (`test-parity/gap_snapshot.json`, 15 entrie
     `scripts/run_gap_tests.sh` on `main` today, and it is not in the snapshot
     either. It is deliberately **not** routed around here: excluding `zlib` from
     the ext-routed set would hide a real API gap to make a number green.
+    Filed as **#8005**.
 
 There is no `test-parity/gap_snapshot.macos.json` in the tree, so no macOS gap
 baseline has ever been recorded; the comparison above is against the Linux one.
