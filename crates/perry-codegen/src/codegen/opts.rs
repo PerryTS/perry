@@ -555,6 +555,12 @@ pub struct ImportedClass {
     /// instances by the source module's constructor. `None` falls back
     /// to a freshly-assigned id (legacy behavior).
     pub source_class_id: Option<u32>,
+    /// #7170 R2: LOCAL imported function bindings whose source proof returns
+    /// this exact anonymous-record class. Codegen projects these entries into
+    /// `ModuleDispatchFacts::imported_return_shapes` before collecting region
+    /// facts. Kept beside the class metadata so the proof and the field layout
+    /// it names enter the consumer atomically and share one object-cache key.
+    pub return_shape_imports: Vec<String>,
 }
 
 /// Constructor metadata for a class imported from another module.

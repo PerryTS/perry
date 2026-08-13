@@ -1559,7 +1559,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // proven-`this` admission consults them (§5.2 shape barriers, the
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
-    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let imported_return_shapes = opts
+        .imported_classes
+        .iter()
+        .flat_map(|class| {
+            class
+                .return_shape_imports
+                .iter()
+                .map(move |local| (local.clone(), class.name.clone()))
+        })
+        .collect();
+    module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),

@@ -9,9 +9,10 @@
 //
 // The promotions this file is *about* are asserted structurally, not here:
 // `perry test-files/test_gap_repsel_return_shape.ts --opt-report` must list
-// `producedRec`, `shaped`, `survivor`, `acc`, `poisoned` and friends as
-// `Ptr<Shape>`. A green run of this file with zero promotions would be a
-// vacuous pass (#7024/#7025), so the count is checked in review, not inferred.
+// `producedRec`, `shaped`, `survivor`, `imported`, `acc`, `poisoned` and
+// friends as `Ptr<Shape>`. A green run of this file with zero promotions would
+// be a vacuous pass (#7024/#7025), so the count is checked in review, not
+// inferred.
 //
 // Covered:
 //  1. producer-side: a contained local whose only escape is `return o`,
@@ -24,7 +25,13 @@
 //     slot must be re-derived and rewritten, RFC §5.6),
 //  6. `finally` running after the return value is computed,
 //  7. producers that must NOT carry a fact: an aliased cache, a
-//     fall-through-to-undefined path, an indirect callee.
+//     fall-through-to-undefined path, an indirect callee,
+//  8. an anonymous-record producer imported under a renamed local binding,
+//     kept live across collection-triggering churn before its fields are read.
+
+import {
+  makeBarrelRow as makeImportedRow,
+} from "./_helpers/repsel_cross_module_return_shape_barrel.ts";
 
 class Rec {
   id: number;
@@ -161,6 +168,20 @@ function survivesGc(n: number): string {
   return survivor.name + "/" + survivor.score.toFixed(2) + "/" + sink;
 }
 
+// 8. The callee is an ExternFuncRef rather than a module-local FuncRef. The
+// driver resolves the export back to its source module and installs the
+// content-addressed anonymous shape under this exact renamed local binding.
+function importedSurvivesGc(n: number): string {
+  const imported = makeImportedRow(5);
+  imported.value = imported.value + 1;
+  let sink = 0;
+  for (let i = 0; i < n; i++) {
+    churn(i);
+    sink = sink + imported.value;
+  }
+  return imported.key + "/" + imported.tag + "/" + imported.value + "/" + sink;
+}
+
 // 6. `finally` runs after the return value is computed but before the caller
 // resumes — the ordering the return exemption's soundness argument rests on.
 function returnThenFinally(): string {
@@ -209,6 +230,7 @@ out.push(readMixed(1));
 out.push(readMixed(2));
 out.push(readMixed(3));
 out.push(survivesGc(120000));
+out.push(importedSurvivesGc(120000));
 out.push(returnThenFinally());
 
 const c1 = getCached();

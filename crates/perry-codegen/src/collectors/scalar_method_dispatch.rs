@@ -88,6 +88,11 @@ pub struct ModuleDispatchFacts {
     /// (`collectors/ptr_shape_returns.rs`); a call to such a function is then
     /// a rule-1 provenance seed exactly as `new C(...)` is.
     return_shape_functions: HashMap<u32, String>,
+    /// Representation-selection Phase 3b, #7170 R2: LOCAL imported function
+    /// name -> exact anonymous-record class returned by its source body.
+    /// Populated by the compile driver from a whole-program pre-pass over
+    /// final HIR, after this module's own barrier/producer facts are collected.
+    imported_return_shapes: HashMap<String, String>,
     /// Representation-selection Phase 3b, #7170 R1: `LocalId` -> `FuncId` for
     /// every local that provably names one closure literal, module-wide.
     ///
@@ -115,6 +120,7 @@ impl Default for ModuleDispatchFacts {
             numarray_prototype_index_barriers: true,
             freeze_barrier_sites: true,
             return_shape_functions: HashMap::new(),
+            imported_return_shapes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }
     }
@@ -191,6 +197,22 @@ impl ModuleDispatchFacts {
             .map(String::as_str)
     }
 
+    /// The anonymous-record class returned by one statically-resolved native
+    /// import, if the whole-program pre-pass proved that source body.
+    pub(crate) fn imported_return_shape_class(&self, local_name: &str) -> Option<&str> {
+        self.imported_return_shapes
+            .get(local_name)
+            .map(String::as_str)
+    }
+
+    /// Install the driver-resolved import whitelist after the module-local
+    /// barrier and producer scan has finished. Keeping this out of
+    /// [`collect_module_dispatch_facts`] preserves its module-only contract
+    /// for unit tests and producer pre-passes.
+    pub(crate) fn install_imported_return_shapes(&mut self, shapes: HashMap<String, String>) {
+        self.imported_return_shapes = shapes;
+    }
+
     /// Representation-selection Phase 3b, #7170 R1: the `FuncId` that
     /// `LocalGet(local_id)` in callee position provably names, or `None`.
     ///
@@ -212,6 +234,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         numarray_prototype_index_barriers: false,
         freeze_barrier_sites: false,
         return_shape_functions: HashMap::new(),
+        imported_return_shapes: HashMap::new(),
         // #7170 R1. Purely structural — no barrier flag feeds it, and it is
         // read only through `closure_binding_func`, whose every consumer treats
         // `None` as "take no seed". Computed here rather than lazily so the one
@@ -679,6 +702,7 @@ mod tests {
             numarray_prototype_index_barriers: false,
             freeze_barrier_sites: false,
             return_shape_functions: HashMap::new(),
+            imported_return_shapes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }
     }

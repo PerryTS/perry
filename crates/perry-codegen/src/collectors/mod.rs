@@ -82,6 +82,7 @@ pub(crate) use proven_this::{
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
+pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };

@@ -607,6 +607,13 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            // #7170 R2: these facts derive from producer HIR, not the
+            // consumer HIR hashed by this cache entry. Keep them in the
+            // ImportedClass record so proof + layout invalidate atomically.
+            buf.push_str(":return_shape_imports=");
+            let mut return_shape_imports = c.return_shape_imports.clone();
+            return_shape_imports.sort();
+            buf.push_str(&return_shape_imports.join(","));
             buf.push('|');
         }
         h.field("imported_classes", &buf);

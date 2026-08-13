@@ -279,6 +279,7 @@ fn imported_class_from_hir(
             .map(|field| field.ty.clone())
             .collect(),
         source_class_id: Some(class.id),
+        return_shape_imports: Vec::new(),
     }
 }
 
@@ -994,6 +995,15 @@ pub fn run_with_parse_cache(
     // Build a map of all exported functions with their return types from all modules
     let mut exported_func_return_types: BTreeMap<(String, String), perry_hir::types::Type> =
         BTreeMap::new();
+    // #7170 R2: final-HIR return-shape facts for directly exported native
+    // functions. Values are content-addressed anonymous-record class names;
+    // keys use the declaring path + exported symbol name, exactly like the
+    // function return-type metadata beside it. Import resolution later walks
+    // aliases/re-exports to this origin key before installing a consumer fact.
+    //
+    // Harvest all modules before rayon starts codegen so the result is
+    // independent of module compile order.
+    let mut exported_return_shapes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
     // Set of exported functions that were declared `async` in their source module.
     // We track this separately because users routinely write `async function f() { ... }`
     // without an explicit `Promise<T>` annotation, in which case `func.return_type` is the
@@ -1001,6 +1011,15 @@ pub fn run_with_parse_cache(
     let mut exported_async_funcs: BTreeSet<(String, String)> = BTreeSet::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
+        for (export_name, class_name) in perry_codegen::module_exported_return_shapes(hir_module) {
+            if let Some(class) = hir_module
+                .classes
+                .iter()
+                .find(|class| class.name == class_name)
+            {
+                exported_return_shapes.insert((path_str.clone(), export_name), class);
+            }
+        }
         for func in &hir_module.functions {
             if func.is_exported {
                 exported_func_param_counts
@@ -3769,6 +3788,45 @@ pub fn run_with_parse_cache(
                     // Imported return types
                     if let Some(return_type) = exported_func_return_types.get(&key) {
                         imported_return_types.insert(local_name.clone(), return_type.clone());
+                    }
+
+                    // #7170 R2: cross-module return-shape provenance. Resolve
+                    // the same exact origin path/name the call-symbol plumbing
+                    // above uses, then install both halves atomically:
+                    //
+                    //  * LOCAL ExternFuncRef name -> returned shape, and
+                    //  * the source class's field metadata in imported_classes.
+                    //
+                    // The producer pre-pass exports anonymous record shapes
+                    // only. Their names content-address the complete field
+                    // shape, so a same-named local class is the same layout;
+                    // named user classes remain fail-closed in this increment.
+                    let return_shape_origin_name = resolved_origin_name
+                        .as_ref()
+                        .unwrap_or(&exported_name)
+                        .clone();
+                    let return_shape_key = (origin_path.clone(), return_shape_origin_name);
+                    if let Some(class) = exported_return_shapes.get(&return_shape_key).copied() {
+                        let imported_index = match imported_classes
+                            .iter()
+                            .position(|imported| imported.name == class.name)
+                        {
+                            Some(index) => index,
+                            None => {
+                                let class_prefix =
+                                    compute_module_prefix(&origin_path, &ctx.project_root);
+                                imported_classes.push(imported_class_from_hir(
+                                    class,
+                                    class_prefix,
+                                    None,
+                                ));
+                                imported_classes.len() - 1
+                            }
+                        };
+                        let imported = &mut imported_classes[imported_index];
+                        if !imported.return_shape_imports.contains(&local_name) {
+                            imported.return_shape_imports.push(local_name.clone());
+                        }
                     }
 
                     // Imported async functions

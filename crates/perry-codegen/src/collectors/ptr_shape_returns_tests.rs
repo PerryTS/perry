@@ -286,6 +286,106 @@ fn call_to_a_return_shape_producer_is_provenance() {
     );
 }
 
+/// #7170 R2: the compile driver resolves an imported function binding to a
+/// source return-shape fact before parallel codegen. An `ExternFuncRef`
+/// carrying that exact LOCAL binding is therefore the same rule-1 provenance
+/// seed as the local `FuncRef` case above.
+///
+/// Sabotage: remove the `ExternFuncRef` arm in
+/// `find_return_shape_candidates`, or key it by an origin/export name instead
+/// of the HIR's local binding, and the positive/alias controls fail.
+#[test]
+fn imported_return_shape_is_provenance_by_exact_local_binding() {
+    let mut facts = super::super::collect_module_dispatch_facts(&Module::new("consumer"));
+    facts.install_imported_return_shapes(HashMap::from([(
+        "makeLocal".to_string(),
+        "C".to_string(),
+    )]));
+    let c = class_c();
+    let classes = classes_of(&c);
+
+    let caller = |callee_name: &str, local_id: u32| {
+        vec![
+            Stmt::Let {
+                id: local_id,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: callee_name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            },
+            store_x(local_id),
+        ]
+    };
+
+    let promoted = promote(&caller("makeLocal", 20), &classes, &facts);
+    assert_eq!(
+        promoted.get(&20).map(|fact| fact.class_name.as_str()),
+        Some("C")
+    );
+    assert!(
+        !promote(&caller("makeAtOrigin", 21), &classes, &facts).contains_key(&21),
+        "an origin/export spelling must not match a differently-named local import"
+    );
+}
+
+/// The whole-program pre-pass exports only direct function symbols returning
+/// content-addressed anonymous records. Named user classes remain fail-closed
+/// in this first cross-module increment, and aliases in `exported_functions`
+/// carry the same proven body under their consumer-visible export name.
+#[test]
+fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
+    const ANON: &str = "__AnonShape_0123456789abcdef";
+
+    let mut anon = class_c();
+    anon.name = ANON.to_string();
+    let mut producer = function(
+        70,
+        "makeRecord",
+        vec![Stmt::Return(Some(Expr::New {
+            class_name: ANON.to_string(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }))],
+    );
+    producer.is_exported = true;
+
+    let mut hir = Module::new("producer");
+    hir.classes = vec![anon, class_c()];
+    hir.functions = vec![
+        producer,
+        function(71, "makeNamed", vec![Stmt::Return(Some(new_c()))]),
+    ];
+    hir.exported_functions = vec![
+        ("recordAlias".to_string(), 70),
+        ("namedAlias".to_string(), 71),
+    ];
+
+    let exports = super::collect_exported_return_shapes(&hir);
+    assert_eq!(exports.get("makeRecord").map(String::as_str), Some(ANON));
+    assert_eq!(exports.get("recordAlias").map(String::as_str), Some(ANON));
+    assert!(!exports.contains_key("namedAlias"));
+
+    // The source module's barrier must suppress the exported fact just as it
+    // suppresses a same-module caller fact; the driver may not resurrect it.
+    hir.init = vec![Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(999)),
+        property: "x".to_string(),
+        byte_offset: 0,
+    })))];
+    assert!(super::collect_exported_return_shapes(&hir).is_empty());
+}
+
 /// `return new C()` directly is fresh by construction — no body proof needed.
 #[test]
 fn direct_new_return_is_a_fact() {

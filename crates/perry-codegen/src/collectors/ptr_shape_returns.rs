@@ -248,6 +248,46 @@ pub(crate) fn collect_return_shape_functions(
     out
 }
 
+/// Export name -> anonymous-record class for source functions whose final HIR
+/// carries a return-shape fact.
+///
+/// This is the producer half of #7170 R2's cross-module increment. It is run
+/// by the compile driver before parallel codegen, so an importing module never
+/// depends on whether its producer happened to compile first. Only direct HIR
+/// functions are exported here: imported `const` closures are live bindings
+/// fetched through variable getters, not the statically-named function symbol
+/// an `ExternFuncRef` call denotes. The first increment also restricts the
+/// payload to content-addressed anonymous shapes; equal names then mean equal
+/// field layouts across modules, while user-class name collisions remain
+/// fail-closed.
+pub(crate) fn collect_exported_return_shapes(hir: &Module) -> HashMap<String, String> {
+    let facts = super::scalar_method_dispatch::collect_module_dispatch_facts(hir);
+    let mut out = HashMap::new();
+
+    let mut insert = |export_name: &str, func_id: u32| {
+        let Some(class_name) = facts.return_shape_class(func_id) else {
+            return;
+        };
+        if !class_name.starts_with("__AnonShape_")
+            || !hir.classes.iter().any(|class| class.name == class_name)
+        {
+            return;
+        }
+        out.insert(export_name.to_string(), class_name.to_string());
+    };
+
+    for function in &hir.functions {
+        if function.is_exported {
+            insert(&function.name, function.id);
+        }
+    }
+    for (export_name, func_id) in &hir.exported_functions {
+        insert(export_name, *func_id);
+    }
+
+    out
+}
+
 /// Visit every expression of every executable body in the module, including
 /// inside nested closure bodies.
 ///
@@ -703,10 +743,12 @@ pub(crate) fn find_return_shape_candidates(
         if boxed_vars.contains(id) || module_globals.contains_key(id) {
             return;
         }
-        let Some(func_id) = callee_names_one_function(callee, module_dispatch) else {
-            return;
+        let class_name = match callee.as_ref() {
+            Expr::ExternFuncRef { name, .. } => module_dispatch.imported_return_shape_class(name),
+            _ => callee_names_one_function(callee, module_dispatch)
+                .and_then(|func_id| module_dispatch.return_shape_class(func_id)),
         };
-        if let Some(class_name) = module_dispatch.return_shape_class(func_id) {
+        if let Some(class_name) = class_name {
             candidates.insert(*id, class_name.to_string());
             seeded.insert(*id);
         }
@@ -735,8 +777,9 @@ pub(crate) fn find_return_shape_candidates(
 ///   `js_typed_feedback_closure_direct_call_guard` because it is populated in
 ///   statement order and a later rebinding invalidates it.
 ///
-/// Anything else — a property get, a computed callee, an `ExternFuncRef` —
-/// could resolve to a different body, and yields `None`.
+/// An `ExternFuncRef` is handled separately by the driver-built import
+/// whitelist: unlike a raw name, that table is keyed by the unique local
+/// import binding and already resolved through aliases/re-exports.
 fn callee_names_one_function(callee: &Expr, module_dispatch: &ModuleDispatchFacts) -> Option<u32> {
     match callee {
         Expr::FuncRef(func_id) => Some(*func_id),

@@ -362,6 +362,7 @@ fn key_stable_for_nested_type_hashmap_order() {
         field_types: vec![field_type],
         static_field_names: vec![],
         source_class_id: Some(7),
+        return_shape_imports: vec![],
     };
 
     a = empty_opts();
@@ -397,6 +398,7 @@ fn key_changes_with_imported_class_signature() {
         field_types: vec![],
         static_field_names: vec![],
         source_class_id: Some(42),
+        return_shape_imports: vec![],
     });
     b.imported_classes.push(ImportedClass {
         name: "Foo".into(),
@@ -417,6 +419,7 @@ fn key_changes_with_imported_class_signature() {
         field_types: vec![],
         static_field_names: vec![],
         source_class_id: Some(42),
+        return_shape_imports: vec![],
     });
     assert_ne!(
         compute_object_cache_key(&a, 1, "0.5.156"),
@@ -445,6 +448,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         field_types: vec![perry_hir::types::Type::Number],
         static_field_names: vec![],
         source_class_id: Some(42),
+        return_shape_imports: vec![],
     };
     let key_for = |class: ImportedClass| {
         let mut opts = empty_opts();
@@ -468,6 +472,16 @@ fn key_changes_with_imported_class_codegen_surface() {
     let mut changed = base.clone();
     changed.static_method_names = vec!["make".into()];
     assert_ne!(base_key, key_for(changed));
+
+    let mut changed = base.clone();
+    changed.return_shape_imports = vec!["makeRow".into()];
+    assert_ne!(base_key, key_for(changed));
+
+    let mut first_order = base.clone();
+    first_order.return_shape_imports = vec!["makeB".into(), "makeA".into()];
+    let mut second_order = base.clone();
+    second_order.return_shape_imports = vec!["makeA".into(), "makeB".into()];
+    assert_eq!(key_for(first_order), key_for(second_order));
 
     let mut changed = base.clone();
     changed.static_field_names = vec!["VERSION".into()];
