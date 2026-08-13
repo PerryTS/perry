@@ -1033,8 +1033,11 @@ pub(super) fn scan_remembered_dirty_slots_copying(
 }
 
 /// The young-pin latch was clear, the preflight was skipped on that proof, and
-/// the copier then met a pinned young object anyway — so the latch is
-/// incomplete and a pin site exists that does not go through `gc::pin_object`.
+/// the copier then met bytes that describe a pinned young object anyway.
+/// This is the instant relocation would become unsafe, but it does not by
+/// itself identify the violated invariant. In #7990 the header was internally
+/// impossible (`GC_TYPE_MAP | GC_FLAG_INTERNED`), and the fault disappeared
+/// when comparison operands were rooted; the pin latch itself was complete.
 ///
 /// There is no recovery: leaving the object in from-space strands the
 /// referring slot on memory `copying_reset_from_spaces_and_flip` is about to

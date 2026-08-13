@@ -101,6 +101,31 @@ fn strict_eq_rereads_its_left_operand_below_an_allocating_right_operand() {
     );
 }
 
+/// #7990 surfaced the same stale comparison-operand class through a different
+/// consumer: the copier reached bytes reporting the impossible combination
+/// `GC_TYPE_MAP | GC_FLAG_INTERNED`. Keep the reported typed-Map population in
+/// the regression. The generic object case above would stay green if a future
+/// type-analysis shortcut accidentally classified Maps as non-pointers.
+#[test]
+fn strict_eq_rereads_a_map_operand_below_an_allocating_right_operand() {
+    let ir = cmp_ir(
+        "streq_rooted_map_operand_7990",
+        CompareOp::Eq,
+        Expr::MapNew,
+        Expr::Object(vec![("right".to_string(), Expr::Number(2.0))]),
+    );
+    let left = call_operand_of(&ir, "js_eq", 0);
+    let right = call_operand_of(&ir, "js_eq", 1);
+    let left_producer = producer_line(&ir, &left);
+    let right_producer = producer_line(&ir, &right);
+    assert!(
+        left_producer > right_producer,
+        "js_eq's Map operand ({left}) is produced at line {left_producer}, above the right \
+         operand ({right}) at line {right_producer}. An intervening collection would leave \
+         the comparison holding a retired Map address (#7990).\n{ir}"
+    );
+}
+
 /// The complementary cost assertion: even with an allocating right operand,
 /// a proven-number left operand cannot be invalidated by relocation and must
 /// stay in its original register. A blanket "root every comparison" fix would
