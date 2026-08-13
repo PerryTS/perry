@@ -24,7 +24,7 @@ transition edges, and formal dictionary mode — is not implemented and should
 not be inferred from the merged phase labels.
 
 The original “within 1.5× Node” table is historical. Maintainer direction on
-#6759 raised the performance bar to beat Node and split the remaining compiler
+Issue `#6759` raised the performance bar to beat Node and split the remaining compiler
 coverage into follow-up campaigns. #6811 beat Node on the canonical object-write
 micro; #6812 tracks generalizing that narrow win. Static inline `in` caches and
 shape-cached enumeration remain separately scopeable work rather than hidden
