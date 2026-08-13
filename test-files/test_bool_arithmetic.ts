@@ -44,6 +44,12 @@ console.log(maybeBool + 2); // 42
 console.log(maybeBool * 2); // 8
 console.log(maybeBool > 2); // true
 
+// A nested `+` is not a canonical numeric operand merely because its declared
+// type says Number: this RHS is "41", so abstract relational comparison is
+// required even though the left Boolean is native.
+const liar: number = "4" as any;
+console.log(t < (liar + 1)); // true
+
 // === Boolean in while loop ===
 let i = 0;
 let flag = true;

@@ -7,6 +7,7 @@ use crate::temp_root_coverage::main_ir_for as ir_for;
 
 const FLAG: u32 = 1;
 const RESULT: u32 = 2;
+const LIAR: u32 = 3;
 
 fn proven_flag() -> Stmt {
     Stmt::Let {
@@ -83,6 +84,45 @@ fn proven_boolean_relational_compare_uses_native_fcmp() {
     assert!(
         !ir.contains("call double @js_rel_lt("),
         "proven Boolean relational compare retained js_rel_lt:\n{ir}"
+    );
+}
+
+#[test]
+fn proven_boolean_compare_rejects_declared_only_nested_add() {
+    let ir = ir_for(
+        "bool_relational_declared_only_add",
+        vec![
+            proven_flag(),
+            Stmt::Let {
+                id: LIAR,
+                name: "liar".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                // Mirrors `let liar: number = "4" as any`: annotations are
+                // erased, so the slot may hold a NaN-boxed string at runtime.
+                init: Some(Expr::String("4".to_string())),
+            },
+            result(
+                Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(FLAG)),
+                    right: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(LIAR)),
+                        right: Box::new(Expr::Number(1.0)),
+                    }),
+                },
+                Type::Boolean,
+            ),
+        ],
+    );
+    assert!(
+        ir.contains("call double @js_rel_lt("),
+        "a nested add with a declared-only Number must keep abstract relational semantics:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_dynamic_string_or_number_add("),
+        "the nested add must preserve runtime string concatenation:\n{ir}"
     );
 }
 

@@ -295,11 +295,18 @@ pub(crate) fn lower_let(
     // HIR as `Number`; neither form proves what the runtime slots contain.
     // Record both as violable so a later arithmetic consumer re-checks the
     // local instead of laundering a possibly boxed value through its type.
+    // A non-numeric initializer of an explicitly numeric local is the direct
+    // form of the same erased-annotation hazard (`let n: number = "4" as
+    // any`), so it must seed the bit even without a declared-only read below
+    // it.
     if matches!(
         refined_ty,
         perry_hir::types::Type::Number | perry_hir::types::Type::Int32
     ) {
-        if init.is_some_and(|e| crate::type_analysis::numeric_proof_is_declared_only(ctx, e)) {
+        if init.is_some_and(|e| {
+            !crate::type_analysis::is_numeric_expr(ctx, e)
+                || crate::type_analysis::numeric_proof_is_declared_only(ctx, e)
+        }) {
             ctx.declared_only_numeric_locals.insert(id);
         }
     }

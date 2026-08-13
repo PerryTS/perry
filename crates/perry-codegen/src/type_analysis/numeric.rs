@@ -468,9 +468,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///
 /// Structurally admitted:
 /// * numeric literals;
-/// * `Binary` arithmetic/bitwise when the whole node is `is_numeric_expr` AND
-///   `is_provably_not_bigint` (a possibly-BigInt chain routes through the
-///   BIGINT-boxed dynamic helpers — those results are NaN-boxed pointers);
+/// * `Binary` arithmetic/bitwise when the whole node is `is_numeric_expr`, is
+///   `is_provably_not_bigint`, and does not inherit a declared-only numeric
+///   proof (a possibly-BigInt chain routes through BIGINT-boxed dynamic
+///   helpers, while a declared-only `+` may return a boxed string);
 /// * `Unary` Neg/Pos/BitNot over a non-BigInt operand;
 /// * `Update` (++/--) when numeric per `is_numeric_expr`;
 /// * the `Math.*` family / `Date.now` (Rust-computed f64s);
@@ -483,7 +484,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
-        Expr::Binary { .. } => is_numeric_expr(ctx, e) && is_provably_not_bigint(ctx, e),
+        Expr::Binary { .. } => {
+            is_numeric_expr(ctx, e)
+                && is_provably_not_bigint(ctx, e)
+                && !crate::type_analysis::numeric_proof_is_declared_only(ctx, e)
+        }
         Expr::Unary { op, operand } => {
             matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                 && is_provably_not_bigint(ctx, operand)
