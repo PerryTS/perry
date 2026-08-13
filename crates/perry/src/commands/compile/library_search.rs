@@ -29,9 +29,11 @@ use crate::OutputFormat;
 // `rust_target_triple` and `find_perry_workspace_root` still live in
 // the compile.rs orchestrator. Pull them in as private parent-module
 // items so the search helpers below can reach them.
+#[cfg(target_os = "windows")]
+use super::is_native_windows_target;
 use super::{
-    android_target, find_perry_workspace_root, is_android_target, is_native_windows_target,
-    is_windows_target, rust_target_triple, windows_target_arch, WindowsTargetArch,
+    android_target, find_perry_workspace_root, is_android_target, is_windows_target,
+    rust_target_triple, windows_target_arch, WindowsTargetArch,
 };
 
 /// Resolve the host's Rust target triple by parsing `rustc -vV`.
@@ -621,16 +623,10 @@ pub(super) fn xwin_sysroot_lib_paths(root: &Path, target_arch: WindowsTargetArch
         let crt = root.join("crt").join("lib").join(arch);
         let um = root.join("sdk").join("lib").join("um").join(arch);
         let ucrt = root.join("sdk").join("lib").join("ucrt").join(arch);
-        if crt.exists() || um.exists() || ucrt.exists() {
-            if crt.exists() {
-                paths.push(crt.to_string_lossy().to_string());
-            }
-            if um.exists() {
-                paths.push(um.to_string_lossy().to_string());
-            }
-            if ucrt.exists() {
-                paths.push(ucrt.to_string_lossy().to_string());
-            }
+        if crt.is_dir() && um.is_dir() && ucrt.is_dir() {
+            paths.push(crt.to_string_lossy().to_string());
+            paths.push(um.to_string_lossy().to_string());
+            paths.push(ucrt.to_string_lossy().to_string());
             return paths;
         }
     }
