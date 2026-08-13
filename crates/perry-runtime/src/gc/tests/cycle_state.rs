@@ -1410,6 +1410,39 @@ fn full_cycle_global_root_store_after_root_scan_preserves_new_value() {
 }
 
 #[test]
+fn full_cycle_path_module_root_store_after_root_scan_preserves_new_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner(crate::module_require::scan_module_path_roots_mut);
+    let key = "gc-cycle-late-path-module-root";
+    crate::module_require::test_remove_path_module_root(key);
+
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+    assert!(
+        incremental_mark_barrier_active(),
+        "full cycle should keep root barriers active after root scan"
+    );
+
+    crate::module_require::test_store_path_module_root(key, ptr_bits(child as usize));
+    run_cycle_in_single_unit_steps(&mut state);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "path-module export stored after root scan should survive via its persistent-root barrier"
+    );
+    crate::module_require::test_remove_path_module_root(key);
+}
+
+#[test]
 fn full_cycle_class_static_field_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

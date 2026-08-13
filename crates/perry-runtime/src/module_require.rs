@@ -233,9 +233,10 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
 /// State of one AOT-compiled module that can be loaded by runtime path.
 ///
 /// `Initializing` carries the owner thread so a CommonJS cycle on that same
-/// thread can observe the wrapper's partial `exports` object. Other callers
-/// wait for the owner to publish the final value (or failure), which prevents
-/// concurrent first requests from racing the generated module init guard.
+/// thread can observe the wrapper's partial `exports` object. The registry's
+/// loader-wide logical owner prevents a second thread from claiming another
+/// key while generated init code is active, so concurrent A <-> B loads cannot
+/// form a wait cycle. Other callers wait for the final value or failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PathModuleStatus {
     Registered,
@@ -258,13 +259,19 @@ struct PathModuleEntry {
 #[derive(Default)]
 struct PathModuleState {
     entries: std::collections::HashMap<String, PathModuleEntry>,
+    /// Logical (not mutex) ownership of the lazy loader. While one thread is
+    /// running generated init code, only that thread may claim another path.
+    /// This composes concurrency with A -> B -> A cycles without ever holding
+    /// the registry mutex across generated code.
+    loader_owner: Option<std::thread::ThreadId>,
+    loader_depth: usize,
 }
 
 /// Provider-visible path-module registry. App-only dylibs call these runtime
 /// symbols through their undefined ABI references, so the state lives in the
 /// separately loaded runtime provider rather than being duplicated per app.
-/// One mutex protects init ownership and export publication atomically; it is
-/// always released before generated code runs.
+/// One mutex protects logical loader ownership and export publication
+/// atomically; it is always released before generated code runs.
 struct PathModuleRegistry {
     state: std::sync::Mutex<PathModuleState>,
     ready: std::sync::Condvar,
@@ -307,18 +314,28 @@ impl PathModuleRegistry {
     /// Only same-thread recursive loads may observe it; unrelated waiters stay
     /// parked while the status is `Initializing`.
     fn register_partial_exports(&self, key: String, exports: u64) {
-        let mut state = self.lock();
-        let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
-            init_addr: None,
-            exports: None,
-            status: PathModuleStatus::Registered,
-        });
-        if matches!(entry.status, PathModuleStatus::Failed(_)) {
-            return;
-        }
-        entry.exports = Some(exports);
-        if entry.status == PathModuleStatus::Registered {
-            entry.status = PathModuleStatus::Initializing(std::thread::current().id());
+        let stored = {
+            let mut state = self.lock();
+            let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+                init_addr: None,
+                exports: None,
+                status: PathModuleStatus::Registered,
+            });
+            if matches!(entry.status, PathModuleStatus::Failed(_)) {
+                false
+            } else {
+                entry.exports = Some(exports);
+                if entry.status == PathModuleStatus::Registered {
+                    entry.status = PathModuleStatus::Initializing(std::thread::current().id());
+                }
+                true
+            }
+        };
+        // The registry is a persistent mutable GC root. Shade the new value
+        // after releasing its lock so a full cycle that already scanned roots
+        // cannot sweep a late-published exports object.
+        if stored {
+            crate::gc::runtime_write_barrier_root_nanbox(exports);
         }
     }
 
@@ -327,18 +344,28 @@ impl PathModuleRegistry {
     /// population can still follow the CJS body). Eager modules have no
     /// registered init address, so this call is their completion boundary.
     fn register_final_exports(&self, key: String, exports: u64) {
-        let mut state = self.lock();
-        let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
-            init_addr: None,
-            exports: None,
-            status: PathModuleStatus::Registered,
-        });
-        if matches!(entry.status, PathModuleStatus::Failed(_)) {
-            return;
+        let (stored, completed_eager) = {
+            let mut state = self.lock();
+            let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+                init_addr: None,
+                exports: None,
+                status: PathModuleStatus::Registered,
+            });
+            if matches!(entry.status, PathModuleStatus::Failed(_)) {
+                (false, false)
+            } else {
+                entry.exports = Some(exports);
+                let completed_eager = entry.init_addr.is_none();
+                if completed_eager {
+                    entry.status = PathModuleStatus::Initialized;
+                }
+                (true, completed_eager)
+            }
+        };
+        if stored {
+            crate::gc::runtime_write_barrier_root_nanbox(exports);
         }
-        entry.exports = Some(exports);
-        if entry.init_addr.is_none() {
-            entry.status = PathModuleStatus::Initialized;
+        if completed_eager {
             self.ready.notify_all();
         }
     }
@@ -377,6 +404,25 @@ impl PathModuleRegistry {
                     let Some(addr) = entry.init_addr else {
                         return Ok(entry.exports);
                     };
+                    match state.loader_owner {
+                        Some(owner) if owner != current => {
+                            drop(
+                                self.ready
+                                    .wait(state)
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                            );
+                            continue;
+                        }
+                        Some(_) => state.loader_depth += 1,
+                        None => {
+                            state.loader_owner = Some(current);
+                            state.loader_depth = 1;
+                        }
+                    }
+                    let entry = state
+                        .entries
+                        .get_mut(key)
+                        .expect("path entry disappeared while claiming loader ownership");
                     entry.status = PathModuleStatus::Initializing(current);
                     break addr;
                 }
@@ -386,22 +432,36 @@ impl PathModuleRegistry {
         // Never hold the registry lock across generated module code. That code
         // self-registers exports and may recursively require another path.
         let outcome = initialize(init_addr);
-        let mut state = self.lock();
-        let entry = state
-            .entries
-            .get_mut(key)
-            .expect("path initializer entry disappeared while it was running");
-        let result = match outcome {
-            Ok(()) => {
-                entry.status = PathModuleStatus::Initialized;
-                Ok(entry.exports)
+        let (result, failed_error) = {
+            let mut state = self.lock();
+            let entry = state
+                .entries
+                .get_mut(key)
+                .expect("path initializer entry disappeared while it was running");
+            let (result, failed_error) = match outcome {
+                Ok(()) => {
+                    entry.status = PathModuleStatus::Initialized;
+                    (Ok(entry.exports), None)
+                }
+                Err(error) => {
+                    entry.exports = None;
+                    entry.status = PathModuleStatus::Failed(error);
+                    (Err(error), Some(error))
+                }
+            };
+            debug_assert_eq!(state.loader_owner, Some(current));
+            debug_assert!(state.loader_depth > 0);
+            state.loader_depth -= 1;
+            if state.loader_depth == 0 {
+                state.loader_owner = None;
             }
-            Err(error) => {
-                entry.exports = None;
-                entry.status = PathModuleStatus::Failed(error);
-                Err(error)
-            }
+            (result, failed_error)
         };
+        // Failed values are persistent roots too. Keep waiters asleep until
+        // the cached exception has been shaded.
+        if let Some(error) = failed_error {
+            crate::gc::runtime_write_barrier_root_nanbox(error);
+        }
         self.ready.notify_all();
         result
     }
@@ -423,6 +483,11 @@ impl PathModuleRegistry {
                 visitor.visit_nanbox_u64_slot(error);
             }
         }
+    }
+
+    #[cfg(test)]
+    fn remove_for_test(&self, key: &str) {
+        self.lock().entries.remove(key);
     }
 }
 
@@ -553,6 +618,16 @@ pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
 /// them when a copying collection moves their referents.
 pub fn scan_module_path_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     MODULE_PATH_REGISTRY.scan_roots(visitor);
+}
+
+#[cfg(test)]
+pub(crate) fn test_store_path_module_root(key: &str, value_bits: u64) {
+    MODULE_PATH_REGISTRY.register_final_exports(key.to_string(), value_bits);
+}
+
+#[cfg(test)]
+pub(crate) fn test_remove_path_module_root(key: &str) {
+    MODULE_PATH_REGISTRY.remove_for_test(key);
 }
 
 /// Node-style `require.resolve` fallback for package-subpath specifiers that
@@ -801,8 +876,54 @@ mod path_module_registry_tests {
     use super::*;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Barrier,
+        mpsc, Arc, Barrier, Condvar, Mutex,
     };
+
+    struct InitGate {
+        entered: mpsc::Sender<usize>,
+        released: Mutex<std::collections::HashSet<usize>>,
+        ready: Condvar,
+    }
+
+    impl InitGate {
+        fn enter_and_wait(&self, addr: usize) {
+            self.entered.send(addr).unwrap();
+            let mut released = self.released.lock().unwrap();
+            while !released.contains(&addr) {
+                released = self.ready.wait(released).unwrap();
+            }
+        }
+
+        fn release(&self, addr: usize) {
+            self.released.lock().unwrap().insert(addr);
+            self.ready.notify_all();
+        }
+    }
+
+    fn initialize_two_key_cycle(
+        registry: &PathModuleRegistry,
+        gate: &InitGate,
+        calls: &[AtomicUsize; 2],
+        partial_observations: &AtomicUsize,
+        addr: usize,
+    ) -> Result<(), u64> {
+        gate.enter_and_wait(addr);
+        let (key, other_key, partial, other_partial, final_value, call_index) = match addr {
+            31 => ("a.js", "b.js", 0xA1, 0xB1, 0xA2, 0),
+            37 => ("b.js", "a.js", 0xB1, 0xA1, 0xB2, 1),
+            _ => panic!("unexpected initializer address {addr}"),
+        };
+        calls[call_index].fetch_add(1, Ordering::Relaxed);
+        registry.register_partial_exports(key.into(), partial);
+        let observed = registry.require_with(other_key, &|next_addr| {
+            initialize_two_key_cycle(registry, gate, calls, partial_observations, next_addr)
+        })?;
+        if observed == Some(other_partial) {
+            partial_observations.fetch_add(1, Ordering::Relaxed);
+        }
+        registry.register_final_exports(key.into(), final_value);
+        Ok(())
+    }
 
     #[test]
     fn recursive_load_observes_partial_exports_without_reentering_init() {
@@ -866,6 +987,71 @@ mod path_module_registry_tests {
             assert_eq!(worker.join().unwrap().unwrap(), Some(0xB2));
         }
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn opposite_concurrent_cycle_serializes_generated_init_and_completes() {
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.register_init("a.js".into(), 31));
+        assert!(registry.register_init("b.js".into(), 37));
+        let starts = Arc::new(Barrier::new(3));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let gate = Arc::new(InitGate {
+            entered: entered_tx,
+            released: Mutex::new(std::collections::HashSet::new()),
+            ready: Condvar::new(),
+        });
+        let calls = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+        let partial_observations = Arc::new(AtomicUsize::new(0));
+        let (result_tx, result_rx) = mpsc::channel();
+
+        let mut workers = Vec::new();
+        for (key, expected) in [("a.js", 0xA2), ("b.js", 0xB2)] {
+            let registry = Arc::clone(&registry);
+            let starts = Arc::clone(&starts);
+            let gate = Arc::clone(&gate);
+            let calls = Arc::clone(&calls);
+            let partial_observations = Arc::clone(&partial_observations);
+            let result_tx = result_tx.clone();
+            workers.push(std::thread::spawn(move || {
+                starts.wait();
+                let result = registry.require_with(key, &|addr| {
+                    initialize_two_key_cycle(&registry, &gate, &calls, &partial_observations, addr)
+                });
+                result_tx.send((expected, result)).unwrap();
+            }));
+        }
+        drop(result_tx);
+
+        starts.wait();
+        let first = entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("one thread must claim the logical loader");
+        assert!(
+            entered_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "opposite keys ran generated init concurrently and can deadlock"
+        );
+        gate.release(first);
+        let nested = entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the loader owner must recursively initialize the opposite key");
+        assert_ne!(nested, first);
+        gate.release(nested);
+
+        for _ in 0..2 {
+            let (expected, result) = result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("A <-> B concurrent load did not complete within the bound");
+            assert_eq!(result.unwrap(), Some(expected));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(calls[0].load(Ordering::Relaxed), 1);
+        assert_eq!(calls[1].load(Ordering::Relaxed), 1);
+        assert_eq!(partial_observations.load(Ordering::Relaxed), 1);
     }
 
     #[test]
