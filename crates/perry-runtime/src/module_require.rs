@@ -277,6 +277,63 @@ struct PathModuleState {
     /// the registry mutex across generated code.
     loader_owner: Option<std::thread::ThreadId>,
     loader_depth: usize,
+    /// Every entry currently in `Initializing` belongs to this thread.
+    /// Counting avoids scanning thousands of registered Next modules on each
+    /// cold claim.
+    initializing_owner: Option<std::thread::ThreadId>,
+    initializing_count: usize,
+    /// Eager CJS wrappers that have published partial exports, in nesting
+    /// order. The native module-init exception boundary fails only the current
+    /// wrapper, so an inner error that user code catches does not poison its
+    /// caller.
+    eager_initializers: Vec<(std::thread::ThreadId, String, Option<u64>)>,
+    module_boundaries: Vec<(std::thread::ThreadId, u64)>,
+    next_module_boundary: u64,
+}
+
+impl PathModuleState {
+    fn begin_initializing(&mut self, owner: std::thread::ThreadId) -> bool {
+        match self.initializing_owner {
+            Some(existing) if existing != owner => false,
+            Some(_) => {
+                self.initializing_count += 1;
+                true
+            }
+            None => {
+                self.initializing_owner = Some(owner);
+                self.initializing_count = 1;
+                true
+            }
+        }
+    }
+
+    fn finish_initializing(&mut self, owner: std::thread::ThreadId) {
+        debug_assert_eq!(self.initializing_owner, Some(owner));
+        debug_assert!(self.initializing_count > 0);
+        self.initializing_count -= 1;
+        if self.initializing_count == 0 {
+            self.initializing_owner = None;
+        }
+    }
+
+    fn finish_eager(&mut self, owner: std::thread::ThreadId, key: &str) {
+        let index = self
+            .eager_initializers
+            .iter()
+            .rposition(|(candidate_owner, candidate_key, _)| {
+                *candidate_owner == owner && candidate_key == key
+            })
+            .expect("completed eager path module was missing from the init stack");
+        debug_assert_eq!(index + 1, self.eager_initializers.len());
+        self.eager_initializers.remove(index);
+    }
+
+    fn current_module_boundary(&self, owner: std::thread::ThreadId) -> Option<u64> {
+        self.module_boundaries
+            .iter()
+            .rfind(|(candidate_owner, _)| *candidate_owner == owner)
+            .map(|(_, boundary)| *boundary)
+    }
 }
 
 /// Provider-visible path-module registry. App-only dylibs call these runtime
@@ -346,7 +403,11 @@ impl PathModuleRegistry {
         let current = std::thread::current().id();
         let stored = {
             let mut state = self.lock();
-            if state.loader_owner.is_some_and(|owner| owner != current) {
+            if state.loader_owner.is_some_and(|owner| owner != current)
+                || state
+                    .initializing_owner
+                    .is_some_and(|owner| owner != current)
+            {
                 // Generated code on a second thread must not create a foreign
                 // `Initializing` entry while the logical loader is owned. If
                 // it did, the owner could wait for this entry while this
@@ -354,21 +415,39 @@ impl PathModuleRegistry {
                 // this rejection into a JS exception.
                 return false;
             }
-            let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
-                init_addr: None,
-                exports: None,
-                status: PathModuleStatus::Registered,
-                active_claim: None,
-            });
-            if matches!(entry.status, PathModuleStatus::Failed(_))
-                || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
-            {
-                false
-            } else {
+            let key_for_stack = key.clone();
+            let (began, eager) = {
+                let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+                    init_addr: None,
+                    exports: None,
+                    status: PathModuleStatus::Registered,
+                    active_claim: None,
+                });
+                if matches!(entry.status, PathModuleStatus::Failed(_))
+                    || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
+                {
+                    return false;
+                }
                 entry.exports = Some(exports);
                 if entry.status == PathModuleStatus::Registered {
                     entry.status = PathModuleStatus::Initializing(current);
+                    (true, entry.active_claim.is_none())
+                } else {
+                    (false, false)
                 }
+            };
+            if began {
+                if !state.begin_initializing(current) {
+                    return false;
+                }
+                if eager {
+                    let boundary = state.current_module_boundary(current);
+                    state
+                        .eager_initializers
+                        .push((current, key_for_stack, boundary));
+                }
+                true
+            } else {
                 true
             }
         };
@@ -390,30 +469,40 @@ impl PathModuleRegistry {
         let current = std::thread::current().id();
         let (stored, completed_eager) = {
             let mut state = self.lock();
-            let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
-                init_addr: None,
-                exports: None,
-                status: PathModuleStatus::Registered,
-                active_claim: None,
-            });
-            if matches!(entry.status, PathModuleStatus::Failed(_))
-                || entry.active_claim.is_some_and(|owner| owner != current)
-                || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
-            {
-                (false, false)
-            } else {
-                entry.exports = Some(exports);
-                // Every CJS wrapper publishes a partial/final pair. A final
-                // store completes an eager execution, even when an init
-                // address was also registered for path lookup. A lazy claim
-                // remains `Initializing` until its generated init returns, so
-                // a later namespace-population throw is still cached.
-                let completed_eager = entry.active_claim.is_none();
-                if completed_eager {
-                    entry.status = PathModuleStatus::Initialized;
+            let key_for_stack = key.clone();
+            let (stored, completed_eager, finished_initializing) = {
+                let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
+                    init_addr: None,
+                    exports: None,
+                    status: PathModuleStatus::Registered,
+                    active_claim: None,
+                });
+                if matches!(entry.status, PathModuleStatus::Failed(_))
+                    || entry.active_claim.is_some_and(|owner| owner != current)
+                    || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
+                {
+                    (false, false, false)
+                } else {
+                    entry.exports = Some(exports);
+                    // Every CJS wrapper publishes a partial/final pair. A final
+                    // store completes an eager execution, even when an init
+                    // address was also registered for path lookup. A lazy claim
+                    // remains `Initializing` until its generated init returns, so
+                    // a later namespace-population throw is still cached.
+                    let completed_eager = entry.active_claim.is_none();
+                    let finished_initializing = completed_eager
+                        && matches!(entry.status, PathModuleStatus::Initializing(_));
+                    if completed_eager {
+                        entry.status = PathModuleStatus::Initialized;
+                    }
+                    (true, completed_eager, finished_initializing)
                 }
-                (true, completed_eager)
+            };
+            if finished_initializing {
+                state.finish_eager(current, &key_for_stack);
+                state.finish_initializing(current);
             }
+            (stored, completed_eager)
         };
         if stored {
             crate::gc::runtime_write_barrier_root_nanbox(exports);
@@ -422,6 +511,76 @@ impl PathModuleRegistry {
             self.ready.notify_all();
         }
         stored
+    }
+
+    fn begin_module_boundary(&self) -> u64 {
+        let current = std::thread::current().id();
+        let mut state = self.lock();
+        state.next_module_boundary = state.next_module_boundary.wrapping_add(1).max(1);
+        let boundary = state.next_module_boundary;
+        state.module_boundaries.push((current, boundary));
+        boundary
+    }
+
+    /// Leave one generated module body. A normal return with a still-partial
+    /// eager CJS wrapper (for example, a legal top-level CommonJS `return`)
+    /// completes with those partial exports. An exceptional return caches the
+    /// original throw. Lazy claims are deliberately absent from this stack and
+    /// are completed by `require_with` instead.
+    fn finish_module_boundary(&self, boundary: u64, error: Option<u64>) -> usize {
+        let current = std::thread::current().id();
+        let completed = {
+            let mut state = self.lock();
+            let boundary_index = state
+                .module_boundaries
+                .iter()
+                .rposition(|(owner, candidate)| *owner == current && *candidate == boundary)
+                .expect("generated module-init boundary stack became unbalanced");
+            debug_assert!(
+                state.module_boundaries[boundary_index + 1..]
+                    .iter()
+                    .all(|(owner, _)| *owner != current),
+                "generated module-init boundaries must be LIFO per thread"
+            );
+            state.module_boundaries.remove(boundary_index);
+
+            let mut keys = Vec::new();
+            state.eager_initializers.retain(|(owner, key, candidate)| {
+                if *owner == current && *candidate == Some(boundary) {
+                    keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            for key in &keys {
+                let entry = state
+                    .entries
+                    .get_mut(key)
+                    .expect("eager path-module init entry disappeared while running");
+                debug_assert!(entry.active_claim.is_none());
+                debug_assert!(
+                    matches!(entry.status, PathModuleStatus::Initializing(owner) if owner == current)
+                );
+                if let Some(error) = error {
+                    entry.exports = None;
+                    entry.status = PathModuleStatus::Failed(error);
+                } else {
+                    entry.status = PathModuleStatus::Initialized;
+                }
+            }
+            for _ in 0..keys.len() {
+                state.finish_initializing(current);
+            }
+            keys.len()
+        };
+        if completed > 0 {
+            if let Some(error) = error {
+                crate::gc::runtime_write_barrier_root_nanbox(error);
+            }
+            self.ready.notify_all();
+        }
+        completed
     }
 
     /// Return the value for `key`, initializing it once when necessary.
@@ -463,12 +622,10 @@ impl PathModuleRegistry {
                     let Some(addr) = entry.init_addr else {
                         return Ok(entry.exports);
                     };
-                    if state.entries.values().any(|candidate| {
-                        matches!(
-                            candidate.status,
-                            PathModuleStatus::Initializing(owner) if owner != current
-                        )
-                    }) {
+                    if state
+                        .initializing_owner
+                        .is_some_and(|owner| owner != current)
+                    {
                         // An eager initializer started without a lazy-loader
                         // claim. Let it finish before granting ownership; it
                         // can recursively claim the loader itself without
@@ -501,6 +658,7 @@ impl PathModuleRegistry {
                         .expect("path entry disappeared while claiming loader ownership");
                     entry.status = PathModuleStatus::Initializing(current);
                     entry.active_claim = Some(current);
+                    assert!(state.begin_initializing(current));
                     break addr;
                 }
             }
@@ -528,6 +686,7 @@ impl PathModuleRegistry {
                     (Err(PathModuleRequireError::Initializer(error)), Some(error))
                 }
             };
+            state.finish_initializing(current);
             debug_assert_eq!(state.loader_owner, Some(current));
             debug_assert!(state.loader_depth > 0);
             state.loader_depth -= 1;
@@ -638,6 +797,33 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
             "Perry rejected path-module final exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",
         );
+    }
+}
+
+/// Execute a generated module-init body behind a native exception boundary.
+/// If a CommonJS wrapper published partial exports and then threw, cache the
+/// exact value and wake waiters before propagating it. The boundary lives here
+/// rather than in generated JavaScript so top-level lexical declarations keep
+/// their original module/function scope.
+///
+/// # Safety
+/// `init_addr` is codegen's `ptrtoint` of an `extern "C" fn()` module body.
+#[no_mangle]
+pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
+    let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
+    let boundary = MODULE_PATH_REGISTRY.begin_module_boundary();
+    let outcome = crate::exception::js_call_catching(|| {
+        init_fn();
+        undefined()
+    });
+    match outcome {
+        Ok(_) => {
+            MODULE_PATH_REGISTRY.finish_module_boundary(boundary, None);
+        }
+        Err(error) => {
+            MODULE_PATH_REGISTRY.finish_module_boundary(boundary, Some(error.to_bits()));
+            crate::exception::js_throw(error)
+        }
     }
 }
 
@@ -1238,6 +1424,117 @@ mod path_module_registry_tests {
                 "eager module must already be complete"
             )),
             Ok(Some(0xE2))
+        );
+    }
+
+    #[test]
+    fn eager_wrapper_throw_replaces_partial_exports_and_wakes_waiters() {
+        let registry = Arc::new(PathModuleRegistry::default());
+        assert!(registry.register_init("eager-throws.js".into(), 49));
+        let boundary = registry.begin_module_boundary();
+        assert!(registry.register_partial_exports("eager-throws.js".into(), 0xE1));
+
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let waiter_registry = Arc::clone(&registry);
+        let waiter = std::thread::spawn(move || {
+            waiting_tx.send(()).unwrap();
+            let result = waiter_registry.require_with("eager-throws.js", &|_| {
+                panic!("a waiter must not retry the eager initializer")
+            });
+            result_tx.send(result).unwrap();
+        });
+        waiting_rx.recv().unwrap();
+        assert!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "the foreign waiter returned partial exports instead of waiting"
+        );
+
+        assert_eq!(registry.finish_module_boundary(boundary, Some(0xBAD)), 1);
+        assert_eq!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("eager failure did not wake the waiting require"),
+            Err(PathModuleRequireError::Initializer(0xBAD))
+        );
+        waiter.join().unwrap();
+        assert_eq!(
+            registry.require_with("eager-throws.js", &|_| {
+                panic!("failed eager module must not retry")
+            }),
+            Err(PathModuleRequireError::Initializer(0xBAD))
+        );
+        let state = registry.lock();
+        assert_eq!(state.initializing_count, 0);
+        assert_eq!(state.initializing_owner, None);
+    }
+
+    #[test]
+    fn caught_nested_eager_failure_does_not_poison_outer_wrapper() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("outer.js".into(), 51));
+        assert!(registry.register_init("inner.js".into(), 53));
+        let outer_boundary = registry.begin_module_boundary();
+        assert!(registry.register_partial_exports("outer.js".into(), 0xA1));
+        let inner_boundary = registry.begin_module_boundary();
+        assert!(registry.register_partial_exports("inner.js".into(), 0xB1));
+
+        assert_eq!(
+            registry.finish_module_boundary(inner_boundary, Some(0xBAD)),
+            1
+        );
+        assert!(registry.register_final_exports("outer.js".into(), 0xA2));
+        assert_eq!(registry.finish_module_boundary(outer_boundary, None), 0);
+        assert_eq!(
+            registry.require_with("inner.js", &|_| panic!("inner failure must be cached")),
+            Err(PathModuleRequireError::Initializer(0xBAD))
+        );
+        assert_eq!(
+            registry.require_with("outer.js", &|_| panic!("outer module completed eagerly")),
+            Ok(Some(0xA2))
+        );
+        let state = registry.lock();
+        assert_eq!(state.initializing_count, 0);
+        assert!(state.eager_initializers.is_empty());
+    }
+
+    #[test]
+    fn lazy_inner_boundary_does_not_consume_outer_eager_wrapper() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("outer.js".into(), 55));
+        let outer_boundary = registry.begin_module_boundary();
+        assert!(registry.register_partial_exports("outer.js".into(), 0xA1));
+
+        // A lazily claimed inner module does not enter the eager stack. Its
+        // native catch must leave the outer wrapper available to catch or
+        // complete independently.
+        let inner_boundary = registry.begin_module_boundary();
+        assert_eq!(
+            registry.finish_module_boundary(inner_boundary, Some(0xBAD)),
+            0
+        );
+        assert!(registry.register_final_exports("outer.js".into(), 0xA2));
+        assert_eq!(registry.finish_module_boundary(outer_boundary, None), 0);
+        assert_eq!(
+            registry.require_with("outer.js", &|_| panic!("outer module completed eagerly")),
+            Ok(Some(0xA2))
+        );
+    }
+
+    #[test]
+    fn eager_top_level_return_completes_with_partial_exports() {
+        let registry = PathModuleRegistry::default();
+        assert!(registry.register_init("returns.js".into(), 57));
+        let boundary = registry.begin_module_boundary();
+        assert!(registry.register_partial_exports("returns.js".into(), 0xC1));
+        assert_eq!(registry.finish_module_boundary(boundary, None), 1);
+        assert_eq!(
+            registry.require_with("returns.js", &|_| {
+                panic!("a normally returned eager wrapper must not retry")
+            }),
+            Ok(Some(0xC1))
         );
     }
 

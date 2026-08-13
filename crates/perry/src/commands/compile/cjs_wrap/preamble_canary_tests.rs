@@ -209,7 +209,7 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
         "an exported undefined value must not be mistaken for a registry miss\n{wrapped}"
     );
 
-    // Run the real parser/lowerer as an anti-vacuity check for both new
+    // Run the real parser/lowerer as an anti-vacuity check for the registry
     // intrinsics, including the boolean presence probe in the require shim.
     let ast = perry_parser::parse_typescript(&wrapped, "lazy.js").unwrap();
     perry_hir::lower_module(&ast, "lazy", &path.to_string_lossy()).unwrap();

@@ -1209,6 +1209,10 @@ module.exports = SafeBuffer;"#;
         // The CommonJS runtime shims still run at module scope.
         assert!(wrapped.contains("const __cjs_module = { exports: {} };"));
         assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
+        let ast = perry_parser::parse_typescript(&wrapped, "stack-utils.js")
+            .expect("flat class wrap must parse");
+        perry_hir::lower_module(&ast, "stack_utils", "/tmp/test.js")
+            .expect("flat class wrap must preserve its top-level class binding");
     }
 
     #[test]

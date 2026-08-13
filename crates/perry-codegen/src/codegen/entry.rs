@@ -1271,7 +1271,18 @@ pub(super) fn compile_module_entry(
                     }
                     blk.call_void(&format!("{}__init", dep_prefix), &[]);
                 }
-                blk.call_void(&init_body_name, &[]);
+                // Run each module body behind a native exception boundary.
+                // A CommonJS wrapper publishes partial exports at the top of
+                // this body; if an exception escapes before final publication,
+                // the runtime caches that exact failure and wakes path-module
+                // waiters before rethrowing. Keeping the boundary here avoids
+                // adding a JavaScript `try` block that would change top-level
+                // `let`/`const`/`class` scope in flat CJS emission.
+                let init_body_addr = format!("ptrtoint (ptr @{} to i64)", init_body_name);
+                blk.call_void(
+                    "js_run_module_init_catching",
+                    &[(I64, init_body_addr.as_str())],
+                );
                 blk.ret_void();
             }
         }

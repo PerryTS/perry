@@ -191,3 +191,24 @@ fn executable_and_app_dylib_both_register_lazy_path_initializers() {
         );
     }
 }
+
+#[test]
+fn module_init_body_runs_through_native_exception_boundary() {
+    let mut opts = entry_opts("executable");
+    opts.is_entry_module = false;
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8");
+
+    assert!(
+        ir.contains("call void @js_run_module_init_catching("),
+        "module init must cache an escaping CJS partial-export failure before rethrowing\n{ir}"
+    );
+    assert!(
+        ir.contains("__init_body to i64)"),
+        "the exception boundary must receive the generated module body address\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @gc_exit_teardown_ts__init_body()"),
+        "the generated wrapper must not bypass the exception boundary\n{ir}"
+    );
+}

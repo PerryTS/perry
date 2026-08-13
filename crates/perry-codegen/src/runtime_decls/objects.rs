@@ -337,6 +337,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
     module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
