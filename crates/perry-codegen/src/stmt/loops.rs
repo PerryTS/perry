@@ -788,7 +788,13 @@ fn match_packed_f64_range_loop(
         // read-only DENSE mode: several scalar statements, masked
         // statically-windowed indices, no stores, no side exits.
         accesses.clear();
-        if !packed_f64_range_loop_dense_body_collect(body, counter_id, bound_local, &mut accesses) {
+        if !packed_f64_range_loop_dense_body_collect(
+            ctx,
+            body,
+            counter_id,
+            bound_local,
+            &mut accesses,
+        ) {
             return None;
         }
         true
@@ -1060,6 +1066,7 @@ fn packed_f64_range_loop_store_collect(
 /// have no side exits, multi-statement bodies are safe: an iteration either
 /// runs entirely in the fast copy or entirely in the slow copy.
 fn packed_f64_range_loop_dense_body_collect(
+    ctx: &FnCtx<'_>,
     body: &[Stmt],
     counter_id: u32,
     bound_local: Option<u32>,
@@ -1074,7 +1081,9 @@ fn packed_f64_range_loop_dense_body_collect(
                 init: Some(init),
                 ..
             } => {
-                if !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses) {
+                if !masked_window_indices_are_non_collecting(ctx, init)
+                    || !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses)
+                {
                     return false;
                 }
                 written.insert(*id);
@@ -1086,7 +1095,9 @@ fn packed_f64_range_loop_dense_body_collect(
                 if *id == counter_id || Some(*id) == bound_local {
                     return false;
                 }
-                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses) {
+                if !masked_window_indices_are_non_collecting(ctx, value)
+                    || !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses)
+                {
                     return false;
                 }
                 written.insert(*id);
@@ -1098,7 +1109,9 @@ fn packed_f64_range_loop_dense_body_collect(
                 written.insert(*id);
             }
             Stmt::Expr(expr) => {
-                if !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses) {
+                if !masked_window_indices_are_non_collecting(ctx, expr)
+                    || !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses)
+                {
                     return false;
                 }
             }
@@ -1108,6 +1121,58 @@ fn packed_f64_range_loop_dense_body_collect(
     !accesses.is_empty()
         && accesses.values().all(|access| !access.written)
         && accesses.keys().all(|arr_id| !written.contains(arr_id))
+}
+
+/// The static-window range proof says nothing about evaluating the index.
+/// Keep the masked copies that hoist a raw typed-array backing pointer behind
+/// the shared collection predicate: `(+key) & 7` has a bounded range, but when
+/// `key` is `any`, unary `+` can invoke user coercion and collect. Nested
+/// tracked reads are checked recursively for the same reason.
+pub(super) fn masked_window_indices_are_non_collecting(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::IndexGet { index, .. } => {
+            !crate::rooting::operand_may_collect(ctx, index)
+                && masked_window_indices_are_non_collecting(ctx, index)
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. }
+        | Expr::MathImul(left, right)
+        | Expr::MathPow(left, right) => {
+            masked_window_indices_are_non_collecting(ctx, left)
+                && masked_window_indices_are_non_collecting(ctx, right)
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::NumberCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::MathAbs(operand)
+        | Expr::MathSqrt(operand)
+        | Expr::MathFloor(operand)
+        | Expr::MathCeil(operand)
+        | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
+        | Expr::MathF16round(operand) => masked_window_indices_are_non_collecting(ctx, operand),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            masked_window_indices_are_non_collecting(ctx, condition)
+                && masked_window_indices_are_non_collecting(ctx, then_expr)
+                && masked_window_indices_are_non_collecting(ctx, else_expr)
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => values
+            .iter()
+            .all(|value| masked_window_indices_are_non_collecting(ctx, value)),
+        _ => true,
+    }
 }
 
 /// Effect-free expression walk: tracked `a[i ± c]` reads, locals, literals and

@@ -6,5 +6,6 @@ rooted runtime fallback resolves the view's current backing after that window,
 while fresh inline Buffer and TypedArray storage keeps its existing fast path.
 
 Computed-access IR regressions now trace each protected receiver and key through
-its exact root slot, and the call-free masked-window invariant is documented so
-those loops retain their zero-root direct loads.
+its exact root slot. Masked-window tiers also decline collecting index
+expressions before hoisting a raw typed-array pointer, while inert indexes keep
+their zero-root direct loads.

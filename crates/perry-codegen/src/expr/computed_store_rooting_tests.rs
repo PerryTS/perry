@@ -44,7 +44,9 @@
 //! width measured over a store that never got emitted would be hazard 4.
 
 use perry_hir::types::Type;
-use perry_hir::{BinaryOp, Expr, Function, Module as HirModule, Param, Stmt};
+use perry_hir::{
+    BinaryOp, CompareOp, Expr, Function, Module as HirModule, Param, Stmt, UnaryOp, UpdateOp,
+};
 
 use super::slice8_rooting_tests::{call_operand_of, producer_line};
 
@@ -137,7 +139,6 @@ fn assert_call_operand_rooted_across_operand(
          the collecting operand produced at line {window_line}:\n{ir}"
     );
 
-    let store_needle = format!(", ptr {slot}");
     let store = ir
         .lines()
         .enumerate()
@@ -145,7 +146,9 @@ fn assert_call_operand_rooted_across_operand(
         .filter(|(_, line)| {
             line.contains("store ptr addrspace(1)")
                 && !line.contains(" null,")
-                && line.contains(&store_needle)
+                && line
+                    .rsplit_once(", ptr ")
+                    .is_some_and(|(_, tail)| tail.split(',').next().unwrap_or(tail).trim() == slot)
         })
         .map(|(line, _)| line)
         .last()
@@ -487,6 +490,13 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
         !calls(&inert_store, "js_typed_array_set"),
         "an inert RHS on a proven fixed-length view should retain the inline store:\n{inert_store}"
     );
+    assert!(
+        inert_store.lines().any(|line| {
+            line.trim_start().starts_with("store double 1.0, ptr ") && line.contains("!alias.scope")
+        }),
+        "the inert fixture must actually emit the native element store, not merely avoid the \
+         runtime fallback:\n{inert_store}"
+    );
 
     let collecting_store = compile_body(
         "native_view_collecting_store",
@@ -518,6 +528,85 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
         calls(&collecting_load, "js_typed_array_get"),
         "a collecting proven index must not reuse a native view's cached raw data pointer:\n\
          {collecting_load}"
+    );
+}
+
+fn masked_window_coercion_loop(key_ty: Type) -> String {
+    let masked_index = Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(Expr::Unary {
+            op: UnaryOp::Pos,
+            operand: Box::new(Expr::LocalGet(2)),
+        }),
+        right: Box::new(Expr::Integer(7)),
+    };
+    compile_body_with_params(
+        "masked_window_coercion",
+        vec![param(1, "view", Type::Any), param(2, "key", key_ty)],
+        vec![
+            Stmt::Let {
+                id: 3,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 4,
+                    name: "i".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(4)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+                update: Some(Expr::Update {
+                    id: 4,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(3)),
+                        right: Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(1)),
+                            index: Box::new(masked_index),
+                        }),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    )
+}
+
+/// #7640 E review follow-up — unary `+` over an `any` key can invoke user
+/// coercion even though the surrounding mask has a static index window. Such
+/// an index must decline before a typed-array tier hoists its raw data pointer;
+/// the same shape with an inert i32 key proves the fast tier remains live.
+#[test]
+fn collecting_masked_window_index_declines_the_hoisted_pointer_tier() {
+    let inert = masked_window_coercion_loop(Type::Int32);
+    assert!(
+        inert.contains("for.packed_f64_range_fast_ta_i32"),
+        "the inert control must exercise the masked Int32Array tier:\n{inert}"
+    );
+
+    let collecting = masked_window_coercion_loop(Type::Any);
+    assert!(
+        calls(&collecting, "js_number_coerce"),
+        "unary + over an any key must exercise the collecting coercion witness:\n{collecting}"
+    );
+    assert!(
+        !collecting.contains("for.packed_f64_range_fast_ta_i32"),
+        "a collecting masked index must decline before the tier hoists a raw backing pointer:\n\
+         {collecting}"
     );
 }
 

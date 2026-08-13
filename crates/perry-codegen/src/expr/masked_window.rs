@@ -158,11 +158,10 @@ pub(crate) fn lower_masked_window_index_get(
     fact: &MaskedWindowArrayFact,
 ) -> String {
     // #7640 section E audit: `static_index_window` alone admits collecting
-    // operands, but every fact reaching this helper was established by
-    // `packed_f64_range_loop_pure_expr_collect` / `region_store_operand_collect`.
-    // Those walks recursively reject calls, stores, updates, closures and
-    // unrecognized reads, so the fast copy is call-free and its hoisted typed-
-    // array data pointer cannot cross a collection or disposal point.
+    // operands such as `(+key) & 7`. The loop and region matchers pair their
+    // structural walk with `masked_window_indices_are_non_collecting`, so a
+    // fact reaching this helper has a non-collecting index and may consume the
+    // tier's hoisted typed-array pointer directly.
     let value = emit_window_load_f64(ctx, arr_box, idx_i32, fact);
     let lowered = LoweredValue {
         semantic: SemanticKind::JsNumber,

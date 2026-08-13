@@ -43,9 +43,9 @@ use anyhow::Result;
 use perry_hir::{Expr, Stmt};
 
 use super::loops::{
-    local_is_number_array, local_is_untyped_candidate, packed_f64_range_loop_pure_expr_collect,
-    packed_loop_array_binding_storage_is_addressable, record_packed_f64_range_static_access,
-    PackedF64RangeArrayAccess,
+    local_is_number_array, local_is_untyped_candidate, masked_window_indices_are_non_collecting,
+    packed_f64_range_loop_pure_expr_collect, packed_loop_array_binding_storage_is_addressable,
+    record_packed_f64_range_static_access, PackedF64RangeArrayAccess,
 };
 use super::{emit_shadow_clears_after_stmt, lower_stmt};
 use crate::expr::{
@@ -352,6 +352,9 @@ fn region_store_operand_collect(
     expr: &Expr,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
 ) -> bool {
+    if !masked_window_indices_are_non_collecting(ctx, expr) {
+        return false;
+    }
     match expr {
         Expr::IndexGet { object, index } => {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
@@ -416,12 +419,14 @@ pub(super) fn try_match_masked_window_region(
         let ok = match stmt {
             Stmt::Expr(Expr::LocalSet(id, value)) => {
                 let mut trial = accesses.clone();
-                if packed_f64_range_loop_pure_expr_collect(
-                    value,
-                    REGION_NO_COUNTER,
-                    true,
-                    &mut trial,
-                ) {
+                if masked_window_indices_are_non_collecting(ctx, value)
+                    && packed_f64_range_loop_pure_expr_collect(
+                        value,
+                        REGION_NO_COUNTER,
+                        true,
+                        &mut trial,
+                    )
+                {
                     accesses = trial;
                     written.insert(*id);
                     true
@@ -452,12 +457,14 @@ pub(super) fn try_match_masked_window_region(
                     break;
                 }
                 let mut trial = accesses.clone();
-                if packed_f64_range_loop_pure_expr_collect(
-                    expr,
-                    REGION_NO_COUNTER,
-                    true,
-                    &mut trial,
-                ) {
+                if masked_window_indices_are_non_collecting(ctx, expr)
+                    && packed_f64_range_loop_pure_expr_collect(
+                        expr,
+                        REGION_NO_COUNTER,
+                        true,
+                        &mut trial,
+                    )
+                {
                     accesses = trial;
                     true
                 } else {
