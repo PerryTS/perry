@@ -1,0 +1,1 @@
+**Fixed: growing arrays at valid low arena addresses now retain stale-reference forwarding across repeated growth and moving minor GC (#8035).** Array header access now requires allocator ownership before dereferencing, rejects invalid forwarding targets, and installs growth forwarding through a checked raw-header pointer.

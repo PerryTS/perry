@@ -249,10 +249,10 @@ fn classify_tracked_gc_header_with(
         .then_some((header_addr, TrackedGcStorage::Malloc))
 }
 
-/// Read a `GcHeader` only after allocator-owned metadata proves that `addr` is
-/// a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use an
-/// address-magnitude window as evidence of ownership: arena page membership or
-/// an exact malloc-registry hit is required before the first header byte is
+/// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
+/// is a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use
+/// an address-magnitude window as evidence of ownership: arena page membership
+/// or an exact malloc-registry hit is required before the first header byte is
 /// touched. The header's type, size, and arena flag are then validated.
 ///
 /// This is the canonical gate for code that must distinguish live Perry GC
@@ -260,25 +260,32 @@ fn classify_tracked_gc_header_with(
 /// allocations before dereferencing a header.
 ///
 /// # Safety
-/// The returned reference is valid only while the allocation remains live and
-/// on the current runtime thread. Callers must not retain it across allocation
-/// or collection safepoints.
+/// The returned pointer is valid only while the allocation remains live and on
+/// the current runtime thread. Callers must not dereference it after an
+/// allocation or collection safepoint. Returning a raw pointer is deliberate:
+/// some checked callers install forwarding metadata, so this gate must not
+/// manufacture a shared reference and then write through a cast of it.
 #[inline]
-pub(crate) unsafe fn try_read_tracked_gc_header(addr: usize) -> Option<&'static GcHeader> {
+pub(crate) unsafe fn try_read_tracked_gc_header(
+    addr: usize,
+) -> Option<std::ptr::NonNull<GcHeader>> {
     let (header_addr, storage) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base)| base),
         crate::gc::gc_malloc_header_is_tracked,
     )?;
-    let header = &*(header_addr as *const GcHeader);
-    if crate::gc::gc_type_info(header.obj_type).is_none() {
+    if header_addr % std::mem::align_of::<GcHeader>() != 0 {
         return None;
     }
-    let size = header.size as usize;
-    if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
+    let header = std::ptr::NonNull::new(header_addr as *mut GcHeader)?;
+    let header_ptr = header.as_ptr();
+    if crate::gc::gc_type_info((*header_ptr).obj_type).is_none() {
         return None;
     }
-    let header_is_arena = header.gc_flags & crate::gc::GC_FLAG_ARENA != 0;
+    if ((*header_ptr).size as usize) < GC_HEADER_SIZE {
+        return None;
+    }
+    let header_is_arena = (*header_ptr).gc_flags & crate::gc::GC_FLAG_ARENA != 0;
     if header_is_arena != matches!(storage, TrackedGcStorage::Arena) {
         return None;
     }
@@ -337,6 +344,8 @@ mod tests {
 
         // 4 GiB is well below the legacy 2 TiB macOS floor. Membership in a
         // registered arena range, not this magnitude, is the ownership proof.
+        // The array install-path test injects this candidate because mapping a
+        // fixed low address in the test process would be platform-dependent.
         const LOW_USER: usize = 0x1_0000_0008;
         const LOW_RANGE_BASE: usize = LOW_USER - GC_HEADER_SIZE;
         const { assert!(LOW_USER < 0x200_0000_0000) };
@@ -384,7 +393,7 @@ mod tests {
             payload: u64,
         }
 
-        let synthetic = SyntheticAllocation {
+        let make_synthetic = || SyntheticAllocation {
             header: GcHeader {
                 obj_type: crate::gc::GC_TYPE_ARRAY,
                 gc_flags: 0,
@@ -393,8 +402,13 @@ mod tests {
             },
             payload: 0,
         };
-        let user = &synthetic.payload as *const u64 as usize;
-        assert!(unsafe { try_read_tracked_gc_header(user) }.is_none());
+        let stack_synthetic = make_synthetic();
+        let stack_user = &stack_synthetic.payload as *const u64 as usize;
+        assert!(unsafe { try_read_tracked_gc_header(stack_user) }.is_none());
+
+        let heap_synthetic = Box::new(make_synthetic());
+        let heap_user = &heap_synthetic.payload as *const u64 as usize;
+        assert!(unsafe { try_read_tracked_gc_header(heap_user) }.is_none());
     }
 
     #[test]

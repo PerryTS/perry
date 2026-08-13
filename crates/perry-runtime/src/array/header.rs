@@ -584,13 +584,14 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // practice (1-2 grows) but cap depth at 64 to defend against
     // cycles from corrupted GC state.
     let mut cleaned = cleaned;
+    let mut tracked_header =
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(cleaned as usize) };
     unsafe {
         let mut steps = 0u32;
-        while let Some(gc_header) =
-            crate::value::addr_class::try_read_tracked_gc_header(cleaned as usize)
-        {
-            if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
-                || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        while let Some(gc_header) = tracked_header {
+            let gc_header = gc_header.as_ptr();
+            if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY
+                || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 break;
             }
@@ -600,10 +601,11 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             else {
                 return std::ptr::null();
             };
-            if target_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+            if (*target_header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
                 return std::ptr::null();
             }
             cleaned = new_user as *const ArrayHeader;
+            tracked_header = Some(target_header);
             steps += 1;
             if steps > 64 {
                 return std::ptr::null();
@@ -618,9 +620,10 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // pointer for every downstream accessor. O(1) on subsequent
     // calls (idempotent via the `materialized` cache).
     let addr = cleaned as usize;
-    let tracked_header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) };
-    if let Some(gc_header) = tracked_header {
-        if gc_header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+    let tracked_obj_type =
+        tracked_header.map(|gc_header| unsafe { (*gc_header.as_ptr()).obj_type });
+    if let Some(obj_type) = tracked_obj_type {
+        if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             unsafe {
                 let lazy = cleaned as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
@@ -632,7 +635,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         // A declared TypeScript type is a hint, never a layout fact. Reject
         // every tracked non-array at this shared funnel before treating its
         // payload as an ArrayHeader (#7574).
-        if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        if obj_type != crate::gc::GC_TYPE_ARRAY {
             return std::ptr::null();
         }
     } else if !crate::buffer::is_registered_buffer(addr)
@@ -660,11 +663,9 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // wave them through; everything else at this size is
             // almost certainly corrupted.
             let addr = cleaned as usize;
-            let sparse_array_shape = tracked_header.is_some_and(|gc_header| {
-                gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
-                    && hdr.length > hdr.capacity
-                    && hdr.capacity <= 1_000_000
-            });
+            let sparse_array_shape = tracked_obj_type == Some(crate::gc::GC_TYPE_ARRAY)
+                && hdr.length > hdr.capacity
+                && hdr.capacity <= 1_000_000;
             if sparse_array_shape {
                 return cleaned;
             }

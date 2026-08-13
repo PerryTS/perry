@@ -222,7 +222,7 @@ pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {
 /// `RuntimeHandleScope` inside such a test is decorative — its handles are
 /// neither marked nor rewritten, so a raw pointer held across a GC-capable
 /// call is silently unrooted and the test can pass for the wrong reason.
-pub(super) fn register_runtime_handle_root_scanner_for_tests() {
+pub(crate) fn register_runtime_handle_root_scanner_for_tests() {
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
@@ -403,7 +403,7 @@ impl Drop for GcTestIsolationGuard {
     }
 }
 
-pub(super) struct CopyingNurseryTestGuard {
+pub(crate) struct CopyingNurseryTestGuard {
     frame: u64,
     _scanner_guard: ScopedRootScannerRegistryGuard,
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -447,7 +447,7 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
 }
 
 impl CopyingNurseryTestGuard {
-    pub(super) fn new(slot_count: u32) -> Self {
+    pub(crate) fn new(slot_count: u32) -> Self {
         let lock = copying_nursery_isolation_lock();
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
@@ -475,14 +475,14 @@ impl Drop for CopyingNurseryTestGuard {
     }
 }
 
-pub(super) struct GcTriggerThresholdTestGuard {
+pub(crate) struct GcTriggerThresholdTestGuard {
     next_arena_trigger: usize,
     next_malloc_trigger: usize,
     malloc_step: usize,
 }
 
 impl GcTriggerThresholdTestGuard {
-    pub(super) fn suppress_automatic_triggers() -> Self {
+    pub(crate) fn suppress_automatic_triggers() -> Self {
         let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| {
             let previous = trigger.get();
             trigger.set(usize::MAX);

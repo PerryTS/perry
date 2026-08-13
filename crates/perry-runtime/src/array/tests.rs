@@ -539,10 +539,13 @@ fn test_array_push_f64_grow_path_preserves_value_and_forwarding() {
 }
 
 #[test]
-fn stale_array_reference_survives_three_growths_and_minor_gc() {
-    let scope = crate::gc::RuntimeHandleScope::new();
+fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
+    let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    let _verify_evacuation = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
     let initial = js_array_alloc(0);
-    let _root = scope.root_raw_mut_ptr(initial);
     let mut head = initial;
 
     // Capacity progresses 16 -> 32 -> 64 -> 128. Keeping `initial` unchanged
@@ -557,10 +560,30 @@ fn stale_array_reference_survives_three_growths_and_minor_gc() {
         assert_eq!(js_array_get_f64(initial, i), i as f64);
     }
 
-    // This same test is run under PERRY_GC_FORCE_EVACUATE=1 and
-    // PERRY_GC_VERIFY_EVACUATION=1 by the issue-specific validation command.
-    // The rooted stale reference must still lead to the live head afterward.
-    let _ = crate::gc::gc_collect_minor();
+    // Root the current head, not the deliberately stale first allocation: the
+    // handle must prove that evacuation moved the live array itself, while
+    // `initial` independently exercises the three growth stubs afterward.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let root = scope.root_raw_mut_ptr(head);
+    let pre_gc_head = head;
+    let cycles_before = crate::gc::copying_minor_cycles();
+    let (_, rooted_head) = root.across_mut::<ArrayHeader, _>(|| {
+        let _ = crate::gc::gc_collect_minor();
+    });
+    let cycles_after = crate::gc::copying_minor_cycles();
+    assert!(
+        cycles_after > cycles_before,
+        "forced collection must complete a copying minor"
+    );
+    assert_ne!(
+        rooted_head, pre_gc_head,
+        "forced evacuation must move the live array head"
+    );
+    assert_eq!(
+        clean_arr_ptr_mut(initial),
+        rooted_head,
+        "the stale three-stub chain must resolve to the relocated rooted head"
+    );
     assert_eq!(js_array_length(initial), 65);
     for i in 0..65u32 {
         assert_eq!(js_array_get_f64(initial, i), i as f64);
@@ -568,7 +591,10 @@ fn stale_array_reference_survives_three_growths_and_minor_gc() {
 }
 
 #[test]
-fn injected_low_address_array_receives_growth_forwarding_stub() {
+fn install_array_growth_forwarding_with_installs_stub_for_injected_header() {
+    // Actual low-address classification is covered by
+    // value::addr_class::tests::tracked_gc_classifier_accepts_injected_low_arena_membership.
+    // This test proves the install path uses the injected tracked header.
     const LOW_USER: usize = 0x1_0000_0008;
     const { assert!(LOW_USER < 0x200_0000_0000) };
     let old = js_array_alloc(0);
@@ -576,8 +602,8 @@ fn injected_low_address_array_receives_growth_forwarding_stub() {
     unsafe {
         let old_header =
             crate::value::addr_class::try_read_tracked_gc_header(old as usize).unwrap();
-        let header_ptr = std::ptr::from_ref(old_header).cast_mut();
-        let flags = old_header.gc_flags;
+        let header_ptr = old_header.as_ptr();
+        let flags = (*header_ptr).gc_flags;
         let payload = *(old as *const u64);
 
         let installed = super::push_pop::install_array_growth_forwarding_with(
@@ -602,14 +628,12 @@ fn clean_arr_ptr_rejects_forwarding_cycle() {
     let first = js_array_alloc(0);
     let second = js_array_alloc(0);
     unsafe {
-        let first_header = std::ptr::from_ref(
-            crate::value::addr_class::try_read_tracked_gc_header(first as usize).unwrap(),
-        )
-        .cast_mut();
-        let second_header = std::ptr::from_ref(
-            crate::value::addr_class::try_read_tracked_gc_header(second as usize).unwrap(),
-        )
-        .cast_mut();
+        let first_header = crate::value::addr_class::try_read_tracked_gc_header(first as usize)
+            .unwrap()
+            .as_ptr();
+        let second_header = crate::value::addr_class::try_read_tracked_gc_header(second as usize)
+            .unwrap()
+            .as_ptr();
         let first_flags = (*first_header).gc_flags;
         let second_flags = (*second_header).gc_flags;
         let first_payload = *(first as *const u64);
@@ -632,10 +656,9 @@ fn clean_arr_ptr_rejects_untracked_forwarding_target_without_deref() {
     let array = js_array_alloc(0);
     let unrelated = 0x20_0000usize as *mut u8;
     unsafe {
-        let header = std::ptr::from_ref(
-            crate::value::addr_class::try_read_tracked_gc_header(array as usize).unwrap(),
-        )
-        .cast_mut();
+        let header = crate::value::addr_class::try_read_tracked_gc_header(array as usize)
+            .unwrap()
+            .as_ptr();
         let flags = (*header).gc_flags;
         let payload = *(array as *const u64);
         crate::gc::set_forwarding_address(header, unrelated);

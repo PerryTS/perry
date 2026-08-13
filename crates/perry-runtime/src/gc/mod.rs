@@ -1415,3 +1415,8 @@ mod tests;
 /// on a parallel test thread can wipe its entries mid-test.
 #[cfg(test)]
 pub(crate) use tests::support::copying_nursery_isolation_lock as global_side_table_test_lock;
+#[cfg(test)]
+pub(crate) use tests::support::{
+    register_runtime_handle_root_scanner_for_tests, CopyingNurseryTestGuard,
+    GcTriggerThresholdTestGuard,
+};

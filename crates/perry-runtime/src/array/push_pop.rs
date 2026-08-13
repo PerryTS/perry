@@ -47,17 +47,18 @@ fn throw_non_writable_length() -> ! {
 pub(super) unsafe fn install_array_growth_forwarding_with(
     old_user_addr: usize,
     new_user_addr: *mut u8,
-    tracked_header_for: impl FnOnce(usize) -> Option<&'static crate::gc::GcHeader>,
+    tracked_header_for: impl FnOnce(usize) -> Option<std::ptr::NonNull<crate::gc::GcHeader>>,
 ) -> bool {
     let Some(header) = tracked_header_for(old_user_addr) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
-        || header.gc_flags & crate::gc::GC_FLAG_ARENA == 0
+    let header = header.as_ptr();
+    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
     {
         return false;
     }
-    crate::gc::set_forwarding_address(std::ptr::from_ref(header).cast_mut(), new_user_addr);
+    crate::gc::set_forwarding_address(header, new_user_addr);
     true
 }
 
@@ -166,9 +167,15 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // valid low-address macOS arena allocations are accepted, while
         // handles, synthetic pointers, and unrelated allocations are rejected
         // before a header dereference.
-        let _ = install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
-            crate::value::addr_class::try_read_tracked_gc_header(addr)
-        });
+        let installed =
+            install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
+                crate::value::addr_class::try_read_tracked_gc_header(addr)
+            });
+        assert!(
+            installed,
+            "array growth could not install a forwarding stub for the tracked source at {:#x}",
+            arr as usize
+        );
 
         new_ptr
     }
