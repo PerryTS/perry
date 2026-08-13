@@ -218,12 +218,24 @@ fn iterator_prototype_tower_runs_in_a_no_move_window() {
 fn realm_owned_intrinsic_module_and_storage_roots_are_distinct() {
     use std::sync::{Arc, Barrier, Mutex};
 
+    // The guard owns the sole wait path. It also runs while unwinding, so a
+    // panic during materialization or snapshot capture releases the peer
+    // instead of leaving it blocked forever. On success it keeps each agent
+    // (and therefore its arena) alive until both snapshots have been captured.
+    struct ReleasePeerOnDrop(Arc<Barrier>);
+    impl Drop for ReleasePeerOnDrop {
+        fn drop(&mut self) {
+            self.0.wait();
+        }
+    }
+
     let bootstrap_gate = Arc::new(Mutex::new(()));
     let both_alive = Arc::new(Barrier::new(2));
     let agent = |gate: Arc<Mutex<()>>, barrier: Arc<Barrier>| {
         std::thread::Builder::new()
             .stack_size(16 << 20)
             .spawn(move || {
+                let _release_peer = ReleasePeerOnDrop(barrier);
                 {
                     // GLOBAL_THIS_PTR is older process-global bootstrap state;
                     // serialize that unrelated initialization while auditing
@@ -231,9 +243,7 @@ fn realm_owned_intrinsic_module_and_storage_roots_are_distinct() {
                     let _bootstrap = gate.lock().expect("bootstrap gate");
                     crate::object::test_materialize_realm_owned_roots();
                 }
-                let snapshot = crate::object::test_realm_owned_root_snapshot();
-                barrier.wait();
-                snapshot
+                crate::object::test_realm_owned_root_snapshot()
             })
             .expect("spawn realm agent")
     };
