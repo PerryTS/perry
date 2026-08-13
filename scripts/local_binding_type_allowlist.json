@@ -10,6 +10,38 @@
       "reason": "The module map is copied into the closure's source-type metadata; representation consumers use the separate runtime-proof map or emit a live-value guard."
     },
     {
+      "path": "crates/perry-codegen/src/codegen/closure.rs",
+      "function": "compile_closure",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This entry operation merges source-type metadata for closure receivers; raw representation consumers require separate runtime proof or a live guard."
+    },
+    {
+      "path": "crates/perry-codegen/src/codegen/mod.rs",
+      "function": "unique_global",
+      "access": "raw:module_local_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This iteration derives the typed-ABI metadata oracle while filtering globals; typed entry paths independently guard live argument and capture values."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/byte_read_key.rs",
+      "function": "is_numeric",
+      "access": "raw:binding_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This collector inventories declared numeric key candidates; the map contains source metadata and is not itself runtime-value evidence."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/pointer_locals.rs",
+      "function": "collect_facts",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The membership check prunes the complete-write fixpoint to frame-owned locals; it cannot remove a required root and unknown values remain conservatively pointer-capable."
+    },
+    {
       "path": "crates/perry-codegen/src/collectors/hir_facts.rs",
       "function": "seed_module_bindings",
       "access": "raw:binding_types",
@@ -47,7 +79,7 @@
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The hint admits only the inline push tier whose live-bits test sends heap-valued + results through layout-note, addref, and barrier bookkeeping."
+      "reason": "The hint admits a numeric-push candidate; raw-layout arrays keep the runtime number guard and generic inline stores inspect live bits to invalidate numeric layout on every non-number."
     },
     {
       "path": "crates/perry-codegen/src/expr/binary.rs",
@@ -119,7 +151,7 @@
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The class hint selects guarded field or runtime method/property routing; raw field access validates the live class id and keys token before dereference and all misses retain dynamic lookup."
+      "reason": "The class hint selects only the guarded plain-field IC; its live class-id and keys-token checks dominate raw access, while accessors and method binding require proven receiver provenance."
     },
     {
       "path": "crates/perry-codegen/src/expr/property_get.rs",
@@ -308,10 +340,10 @@
     {
       "path": "crates/perry-codegen/src/stmt/masked_window_region.rs",
       "function": "expr_is_number_under",
-      "access": "local_type_hint",
+      "access": "stable_local_type_proof",
       "count": 1,
       "classification": "representation-proven",
-      "reason": "The active masked-window refinement set and preheader guards prove numeric storage for the scoped cloned region."
+      "reason": "The proof API supplies runtime-derived initializer evidence and rejects the binding after any write before the scoped region refinement is installed."
     },
     {
       "path": "crates/perry-codegen/src/stmt/masked_window_region.rs",
@@ -496,6 +528,22 @@
       "count": 2,
       "classification": "metadata-only",
       "reason": "The generic HIR environment exposes source-level metadata only; codegen supplies its separate runtime-proof facts adapter."
+    },
+    {
+      "path": "crates/perry-hir/src/lower/context.rs",
+      "function": "define_sloppy_implicit_global",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This scope-stack iteration resolves an existing lexical binding during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-hir/src/lower/context.rs",
+      "function": "lookup_local_in_current_scope",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
     }
   ]
 }

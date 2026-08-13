@@ -178,7 +178,7 @@ fn expr_is_number_under(
         Expr::LocalGet(id) => {
             refined.contains(id)
                 || matches!(
-                    ctx.local_type_hint(id),
+                    ctx.stable_local_type_proof(id),
                     Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }

@@ -116,17 +116,43 @@ fn typed_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
-    let Expr::Closure { captures, .. } = expr else {
+    let Expr::Closure {
+        params,
+        body,
+        captures,
+        ..
+    } = expr
+    else {
         return None;
     };
-    let mut reps = Vec::with_capacity(captures.len());
-    for id in captures {
+    // Match the capture allocator/body map order: explicit captures first,
+    // followed by referenced outer ids in deterministic order. Module globals
+    // are absent from the typed-ABI type oracle, so encountering one rejects
+    // the clone; emitted capture slots filter the same ids. This keeps every
+    // enumerated representation aligned with the slot index guarded by the
+    // trampoline and loaded by the typed body, even when HIR capture
+    // conversion omitted an id that codegen auto-detects.
+    let mut effective = captures.clone();
+    let mut referenced = HashSet::new();
+    crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
+    let mut inner_lets = HashSet::new();
+    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    let param_ids: HashSet<u32> = params.iter().map(|param| param.id).collect();
+    let explicit: HashSet<u32> = effective.iter().copied().collect();
+    let mut auto: Vec<u32> = referenced.into_iter().collect();
+    auto.sort_unstable();
+    effective.extend(auto.into_iter().filter(|id| {
+        !param_ids.contains(id) && !inner_lets.contains(id) && !explicit.contains(id)
+    }));
+
+    let mut reps = Vec::with_capacity(effective.len());
+    for id in effective {
         // This is a candidate representation derived from source metadata,
         // not a proof. Both typed-clone entry paths guard the current capture
         // bits against `rep` before entering the raw ABI.
-        let ty = module_local_types.get(id)?;
+        let ty = module_local_types.get(&id)?;
         let rep = typed_param_rep_for_type(ty)?;
-        reps.push((*id, rep));
+        reps.push((id, rep));
     }
     Some(reps)
 }
@@ -692,7 +718,7 @@ pub(crate) fn typed_i1_closure_rejection_reason_with_types(
     if *captures_new_target {
         return Some(TypedCloneRejectionReason::CapturesNewTarget);
     }
-    if captures.iter().any(|id| mutable_captures.contains(id)) {
+    if !mutable_captures.is_empty() || captures.iter().any(|id| mutable_captures.contains(id)) {
         return Some(TypedCloneRejectionReason::Captures);
     }
 

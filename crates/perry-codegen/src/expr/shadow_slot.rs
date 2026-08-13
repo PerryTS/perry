@@ -8,7 +8,7 @@ use super::*;
 use anyhow::{anyhow, Result};
 
 use perry_hir::types::Type as HirType;
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{Expr, UnaryOp};
 
 use crate::types::{I32, I64, PTR};
 
@@ -76,9 +76,15 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
                 })
         }
         Expr::Compare { .. } | Expr::Void(_) => true,
-        Expr::Unary { .. } => true,
-        Expr::Binary { op, .. } => {
-            !matches!(op, BinaryOp::Add) || crate::type_analysis::is_numeric_expr(ctx, expr)
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Not | UnaryOp::Pos => true,
+            UnaryOp::Neg | UnaryOp::BitNot => {
+                crate::type_analysis::is_provably_not_bigint(ctx, operand)
+            }
+        },
+        Expr::Binary { .. } => {
+            crate::type_analysis::is_numeric_expr(ctx, expr)
+                && crate::type_analysis::is_provably_not_bigint(ctx, expr)
         }
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never

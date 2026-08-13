@@ -1279,10 +1279,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the property is registered as a getter, call the
             // synthesized __get_<property> method instead of doing a
             // raw field load.
-            if let Some(class_name) = receiver_class_name(ctx, object)
+            let proven_receiver_class = receiver_class_name(ctx, object);
+            if let Some(class_name) = proven_receiver_class
+                .clone()
                 .or_else(|| guarded_declared_class_get_candidate(ctx, object))
             {
-                if class_name == "URLPattern" && is_url_pattern_data_property(property) {
+                // A metadata-only class name may nominate the guarded plain-
+                // field IC below, whose live class-id/keys check owns a
+                // semantic fallback. It must never select class behavior by
+                // itself: direct accessors and bound methods have no receiver
+                // shape guard and would otherwise invoke the declared class on
+                // an unrelated live instance.
+                let receiver_class_is_proven =
+                    proven_receiver_class.as_deref() == Some(class_name.as_str());
+                if receiver_class_is_proven
+                    && class_name == "URLPattern"
+                    && is_url_pattern_data_property(property)
+                {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
@@ -1304,7 +1317,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `class Headers` — a user class of that name owns the
                 // receiver type, so fall through to the user-class
                 // getter/method dispatch below.
-                if class_name == "Headers"
+                if receiver_class_is_proven
+                    && class_name == "Headers"
                     && !ctx.classes.contains_key(&class_name)
                     && matches!(
                         property.as_str(),
@@ -1335,13 +1349,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
                 }
-                if class_name == "ClientRequest" && is_http_client_request_method_name(property) {
+                if receiver_class_is_proven
+                    && class_name == "ClientRequest"
+                    && is_http_client_request_method_name(property)
+                {
                     return lower_class_method_bind(ctx, object, property);
                 }
-                if class_name == "Agent" && is_http_agent_method_name(property) {
+                if receiver_class_is_proven
+                    && class_name == "Agent"
+                    && is_http_agent_method_name(property)
+                {
                     return lower_class_method_bind(ctx, object, property);
                 }
-                if is_net_native_method_value(&class_name, property) {
+                if receiver_class_is_proven && is_net_native_method_value(&class_name, property) {
                     return lower_class_method_bind(ctx, object, property);
                 }
                 if class_has_computed_runtime_members(ctx, &class_name) {
@@ -1359,7 +1379,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .get(&class_name)
                     .map(|c| c.static_accessor_names.iter().any(|n| n == property))
                     .unwrap_or(false);
-                if !is_static_accessor {
+                if receiver_class_is_proven && !is_static_accessor {
                     if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                         let recv_box = lower_expr(ctx, object)?;
                         return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
@@ -1387,7 +1407,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
-                if class_name == "Headers"
+                if receiver_class_is_proven
+                    && class_name == "Headers"
                     && !ctx.classes.contains_key(&class_name)
                     && is_headers_method_name(property)
                 {
@@ -1406,7 +1427,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_bits), (I64, &key_handle)],
                     ));
                 }
-                if is_web_stream_method {
+                if receiver_class_is_proven && is_web_stream_method {
                     return lower_class_method_bind(ctx, object, property);
                 }
                 // Fast path: known class instance + plain instance field
@@ -1883,7 +1904,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // prototype methods — every method reference returned
                 // `undefined`.
                 let method_key = (class_name.clone(), property.clone());
-                if ctx.methods.contains_key(&method_key) {
+                if receiver_class_is_proven && ctx.methods.contains_key(&method_key) {
                     return lower_class_method_bind(ctx, object, property);
                 }
             }

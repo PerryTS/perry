@@ -2188,6 +2188,58 @@ fn small_bigint_literal_stays_i128_until_js_boundary() {
 }
 
 #[test]
+fn bigint_binary_result_live_across_collection_keeps_a_precise_root() {
+    let _pin = NativeRootsPin::shadow();
+    let module = module_with_classes_and_params(
+        "bigint_binary_root_across_collection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::BigInt,
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "value".to_string(),
+                ty: Type::BigInt,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(Expr::BigInt("1n".to_string())),
+                    right: Box::new(Expr::BigInt("2n".to_string())),
+                }),
+            },
+            Stmt::Expr(native_module_call(
+                "console",
+                "log",
+                vec![Expr::String("collection point".to_string())],
+            )),
+            Stmt::Return(Some(local(10))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe = defined_function_ir_section(
+        &ir,
+        "perry_fn_bigint_binary_root_across_collection_ts__probe",
+    );
+    let collection = probe
+        .find("call void @js_console_log_spread")
+        .expect("fixture should contain a collection-capable console call");
+    assert!(
+        probe[..collection].contains("call void @js_shadow_slot_bind"),
+        "the BigInt result local must be bound as a precise root before the collection point:\n{probe}"
+    );
+    assert_eq!(
+        probe.matches("call void @js_shadow_slot_bind").count(),
+        1,
+        "the fixture has exactly one pointer-bearing frame local, so its root must be the BigInt result:\n{probe}"
+    );
+    assert!(
+        probe[collection..].contains("load double, ptr "),
+        "the returned BigInt must be reloaded from its rooted slot after the collection point:\n{probe}"
+    );
+}
+
+#[test]
 fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
     let too_wide = format!("0x1{}n", "0".repeat(32));
     let body = vec![Stmt::Return(Some(Expr::BigInt(too_wide)))];
@@ -2281,9 +2333,15 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
         "packed fast clone must not perform a boxed fallback before side-exiting:\n{fallback_block}\n\n{ir}"
     );
     let slow_start = ir
-        .find("for.packed_f64_slow")
-        .expect("expected packed-f64 slow clone");
-    let slow_clone = &ir[slow_start..];
+        .find("\nfor.packed_f64_slow.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-f64 slow-clone block");
+    let slow_tail = &ir[slow_start..];
+    let slow_end = slow_tail
+        .find("\n}\n")
+        .map(|offset| slow_start + offset)
+        .expect("expected packed-f64 slow-clone function boundary");
+    let slow_clone = &ir[slow_start..slow_end];
     assert!(
         slow_clone.contains("call void @js_gc_note_slot_layout")
             && slow_clone.contains("call void @js_write_barrier_slot"),
@@ -7294,7 +7352,7 @@ fn compiler_private_async_iter_result_i32_slot_uses_typed_handoff() {
 }
 
 #[test]
-fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_before_raw_slot() {
+fn compiler_private_async_iter_result_annotated_numeric_payload_stays_generic() {
     let ir = compile_ir_for_module_with_opts(
         module_with_classes_and_params(
             "compiler_private_async_iter_result_annotated_numeric_param.ts",
@@ -7308,16 +7366,12 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_befor
     .unwrap();
 
     assert!(
-        ir.contains("call double @js_number_coerce"),
-        "annotation-only numeric async payloads must be coerced before raw f64 storage:\n{ir}"
+        ir.contains("call double @js_iter_result_set("),
+        "annotation-only numeric async payloads must preserve the live JSValue:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_iter_result_set_f64"),
-        "coerced numeric async payload should still use the raw f64 scratch slot:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_iter_result_set("),
-        "coerced numeric async payload should avoid the generic JSValue setter:\n{ir}"
+        !ir.contains("call double @js_iter_result_set_f64"),
+        "annotation-only numeric async payloads must not use the unguarded raw-f64 slot:\n{ir}"
     );
 }
 
@@ -12250,7 +12304,9 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
     )
     .unwrap();
     let public = "perry_closure_typed_f64_closure_abi_ts__300";
+    let generic_body = "perry_closure_typed_f64_closure_abi_ts__300$generic";
     let typed = "perry_closure_typed_f64_closure_abi_ts__300$typed_f64";
+    let caller_ir = defined_function_ir_section(&ir, "perry_fn_typed_f64_closure_abi_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12265,8 +12321,11 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
         "public typed-f64 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
-        ir.contains("closure_direct.typed_f64") && ir.contains("call i32 @js_typed_f64_arg_guard"),
-        "direct typed-f64 calls must guard captures and retain their generic branch:\n{ir}"
+        caller_ir.contains("closure_direct.typed_f64")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-f64 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call double @{typed}(i64 ")),
@@ -12388,7 +12447,10 @@ fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
     )
     .unwrap();
     let public = "perry_closure_typed_i32_closure_capture_ts__303";
+    let generic_body = "perry_closure_typed_i32_closure_capture_ts__303$generic";
     let typed = "perry_closure_typed_i32_closure_capture_ts__303$typed_i32";
+    let caller_ir =
+        defined_function_ir_section(&ir, "perry_fn_typed_i32_closure_capture_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12403,8 +12465,11 @@ fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
         "public typed-i32 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
-        ir.contains("closure_direct.typed_i32") && ir.contains("call i32 @js_typed_i32_arg_guard"),
-        "direct typed-i32 calls must guard captures and retain their generic branch:\n{ir}"
+        caller_ir.contains("closure_direct.typed_i32")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-i32 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call i32 @{typed}(i64 ")),
@@ -12658,7 +12723,9 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
     )
     .unwrap();
     let public = "perry_closure_typed_i1_closure_capture_ts__301";
+    let generic_body = "perry_closure_typed_i1_closure_capture_ts__301$generic";
     let typed = "perry_closure_typed_i1_closure_capture_ts__301$typed_i1";
+    let caller_ir = defined_function_ir_section(&ir, "perry_fn_typed_i1_closure_capture_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12673,8 +12740,11 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
         "public typed-i1 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
     );
     assert!(
-        ir.contains("closure_direct.typed_i1") && ir.contains("call i32 @js_typed_i1_arg_guard"),
-        "direct typed-i1 calls must guard captures and retain their generic branch:\n{ir}"
+        caller_ir.contains("closure_direct.typed_i1")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-i1 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 ")),
@@ -13775,7 +13845,7 @@ fn static_name_spread_method_fallback_uses_method_id_wrapper() {
 }
 
 #[test]
-fn static_name_class_method_value_uses_method_id_bind_wrapper() {
+fn annotated_class_method_value_uses_generic_lookup() {
     let mut calc = class(209, "Calc", Vec::new());
     calc.methods.push(Function {
         id: 2090,
@@ -13807,12 +13877,13 @@ fn static_name_class_method_value_uses_method_id_bind_wrapper() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_class_method_bind_by_id"),
-        "static-name class method value reads should use method-id bind ABI:\n{ir}"
+        ir.contains("call double @js_object_get_field_ic_miss"),
+        "an annotation-only class receiver should preserve generic property lookup:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_class_method_bind(double"),
-        "static-name class method value reads should not pass raw name bytes:\n{ir}"
+        !ir.contains("call double @js_class_method_bind_by_id")
+            && !ir.contains("call double @js_class_method_bind(double"),
+        "an annotation-only class receiver must not select a direct class-method bind ABI:\n{ir}"
     );
 }
 

@@ -224,7 +224,9 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             .then_some(HirType::BigInt)
         }
         Expr::Binary { left, right, .. }
-            if is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right) =>
+            if is_numeric_expr(ctx, left)
+                && is_numeric_expr(ctx, right)
+                && is_provably_not_bigint(ctx, init) =>
         {
             Some(HirType::Number)
         }

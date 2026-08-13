@@ -306,12 +306,22 @@ pub fn collect_pointer_typed_locals(
                         None
                     }
                 }),
-            Expr::Unary { op, .. } => Some(match op {
-                perry_hir::UnaryOp::Not => Type::Boolean,
-                perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot => {
-                    Type::Number
-                }
-            }),
+            Expr::Unary { op, operand } => match op {
+                perry_hir::UnaryOp::Not => Some(Type::Boolean),
+                // Unary plus either produces a Number or throws for BigInt; it
+                // can never bind a pointer-bearing result.
+                perry_hir::UnaryOp::Pos => Some(Type::Number),
+                // Negation and bit-not preserve BigInt. Only discard the root
+                // when the operand has runtime-derived non-pointer evidence;
+                // declared types are intentionally absent from this proof.
+                perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => expr_is_known_non_pointer(
+                    operand,
+                    local_types,
+                    local_value_types,
+                    non_pointer_locals,
+                )
+                .then_some(Type::Number),
+            },
             Expr::Binary { op, left, right } => {
                 if matches!(op, BinaryOp::Add) {
                     if expr_is_known_non_pointer(
@@ -329,8 +339,27 @@ pub fn collect_pointer_typed_locals(
                     } else {
                         None
                     }
-                } else {
+                } else if expr_is_known_non_pointer(
+                    left,
+                    local_types,
+                    local_value_types,
+                    non_pointer_locals,
+                ) || expr_is_known_non_pointer(
+                    right,
+                    local_types,
+                    local_value_types,
+                    non_pointer_locals,
+                ) {
+                    // Every non-Add arithmetic/bitwise operator can preserve
+                    // BigInt only when both operands convert to BigInt. A
+                    // runtime-proven non-pointer operand converts to Number,
+                    // so the expression either yields a scalar Number or
+                    // throws on a mixed Number/BigInt pair. With no such
+                    // evidence the result may be a heap BigInt and must keep a
+                    // precise root.
                     Some(Type::Number)
+                } else {
+                    None
                 }
             }
             Expr::Conditional {
@@ -1338,6 +1367,73 @@ mod tests {
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
         assert!(!slots.contains_key(&1));
         assert!(slots.contains_key(&2));
+    }
+
+    #[test]
+    fn bigint_arithmetic_results_keep_shadow_slots() {
+        let bigint = || Expr::BigInt("1".to_string());
+        let cases = [
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(bigint()),
+                right: Box::new(bigint()),
+            },
+            Expr::Unary {
+                op: perry_hir::UnaryOp::Neg,
+                operand: Box::new(bigint()),
+            },
+            Expr::Unary {
+                op: perry_hir::UnaryOp::BitNot,
+                operand: Box::new(bigint()),
+            },
+        ];
+
+        for (index, init) in cases.into_iter().enumerate() {
+            let id = index as u32 + 1;
+            let stmts = vec![Stmt::Let {
+                id,
+                name: format!("bigint_result_{id}"),
+                ty: Type::BigInt,
+                mutable: false,
+                init: Some(init),
+            }];
+            let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+            assert!(
+                slots.contains_key(&id),
+                "BigInt-producing arithmetic must remain visible to the precise GC"
+            );
+        }
+    }
+
+    #[test]
+    fn proven_number_arithmetic_still_avoids_shadow_slots() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "product".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(Expr::Integer(6)),
+                    right: Box::new(Expr::Integer(7)),
+                }),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "negative".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(Expr::LocalGet(1)),
+                }),
+            },
+        ];
+
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(!slots.contains_key(&1));
+        assert!(!slots.contains_key(&2));
     }
 
     /// Every `Type` variant, with the answer pinned.

@@ -9,8 +9,11 @@ audit keeps that choice explicit:
 
 * ordinary consumers call ``stable_local_type_proof``; its whole-region write
   set conservatively invalidates runtime-derived evidence after any assignment;
-* exceptional consumers call ``local_type_hint`` and need an allowlist entry
-  explaining the runtime guard or independent proof;
+* exceptional consumers call ``local_type_hint`` and must explain the runtime
+  guard or independent proof;
+* every accessor group needs an allowlist classification and reason, including
+  ``stable_local_type_proof`` groups; a missing entry fails as an unclassified
+  local-type read;
 * remaining raw reads in pre-codegen collectors are inventoried as well; and
 * a direct read of ``ctx.local_types`` or ``ctx.proven_local_types`` outside the
   accessors is always an error.
@@ -51,11 +54,13 @@ SKIP_SUFFIXES = ("_tests.rs",)
 
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 ACCESS_RE = re.compile(
-    r"\bctx\s*\.\s*(?P<api>stable_local_type_proof|local_type_hint)\s*\("
+    r"\b(?P<receiver>[A-Za-z_][A-Za-z0-9_]*|self)\s*\.\s*"
+    r"(?P<api>stable_local_type_proof|local_type_hint)\s*\("
 )
 RAW_RE = re.compile(
     r"\b(?P<receiver>(?:ctx|self)\s*\.\s*(?:local_types|proven_local_types)|self\s*\.\s*locals|module_local_types|"
-    r"module_receiver_types|binding_types|proven_types|local_types)\s*\.\s*get\s*\("
+    r"module_receiver_types|binding_types|proven_types|local_types)\s*"
+    r"(?:\.\s*(?:get|get_key_value|get_mut|contains_key|entry|iter|iter_mut|keys|values|values_mut)\s*\(|\[)"
 )
 GENERIC_LOCAL_FACT_RE = re.compile(r"\bself\s*\.\s*get\s*\(")
 
@@ -410,7 +415,7 @@ fn collector(local_types: &Map, id: &u32) {
 
     expect(
         "count drift",
-        audit(sites + [sites[0]], raw, entries, [], minimum_sites=3),
+        audit([*sites, sites[0]], raw, entries, [], minimum_sites=3),
         "count drift",
     )
 
@@ -432,6 +437,24 @@ fn collector(local_types: &Map, id: &u32) {
         audit(proof_bypass_sites, proof_bypass_raw, [], [], minimum_sites=0),
         "direct ctx.proven_local_types read bypasses the proof API",
     )
+
+    for label, bypass in [
+        (
+            "contains-key bypass",
+            "fn bad(ctx: &FnCtx<'_>, id: &u32) { "
+            "let _ = ctx.local_types.contains_key(id); }",
+        ),
+        (
+            "index bypass",
+            "fn bad(ctx: &FnCtx<'_>, id: &u32) { let _ = ctx.local_types[id]; }",
+        ),
+    ]:
+        bypass_sites, bypass_raw = scan_text(fixture_path, bypass)
+        expect(
+            label,
+            audit(bypass_sites, bypass_raw, [], [], minimum_sites=0),
+            "direct ctx.local_types read bypasses the proof API",
+        )
 
     expect(
         "candidate floor",

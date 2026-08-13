@@ -16,10 +16,10 @@
 //! predicate for a test that always says "yes" — and, more importantly, the
 //! bookkeeping calls must still be REACHABLE from the guarded arm. The change
 //! is "skip the calls when the live bits prove them dead", never "elide them
-//! outright": a `number`-annotated parameter that actually holds a string at
-//! runtime (Perry does not validate declared types) takes the guarded arm and
-//! records the slot exactly as it always did. A test that asserted the calls
-//! ABSENT would be pinning silent heap corruption.
+//! outright": an unexpected tag-shaped NaN payload takes the guarded arm and
+//! records the slot exactly as it always did. Metadata-only numeric candidates
+//! are tested separately below and stay on the runtime number guard. A test
+//! that asserted the bookkeeping calls ABSENT would pin silent heap corruption.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -228,11 +228,21 @@ fn inbounds_block(ir: &str) -> String {
     rest[..end].to_string()
 }
 
-/// `keep.push(base + j)` — `push_num.ts` verbatim. `Expr::Binary { Add }` is
-/// the shape no static non-pointer proof can admit (`+` is string
-/// concatenation for non-numeric operands), which is exactly why the live test
-/// is what retires the calls here.
+/// A canonical numeric `+` whose operands have runtime-derived evidence. The
+/// live-bits guard remains useful because NaN payloads still require GC-layout
+/// bookkeeping even though neither operand rests on source metadata.
 fn numeric_add_push() -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+    }
+}
+
+/// The benchmark-like shape whose left operand is only a declared-number
+/// parameter. Perry does not enforce that annotation, so this candidate must
+/// keep the live runtime-number guard and generic push fallback.
+fn metadata_numeric_add_push() -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(BASE_ID)),
@@ -275,8 +285,7 @@ fn a_numeric_push_moves_its_gc_bookkeeping_behind_one_live_test() {
 #[test]
 fn the_guarded_arm_still_reaches_every_call_it_moved() {
     let ir = ir_for(push_module(Type::Number, numeric_add_push(), Vec::new()));
-    // Not an elision. A `number`-annotated value that is a heap string at
-    // runtime (Perry does not validate declared types) takes this arm.
+    // Not an elision. A tag-shaped live payload still takes this arm.
     assert!(
         ir.contains(NOTE_CALL),
         "the layout note was ELIDED rather than guarded — a pointer reaching \
@@ -402,4 +411,23 @@ fn the_guard_branches_on_the_live_bits_not_on_a_constant() {
              every heap tag `layout_pointer_bearing_bits` accepts:\n{inbounds}"
         );
     }
+}
+
+#[test]
+fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
+    let ir = ir_for(push_module(
+        Type::Number,
+        metadata_numeric_add_push(),
+        Vec::new(),
+    ));
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
+            && ir.contains("call i64 @js_array_numeric_push_f64_unboxed")
+            && ir.contains("call i64 @js_array_push_f64"),
+        "a declared-number addition must validate the live value and retain the generic push fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains(GUARD_BLOCK),
+        "metadata alone must not reach the pointer-only inline bookkeeping guard:\n{ir}"
+    );
 }

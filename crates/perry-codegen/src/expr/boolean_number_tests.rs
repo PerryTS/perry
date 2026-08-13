@@ -156,7 +156,7 @@ fn invalidated_boolean_proof_keeps_dynamic_coercion_and_add_dispatch() {
         "a Boolean local invalidated by a string write must preserve concat semantics:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_number_coerce("),
-        "an invalidated Boolean proof must preserve runtime numeric coercion:\n{ir}"
+        ir.contains("call double @js_dynamic_mul("),
+        "an invalidated Boolean proof must preserve BigInt-aware runtime ToNumeric coercion:\n{ir}"
     );
 }
