@@ -573,12 +573,12 @@ pub extern "C" fn js_generator_attach_closure_prototype(
 /// ```
 fn build_generator_tower(
     is_async: bool,
-    ctor_slot: &std::sync::atomic::AtomicI64,
-    proto_slot: &std::sync::atomic::AtomicI64,
-    gen_proto_slot: &std::sync::atomic::AtomicI64,
+    ctor_slot: &crate::object::RealmAtomicI64,
+    proto_slot: &crate::object::RealmAtomicI64,
+    gen_proto_slot: &crate::object::RealmAtomicI64,
 ) {
-    // #7251: this builds an IMMORTAL object graph (the tower hangs off a
-    // process-global intrinsic slot for the life of the thread) by threading
+    // #7251: this builds an IMMORTAL object graph (the tower hangs off an
+    // agent-local intrinsic root for the life of the thread) by threading
     // `ctor`/`proto`/`gen_proto` as raw `*mut ObjectHeader` / `*mut
     // ClosureHeader` locals across a dozen-plus allocating installs below.
     // None of those locals is a slot the collector rewrites, so a relocating
@@ -711,8 +711,8 @@ fn build_generator_tower(
     gen_proto_slot.store(gen_proto as i64, Ordering::Release);
 }
 
-/// Build both generator intrinsic towers. Idempotent; called once from
-/// `populate_global_this_builtins` under the globalThis singleton CAS. (#3664)
+/// Build both generator intrinsic towers. Idempotent within the current
+/// agent; called during its global bootstrap or by the lazy accessors. (#3664)
 pub(crate) fn ensure_generator_intrinsics() {
     if crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
         build_generator_tower(

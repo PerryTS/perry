@@ -219,16 +219,12 @@ pub(crate) fn install_storage_globals(
 
     let local = make_storage_object(StorageKind::Local, storage_proto);
     let session = make_storage_object(StorageKind::Session, storage_proto);
-    crate::gc::runtime_store_root_atomic_raw_i64(
-        &crate::object::LOCAL_STORAGE_PTR,
-        local as i64,
-        Ordering::Release,
-    );
-    crate::gc::runtime_store_root_atomic_raw_i64(
-        &crate::object::SESSION_STORAGE_PTR,
-        session as i64,
-        Ordering::Release,
-    );
+    crate::object::LOCAL_STORAGE_PTR.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_raw_i64(slot, local as i64, Ordering::Release);
+    });
+    crate::object::SESSION_STORAGE_PTR.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_raw_i64(slot, session as i64, Ordering::Release);
+    });
 
     set_global_storage_property(global, "localStorage", local);
     set_global_storage_property(global, "sessionStorage", session);

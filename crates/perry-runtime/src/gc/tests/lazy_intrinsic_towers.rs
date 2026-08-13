@@ -1,11 +1,12 @@
-//! #7251: the two lazy intrinsic-tower builders need #7217's NO-MOVE WINDOW,
-//! and #7217 itself could not gate them.
+//! #7251/#8002: lazy intrinsic-tower builders need #7217's NO-MOVE WINDOW,
+//! and every realm must own the tower roots that point into its arena.
 //!
+//! `object::iterator_prototypes::build_iterator_prototypes`,
 //! `object::global_this::generator::build_generator_tower` and
 //! `object::global_this::typed_array::ensure_typed_array_intrinsic` have the
 //! identical shape #7217 fixed for `populate_global_this_builtins`: each
-//! builds an IMMORTAL object graph (hanging off a process-global intrinsic
-//! slot for the life of the thread) by threading raw `*mut ObjectHeader` /
+//! builds an IMMORTAL object graph (hanging off an agent-local intrinsic root
+//! for the life of the thread) by threading raw `*mut ObjectHeader` /
 //! `*mut ClosureHeader` locals across a dozen-plus allocating installs. A
 //! relocating — or even a non-relocating, freeing — collection reached from
 //! one of THEIR OWN allocations leaves the rest of the build writing through
@@ -42,24 +43,20 @@
 //!    allocation.
 //!
 //! 2. **Re-exec the test binary so the child is the first to touch a tower.**
-//!    The six intrinsic-tower statics were plain process-global `AtomicI64`s,
+//!    The intrinsic-tower statics were plain process-global `AtomicI64`s,
 //!    built exactly once per *process* — so whichever test happened to run
 //!    first on that binary (libtest's ordering is not something a single test
 //!    controls) built them for every other test, including a freshly
 //!    re-exec'd child, because OTHER tests in the SAME binary run before this
-//!    one and touch `globalThis`. FIXED HERE by converting the six statics
+//!    one and touch `globalThis`. FIXED HERE by converting the statics
 //!    (`TYPED_ARRAY_INTRINSIC_PTR`, `TYPED_ARRAY_INTRINSIC_PROTO_PTR`,
 //!    `GENERATOR_FUNCTION_INTRINSIC_PTR`, `GENERATOR_INTRINSIC_PROTO_PTR`,
 //!    `GENERATOR_PROTOTYPE_PTR`, `ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR`,
 //!    `ASYNC_GENERATOR_INTRINSIC_PROTO_PTR`, `ASYNC_GENERATOR_PROTOTYPE_PTR`)
-//!    in `object/mod.rs` from a bare `static` to `per_test_global!` — the
-//!    exact mechanism #7672 built for this class of hazard (see
-//!    `per_test_global.rs`'s module docs). In a test build each libtest
-//!    THREAD gets its own zeroed instance, and libtest runs one thread per
-//!    test, so "per thread" and "per test" coincide: this test's first read
-//!    of `GENERATOR_FUNCTION_INTRINSIC_PTR` is guaranteed `0` regardless of
-//!    what any other test in the binary did. Non-test builds expand to the
-//!    identical plain `static` — zero behavioural change in shipped binaries.
+//!    in `object/mod.rs` from bare process statics to `perry_thread_local!`
+//!    backing slots. Each libtest thread therefore gets a guaranteed-first
+//!    touch, and shipped `perry/thread` agents no longer reuse another realm's
+//!    raw arena pointers (#8002).
 //!
 //! 3. **Record `gc_is_suppressed()` from inside the builder under
 //!    `#[cfg(test)]`.** Reported *suppressed* even with the scope removed,
@@ -116,12 +113,9 @@ use super::super::*;
 use super::support::*;
 use std::sync::atomic::Ordering as StdOrdering;
 
-/// Run `body` on a thread that has touched neither `globalThis` nor either
-/// tower, mirroring `global_bootstrap.rs::on_a_fresh_thread`. Belt-and-braces
-/// alongside the `per_test_global!` conversion above: libtest already gives
-/// each `#[test]` its own thread (and therefore its own instance of every
-/// `per_test_global!` table), but spawning explicitly keeps this test's
-/// guarantee independent of that harness detail.
+/// Run `body` on a thread that has touched neither `globalThis` nor any lazy
+/// tower, mirroring `global_bootstrap.rs::on_a_fresh_thread`. The explicit
+/// spawn keeps this test's guarantee independent of libtest's thread reuse.
 fn on_a_fresh_thread(body: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(16 << 20)
@@ -174,6 +168,102 @@ fn arm_collection_reachable_by_next_allocation() {
 fn armed_collection_is_serviced_by_the_next_allocation(collections_before: u64) -> bool {
     force_next_general_arena_alloc_slow();
     gc_collection_count() > collections_before
+}
+
+#[test]
+fn iterator_prototype_tower_runs_in_a_no_move_window() {
+    on_a_fresh_thread(|| {
+        let _pacing = crate::gc::policy::force_legacy_gc_pacing();
+        crate::gc::ensure_gc_initialized();
+        assert_eq!(
+            crate::object::iterator_prototypes::ITERATOR_PROTOTYPE_PTR.load(StdOrdering::Acquire),
+            0,
+            "the iterator tower was already built before this thread's first touch"
+        );
+
+        arm_collection_reachable_by_next_allocation();
+        let collections_before = gc_collection_count();
+
+        crate::object::iterator_prototypes::ensure_iterator_prototypes();
+
+        assert_ne!(
+            crate::object::iterator_prototypes::ITERATOR_PROTOTYPE_PTR.load(StdOrdering::Acquire),
+            0,
+            "the iterator tower did not build, so the test measured nothing"
+        );
+        let collections_after = gc_collection_count();
+        assert_eq!(
+            collections_after, collections_before,
+            "a collection ran inside `build_iterator_prototypes` while its shared/family raw pointers were unrewritable"
+        );
+        assert!(
+            pending_collection_still_owed(),
+            "the window must defer the request, not drop it"
+        );
+        assert!(
+            !crate::gc::gc_is_suppressed(),
+            "the no-move window must close when the iterator tower builder returns"
+        );
+        assert!(
+            armed_collection_is_serviced_by_the_next_allocation(collections_after),
+            "the armed collection was never serviceable, so the no-collection assertion was vacuous"
+        );
+    });
+}
+
+/// #8002/#8003: every cached heap address must name the calling agent's live
+/// arena. Both agents are held at the barrier so address inequality cannot be
+/// earned by allocator reuse after the first thread exits.
+#[test]
+fn realm_owned_intrinsic_module_and_storage_roots_are_distinct() {
+    use std::sync::{Arc, Barrier, Mutex};
+
+    let bootstrap_gate = Arc::new(Mutex::new(()));
+    let both_alive = Arc::new(Barrier::new(2));
+    let agent = |gate: Arc<Mutex<()>>, barrier: Arc<Barrier>| {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || {
+                {
+                    // GLOBAL_THIS_PTR is older process-global bootstrap state;
+                    // serialize that unrelated initialization while auditing
+                    // the roots moved by #8002/#8003.
+                    let _bootstrap = gate.lock().expect("bootstrap gate");
+                    crate::object::test_materialize_realm_owned_roots();
+                }
+                let snapshot = crate::object::test_realm_owned_root_snapshot();
+                barrier.wait();
+                snapshot
+            })
+            .expect("spawn realm agent")
+    };
+
+    let a = agent(Arc::clone(&bootstrap_gate), Arc::clone(&both_alive));
+    let b = agent(bootstrap_gate, both_alive);
+    let a = a.join().expect("agent A panicked");
+    let b = b.join().expect("agent B panicked");
+
+    assert_eq!(a.len(), 23, "the gate must cover every #8002/#8003 root");
+    assert_eq!(a.len(), b.len());
+    for ((a_name, a_slot, a_root), (b_name, b_slot, b_root)) in a.iter().zip(&b) {
+        assert_eq!(a_name, b_name, "snapshot wiring diverged between agents");
+        assert_ne!(
+            *a_root, 0,
+            "agent A did not materialize {a_name}; distinctness would prove nothing"
+        );
+        assert_ne!(
+            *b_root, 0,
+            "agent B did not materialize {b_name}; distinctness would prove nothing"
+        );
+        assert_ne!(
+            a_slot, b_slot,
+            "{a_name} resolved to one process-global atomic in both agents"
+        );
+        assert_ne!(
+            a_root, b_root,
+            "{a_name} reused agent A's live heap address in agent B"
+        );
+    }
 }
 
 #[test]

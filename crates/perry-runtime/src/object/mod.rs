@@ -242,51 +242,127 @@ pub(crate) use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 
+/// An atomic GC root whose backing slot belongs to the calling Perry agent.
+///
+/// The public handle stays process-global and contains no heap address. Every
+/// load, store and scanner visit resolves through `perry_thread_local!` to the
+/// current thread's real atomic. This preserves the explicit atomic API at the
+/// call sites while making it impossible to publish one arena's raw pointer to
+/// another realm (#8002/#8003).
+pub(crate) struct RealmAtomicI64 {
+    slot: &'static crate::tls_hot::HotKey<AtomicI64>,
+}
+
+impl RealmAtomicI64 {
+    const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
+        Self { slot }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load(&self, ordering: Ordering) -> i64 {
+        self.slot.with(|slot| slot.load(ordering))
+    }
+
+    #[inline(always)]
+    pub(crate) fn store(&self, value: i64, ordering: Ordering) {
+        self.slot.with(|slot| {
+            crate::gc::runtime_store_root_atomic_raw_i64(slot, value, ordering);
+        });
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicI64) -> R) -> R {
+        self.slot.with(f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slot_addr(&self) -> usize {
+        self.slot.with(|slot| slot as *const AtomicI64 as usize)
+    }
+}
+
+/// `u64` twin of [`RealmAtomicI64`] for NaN-boxed root words.
+pub(crate) struct RealmAtomicU64 {
+    slot: &'static crate::tls_hot::HotKey<AtomicU64>,
+}
+
+impl RealmAtomicU64 {
+    const fn new(slot: &'static crate::tls_hot::HotKey<AtomicU64>) -> Self {
+        Self { slot }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load(&self, ordering: Ordering) -> u64 {
+        self.slot.with(|slot| slot.load(ordering))
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicU64) -> R) -> R {
+        self.slot.with(f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slot_addr(&self) -> usize {
+        self.slot.with(|slot| slot as *const AtomicU64 as usize)
+    }
+}
+
+crate::perry_thread_local! {
+    static HTTP_METHODS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static FS_CONSTANTS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_SIGNALS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_ERRNO_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_PRIORITY_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_DLOPEN_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static TYPED_ARRAY_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static LOCAL_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static SESSION_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+}
+
+static HTTP_METHODS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&HTTP_METHODS_CACHE_SLOT);
+static FS_CONSTANTS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&FS_CONSTANTS_CACHE_SLOT);
+static OS_CONSTANTS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&OS_CONSTANTS_CACHE_SLOT);
+static OS_CONSTANTS_SIGNALS_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_SIGNALS_CACHE_SLOT);
+static OS_CONSTANTS_ERRNO_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_ERRNO_CACHE_SLOT);
+static OS_CONSTANTS_PRIORITY_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_PRIORITY_CACHE_SLOT);
+static OS_CONSTANTS_DLOPEN_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_DLOPEN_CACHE_SLOT);
+
+pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PTR_SLOT);
+pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT);
+pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static LOCAL_STORAGE_PTR: RealmAtomicI64 = RealmAtomicI64::new(&LOCAL_STORAGE_PTR_SLOT);
+pub(crate) static SESSION_STORAGE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&SESSION_STORAGE_PTR_SLOT);
+
 per_test_global! {
-    static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
     static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
     static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
-    // `%TypedArray%` intrinsic constructor/prototype roots used by per-kind
-    // typed array constructors and scanned by `scan_object_cache_roots_mut`.
-    pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    // #3664: the generator / async-generator intrinsic prototype towers.
-    // `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
-    // (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
-    // `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
-    // `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
-    // `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
-    // `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
-    // GC roots scanned by `scan_object_cache_roots_mut`.
-    //
-    // #7251: these six are `per_test_global!` (not a bare `static`) SPECIFICALLY
-    // so a test can observe "this tower has never been built" reliably. Before
-    // this they were plain process-global `AtomicI64`s, built exactly once per
-    // *process* — so whichever test happened to run first (order is
-    // libtest-nondeterministic) built them for every OTHER test on the same
-    // binary, and a gate trying to arm a collection around
-    // `ensure_generator_intrinsics()` / `ensure_typed_array_intrinsic()` found
-    // the tower already cached and measured nothing (see #7251's second and
-    // third failed gate attempts). `per_test_global!` gives each libtest THREAD
-    // — and libtest runs one thread per test — its own zeroed instance, so
-    // `crates/perry-runtime/src/gc/tests/lazy_intrinsic_towers.rs` sees a
-    // guaranteed-first-touch tower with no dependence on test execution order.
-    // Non-test builds expand to the identical plain `static` this replaced.
-    pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 }
-pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -1120,74 +1196,39 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    visitor.visit_atomic_nanbox_u64_slot(&HTTP_METHODS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&FS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&OS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(
+    for slot in [
+        &HTTP_METHODS_CACHE,
+        &FS_CONSTANTS_CACHE,
+        &OS_CONSTANTS_CACHE,
         &OS_CONSTANTS_SIGNALS_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_ERRNO_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_PRIORITY_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_DLOPEN_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
+    ] {
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_nanbox_u64_slot(slot, Ordering::Relaxed, Ordering::Relaxed);
+        });
+    }
     visitor.visit_atomic_i64_slot(&GLOBAL_THIS_PTR, Ordering::Acquire, Ordering::Release);
-    visitor.visit_atomic_i64_slot(
+    // Realm intrinsic towers and Web Storage brands point into the calling
+    // thread's arena, so visit only this agent's backing atomics.
+    for slot in [
         &TYPED_ARRAY_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    // #3664: generator / async-generator intrinsic tower roots.
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_FUNCTION_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_PROTOTYPE_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_PROTOTYPE_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
+        &LOCAL_STORAGE_PTR,
+        &SESSION_STORAGE_PTR,
+    ] {
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        });
+    }
     async_generator_queue::scan_async_generator_queue_roots_mut(visitor);
-    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
-    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
     // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
     // these must stay live for the lifetime of any iterator.
@@ -1199,7 +1240,9 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
     ] {
-        visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        });
     }
 }
 
@@ -1367,47 +1410,61 @@ pub(crate) fn test_keys_index_entry_exists(owner: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_this_ptr: i64) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &HTTP_METHODS_CACHE,
-        object_cache_bits[0],
-        Ordering::Relaxed,
-    );
+    HTTP_METHODS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[0],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &FS_CONSTANTS_CACHE,
-        object_cache_bits[1],
-        Ordering::Relaxed,
-    );
+    FS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[1],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_CACHE,
-        object_cache_bits[2],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[2],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_SIGNALS_CACHE,
-        object_cache_bits[3],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_SIGNALS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[3],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_ERRNO_CACHE,
-        object_cache_bits[4],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_ERRNO_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[4],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_PRIORITY_CACHE,
-        object_cache_bits[5],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_PRIORITY_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[5],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_DLOPEN_CACHE,
-        object_cache_bits[6],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_DLOPEN_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[6],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors GLOBAL_THIS_PTR scanned by scan_object_cache_roots_mut.
     crate::gc::runtime_store_root_atomic_raw_i64(
         &GLOBAL_THIS_PTR,
@@ -1433,38 +1490,143 @@ pub(crate) fn test_object_cache_roots() -> ([u64; 7], i64) {
     )
 }
 
+/// Materialize every #8002/#8003 realm-owned root on this agent. Kept as one
+/// helper so the two-thread isolation gate below cannot accidentally exercise
+/// only the backing TLS cells while all builders early-return.
+#[cfg(test)]
+pub(crate) fn test_materialize_realm_owned_roots() {
+    let global = js_get_global_this();
+    assert_ne!(
+        crate::value::js_nanbox_get_pointer(global),
+        0,
+        "globalThis bootstrap did not run"
+    );
+    iterator_prototypes::ensure_iterator_prototypes();
+    unsafe {
+        let _ = http_methods_array();
+        let _ = create_fs_constants_object();
+    }
+    for (name, cache) in [
+        ("os.constants", &OS_CONSTANTS_CACHE),
+        ("os.constants.signals", &OS_CONSTANTS_SIGNALS_CACHE),
+        ("os.constants.errno", &OS_CONSTANTS_ERRNO_CACHE),
+        ("os.constants.priority", &OS_CONSTANTS_PRIORITY_CACHE),
+        ("os.constants.dlopen", &OS_CONSTANTS_DLOPEN_CACHE),
+    ] {
+        let _ = create_cached_sub_namespace(name, cache);
+    }
+}
+
+/// `(name, backing-atomic address, rooted heap word)` for every root moved by
+/// #8002/#8003. The backing address proves the storage is per-agent; the
+/// nonzero heap word proves the corresponding builder actually populated it.
+#[cfg(test)]
+pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)> {
+    let mut roots = Vec::new();
+    for (name, slot) in [
+        ("HTTP_METHODS_CACHE", &HTTP_METHODS_CACHE),
+        ("FS_CONSTANTS_CACHE", &FS_CONSTANTS_CACHE),
+        ("OS_CONSTANTS_CACHE", &OS_CONSTANTS_CACHE),
+        ("OS_CONSTANTS_SIGNALS_CACHE", &OS_CONSTANTS_SIGNALS_CACHE),
+        ("OS_CONSTANTS_ERRNO_CACHE", &OS_CONSTANTS_ERRNO_CACHE),
+        ("OS_CONSTANTS_PRIORITY_CACHE", &OS_CONSTANTS_PRIORITY_CACHE),
+        ("OS_CONSTANTS_DLOPEN_CACHE", &OS_CONSTANTS_DLOPEN_CACHE),
+    ] {
+        roots.push((name, slot.test_slot_addr(), slot.load(Ordering::Acquire)));
+    }
+    for (name, slot) in [
+        ("TYPED_ARRAY_INTRINSIC_PTR", &TYPED_ARRAY_INTRINSIC_PTR),
+        (
+            "TYPED_ARRAY_INTRINSIC_PROTO_PTR",
+            &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            "GENERATOR_FUNCTION_INTRINSIC_PTR",
+            &GENERATOR_FUNCTION_INTRINSIC_PTR,
+        ),
+        (
+            "GENERATOR_INTRINSIC_PROTO_PTR",
+            &GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+        ("GENERATOR_PROTOTYPE_PTR", &GENERATOR_PROTOTYPE_PTR),
+        (
+            "ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR",
+            &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+        ),
+        (
+            "ASYNC_GENERATOR_INTRINSIC_PROTO_PTR",
+            &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            "ASYNC_GENERATOR_PROTOTYPE_PTR",
+            &ASYNC_GENERATOR_PROTOTYPE_PTR,
+        ),
+        ("LOCAL_STORAGE_PTR", &LOCAL_STORAGE_PTR),
+        ("SESSION_STORAGE_PTR", &SESSION_STORAGE_PTR),
+        (
+            "ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "ARRAY_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "MAP_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "SET_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "STRING_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+        ),
+    ] {
+        roots.push((
+            name,
+            slot.test_slot_addr(),
+            slot.load(Ordering::Acquire) as u64,
+        ));
+    }
+    roots
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_object_cache_roots() {
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&HTTP_METHODS_CACHE, 0, Ordering::Relaxed);
+    HTTP_METHODS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&FS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
+    FS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&OS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
+    OS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_SIGNALS_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_SIGNALS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_ERRNO_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_ERRNO_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_PRIORITY_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_PRIORITY_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_DLOPEN_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_DLOPEN_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
     GLOBAL_THIS_READY.store(false, Ordering::Release);

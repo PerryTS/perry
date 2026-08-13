@@ -412,9 +412,8 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// walks read `null.prototype` and the constructor's `__proto__` returned the
 /// `0.0` no-value placeholder (`typeof Int8Array.__proto__ === "number"`).
 ///
-/// Idempotent: subsequent calls return the cached pointer. Called from
-/// `populate_global_this_builtins` (single-threaded under the singleton CAS),
-/// so the AtomicI64 stores don't need to race-resolve.
+/// Idempotent within the current agent: subsequent calls return its cached
+/// pointer. The owning agent is the only thread that accesses these roots.
 pub(crate) fn ensure_typed_array_intrinsic(
 ) -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
     let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);

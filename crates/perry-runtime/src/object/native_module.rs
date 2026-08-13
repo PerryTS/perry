@@ -39,6 +39,8 @@ pub(crate) use callable_exports::{
 };
 pub(crate) use constants::get_native_module_constant;
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
+#[cfg(test)]
+pub(crate) use namespace_builders::create_fs_constants_object;
 pub(crate) use namespace_builders::{
     create_cached_sub_namespace, create_sub_namespace, http_global_agent_object,
     http_methods_array, http_status_codes_object, https_global_agent_object,
