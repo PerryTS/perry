@@ -275,6 +275,7 @@ pub extern "C" fn js_throw(value: f64) -> ! {
 
         if (*s).try_depth == 0 {
             print_uncaught(value);
+            emit_uncaught_backtrace();
             std::process::exit(1);
         }
 
@@ -374,6 +375,7 @@ pub extern "C" fn js_throw(value: f64) -> ! {
          or an intermediate object was built without unwind tables."
     );
     print_uncaught(value);
+    emit_uncaught_backtrace();
     std::process::abort();
 }
 
@@ -435,6 +437,58 @@ pub(crate) unsafe fn string_header_to_string(ptr: *const crate::string::StringHe
     std::str::from_utf8(std::slice::from_raw_parts(bytes_ptr, len))
         .unwrap_or("?")
         .to_string()
+}
+
+/// Emit a symbolicated native backtrace for an UNCAUGHT throw, behind
+/// `PERRY_UNCAUGHT_BACKTRACE=1` (#7803 tooling).
+///
+/// # Why this exists
+///
+/// A #7154-class rooting bug surfaces as an uncaught `TypeError` in a function
+/// that is nowhere near the code that lost the value, and the JS-level `stack`
+/// this path already prints reads `at <anonymous>` — one frame, no name. The
+/// native stack, in contrast, names every compiled JS frame: `--debug-symbols`
+/// keeps 1726 `_perry_fn_*` / `_perry_closure_*` symbols in the corpus binary,
+/// so `backtrace_symbols_fd` resolves the whole chain through `dladdr`.
+///
+/// The obvious alternative — run the failing binary under a debugger and break
+/// on the throw helper — was tried first for #7803 and is NOT equivalent: the
+/// failure is intermittent, and under `lldb` the same seeds that fail natively
+/// pass. An instrument that only works when the bug does not reproduce is not
+/// an instrument. This one runs in the ordinary process, so it observes the
+/// run that actually fails.
+///
+/// Off by default and read once per uncaught throw, i.e. at most once per
+/// process, on a path that is already about to `exit(1)`.
+///
+/// Parsed by VALUE, not by presence: `PERRY_GC_DIAG` was `var_os(..).is_some()`
+/// for long enough that `PERRY_GC_DIAG=0` ENABLED diagnostics and silently
+/// collapsed one arm of an A/B (ZOD-NOTES §3, fixed in #7993). A new knob does
+/// not get to repeat that.
+fn emit_uncaught_backtrace() {
+    let on = matches!(
+        std::env::var("PERRY_UNCAUGHT_BACKTRACE").ok().as_deref(),
+        Some("1") | Some("on") | Some("true")
+    );
+    if !on {
+        return;
+    }
+    #[cfg(all(unix, any(target_os = "macos", target_os = "linux")))]
+    {
+        const MAX_FRAMES: usize = 96;
+        let mut frames = [std::ptr::null_mut::<libc::c_void>(); MAX_FRAMES];
+        eprintln!("--- native backtrace at the uncaught throw ---");
+        // SAFETY: `backtrace` / `backtrace_symbols_fd` are the async-signal-safe
+        // pair — `_fd` writes to the descriptor directly and does not allocate.
+        // Same call shape as `arena::quarantine::emit_native_backtrace`.
+        unsafe {
+            let n = libc::backtrace(frames.as_mut_ptr(), MAX_FRAMES as libc::c_int);
+            if n > 0 {
+                libc::backtrace_symbols_fd(frames.as_ptr(), n, 2);
+            }
+        }
+        eprintln!("--- end native backtrace ---");
+    }
 }
 
 /// Best-effort display of a thrown value for uncaught-exception reporting.

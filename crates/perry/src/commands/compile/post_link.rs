@@ -45,6 +45,17 @@ pub(super) fn strip_final_binary(
         // no_mangle JNI/FFI symbols PerryActivity resolves at load.
         || is_android_target(target)
         || std::env::var("PERRY_DEBUG_SYMBOLS").is_ok()
+        // #7803 tooling: keep the symbol table WITHOUT asking for DWARF.
+        //
+        // `PERRY_DEBUG_SYMBOLS` does both — every consumer reads it with
+        // `is_some()`, so there is no value that skips the strip and leaves
+        // `-g` off. That coupling is a problem for an intermittent bug: the
+        // symbolized build of the #7803 corpus passed 7 seeds that the plain
+        // build fails at 44%, so asking for symbols changed the subject. This
+        // knob skips ONLY the strip, leaving codegen byte-identical to the
+        // build that reproduces, which is what makes the backtrace it yields
+        // evidence about the same program.
+        || std::env::var("PERRY_KEEP_SYMBOLS").is_ok()
     {
         return;
     }
