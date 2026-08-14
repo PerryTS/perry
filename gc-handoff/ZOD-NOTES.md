@@ -1841,7 +1841,27 @@ schedule is pinned, the moment a stale slot lands on bytes that look
 pinned is not. That is still the A/B this session lacked: seed 1 passes,
 seed 3 fails, same binary.
 
-A third seed-3 run is in flight, as is seed 2's first confirmation.
+Final confirmation table, one binary, RATE=0.1 ALLOC_KB=0, quarantine off:
+
+| run | seed | result | safepoints | collections |
+|---|---|---|---|---|
+| first | 1 | pass | 63941 | 6335 |
+| first | 2 | abort | 58281 | 5637 |
+| confirm | 2 | **pass** | 63941 | 6238 |
+| first | 3 | abort | **21547** | **2159** |
+| confirm A | 3 | abort | 52836 | 5319 |
+| confirm B | 3 | abort | **21547** | **2159** |
+
+**Seed 3 is the reproducer (3/3 fail).** Two of the three land on the same
+ordinal. Seed 2 is 1/2 — a bias, not a replay. Seed 1 remains the passing
+control.
+
+The abort is a *layout lottery on top of a pinned schedule*: the stale slot
+is visited on the selected collections, and the latch only fires when the
+bytes there happen to look PINNED. That is why paced RATE=1 is ~40% and
+why `--debug-symbols` / the quarantine suppress — they change reuse, not
+rooting.
+
 `CopyingWalkPhaseGuard` is committed so the next abort (after a rebuild)
 prints `copying walk phase: <scanner|remembered_set|worklist_drain>`.
 The latch still does not name the slot; the phase is the next cut.
