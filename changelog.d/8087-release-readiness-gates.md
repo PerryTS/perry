@@ -38,3 +38,8 @@ release regressions.
 The native GC root-dominance corpus also reads the production statepoint pass
 constant independently of rustfmt's one-line or wrapped layout, preserving the
 single-source drift check when the Rust declaration is reformatted.
+
+The full extension release-link gate now reserves runner disk for its target by
+removing unused hosted SDKs and bounding the local compiler cache. If Cargo does
+fail, its captured structured diagnostics are rendered back into the Actions
+log instead of being lost behind the final one-line compilation summary.

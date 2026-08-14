@@ -58,7 +58,10 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "8G"
+      # This gate also materializes release artifacts for every extension. Keep
+      # the local object cache bounded so it cannot crowd the link target off
+      # the hosted runner's small root disk.
+      SCCACHE_CACHE_SIZE: "2G"
       CARGO_INCREMENTAL: "0"
     steps:
       # This job compiles PR-controlled build scripts; don't leave the workflow
@@ -66,6 +69,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Reclaim disk space for full extension link
+        # ubuntu-latest carries large SDKs this Rust-only job never uses. A
+        # cold all-extension release target plus an unbounded compiler cache
+        # can otherwise exhaust the root disk late in the build, commonly
+        # while compiling the final openssl_e2e test binary.
+        run: |
+          before="$(df -h / | tail -1 | awk '{print $4}')"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          after="$(df -h / | tail -1 | awk '{print $4}')"
+          echo "Disk free: ${before} -> ${after}"
 
       # Cheap gate: no toolchain, no cargo, no cache restore. Every step below
       # is skipped when the diff cannot change what the archives link.
@@ -144,8 +158,21 @@ jobs:
           # than being inferred from exit status. The counting lives in the
           # script (`--count-linked`) so this file carries no inline Python —
           # a heredoc at column 0 silently breaks the YAML block scalar.
+          # Preserve Cargo's structured output for the linked-binary count, but
+          # render its diagnostics back into the Actions log on failure. Plain
+          # redirection previously hid the actual compiler/linker error and
+          # left only Cargo's "due to 1 previous error" summary on stderr.
+          set +e
           # shellcheck disable=SC2086
           cargo test --release --no-run --message-format=json $args > /tmp/ext-link.json
+          cargo_status=$?
+          set -e
+          if [ "$cargo_status" -ne 0 ]; then
+            jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' \
+              /tmp/ext-link.json >&2
+            df -h / >&2
+            exit "$cargo_status"
+          fi
 
           linked="$(python3 scripts/ci_ext_link_scope.py --count-linked /tmp/ext-link.json)"
           echo "linked test binaries: $linked"
