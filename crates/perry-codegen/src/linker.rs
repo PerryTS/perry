@@ -875,7 +875,17 @@ fn compile_ll_inprocess_in(
             )?;
             let obj = fs::read(&plan.obj_path)
                 .with_context(|| format!("Failed to read assembled {}", plan.obj_path.display()))?;
-            if !policy.keep {
+            if policy.keep {
+                // This arm retains the object too — `compact_and_assemble`
+                // wrote it to `plan.obj_path` and the scratch dir survives
+                // below — but it never said so. `PERRY_LLVM_KEEP_IR`'s contract
+                // is that the location is PRINTED, and every consumer that
+                // parses `kept object:` went blind the moment statepoints
+                // became the default backend and this arm started handling the
+                // ordinary compile (#8087: all 11 compiler-output-regression
+                // workloads fail on exactly this, never reaching their subject).
+                eprintln!("[perry-codegen] kept object: {}", plan.obj_path.display());
+            } else {
                 // `remove_dir_all`, not the two names we know about — the same
                 // reason the clang path gives. This arm is the only in-process
                 // one that CREATES the scratch dir (writing the assembly), so
