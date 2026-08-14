@@ -100,14 +100,11 @@ crate::perry_thread_local! {
 
     static LAST_EXEC_GROUPS: RefCell<*mut ObjectHeader> = const { RefCell::new(ptr::null_mut()) };
 
-    /// Set of all RegExpHeader pointers ever allocated in this thread.
+    /// Set of live RegExpHeader pointers allocated in this thread.
     /// Used by callers (e.g. `js_string_split`) to distinguish a regex
     /// delimiter from a string delimiter when the codegen can't tell
-    /// statically. Pointers are never removed; RegExpHeader is backed by
-    /// `gc_malloc` but headers are effectively permanent in practice, and
-    /// even if a header is freed, subsequent lookups will simply miss —
-    /// the worst outcome is that a stale regex is treated as a string
-    /// (safe) rather than the other way around (segfault).
+    /// statically. GC move/death hooks rekey and remove entries as cells
+    /// relocate or die. Header magic remains the primary identity check.
     static REGEX_POINTERS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 
     /// Issue #637: Owned copies of pattern and flags strings keyed by
@@ -131,7 +128,7 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     }
     // Wall 18: check the header-resident magic FIRST so identity survives a
     // duplicate-runtime thread-local split (see `RegExpHeader.magic`). A
-    // RegExp is a `gc_malloc(GC_TYPE_REGEXP)` allocation, so it always carries
+    // RegExp is a GC-tracked `GC_TYPE_REGEXP` allocation, so it always carries
     // a preceding GcHeader; only read the magic field when the GC header says
     // this is an object of sufficient size to actually contain it.
     if regex_header_has_magic(ptr as *const RegExpHeader) {
@@ -157,6 +154,88 @@ fn regex_pointers_contains(addr: usize) -> bool {
         return false;
     }
     REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
+}
+
+/// Rekey every address-owned RegExp table after payload evacuation. Header
+/// child slots are rewritten separately by the RegExp GC descriptor; this
+/// hook handles the owner keys that a slot visitor cannot see.
+pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
+    if old_addr == new_addr {
+        return;
+    }
+    REGEX_POINTERS.with(|table| {
+        let mut table = table.borrow_mut();
+        if table.remove(&old_addr) {
+            table.insert(new_addr);
+        }
+    });
+    REGEX_SOURCE_TABLE.with(|table| {
+        let mut table = table.borrow_mut();
+        if let Some(source) = table.remove(&old_addr) {
+            table.insert(new_addr, source);
+        }
+    });
+    crate::object::exotic_expando::exotic_expando_owner_moved(old_addr, new_addr);
+}
+
+/// Remove address-owned RegExp metadata when the cell is proven dead.
+pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
+    REGEX_POINTERS.with(|table| {
+        table.borrow_mut().remove(&addr);
+    });
+    REGEX_SOURCE_TABLE.with(|table| {
+        table.borrow_mut().remove(&addr);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
+    REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
+}
+
+#[cfg(test)]
+pub(crate) fn test_regex_source_entry_exists(addr: usize) -> bool {
+    REGEX_SOURCE_TABLE.with(|table| table.borrow().contains_key(&addr))
+}
+
+/// Build a minimal nursery-resident RegExp payload for the copying collector's
+/// relocation contract test. Production construction currently chooses the
+/// malloc-backed arm of `ArenaOrMalloc`; this exercises the same registered GC
+/// type through its arena arm so future allocator routing cannot silently
+/// strand the address-owned tables.
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *mut RegExpHeader {
+    unsafe {
+        let ptr = crate::arena::arena_alloc_gc(
+            std::mem::size_of::<RegExpHeader>(),
+            std::mem::align_of::<RegExpHeader>(),
+            crate::gc::GC_TYPE_REGEXP,
+        ) as *mut RegExpHeader;
+        (*ptr).regex_ptr = std::ptr::null_mut();
+        (*ptr).pattern_ptr = std::ptr::null();
+        (*ptr).flags_ptr = std::ptr::null();
+        (*ptr).case_insensitive = flags.contains('i');
+        (*ptr).global = flags.contains('g');
+        (*ptr).multiline = flags.contains('m');
+        (*ptr).sticky = flags.contains('y');
+        (*ptr).dot_all = flags.contains('s');
+        (*ptr).unicode = flags.contains('u') || flags.contains('v');
+        (*ptr).has_indices = flags.contains('d');
+        (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
+        (*ptr).magic = REGEXP_MAGIC;
+        (*ptr).fancy_ptr = std::ptr::null();
+
+        REGEX_EVER_REGISTERED.arm();
+        REGEX_POINTERS.with(|table| {
+            table.borrow_mut().insert(ptr as usize);
+        });
+        REGEX_SOURCE_TABLE.with(|table| {
+            table
+                .borrow_mut()
+                .insert(ptr as usize, (source.to_string(), flags.to_string()));
+        });
+        ptr
+    }
 }
 
 /// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding

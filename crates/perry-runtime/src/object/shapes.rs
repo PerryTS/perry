@@ -49,6 +49,16 @@ pub(crate) struct ShapeDescriptor {
     /// mint a process-unique nonzero generation so two semantically different
     /// layouts can never compare equal merely because their keys/counts do.
     pub(crate) semantic_generation: u64,
+    /// Semantic receiver kind carried by this exact ShapeId. This is kept in
+    /// the authoritative descriptor rather than `GcHeader::_reserved`, whose
+    /// bits belong to the GC layout/age protocol and object feature flags.
+    pub(crate) object_kind: ShapeObjectKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ShapeObjectKind {
+    Ordinary,
+    Class,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -57,12 +67,15 @@ struct ShapeFacts {
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
+    object_kind: ShapeObjectKind,
 }
 
 struct ShapeTableInner {
     indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
     descriptors: HashMap<u32, ShapeDescriptor>,
-    ids_by_facts: HashMap<ShapeFacts, u32>,
+    /// Exact-facts reverse index. More than one id is legal when a worker
+    /// minted a local descriptor before a process-global module id arrived.
+    ids_by_facts: HashMap<ShapeFacts, Vec<u32>>,
     /// Keys-array address -> every descriptor id that currently names it.
     /// Same-address key-count retirement uses this index instead of scanning
     /// every shape ever observed by the agent.
@@ -93,6 +106,7 @@ fn descriptor_facts(descriptor: ShapeDescriptor) -> ShapeFacts {
         logical_key_count: descriptor.logical_key_count,
         live_inline_slot_count: descriptor.live_inline_slot_count,
         semantic_generation: descriptor.semantic_generation,
+        object_kind: descriptor.object_kind,
     }
 }
 
@@ -108,11 +122,27 @@ fn remove_id_from_keys_index(inner: &mut ShapeTableInner, keys: u64, id: u32) {
     }
 }
 
+fn remove_id_from_facts_index(inner: &mut ShapeTableInner, facts: ShapeFacts, id: u32) {
+    let remove_entry = if let Some(ids) = inner.ids_by_facts.get_mut(&facts) {
+        ids.retain(|&candidate| candidate != id);
+        ids.is_empty()
+    } else {
+        false
+    };
+    if remove_entry {
+        inner.ids_by_facts.remove(&facts);
+    }
+}
+
 fn rebuild_descriptor_reverse_indices(inner: &mut ShapeTableInner) {
-    let mut ids_by_facts = HashMap::with_capacity(inner.descriptors.len());
+    let mut ids_by_facts: HashMap<ShapeFacts, Vec<u32>> =
+        HashMap::with_capacity(inner.descriptors.len());
     let mut ids_by_keys: HashMap<u64, Vec<u32>> = HashMap::new();
     for (&id, &descriptor) in &inner.descriptors {
-        ids_by_facts.insert(descriptor_facts(descriptor), id);
+        ids_by_facts
+            .entry(descriptor_facts(descriptor))
+            .or_default()
+            .push(id);
         ids_by_keys.entry(descriptor.keys).or_default().push(id);
     }
     inner.ids_by_facts = ids_by_facts;
@@ -163,6 +193,12 @@ pub(crate) const PIC_ID_TOKEN_BIT: u64 = 1 << 62;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeIdExhausted;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShapeDescriptorError {
+    IdExhausted,
+    InvalidFacts,
+}
+
 fn alloc_shape_id_from(next: &std::sync::atomic::AtomicU32) -> Result<u32, ShapeIdExhausted> {
     use std::sync::atomic::Ordering;
     loop {
@@ -195,33 +231,40 @@ fn shape_descriptor_ensure_with_generation(
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
-) -> Result<u32, ShapeIdExhausted> {
+    object_kind: ShapeObjectKind,
+) -> Result<u32, ShapeDescriptorError> {
     let keys_id = keys as usize;
     if keys_id == 0 && logical_key_count != 0 {
-        return Err(ShapeIdExhausted);
+        return Err(ShapeDescriptorError::InvalidFacts);
     }
     let facts = ShapeFacts {
         keys: keys_id as u64,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
+        object_kind,
     };
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(&id) = inner.ids_by_facts.get(&facts) {
+    if let Some(id) = inner
+        .ids_by_facts
+        .get(&facts)
+        .and_then(|ids| ids.first().copied())
+    {
         return Ok(id);
     }
-    let id = alloc_shape_id()?;
+    let id = alloc_shape_id().map_err(|_| ShapeDescriptorError::IdExhausted)?;
     let descriptor = ShapeDescriptor {
         keys: keys_id as u64,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
+        object_kind,
     };
     // Publish by-id first, then the reverse accelerator. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
     inner.descriptors.insert(id, descriptor);
-    inner.ids_by_facts.insert(facts, id);
+    inner.ids_by_facts.entry(facts).or_default().push(id);
     inner.ids_by_keys.entry(facts.keys).or_default().push(id);
     Ok(id)
 }
@@ -230,8 +273,14 @@ pub(crate) fn shape_descriptor_ensure(
     keys: *const ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
-) -> Result<u32, ShapeIdExhausted> {
-    shape_descriptor_ensure_with_generation(keys, logical_key_count, live_inline_slot_count, 0)
+) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_ensure_with_generation(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        0,
+        ShapeObjectKind::Ordinary,
+    )
 }
 
 #[cold]
@@ -241,11 +290,33 @@ fn shape_id_exhausted_abort() -> ! {
     std::process::abort()
 }
 
+#[cold]
+#[inline(never)]
+fn invalid_shape_facts_abort() -> ! {
+    eprintln!("Perry internal error: refusing to publish invalid object shape facts");
+    std::process::abort()
+}
+
+#[inline]
+fn shape_descriptor_error_abort(error: ShapeDescriptorError) -> ! {
+    match error {
+        ShapeDescriptorError::IdExhausted => shape_id_exhausted_abort(),
+        ShapeDescriptorError::InvalidFacts => invalid_shape_facts_abort(),
+    }
+}
+
+#[inline]
+fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) -> u32 {
+    match result {
+        Ok(id) => id,
+        Err(error) => shape_descriptor_error_abort(error),
+    }
+}
+
 /// Compatibility mint for canonical shapes whose key and live-slot counts are
 /// identical. New object-aware paths use [`shape_descriptor_ensure`] directly.
 pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
-    shape_descriptor_ensure(keys, key_count, key_count)
-        .unwrap_or_else(|_| shape_id_exhausted_abort())
+    publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
 }
 
 pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
@@ -292,6 +363,7 @@ fn install_external_shape_id(
         logical_key_count,
         live_inline_slot_count,
         semantic_generation: 0,
+        object_kind: ShapeObjectKind::Ordinary,
     };
     let facts = descriptor_facts(descriptor);
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
@@ -303,7 +375,10 @@ fn install_external_shape_id(
     // descriptors valid for already-published objects and make the external
     // id canonical for subsequent births in this agent.
     inner.descriptors.insert(id, descriptor);
-    inner.ids_by_facts.insert(facts, id);
+    // An equivalent local descriptor can predate module initialization. Keep
+    // both reverse-index entries and prefer the external id for subsequent
+    // births in this agent; already-published local ids remain resolvable.
+    inner.ids_by_facts.entry(facts).or_default().insert(0, id);
     inner
         .ids_by_keys
         .entry(descriptor.keys)
@@ -359,8 +434,20 @@ pub(crate) unsafe fn stamp_object_shape(
     if !shape_word_is_writable(obj) {
         return 0;
     }
-    let id = shape_descriptor_ensure(keys, key_count, (*obj).field_count)
-        .unwrap_or_else(|_| shape_id_exhausted_abort());
+    let Some(lineage) = object_shape_descriptor(obj) else {
+        let id = shape_descriptor_ensure(keys, key_count, (*obj).field_count)
+            .unwrap_or_else(|error| shape_descriptor_error_abort(error));
+        (*obj).parent_class_id = id;
+        debug_assert_object_shape_parity(obj);
+        return id;
+    };
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        keys,
+        key_count,
+        lineage.live_inline_slot_count,
+        lineage.semantic_generation,
+        lineage.object_kind,
+    ));
     (*obj).parent_class_id = id;
     debug_assert_object_shape_parity(obj);
     id
@@ -384,6 +471,9 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
     runtime_shape_id: u32,
 ) {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return;
+    }
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
@@ -405,6 +495,17 @@ pub(crate) unsafe fn birth_stamp_object_shape(
 /// mutations. Keyless objects receive a descriptor too.
 pub(crate) unsafe fn synchronize_object_shape_descriptor(
     obj: *mut crate::object::ObjectHeader,
+) -> u32 {
+    let predecessor = object_shape_descriptor(obj);
+    synchronize_object_shape_descriptor_from(obj, predecessor)
+}
+
+/// Structural synchronization after a caller has temporarily cleared the
+/// stamp. `predecessor` carries semantic lineage (including class kind) across
+/// the pointer/count mutation without exposing stale structural facts.
+pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
 ) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
@@ -440,20 +541,24 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor(
                 clear_object_shape_stamp(obj);
                 return 0;
             }
-            retire_key_count_versions(keys as u64, key_count);
+            retain_key_count_versions(keys as u64);
         }
     }
 
-    let semantic_generation = shape_descriptor_by_id(old_id)
+    let lineage = shape_descriptor_by_id(old_id).or(predecessor);
+    let semantic_generation = lineage
         .map(|descriptor| descriptor.semantic_generation)
         .unwrap_or(0);
-    let id = shape_descriptor_ensure_with_generation(
+    let object_kind = lineage
+        .map(|descriptor| descriptor.object_kind)
+        .unwrap_or(ShapeObjectKind::Ordinary);
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
         keys,
         key_count,
         (*obj).field_count,
         semantic_generation,
-    )
-    .unwrap_or_else(|_| shape_id_exhausted_abort());
+        object_kind,
+    ));
     (*obj).parent_class_id = id;
     debug_assert_object_shape_parity(obj);
     id
@@ -479,13 +584,45 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     if generation == 0 {
         shape_id_exhausted_abort();
     }
-    let id = shape_descriptor_ensure_with_generation(
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
         keys,
         key_count,
         current.live_inline_slot_count,
         generation,
-    )
-    .unwrap_or_else(|_| shape_id_exhausted_abort());
+        current.object_kind,
+    ));
+    (*obj).parent_class_id = id;
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
+/// Turn a class-expression object into a class receiver. The kind is part of
+/// the exact immutable descriptor, so it cannot alias GC layout bits and every
+/// pre-mark ShapeId guard permanently misses afterward.
+pub(crate) unsafe fn transition_object_shape_to_class(
+    obj: *mut crate::object::ObjectHeader,
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
+    let current = object_shape_descriptor(obj).unwrap_or_else(|| {
+        synchronize_object_shape_descriptor(obj);
+        object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
+    });
+    if current.object_kind == ShapeObjectKind::Class {
+        return object_shape_stamp(obj);
+    }
+    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if generation == 0 {
+        shape_id_exhausted_abort();
+    }
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        current.keys as usize as *const ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        ShapeObjectKind::Class,
+    ));
     (*obj).parent_class_id = id;
     debug_assert_object_shape_parity(obj);
     id
@@ -506,7 +643,7 @@ pub(crate) unsafe fn object_shape_id(obj: *const crate::object::ObjectHeader) ->
         .unwrap_or(0)
 }
 
-fn retire_key_count_versions(keys: u64, current_key_count: u32) {
+fn retain_key_count_versions(keys: u64) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let Some(ids) = inner.ids_by_keys.remove(&keys) else {
         return;
@@ -525,10 +662,12 @@ fn retire_key_count_versions(keys: u64, current_key_count: u32) {
             if !correct_ids.contains(&id) {
                 correct_ids.push(id);
             }
-        } else if descriptor.logical_key_count != current_key_count {
-            inner.descriptors.remove(&id);
-            inner.ids_by_facts.remove(&descriptor_facts(descriptor));
         } else {
+            // Keep immutable historical descriptors addressable by id. An
+            // append under an owned keys allocation preserves the old prefix,
+            // and a stale cache/object may still carry either a local or an
+            // equivalent external id. Dead-key pruning reclaims the whole
+            // lineage once no live owner reaches the keys allocation.
             current_ids.push(id);
         }
     }
@@ -612,8 +751,12 @@ pub(crate) unsafe fn synchronize_live_object_shape_descriptor_after_header_visit
         (old_facts, descriptor_facts(*descriptor))
     };
     if new_facts != old_facts {
-        inner.ids_by_facts.remove(&old_facts);
-        inner.ids_by_facts.insert(new_facts, shape_id);
+        remove_id_from_facts_index(&mut inner, old_facts, shape_id);
+        inner
+            .ids_by_facts
+            .entry(new_facts)
+            .or_default()
+            .push(shape_id);
         remove_id_from_keys_index(&mut inner, old_facts.keys, shape_id);
         inner
             .ids_by_keys
@@ -877,7 +1020,7 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
         .unwrap_or_default();
     for id in stale {
         if let Some(descriptor) = inner.descriptors.remove(&id) {
-            inner.ids_by_facts.remove(&descriptor_facts(descriptor));
+            remove_id_from_facts_index(&mut inner, descriptor_facts(descriptor), id);
         }
     }
 }
@@ -1173,6 +1316,40 @@ mod descriptor_tests_8067 {
     }
 
     #[test]
+    fn absent_descriptor_clears_do_not_mint_semantic_successors() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 1);
+            let addr = obj as usize;
+            let initial = object_shape_id(obj);
+
+            crate::object::descriptor_state::clear_property_attrs(addr, "missing8067");
+            crate::object::descriptor_state::clear_accessor_descriptor(addr, "missing8067");
+            assert_eq!(object_shape_id(obj), initial);
+
+            crate::object::descriptor_state::set_property_attrs(
+                addr,
+                "attrs8067".to_string(),
+                crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
+            );
+            crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
+            let after_real_attr_clear = object_shape_id(obj);
+            crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
+            assert_eq!(object_shape_id(obj), after_real_attr_clear);
+
+            crate::object::descriptor_state::set_accessor_descriptor(
+                addr,
+                "accessor8067".to_string(),
+                crate::object::descriptor_state::AccessorDescriptor::default(),
+            );
+            crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
+            let after_real_accessor_clear = object_shape_id(obj);
+            crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
+            assert_eq!(object_shape_id(obj), after_real_accessor_clear);
+        }
+    }
+
+    #[test]
     fn delete_compaction_never_compares_equal_to_the_predelete_layout() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
@@ -1209,6 +1386,40 @@ mod descriptor_tests_8067 {
             SHAPE_ID_END,
             "exhaustion must park instead of wrapping into an alias"
         );
+    }
+
+    #[test]
+    fn inconsistent_facts_are_not_reported_as_id_exhaustion() {
+        assert_eq!(
+            shape_descriptor_ensure(std::ptr::null(), 1, 1),
+            Err(ShapeDescriptorError::InvalidFacts)
+        );
+    }
+
+    #[test]
+    fn equivalent_local_and_external_ids_remain_resolvable() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = 0x8067_0000_0000_1700usize;
+        let local = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
+            .expect("shape range unexpectedly exhausted");
+        let external = alloc_shape_id().expect("shape range unexpectedly exhausted");
+        assert!(install_external_shape_id(
+            external,
+            keys as *const ArrayHeader,
+            1,
+            1,
+        ));
+
+        assert_eq!(
+            shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1).unwrap(),
+            external,
+            "the process-global id should be preferred for later births"
+        );
+        retain_key_count_versions(keys as u64);
+        assert!(shape_descriptor_by_id(local).is_some());
+        assert!(shape_descriptor_by_id(external).is_some());
+
+        test_drop_shape_descriptors(keys);
     }
 
     #[test]
@@ -1318,7 +1529,7 @@ mod descriptor_tests_8067 {
     }
 
     #[test]
-    fn key_count_retirement_is_scoped_to_one_keys_identity() {
+    fn key_count_versions_remain_resolvable_until_the_keys_die() {
         let _lock = crate::gc::global_side_table_test_lock();
         let keys = 0x8067_0000_0000_2100usize;
         let unrelated_keys = 0x8067_0000_0000_2200usize;
@@ -1331,18 +1542,18 @@ mod descriptor_tests_8067 {
         let unrelated = shape_descriptor_ensure(unrelated_keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
 
-        retire_key_count_versions(keys as u64, 2);
+        retain_key_count_versions(keys as u64);
 
-        assert_eq!(shape_descriptor_by_id(stale_a), None);
-        assert_eq!(shape_descriptor_by_id(stale_b), None);
+        assert!(shape_descriptor_by_id(stale_a).is_some());
+        assert!(shape_descriptor_by_id(stale_b).is_some());
         assert!(shape_descriptor_by_id(current).is_some());
         assert!(shape_descriptor_by_id(unrelated).is_some());
         let inner = crate::state::state().shapes.inner.borrow();
         let current_ids = inner
             .ids_by_keys
             .get(&(keys as u64))
-            .expect("current keys identity disappeared from retirement index");
-        assert_eq!(current_ids.as_slice(), &[current]);
+            .expect("keys identity disappeared from descriptor index");
+        assert_eq!(current_ids.as_slice(), &[stale_a, stale_b, current]);
         drop(inner);
 
         test_drop_shape_descriptors(keys);

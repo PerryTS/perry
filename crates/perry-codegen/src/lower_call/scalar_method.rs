@@ -605,7 +605,7 @@ fn materialize_scalar_receiver(
             slot
         };
         let keys_ptr = ctx.block().load(I64, &keys_slot);
-        let shape_id = super::new_alloc::load_class_shape_id(ctx, class_name, &keys_global_name);
+        let shape_id = crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
         ctx.pending_declares.push((
             "js_object_alloc_class_inline_keys_stamped".to_string(),
             I64,

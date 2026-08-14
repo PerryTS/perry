@@ -21,30 +21,6 @@ use perry_hir::Class;
 use crate::expr::FnCtx;
 use crate::types::{I32, I64, I8, PTR};
 
-/// Load the immutable ShapeId paired with a class's canonical keys global.
-///
-/// As with `class_keys_slots`, cache it in a function-entry alloca: the inline
-/// allocation slow path is an opaque runtime call, so LLVM will not reliably
-/// hoist the module-global load out of a hot loop by itself. Unlike the keys
-/// pointer this scalar is not a GC root and needs no shadow-slot binding.
-pub(crate) fn load_class_shape_id(
-    ctx: &mut FnCtx<'_>,
-    class_name: &str,
-    keys_global_name: &str,
-) -> String {
-    let shape_slot = if let Some(slot) = ctx.class_shape_slots.get(class_name).cloned() {
-        slot
-    } else {
-        let shape_global =
-            crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
-        let slot = ctx.func.entry_init_load_global(&shape_global, I32);
-        ctx.class_shape_slots
-            .insert(class_name.to_string(), slot.clone());
-        slot
-    };
-    ctx.block().load(I32, &shape_slot)
-}
-
 /// #7469: is the `new` site being lowered inside a **loop body**?
 ///
 /// This is the gate on the inline bump allocator. Inlining removes the
@@ -380,7 +356,8 @@ fn emit_instance_alloc_inner(
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
-            let shape_id = load_class_shape_id(ctx, class_name, &keys_global_name);
+            let shape_id =
+                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
             ctx.pending_declares.push((
                 "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
@@ -501,7 +478,8 @@ fn emit_instance_alloc_inner(
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
-            let shape_id = load_class_shape_id(ctx, class_name, &keys_global_name);
+            let shape_id =
+                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
 
             // Inline bump-allocator IR.
             let blk = ctx.block();

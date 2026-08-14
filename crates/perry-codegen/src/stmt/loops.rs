@@ -3839,21 +3839,17 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(&matched.keys_global_name);
-    let (obj_bits, obj_handle, expected_shape_id) = {
+    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+        ctx,
+        &matched.class_name,
+        &matched.keys_global_name,
+    );
+    let (obj_bits, obj_handle) = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
         let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let expected_shape_id = blk.load(I32, &format!("@{shape_global}"));
-        (obj_bits, obj_handle, expected_shape_id)
+        (obj_bits, obj_handle)
     };
-    let max_field_index = matched
-        .fields
-        .values()
-        .map(|(field_index, _)| *field_index)
-        .max()
-        .expect("matcher requires >= 1 tracked field");
     let has_store = matched.fields.values().any(|(_, written)| *written);
     let expected_class_id_str = matched.expected_class_id.to_string();
     let (obj_ptr, shape_ok) =
@@ -3863,7 +3859,6 @@ fn lower_class_field_versioned_for(
             &obj_handle,
             &expected_class_id_str,
             &expected_shape_id,
-            max_field_index,
             // Every tracked field is a raw-f64 candidate: reads rely on the
             // intact bit, so require it whether or not the loop stores.
             true,

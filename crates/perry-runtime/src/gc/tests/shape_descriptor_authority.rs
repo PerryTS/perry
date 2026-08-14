@@ -4,19 +4,27 @@ use super::super::*;
 fn gc_recovers_keys_and_live_slots_from_shape_id_after_header_sabotage() {
     let _lock = global_side_table_test_lock();
     unsafe {
-        let obj = crate::object::js_object_alloc(0, 2);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
         let key_a = crate::string::js_string_from_bytes(b"shape_gc_a".as_ptr(), 10);
+        let key_a_handle = scope.root_string_ptr(key_a);
         let key_b = crate::string::js_string_from_bytes(b"shape_gc_b".as_ptr(), 10);
+        let key_b_handle = scope.root_string_ptr(key_b);
+        let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let key_a = key_a_handle.get_raw_mut_ptr::<crate::StringHeader>();
         crate::object::js_object_set_field_by_name(
             obj,
             key_a,
             crate::value::js_nanbox_pointer(key_a as i64),
         );
+        let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let key_b = key_b_handle.get_raw_mut_ptr::<crate::StringHeader>();
         crate::object::js_object_set_field_by_name(
             obj,
             key_b,
             crate::value::js_nanbox_pointer(key_b as i64),
         );
+        let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
 
         let descriptor = crate::object::shapes::object_shape_descriptor(obj)
             .expect("published object must have an authoritative descriptor");

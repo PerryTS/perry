@@ -46,7 +46,6 @@ const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — handles are <= this; ob
 const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
-const OBJ_FLAG_CLASS_OBJECT_BIT: &str = "8192"; // OBJ_FLAG_CLASS_OBJECT (0x2000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
 const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
 /// `OBJ_FLAG_FROZEN | OBJ_FLAG_HAS_DESCRIPTORS` — both live in the same
@@ -211,9 +210,7 @@ pub(crate) fn emit_plain_finite_number_check(
 /// keys_array / field_count / the typed-layout intact bit / the frozen bit /
 /// the process-global enable flag mid-loop.
 ///
-/// `max_field_index` is the largest packed slot index the loop touches
-/// (`field_count ugt max_field_index` covers every access). `require_raw_f64`
-/// adds the per-object typed-layout intact check (any raw-f64 read or write in
+/// `require_raw_f64` adds the per-object typed-layout intact check (any raw-f64 read or write in
 /// the loop); `require_not_frozen` adds the frozen-bit check (any write in the
 /// loop). Per-store value checks are NOT emitted here — the fast clone's
 /// stores keep their inline plain-finite check and side-exit to `slow_label`.
@@ -236,14 +233,12 @@ pub(crate) fn emit_class_field_loop_preheader_check(
     obj_handle: &str,
     expected_class_id: &str,
     expected_shape_id: &str,
-    max_field_index: u32,
     require_raw_f64: bool,
     require_not_frozen: bool,
     slow_label: &str,
 ) -> (String, String) {
     let deref_idx = ctx.new_block("class_field_loop.preheader.deref");
     let deref_label = ctx.block_label(deref_idx);
-    let _ = max_field_index;
 
     // Gate: enable flag first (volatile — the runtime flips it sticky 0 -> 1
     // when descriptors / typed feedback / verify mode come into use), then
@@ -292,9 +287,6 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
         acc = blk.and(I1, &acc, &cid_ok);
         acc = blk.and(I1, &acc, &shape_ok);
-        let class_object = blk.and(I16, &reserved, OBJ_FLAG_CLASS_OBJECT_BIT);
-        let not_class_object = blk.icmp_eq(I16, &class_object, "0");
-        acc = blk.and(I1, &acc, &not_class_object);
 
         // #5654: a receiver that has ever had a property / accessor descriptor
         // installed on it needs the guard's descriptor-aware dispatch (an
@@ -404,16 +396,13 @@ pub(crate) fn emit_proven_shape_recheck(
     let unlatched = blk.icmp_eq(I16, &latched, "0");
 
     // `class_id` @4 was already matched by the tower. ShapeId @8 proves the
-    // immutable layout descriptor; the class-object bit replaces object_type.
+    // exact immutable layout and receiver-kind descriptor.
     let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
     let shape_id = blk.load(I32, &sid_ptr);
     let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
-    let class_object = blk.and(I16, &reserved, OBJ_FLAG_CLASS_OBJECT_BIT);
-    let not_class_object = blk.icmp_eq(I16, &class_object, "0");
 
     let mut acc = blk.and(I1, &flag_ok, &not_fwd);
     acc = blk.and(I1, &acc, &unlatched);
-    acc = blk.and(I1, &acc, &not_class_object);
     acc = blk.and(I1, &acc, &shape_ok);
     blk.cond_br(&acc, proven_label, generic_label);
 }
@@ -448,7 +437,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     obj_handle: &str,
     expected_class_id: &str,
     expected_shape_id: &str,
-    field_index: u32,
     require_raw_f64: bool,
     set_value_bits: Option<&str>,
     fast_label: &str,
@@ -458,7 +446,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
     let guardcall_label = ctx.block_label(guardcall_idx);
-    let _ = field_index;
 
     // Gate the dereference: a basic block has no short-circuit, so the field
     // loads below must only run once we know (a) the inline path is enabled and
@@ -516,9 +503,6 @@ pub(crate) fn emit_class_field_inline_precheck(
         // (The process-global enable flag was already checked at the gate above,
         // before this dereference.)
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
-        let class_object = blk.and(I16, &reserved, OBJ_FLAG_CLASS_OBJECT_BIT);
-        let not_class_object = blk.icmp_eq(I16, &class_object, "0");
-        acc = blk.and(I1, &acc, &not_class_object);
         if subclass_arms.is_empty() {
             // Byte-for-byte the pre-widening and-chain. A class with no
             // eligible subclass must emit IDENTICAL IR, so the corpus-wide

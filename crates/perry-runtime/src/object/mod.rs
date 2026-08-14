@@ -1761,8 +1761,9 @@ pub struct ObjectMeta {
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
 /// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
-/// and heap class-expression values carry an explicit GcHeader kind bit. The
-/// legacy `ObjectHeader::object_type` word is only an ABI mirror pending #8047.
+/// and heap class-expression values carry their kind in the immutable ShapeId
+/// descriptor. The legacy `ObjectHeader::object_type` word is only an ABI
+/// mirror pending #8047.
 #[inline]
 pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     if obj.is_null() {
@@ -1773,7 +1774,8 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && header._reserved & crate::gc::OBJ_FLAG_CLASS_OBJECT == 0
+        && shapes::object_shape_descriptor(obj)
+            .is_some_and(|shape| shape.object_kind == shapes::ShapeObjectKind::Ordinary)
 }
 
 #[inline]
@@ -1862,6 +1864,7 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
     // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
     // tests exactly that, so an instance still carrying its allocation-time
     // `parent_class_id` (never in the ShapeId range) is left alone.
+    let predecessor = shapes::object_shape_descriptor(obj);
     if (*obj).keys_array != keys_array {
         shapes::clear_object_shape_stamp(obj);
     }
@@ -1888,7 +1891,7 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
     // #8067: the old header edge remains authoritative, but every visible
     // ShapeId must now resolve to the exact rooted ordered-keys/live-slot
     // descriptor. Same-pointer appends are versioned inside the helper.
-    shapes::synchronize_object_shape_descriptor(obj);
+    shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
 }
 
 /// Publish a new authoritative live-inline-slot bound without ever exposing a
@@ -1900,9 +1903,10 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
 #[inline]
 pub(super) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
     if (*obj).field_count != field_count {
+        let predecessor = shapes::object_shape_descriptor(obj);
         shapes::clear_object_shape_stamp(obj);
         (*obj).field_count = field_count;
-        shapes::synchronize_object_shape_descriptor(obj);
+        shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
     } else {
         shapes::debug_assert_object_shape_parity(obj);
     }

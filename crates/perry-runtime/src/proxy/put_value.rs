@@ -321,7 +321,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::OBJ_FLAG_CLASS_OBJECT
             // A generated hit cannot update/downgrade a typed layout without
             // calling the runtime. The miss store clears this bit; prime only
             // once that per-object downgrade is visible.
@@ -523,7 +522,6 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::OBJ_FLAG_CLASS_OBJECT
         | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -601,7 +599,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::OBJ_FLAG_CLASS_OBJECT
             | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -798,8 +795,7 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::OBJ_FLAG_CLASS_OBJECT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
 
     unsafe fn validated_object(
         bits: u64,
@@ -823,14 +819,14 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
             return None;
         }
         let obj = addr as *mut crate::ObjectHeader;
-        if !crate::object::object_is_regular(obj)
-            || (*obj).class_id == 0
-            || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-        {
+        if (*obj).class_id == 0 || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
             return None;
         }
-        let shape_id = crate::object::shapes::object_shape_id(obj);
         let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+        if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+            return None;
+        }
+        let shape_id = crate::object::shapes::object_shape_stamp(obj);
         let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
         if keys.is_null() || (keys as u64) >> 48 != 0 {
             return None;
@@ -970,12 +966,12 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
             trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
             return None;
         }
-        let (obj, object_shape_id, _object_keys, _object_key_count, limit, flags) =
+        let (obj, receiver_shape_id, _object_keys, _object_key_count, limit, flags) =
             trace_object_array_numeric_write_stage(
                 unsafe { validated_object(bits) },
                 "receiver prefix contains an ineligible object",
             )?;
-        if object_shape_id != shared_shape_id {
+        if receiver_shape_id != shared_shape_id {
             trace_object_array_numeric_write_rejection(
                 "receiver prefix does not share one ShapeId",
             );

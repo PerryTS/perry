@@ -430,13 +430,12 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
                 return;
             }
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_CLASS_OBJECT;
-            // Compatibility mirror only; all semantic reads use the GcHeader
-            // bit above so #8047 can remove this payload word atomically.
+            // Compatibility mirror only; all semantic reads use the ShapeId
+            // descriptor kind so #8047 can remove this payload word atomically.
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
             // Becoming a class object changes dispatch semantics even though
             // the rooted keys and slot layout stay the same.
-            crate::object::shapes::transition_object_shape_semantics(obj as *mut ObjectHeader);
+            crate::object::shapes::transition_object_shape_to_class(obj as *mut ObjectHeader);
             // #6530: record cid → class object so `instance.constructor`
             // resolves to the SAME value the module scope/exports hold (see
             // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
@@ -447,33 +446,20 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
     }
 }
 
-/// #1789: is `ptr` a heap "class object" (`object_type == OBJECT_TYPE_CLASS`)?
-/// Validates the GcHeader is a `GC_TYPE_OBJECT` before reading `object_type`,
+/// #1789: is `ptr` a heap class object?
+/// Validates the GcHeader is a live `GC_TYPE_OBJECT` before reading its ShapeId,
 /// so raw Map/Set/Buffer pointers (no GcHeader) are never misread. Used by
 /// `typeof`, `new`, and `instanceof` to recognize a class value.
 pub fn is_class_object_ptr(ptr: *const u8) -> bool {
-    // Reject anything in the native-module handle band (see
-    // `value::addr_class`). Those are registry ids (net.Socket, zlib stream,
-    // crypto, fastify, ioredis, timers, …) bit-OR'd with POINTER_TAG, not real
-    // heap pointers — real objects always live above the band. The previous
-    // 0x1008 floor only caught the tiny net/fastify id space; a mid-range
-    // handle (e.g. zlib's stream base, #1843) sailed past it and this function
-    // then segfaulted dereferencing `[handle - 8]` as a GcHeader.
-    if crate::value::addr_class::is_handle_band(ptr as usize) {
-        return false;
-    }
-    // #5226: small typed arrays and `Buffer`s (incl. `new Uint8Array(n)`, which
-    // lowers to a slab-allocated Buffer) are off-GC-heap with no GcHeader, so
-    // the `ptr - GC_HEADER_SIZE` back-read below faults when the block sits at
-    // the start of a freshly mapped region. They are never class objects —
-    // reject via the side tables first (no back-read).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr as usize) {
-        return false;
-    }
     unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-            && (*gc_header)._reserved & crate::gc::OBJ_FLAG_CLASS_OBJECT != 0
+        let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) else {
+            return false;
+        };
+        header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && crate::object::shapes::object_shape_descriptor(ptr.cast()).is_some_and(|shape| {
+                shape.object_kind == crate::object::shapes::ShapeObjectKind::Class
+            })
     }
 }
 
@@ -1723,23 +1709,108 @@ pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod shape_authority_tests_8067 {
+    fn key<'scope>(
+        scope: &'scope crate::gc::RuntimeHandleScope,
+        name: &str,
+    ) -> crate::gc::RuntimeHandle<'scope> {
+        scope.root_string_ptr(crate::string::js_string_from_bytes(
+            name.as_ptr(),
+            name.len() as u32,
+        ))
+    }
+
     #[test]
-    fn class_marker_is_gc_metadata_not_object_type_mirror() {
+    fn class_kind_survives_numeric_and_pointer_static_field_installation() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
-            let obj = crate::object::js_object_alloc(0x8067, 8);
+            const CID: u32 = 0x8067;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 8));
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
             let before = crate::object::shapes::object_shape_id(obj);
             assert!(crate::object::object_is_regular(obj));
 
             super::js_object_mark_class(obj as i64);
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
             let after = crate::object::shapes::object_shape_id(obj);
             assert_ne!(before, after, "becoming a class object is semantic");
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .expect("class descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Class
+            );
 
             // Sabotage the compatibility mirror. Classification must remain
-            // driven by the GcHeader flag and the ShapeId transition above.
+            // driven by the ShapeId descriptor transition above.
             (*obj).object_type = crate::error::OBJECT_TYPE_REGULAR;
             assert!(super::is_class_object_ptr(obj.cast()));
             assert!(!crate::object::object_is_regular(obj));
+
+            // Numeric layout installation historically set/cleared bits in
+            // GcHeader::_reserved, where the old class marker collided with
+            // GC_LAYOUT_ALL_POINTERS. Shape kind must be unaffected.
+            let numeric_key = key(&scope, "numericStatic");
+            crate::object::js_object_set_field_by_name(
+                obj_handle.get_raw_mut_ptr(),
+                numeric_key.get_raw_const_ptr(),
+                42.0,
+            );
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            assert!(
+                super::is_class_object_ptr(obj.cast()),
+                "numeric static write changed class descriptor: {:?}",
+                crate::object::shapes::object_shape_descriptor(obj)
+            );
+            assert!(!crate::object::object_is_regular(obj));
+
+            // Repeat with a pointer-bearing static value, which drives the
+            // opposite GC layout state and used to erase the aliased bit.
+            let pointer_key = key(&scope, "pointerStatic");
+            let payload = key(&scope, "rootedStaticValue");
+            crate::object::js_object_set_field_by_name(
+                obj_handle.get_raw_mut_ptr(),
+                pointer_key.get_raw_const_ptr(),
+                f64::from_bits(crate::value::JSValue::string_ptr(payload.get_raw_mut_ptr()).bits()),
+            );
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            assert!(super::is_class_object_ptr(obj.cast()));
+            assert!(!crate::object::object_is_regular(obj));
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .expect("post-write class descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Class,
+                "class kind must never share storage with GC layout flags"
+            );
+
+            let class_value = crate::value::js_nanbox_pointer(obj as i64);
+            let class_value_handle = scope.root_nanbox_f64(class_value);
+            let typeof_ptr = crate::builtins::js_value_typeof(class_value);
+            assert_eq!(crate::regex::string_as_str(typeof_ptr), "function");
+
+            let instance = crate::object::js_new_function_construct(
+                class_value_handle.get_nanbox_f64(),
+                std::ptr::null(),
+                0,
+            );
+            let instance_handle = scope.root_nanbox_f64(instance);
+            let instance_value = crate::value::JSValue::from_bits(instance.to_bits());
+            assert!(
+                instance_value.is_pointer(),
+                "construction must return an object"
+            );
+            let instance_ptr = instance_value.as_pointer::<crate::ObjectHeader>();
+            assert_eq!((*instance_ptr).class_id, CID);
+            assert_eq!(
+                crate::object::js_instanceof_dynamic(
+                    instance_handle.get_nanbox_f64(),
+                    class_value_handle.get_nanbox_f64(),
+                )
+                .to_bits(),
+                crate::value::TAG_TRUE,
+                "instanceof must still recognize the class after static writes"
+            );
         }
     }
 }

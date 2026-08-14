@@ -418,7 +418,10 @@ pub(crate) fn lower_generic_property_get(
 
     ctx.block().cond_br(&hit, &hit_label, &miss_label);
 
-    // An exact descriptor match proves that the cached slot remains live.
+    // `js_object_get_field_ic_miss` primes only slots below the descriptor's
+    // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
+    // token hit permanently proves that the cached slot remains live and
+    // makes the raw load below safe without a compatibility-header bound.
     ctx.current_block = hit_idx;
     let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let slot = ctx.block().load(I64, &cache_slot_ptr);

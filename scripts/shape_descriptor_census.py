@@ -256,6 +256,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
+        (r"object_kind\s*:\s*ShapeObjectKind", "authoritative receiver-kind fact"),
         (r"\bfn\s+shape_descriptor_by_id\b", "by-id lookup"),
         (r"\bfn\s+debug_assert_object_shape_parity\b", "parity assertion"),
         (r"\bfn\s+synchronize_live_object_shape_descriptor_after_header_visit\b", "live-object descriptor mirror"),
@@ -271,8 +272,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     public_ensure = function_body(shapes, "shape_id_for_keys_ensure")
     require_code(
         public_ensure,
-        r"unwrap_or_else\s*\([^)]*shape_id_exhausted_abort",
-        "no exhausted-id pointer fallback",
+        r"publish_shape_result\s*\(",
+        "typed shape-mint errors fail stop",
     )
 
     scanner = function_body(shapes, "scan_shape_table_rekey_mut")
@@ -307,24 +308,26 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     assert_before(
         ensure,
         "inner.descriptors.insert",
-        "inner.ids_by_facts.insert",
+        "inner.ids_by_facts.entry",
         "by-id descriptor before reverse accelerator",
     )
-    sync = function_body(shapes, "synchronize_object_shape_descriptor")
+    sync = function_body(shapes, "synchronize_object_shape_descriptor_from")
     assert_before(
         sync,
         "shape_descriptor_ensure",
         "(*obj).parent_class_id = id",
         "descriptor before ObjectHeader ShapeId",
     )
-    retirement = function_body(shapes, "retire_key_count_versions")
+    retirement = function_body(shapes, "retain_key_count_versions")
     require_code(
         retirement,
         r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",
-        "keys-scoped descriptor retirement index",
+        "keys-scoped descriptor lineage index",
     )
     if re.search(r"descriptors\s*\.\s*(?:iter|values|keys)\s*\(", retirement):
-        raise CensusError("shape descriptor retirement scans the global descriptor table")
+        raise CensusError("shape descriptor lineage repair scans the global descriptor table")
+    if "descriptors.remove" in retirement:
+        raise CensusError("live-key lineage repair eagerly deletes published descriptors")
     for name in ("shape_keys_grown", "shape_drop"):
         if "descriptors.remove" in function_body(shapes, name):
             raise CensusError(f"{name} eagerly deletes a sibling descriptor")
@@ -450,7 +453,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError(f"{name} emits a removed ObjectHeader fact")
 
     require_code(gc_types, r"GC_TYPE_REGEXP\s*:\s*u8", "RegExp external discriminator")
-    require_code(gc_types, r"OBJ_FLAG_CLASS_OBJECT\s*:\s*u16", "class-object external marker")
+    require_code(
+        gc_types,
+        r"GC_TYPE_REGEXP[\s\S]*GcMoveHookKind::RegExpSideTables",
+        "RegExp address-owned relocation hook",
+    )
+    if "OBJ_FLAG_CLASS_OBJECT" in gc_types + class_guard + element_guard + write_pics:
+        raise CensusError("class kind reintroduced a GcHeader layout-bit alias")
+    class_probe = function_body(object_mod, "object_is_regular")
+    require_code(
+        class_probe,
+        r"ShapeObjectKind::Ordinary",
+        "ordinary-object descriptor kind authority",
+    )
 
 
 def swap_once(source: str, left: str, right: str) -> str:
@@ -526,7 +541,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
     publication_body = function_body(
-        inverted_publication[path], "synchronize_object_shape_descriptor"
+        inverted_publication[path], "synchronize_object_shape_descriptor_from"
     )
     inverted_body = swap_once(
         publication_body,
@@ -544,7 +559,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     unscoped_retirement = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
     retirement_body = function_body(
-        unscoped_retirement[path], "retire_key_count_versions"
+        unscoped_retirement[path], "retain_key_count_versions"
     )
     unscoped_body, substitutions = re.subn(
         r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",

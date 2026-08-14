@@ -46,6 +46,10 @@ use super::{
     unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
+/// Runtime write-PIC flags that force the miss path. Class-vs-instance kind is
+/// encoded by the authoritative ShapeId and therefore owns no header flag.
+const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1907;
+
 /// The NaN-boxed `undefined` literal, for an absent optional operand.
 fn undefined_literal() -> String {
     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
@@ -535,11 +539,12 @@ fn lower_put_value_static_write_ic(
     // Existing-own overwrite guards. Bit 12 is the per-object typed-layout
     // intact bit: the runtime miss downgrades it before priming this cache, so
     // same-shape siblings take one miss each before direct stores are allowed.
-    const BLOCKING_FLAGS: u16 = 0x3907; // plus class-object kind
     let reserved_addr = ctx.block().sub(I64, &safe_target, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
-    let blocked = ctx.block().and(I16, &reserved, &BLOCKING_FLAGS.to_string());
+    let blocked = ctx
+        .block()
+        .and(I16, &reserved, &WRITE_PIC_BLOCKING_FLAGS.to_string());
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
 
     let class_addr = ctx.block().add(I64, &safe_target, "4");
@@ -549,12 +554,12 @@ fn lower_put_value_static_write_ic(
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
 
     // The write PIC uses the same single ShapeId token domain as the read PIC.
-    let parent_class_addr = ctx.block().add(I64, &safe_target, "8");
-    let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
-    let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
-    let shape_id_rel = ctx.block().add(I32, &parent_class_id, "-2147483648");
+    let shape_id_addr = ctx.block().add(I64, &safe_target, "8");
+    let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
+    let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
+    let shape_id_rel = ctx.block().add(I32, &raw_shape_id, "-2147483648");
     let has_shape_id = ctx.block().icmp_ult(I32, &shape_id_rel, "1073741824");
-    let shape_id64 = ctx.block().zext(I32, &parent_class_id, I64);
+    let shape_id64 = ctx.block().zext(I32, &raw_shape_id, I64);
     let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
     let shape_token = ctx
         .block()
@@ -590,14 +595,13 @@ fn lower_put_value_static_write_ic(
     let cached2_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
     let slot2 = ctx.block().load(I64, &cached2_slot_ptr);
     let token2_match = ctx.block().icmp_eq(I64, &shape_token, &cached2_token);
-    let token2_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut hit2 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit2 = ctx.block().and(I1, &hit2, &not_forwarded);
     hit2 = ctx.block().and(I1, &hit2, &flags_clear);
     hit2 = ctx.block().and(I1, &hit2, &class_nonzero);
     hit2 = ctx.block().and(I1, &hit2, &not_native_module);
     hit2 = ctx.block().and(I1, &hit2, &token2_match);
-    hit2 = ctx.block().and(I1, &hit2, &token2_nonzero);
+    hit2 = ctx.block().and(I1, &hit2, &token_nonzero);
     ctx.block().cond_br(&hit2, &hit_label, &dispatch3_label);
 
     ctx.current_block = dispatch3_idx;
@@ -611,14 +615,13 @@ fn lower_put_value_static_write_ic(
     let cached3_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "5")]);
     let slot3 = ctx.block().load(I64, &cached3_slot_ptr);
     let token3_match = ctx.block().icmp_eq(I64, &shape_token, &cached3_token);
-    let token3_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut hit3 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit3 = ctx.block().and(I1, &hit3, &not_forwarded);
     hit3 = ctx.block().and(I1, &hit3, &flags_clear);
     hit3 = ctx.block().and(I1, &hit3, &class_nonzero);
     hit3 = ctx.block().and(I1, &hit3, &not_native_module);
     hit3 = ctx.block().and(I1, &hit3, &token3_match);
-    hit3 = ctx.block().and(I1, &hit3, &token3_nonzero);
+    hit3 = ctx.block().and(I1, &hit3, &token_nonzero);
     ctx.block().cond_br(&hit3, &hit_label, &dispatch4_label);
 
     ctx.current_block = dispatch4_idx;
@@ -632,14 +635,13 @@ fn lower_put_value_static_write_ic(
     let cached4_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "7")]);
     let slot4 = ctx.block().load(I64, &cached4_slot_ptr);
     let token4_match = ctx.block().icmp_eq(I64, &shape_token, &cached4_token);
-    let token4_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut hit4 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit4 = ctx.block().and(I1, &hit4, &not_forwarded);
     hit4 = ctx.block().and(I1, &hit4, &flags_clear);
     hit4 = ctx.block().and(I1, &hit4, &class_nonzero);
     hit4 = ctx.block().and(I1, &hit4, &not_native_module);
     hit4 = ctx.block().and(I1, &hit4, &token4_match);
-    hit4 = ctx.block().and(I1, &hit4, &token4_nonzero);
+    hit4 = ctx.block().and(I1, &hit4, &token_nonzero);
     ctx.block().cond_br(&hit4, &hit_label, &dispatch5_label);
 
     ctx.current_block = dispatch5_idx;
@@ -833,7 +835,6 @@ fn lower_put_value_dyn_ic_inline(
     let ways_idx = ctx.new_block("put.dynic.ways");
     let way1_idx = ctx.new_block("put.dynic.way1");
     let way2_idx = ctx.new_block("put.dynic.way2");
-    let bounds_idx = ctx.new_block("put.dynic.bounds");
     let store_idx = ctx.new_block("put.dynic.store");
     let slow_idx = ctx.new_block("put.dynic.slow");
     let merge_idx = ctx.new_block("put.dynic.merge");
@@ -841,7 +842,6 @@ fn lower_put_value_dyn_ic_inline(
     let ways_label = ctx.block_label(ways_idx);
     let way1_label = ctx.block_label(way1_idx);
     let way2_label = ctx.block_label(way2_idx);
-    let bounds_label = ctx.block_label(bounds_idx);
     let store_label = ctx.block_label(store_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
@@ -860,19 +860,21 @@ fn lower_put_value_dyn_ic_inline(
     let reserved_addr = ctx.block().sub(I64, &t_handle, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
-    let blocked = ctx.block().and(I16, &reserved, "14599"); // 0x3907, including class objects
+    let blocked = ctx
+        .block()
+        .and(I16, &reserved, &WRITE_PIC_BLOCKING_FLAGS.to_string());
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
     let class_addr = ctx.block().add(I64, &t_handle, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
     let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
-    let parent_class_addr = ctx.block().add(I64, &t_handle, "8");
-    let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
-    let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
-    let shape_id_rel = ctx.block().add(I32, &parent_class_id, "-2147483648");
+    let shape_id_addr = ctx.block().add(I64, &t_handle, "8");
+    let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
+    let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
+    let shape_id_rel = ctx.block().add(I32, &raw_shape_id, "-2147483648");
     let has_shape_id = ctx.block().icmp_ult(I32, &shape_id_rel, "1073741824");
-    let shape_id64 = ctx.block().zext(I32, &parent_class_id, I64);
+    let shape_id64 = ctx.block().zext(I32, &raw_shape_id, I64);
     let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
     let shape_token = ctx
         .block()
@@ -895,30 +897,27 @@ fn lower_put_value_dyn_ic_inline(
     let s0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
     let s0 = ctx.block().load(I64, &s0_ptr);
     let hit0 = ctx.block().icmp_eq(I64, &k_bits, &k0);
-    ctx.block().cond_br(&hit0, &bounds_label, &way1_label);
+    ctx.block().cond_br(&hit0, &store_label, &way1_label);
     ctx.current_block = way1_idx;
     let k1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
     let k1 = ctx.block().load(I64, &k1_ptr);
     let s1_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "4")]);
     let s1 = ctx.block().load(I64, &s1_ptr);
     let hit1 = ctx.block().icmp_eq(I64, &k_bits, &k1);
-    ctx.block().cond_br(&hit1, &bounds_label, &way2_label);
+    ctx.block().cond_br(&hit1, &store_label, &way2_label);
     ctx.current_block = way2_idx;
     let k2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "5")]);
     let k2 = ctx.block().load(I64, &k2_ptr);
     let s2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "6")]);
     let s2 = ctx.block().load(I64, &s2_ptr);
     let hit2 = ctx.block().icmp_eq(I64, &k_bits, &k2);
-    ctx.block().cond_br(&hit2, &bounds_label, &slow_label);
+    ctx.block().cond_br(&hit2, &store_label, &slow_label);
 
-    ctx.current_block = bounds_idx;
+    ctx.current_block = store_idx;
     let slot = ctx.block().phi(
         I64,
         &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
     );
-    ctx.block().br(&store_label);
-
-    ctx.current_block = store_idx;
     let header_words =
         (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
     let slot_word = ctx.block().add(I64, &slot, &header_words);
@@ -951,11 +950,6 @@ fn lower_put_value_dyn_ic_inline(
         .phi(DOUBLE, &[(v, &store_label), (&slow_result, &slow_label)]);
     Ok(result)
 }
-
-/// Inline-slot floor for emitted bounds checks — MUST match
-/// perry-runtime `object::INLINE_SLOT_FLOOR` (the runtime pads every object
-/// to at least this many physical slots; a codegen value larger than the
-/// runtime's would widen inline stores into unallocated memory).
 
 fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {

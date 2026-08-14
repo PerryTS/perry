@@ -407,8 +407,9 @@ pub extern "C" fn js_object_delete_field(
         //    IN PLACE (which is what the comment above describes and what
         //    `shape_slot_lookup`'s shrink check already anticipates), so
         //    deleting it would silently make that path wrong.
+        let predecessor = crate::object::shapes::object_shape_descriptor(obj);
         crate::object::shapes::clear_object_shape_stamp(obj);
-        crate::object::shapes::synchronize_object_shape_descriptor(obj);
+        crate::object::shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
 
         1
     }

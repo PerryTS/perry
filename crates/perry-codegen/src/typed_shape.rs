@@ -383,3 +383,27 @@ pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> S
         .map(|suffix| format!("perry_class_shape_id_{}", suffix))
         .unwrap_or_else(|| format!("perry_class_shape_id_{}", keys_global_name))
 }
+
+/// Load the immutable ShapeId paired with a class's canonical keys global.
+///
+/// Cache it in a function-entry alloca: an opaque allocation/runtime call can
+/// otherwise prevent LLVM from hoisting the module-global load out of a hot
+/// loop. This scalar is not a GC root and needs no shadow-slot binding.
+pub(crate) fn load_class_shape_id(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class_name: &str,
+    keys_global_name: &str,
+) -> String {
+    let shape_slot = if let Some(slot) = ctx.class_shape_slots.get(class_name).cloned() {
+        slot
+    } else {
+        let shape_global = shape_id_global_name_from_keys_global(keys_global_name);
+        let slot = ctx
+            .func
+            .entry_init_load_global(&shape_global, crate::types::I32);
+        ctx.class_shape_slots
+            .insert(class_name.to_string(), slot.clone());
+        slot
+    };
+    ctx.block().load(crate::types::I32, &shape_slot)
+}

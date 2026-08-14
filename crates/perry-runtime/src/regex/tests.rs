@@ -8,7 +8,13 @@ fn make_string(s: &str) -> *mut StringHeader {
 #[test]
 fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let re = js_regexp_new(make_string("x"), make_string("g"));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("x"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = js_regexp_new(
+        pattern.get_raw_mut_ptr::<StringHeader>(),
+        flags.get_raw_mut_ptr::<StringHeader>(),
+    );
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
         .expect("RegExp must be a GC allocation");
     assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);

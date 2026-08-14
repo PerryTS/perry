@@ -1670,11 +1670,7 @@ fn object_key_matches_field(
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
-        let alloc_limit = std::cmp::max(
-            descriptor.live_inline_slot_count,
-            crate::object::INLINE_SLOT_FLOOR as u32,
-        );
-        if field_index >= alloc_limit {
+        if field_index >= descriptor.live_inline_slot_count {
             return false;
         }
         let keys = descriptor.keys as usize as *const ArrayHeader;

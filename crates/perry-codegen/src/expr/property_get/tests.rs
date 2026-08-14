@@ -269,7 +269,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
 ///
 /// #7883 routed all four failure edges — small-handle receiver, non-object
 /// receiver, MRU token mismatch, cached slot out of bounds — into one block,
-/// which left `token` / `token_nonnull` / `epoch_eq` live on only some of them
+/// which left `token` / `token_nonnull` / `shape_id_eq` live on only some of them
 /// and forced the block to reload the whole header ladder. That block is not
 /// cold: on a receiver rotation wider than the MRU entry it runs on nearly
 /// every read, so the duplicate ladder was hot code. The fix is purely
@@ -299,7 +299,10 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         "the two receiver-validation failures need their own landing block, \
          otherwise pic.miss is not dominated by pic.token:\n{ir}"
     );
-    assert!(!main.contains("@PERRY_IC_EPOCH"));
+    assert!(
+        !main.contains("@PERRY_IC_EPOCH"),
+        "the removed keys-pointer epoch global must not appear:\n{ir}"
+    );
     assert!(
         !main.contains("ptrtoint ptr @perry_ic_"),
         "the small-handle sentinel select only existed because an invalid \
@@ -308,7 +311,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     // The header predicates: each load/compare pair must appear exactly once.
     for (needle, what) in [
         ("icmp eq i8 ", "the GC_TYPE_OBJECT compare"),
-        ("icmp eq i32 %", "the closure-magic / object_type compares"),
+        ("icmp eq i32 %", "the ShapeId identity compare"),
     ] {
         let n = main.matches(needle).count();
         assert!(
@@ -518,7 +521,7 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
             l.starts_with("pic.hit") && body.iter().any(|line| line.contains("load double"))
         })
         .map(|(l, _)| l.clone())
-        .unwrap_or_else(|| panic!("no `pic.hit.load` block:\n{func}"));
+        .unwrap_or_else(|| panic!("no `pic.hit*` block containing a slot load:\n{func}"));
 
     let mut defs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (_, body) in &blocks {

@@ -392,7 +392,7 @@ unsafe fn key_bytes_are(key: *const crate::StringHeader, want: &[u8]) -> bool {
 ///
 /// Only caches when:
 /// - obj is a valid ObjectHeader (not null, not handle, not string/array/etc.)
-/// - field exists and its slot index < 8 (inline allocation limit)
+/// - field exists and its slot index is below `shape.live_inline_slot_count`
 ///
 /// Overflow fields (slot >= alloc_limit) are NOT cached and fall through to
 /// the slow path — the fast path loads from `obj_ptr + 24 + slot*8` which

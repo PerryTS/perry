@@ -35,7 +35,6 @@ module asm ".no_dead_strip __LLVM_StackMaps"
 @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT = external global i32
 @PERRY_TA_KIND_CACHE = external global [64 x i64]
 @PERRY_TA_VIEW_GUARD = external global i64
-@PERRY_IC_EPOCH = external global i64
 @perry_class_keys_spike_ts__Point = internal global i64 0
 @spike_ts_.str.0.handle = internal global double 0.0
 @spike_ts_.str.1.handle = internal global double 0.0

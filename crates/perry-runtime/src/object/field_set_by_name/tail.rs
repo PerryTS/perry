@@ -49,9 +49,9 @@ pub(super) fn set_field_by_name_object_tail(
     let mut value = value_handle.get_nanbox_f64();
     // Safety: obj is a valid heap pointer (> 0x10000) at this point
     unsafe {
-        // Validate this is an ObjectHeader, not some other heap type.
-        // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
-        // for static/const objects that don't have GcHeaders.
+        // Validate this is an ObjectHeader, not some other heap type. Every
+        // shaped object has a tracked GcHeader; payload `object_type` is only
+        // a compatibility mirror and is never a kind fallback.
         // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
             return;
@@ -160,14 +160,6 @@ pub(super) fn set_field_by_name_object_tail(
             // had MapHeader.size aliasing object_type == OBJECT_TYPE_REGULAR,
             // so `m.customProp = 5` walked the Map's bytes as object fields —
             // deterministic heap corruption (2026-07-02 audit P1). The
-            // object_type fallback exists ONLY for static/const objects whose
-            // preceding bytes decode to no known GC type.
-            if crate::gc::gc_type_info(gc_type).is_some() {
-                return;
-            }
-            if !is_valid_obj_ptr(obj as *const u8) {
-                return;
-            }
             return;
         }
 
@@ -260,7 +252,8 @@ pub(super) fn set_field_by_name_object_tail(
         const PLAN_BLOCKING_FLAGS: u16 =
             crate::gc::OBJ_FLAG_NULL_PROTO | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
         let obj_class_id = (*obj).class_id;
-        // #6595: class objects (`OBJECT_TYPE_CLASS`) are excluded — their
+        // #6595: class objects are excluded by their authoritative ShapeId
+        // kind — their
         // writes must always reach the `mirror_class_object_static_write`
         // completions, and their cid is shared with their instances so a
         // plan keyed on it conflates two different prototype chains.
@@ -438,12 +431,12 @@ pub(super) fn set_field_by_name_object_tail(
             // cleared the chain. Record the verdict so the next store skips
             // the vet (`plan_fast` above). Eligibility is re-derived from the
             // freshly read `obj_flags`, not the pre-vet read.
-            if !plan_fast
-                && obj_class_id != 0
+            let record_plan_eligible = obj_class_id != 0
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
-            {
+                && !super::prototype_chain::object_has_prototype_override(obj as usize);
+            if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
             }
             if let Some((next_keys, slot_idx)) =

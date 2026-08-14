@@ -221,6 +221,10 @@ pub(crate) enum GcMoveHookKind {
     /// move. Errors are movable; without this a moved error lost its
     /// `err.code`/`err.syscall`/user-assigned props.
     ErrorSideTables,
+    /// Rekey RegExp identity/source registries plus its exotic expando owner
+    /// entry. `GC_TYPE_REGEXP` is movable, and all three tables use the
+    /// payload address as their key.
+    RegExpSideTables,
 }
 
 #[allow(dead_code)]
@@ -667,7 +671,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::MallocTracked,
         false,
-        GcMoveHookKind::None,
+        GcMoveHookKind::RegExpSideTables,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
@@ -778,6 +782,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
                 old_user, new_user,
             );
         }
+        GcMoveHookKind::RegExpSideTables => {
+            crate::regex::regex_header_moved_for_gc(old_user, new_user);
+        }
     }
 }
 
@@ -800,6 +807,9 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         }
         GcMoveHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
+        }
+        GcMoveHookKind::RegExpSideTables => {
+            crate::regex::regex_header_clear_dead_for_gc(user_ptr);
         }
         GcMoveHookKind::None
         | GcMoveHookKind::MapSideTables
@@ -1076,7 +1086,6 @@ pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 /// OBJECT_TYPE_CLASS`; the legacy payload word remains an ABI mirror until
 /// #8047 removes it. Bit 13 is preserved by survival-age and layout-state
 /// updates and is otherwise unused for `GC_TYPE_OBJECT`.
-pub const OBJ_FLAG_CLASS_OBJECT: u16 = 0x2000;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached

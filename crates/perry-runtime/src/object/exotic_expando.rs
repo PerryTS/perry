@@ -16,10 +16,10 @@
 //! closures piggyback on the generic side tables (`PROPERTY_DESCRIPTORS` /
 //! `ACCESSOR_DESCRIPTORS`), which are already keyed by raw address.
 //!
-//! GC: all three cell kinds are non-movable, so the address key is stable
-//! for the cell's lifetime. Stored values are kept alive via a registered
-//! mutable root scanner. Address reuse after a sweep is handled by clearing
-//! the table slot at allocation time (`expando_clear_on_alloc`).
+//! GC: address keys are migrated by each movable owner's registered move
+//! hook. Stored values are kept alive via a mutable root scanner. Address
+//! reuse after a sweep is handled by clearing the table slot at allocation
+//! time (`expando_clear_on_alloc`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -228,9 +228,9 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
 /// value graph was immortal until the exact address happened to be handed
 /// to a new cell of the same kind (`expando_clear_on_alloc`). Prune entries
 /// whose owner cell is provably dead instead. `is_dead_owner` is one of the
-/// GC's deadness predicates (`gc::dead_owner`). Note: non-movable Date /
-/// Temporal cells that die PINNED are skipped by the predicate's pinned
-/// check and remain covered by the clear-on-alloc path.
+/// GC's deadness predicates (`gc::dead_owner`). Owners that die PINNED are
+/// skipped by the predicate's pinned check and remain covered by the
+/// clear-on-alloc path.
 pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
     let tables = &crate::state::state().exotic_expando;
     if !tables.in_use.get() {
@@ -264,12 +264,12 @@ pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
 }
 
 /// Rekey a movable exotic cell's expando entry after the GC relocates it from
-/// `old_addr` to `new_addr`. Date / RegExp / Temporal cells are non-movable so
-/// this never fires for them, but a `Promise` (`GC_TYPE_PROMISE`) is movable —
-/// without this, a `.then()`-chained thenable that survives a GC move would
-/// lose the `status`/`value` expandos it was gated on. Stored expando *values*
-/// are already rewritten by `scan_exotic_expando_roots_mut`; this migrates the
-/// owner *key*. Wired via `GcMoveHookKind::ExoticExpandoOwner`.
+/// `old_addr` to `new_addr`. Without this, a surviving owner would lose its
+/// user-defined properties after a move. Stored expando *values* are already
+/// rewritten by `scan_exotic_expando_roots_mut`; this migrates the owner
+/// *key*. Most users wire this directly via
+/// `GcMoveHookKind::ExoticExpandoOwner`; RegExp calls it from its combined
+/// side-table move hook.
 pub(crate) fn exotic_expando_owner_moved(old_addr: usize, new_addr: usize) {
     let tables = &crate::state::state().exotic_expando;
     if !tables.in_use.get() || old_addr == new_addr {

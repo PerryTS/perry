@@ -1625,7 +1625,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let expected_shape_id = crate::lower_call::new_alloc::load_class_shape_id(
+                        let expected_shape_id = crate::typed_shape::load_class_shape_id(
                             ctx,
                             &class_name,
                             &keys_global_name,
@@ -1697,7 +1697,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &obj_handle,
                                 &expected_class_id_str,
                                 &expected_shape_id,
-                                field_index,
                                 requires_raw_f64,
                                 None,
                                 &fast_label,

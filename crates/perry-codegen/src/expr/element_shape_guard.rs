@@ -20,7 +20,8 @@
 //! `js_array_ensure_element_shape` returning class id `C` means every element
 //! in `[0, verified_len)` passed `element_class_of_bits`: `POINTER_TAG`, a
 //! readable `GcHeader` (which rejects the handle bands and implausible
-//! magnitudes), `obj_type == GC_TYPE_OBJECT`, not a class-object kind, and
+//! magnitudes), `obj_type == GC_TYPE_OBJECT`, an exact ordinary-instance
+//! ShapeId,
 //! `class_id == C`. That is exactly the set of
 //! predicates the element-read tier and the *front half* of the class-field
 //! precheck spend per iteration, so the clone drops them.
@@ -72,11 +73,10 @@ const GC_TYPE_ARRAY: &str = "1";
 /// | 15 (`0x0000_8000`) | `gc_flags & GC_FLAG_FORWARDED` (0x80) | clear |
 /// | 27 (`0x0800_0000`) | `_reserved & OBJ_FLAG_HAS_DESCRIPTORS` (0x800) | clear |
 /// | 28 (`0x1000_0000`) | `_reserved & GC_OBJ_TYPED_LAYOUT_INTACT` (0x1000) | set |
-/// | 29 (`0x2000_0000`) | `_reserved & OBJ_FLAG_CLASS_OBJECT` (0x2000) | clear |
 ///
 /// One load + one `and` + one `icmp` replaces the three loads and six ALU ops
 /// the per-access class-field precheck spends on the same four facts.
-const ELEM_HEADER_MASK: &str = "939557119"; // 0x3800_80FF
+const ELEM_HEADER_MASK: &str = "402686207"; // 0x1800_80FF
 /// The value [`ELEM_HEADER_MASK`] must produce: `obj_type == GC_TYPE_OBJECT`,
 /// not forwarded, no per-object descriptors, typed layout intact.
 const ELEM_HEADER_EXPECT: &str = "268435458"; // 0x1000_0002
@@ -395,8 +395,7 @@ mod tests {
         let forwarded = u32::from(0x80u8) << 8; // GC_FLAG_FORWARDED @ -7
         let has_descriptors = 0x0800u32 << 16; // OBJ_FLAG_HAS_DESCRIPTORS @ -6
         let typed_intact = 0x1000u32 << 16; // GC_OBJ_TYPED_LAYOUT_INTACT @ -6
-        let class_object = 0x2000u32 << 16; // OBJ_FLAG_CLASS_OBJECT @ -6
-        let mask = obj_type_mask | forwarded | has_descriptors | typed_intact | class_object;
+        let mask = obj_type_mask | forwarded | has_descriptors | typed_intact;
         let expect = u32::from(2u8) /* GC_TYPE_OBJECT */ | typed_intact;
 
         assert_eq!(ELEM_HEADER_MASK, mask.to_string(), "header mask drifted");
@@ -419,11 +418,6 @@ mod tests {
             (good & !typed_intact) & mask,
             expect,
             "typed-layout downgrade not rejected"
-        );
-        assert_ne!(
-            (good | class_object) & mask,
-            expect,
-            "class object not rejected"
         );
         assert_ne!((good ^ 1) & mask, expect, "wrong obj_type not rejected");
     }

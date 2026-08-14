@@ -693,12 +693,16 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
-    super::prop_plan::prop_plan_epoch_bump();
-    state()
+    let removed = state()
         .descriptors
         .property_descriptors
         .borrow_mut()
-        .remove(&(obj, key.to_string()));
+        .remove(&(obj, key.to_string()))
+        .is_some();
+    if !removed {
+        return;
+    }
+    super::prop_plan::prop_plan_epoch_bump();
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {
@@ -885,12 +889,16 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
-    super::prop_plan::prop_plan_epoch_bump();
-    state()
+    let removed = state()
         .descriptors
         .accessor_descriptors
         .borrow_mut()
-        .remove(&(obj, key.to_string()));
+        .remove(&(obj, key.to_string()))
+        .is_some();
+    if !removed {
+        return;
+    }
+    super::prop_plan::prop_plan_epoch_bump();
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {

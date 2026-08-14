@@ -882,12 +882,6 @@ pub(super) fn lower_element_shape_versioned_for(
     // the clone is PROVEN call-free below.
     let deref_idx = ctx.current_block;
 
-    let max_field_index = matched
-        .fields
-        .values()
-        .copied()
-        .max()
-        .expect("matcher requires >= 1 tracked field");
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
     ctx.current_block = fast_pre_idx;
@@ -901,7 +895,6 @@ pub(super) fn lower_element_shape_versioned_for(
             expected_shape_id,
             side_exit_label: slow_pre_label.clone(),
             fields: matched.fields.clone(),
-            max_field_index,
             element_binding: matched.element_binding,
             numeric_accumulator: matched.accumulator_id,
         });

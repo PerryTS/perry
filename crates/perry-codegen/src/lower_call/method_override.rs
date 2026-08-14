@@ -239,7 +239,7 @@ pub(super) fn emit_guarded_direct_method_call(
 
     let expected_class_id_str = expected_class_id.to_string();
     let expected_shape_id =
-        super::new_alloc::load_class_shape_id(ctx, receiver_class_name, &keys_global_name);
+        crate::typed_shape::load_class_shape_id(ctx, receiver_class_name, &keys_global_name);
 
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);

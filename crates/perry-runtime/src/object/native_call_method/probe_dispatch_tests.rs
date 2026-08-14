@@ -252,7 +252,7 @@ fn the_magic_screen_covers_every_symbol_and_no_ordinary_object() {
         let excluded_without_the_screen = match obj_type {
             crate::gc::GC_TYPE_SET => crate::set::is_registered_set(sym),
             crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(sym),
-            crate::gc::GC_TYPE_REGEXP => crate::regex::is_regex_pointer(sym as *const u8),
+            crate::gc::GC_TYPE_REGEXP => true,
             _ => false,
         };
         assert!(

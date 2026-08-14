@@ -302,7 +302,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
         let expected_shape_id =
-            crate::lower_call::new_alloc::load_class_shape_id(ctx, &class_name, &keys_global_name);
+            crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
 
         let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
@@ -333,7 +333,6 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             &obj_handle,
             &expected_class_id_str,
             &expected_shape_id,
-            field_index,
             true,
             Some(&val_bits),
             &fast_label,
@@ -436,7 +435,7 @@ fn try_lower_sloppy_class_field_boxed_store(
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
         let expected_shape_id =
-            crate::lower_call::new_alloc::load_class_shape_id(ctx, class_name, keys_global_name);
+            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global_name);
 
         let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
@@ -467,7 +466,6 @@ fn try_lower_sloppy_class_field_boxed_store(
             &obj_handle,
             &expected_class_id_str,
             &expected_shape_id,
-            field_index,
             false,
             Some(&val_bits),
             &fast_label,
@@ -977,12 +975,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     .as_ref()
                                     .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                                 let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                                let expected_shape_id =
-                                    crate::lower_call::new_alloc::load_class_shape_id(
-                                        ctx,
-                                        &class_name,
-                                        &keys_global_name,
-                                    );
                                 // #5093 loop versioning: inside the fast clone of a
                                 // class-field versioned loop, a tracked raw-f64 field
                                 // store on the proven receiver lowers to an inline
@@ -1295,7 +1287,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // reduction, so clang -O0 — which oversized modules are
                                 // forced to (#4880) — can actually compile the module.
                                 // Only the call's own operands are materialized (the key
-                                // handle + expected-keys), not the inline-store scaffolding.
+                                // handle + expected ShapeId), not the inline-store scaffolding.
+                                let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                                    ctx,
+                                    &class_name,
+                                    &keys_global_name,
+                                );
                                 if crate::codegen::full_outline_ic_enabled() {
                                     let key_raw = {
                                         let blk = ctx.block();
@@ -1382,13 +1379,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // literal, so a candidate whose declared type disagrees
                                 // about the slot's representation is dropped.
                                 let subclass_arms =
-                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
-                                ctx,
-                                &class_name,
-                                property,
-                                field_index,
-                                requires_raw_f64,
-                            );
+                             crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                                 ctx,
+                                 &class_name,
+                                 property,
+                                 field_index,
+                                 requires_raw_f64,
+                             );
                                 let _guardcall_label =
                             crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
                                 ctx,
@@ -1396,7 +1393,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &obj_handle,
                                 &expected_class_id_str,
                                 &expected_shape_id,
-                                field_index,
                                 requires_raw_f64,
                                 Some(&val_bits),
                                 &fast_label,
