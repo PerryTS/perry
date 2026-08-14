@@ -83,6 +83,14 @@ EOF
 if [[ "$rc" -eq 0 ]]; then
     sweep_tier_emit "$OUT" 1 "cargo_workspace" "PASS" "$dur" "$total_passed crate-suites passed"
 else
+    # A compile/link error exits nonzero without ever printing a `test result`
+    # line, so `total_failed` stays 0. Saying "0 crate-suites failed" there
+    # reads as "nothing failed" on a tier that did fail; name the real shape.
+    if [[ "$total_failed" -eq 0 ]]; then
+        detail="no suite reported a failure, so an invocation died before emitting results (compile/link)"
+    else
+        detail="$total_failed crate-suites failed of $((total_passed + total_failed))"
+    fi
     sweep_tier_emit "$OUT" 1 "cargo_workspace" "FAIL" "$dur" \
-        "cargo test failed (workspace=$workspace_rc runtime=$runtime_rc; $total_failed crate-suites failed of $((total_passed + total_failed)))"
+        "cargo test failed (workspace=$workspace_rc runtime=$runtime_rc; $detail)"
 fi
