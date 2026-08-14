@@ -47,7 +47,7 @@ fail() {
   exit 1
 }
 
-for tool in npm node cargo cc ar nm; do
+for tool in npm node cargo cc ar nm python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH"
 done
 [[ -x "$PERRY_BIN" ]] || fail "perry not found at $PERRY_BIN"
@@ -140,7 +140,15 @@ run_cold_start() {
   local log="$BUILD_DIR/perry-${mode}-${index}.log"
   : >"$log"
   if [[ "$mode" == "forced" ]]; then
+    # A forced-evacuation flag proves nothing unless the process actually runs
+    # a copying minor and moves a live object. Keep the production request
+    # workload deterministic under a small heap, disable the two known
+    # non-moving fallbacks, and emit the diagnostics consumed by the repository's
+    # evacuation-liveness checker below.
     env PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+      PERRY_GC_DIAG=1 PERRY_GC_TRACE=1 PERRY_GC_HEAP_LIMIT=8 \
+      PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+      PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED=8036 \
       PORT="$port" HOSTNAME=127.0.0.1 NODE_ENV=production \
       "$HOST_BIN" "$RUNTIME_IMAGE" "$STDLIB_IMAGE" "$APP_IMAGE" >>"$log" 2>&1 &
   else
@@ -158,6 +166,11 @@ run_cold_start() {
 
   BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode cold verifier 1 failed"
   BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode warm verifier 2 failed"
+  if [[ "$mode" == "forced" ]]; then
+    python3 "$REPO_ROOT/scripts/gc_evacuation_liveness_assert.py" \
+      "$log" --probe "$NAME-$mode-$index" \
+      || fail "$mode cold start $index did not prove moving-GC liveness"
+  fi
   if grep -Eiq '\[perry-gc\].*SKIPPED|unsettled-await|unimplemented|compatibility[- ]fallback' "$log"; then
     fail "$mode cold start $index emitted a forbidden fallback diagnostic"
   fi

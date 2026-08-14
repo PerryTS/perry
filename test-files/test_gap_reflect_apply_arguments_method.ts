@@ -30,3 +30,47 @@ const value = invokeStart(new ProxyTarget(), (span) => {
 });
 
 console.log(called, value);
+
+// A statically base-typed receiver emits the virtual-override class-id tower.
+// Its cases must not reuse the fallback method's ABI: this override needs a
+// synthetic arguments array even though the base implementation does not.
+class PlainBase {
+  forward(callback: (first: unknown, second: number) => boolean, value: number) {
+    return callback(value, 0);
+  }
+}
+
+class ArgumentsOverride extends PlainBase {
+  forward(callback: (first: unknown, second: number) => boolean, value: number) {
+    return Reflect.apply(callback, this, arguments);
+  }
+}
+
+function invokeVirtual(receiver: PlainBase) {
+  function callback(first: unknown, second: number) {
+    return first === callback && second === 7;
+  }
+  return receiver.forward(callback, 7);
+}
+
+console.log(invokeVirtual(new ArgumentsOverride()));
+
+// And the inverse: an override without synthetic arguments must not receive
+// the fallback's hidden array slot.
+class ArgumentsBase {
+  forward(callback: (first: unknown, second: number) => boolean, value: number) {
+    return Reflect.apply(callback, this, arguments);
+  }
+}
+
+class PlainOverride extends ArgumentsBase {
+  forward(callback: (first: unknown, second: number) => boolean, value: number) {
+    return callback(value, 9);
+  }
+}
+
+function invokePlainOverride(receiver: ArgumentsBase) {
+  return receiver.forward((first, second) => first === 8 && second === 9, 8);
+}
+
+console.log(invokePlainOverride(new PlainOverride()));

@@ -830,6 +830,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // `../` segments need no source-level normalization here.
         {{
             const __perry_path_specifier =
+                specifier === '.' || specifier === '..' ||
                 specifier.slice(0, 2) === './' || specifier.slice(0, 3) === '../'
                     ? {module_dir_literal} + '/' + specifier
                     : specifier;

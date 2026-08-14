@@ -159,6 +159,72 @@ fn emit_tower_pshape_call(
     )
 }
 
+/// Build the exact direct-call ABI for one concrete method implementation.
+/// Virtual towers cannot share this vector: sibling overrides may disagree on
+/// declared arity, user rest, or the compiler-synthesized `arguments` slot.
+fn build_direct_method_args(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    user_args: &[String],
+    has_rest: bool,
+    has_synthetic_arguments: bool,
+    declared_count: usize,
+    undefined_lit: &str,
+) -> Vec<String> {
+    let mut direct_args = Vec::with_capacity(declared_count + 1);
+    direct_args.push(recv_box.to_string());
+    if has_synthetic_arguments {
+        let visible_params = declared_count.saturating_sub(1);
+        for index in 0..visible_params {
+            direct_args.push(
+                user_args
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| undefined_lit.to_string()),
+            );
+        }
+        let capacity = (user_args.len() as u32).to_string();
+        let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
+        for value in user_args {
+            let block = ctx.block();
+            raw_args = block.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &raw_args), (DOUBLE, value)],
+            );
+        }
+        direct_args.push(nanbox_pointer_inline(ctx.block(), &raw_args));
+    } else if has_rest {
+        let fixed_user = declared_count.saturating_sub(1);
+        for index in 0..fixed_user {
+            direct_args.push(
+                user_args
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| undefined_lit.to_string()),
+            );
+        }
+        let rest_count = user_args.len().saturating_sub(fixed_user);
+        let capacity = (rest_count as u32).to_string();
+        let mut rest_array = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
+        for value in user_args.iter().skip(fixed_user) {
+            let block = ctx.block();
+            rest_array = block.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &rest_array), (DOUBLE, value)],
+            );
+        }
+        direct_args.push(nanbox_pointer_inline(ctx.block(), &rest_array));
+    } else {
+        direct_args.extend(user_args.iter().cloned());
+        while direct_args.len() < declared_count + 1 {
+            direct_args.push(undefined_lit.to_string());
+        }
+    }
+    direct_args
+}
+
 /// Interface / dynamic dispatch fallback: when the static class is unknown OR
 /// resolves to an interface name not in the class registry, BUT the property
 /// name corresponds to a method defined on at least one class in the registry,
@@ -566,63 +632,15 @@ pub(crate) fn try_lower_instance_method_call(
                     // args bundled into a single array at its rest slot. This is
                     // per-case so one rest-bearing sibling can't force the others
                     // to receive a bundled array in place of positional params.
-                    let mut case_args: Vec<String> = Vec::with_capacity(impl_decl_count + 1);
-                    case_args.push(recv_box.clone());
-                    if impl_has_synth {
-                        let visible_params = impl_decl_count.saturating_sub(1);
-                        for i in 0..visible_params {
-                            case_args.push(
-                                static_user_args
-                                    .get(i)
-                                    .cloned()
-                                    .unwrap_or_else(|| undefined_lit.clone()),
-                            );
-                        }
-                        let cap = (static_user_args.len() as u32).to_string();
-                        let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                        for value in &static_user_args {
-                            let blk = ctx.block();
-                            raw_args = blk.call(
-                                I64,
-                                "js_array_push_f64",
-                                &[(I64, &raw_args), (DOUBLE, value)],
-                            );
-                        }
-                        case_args.push(nanbox_pointer_inline(ctx.block(), &raw_args));
-                    } else if impl_has_rest {
-                        let fixed_user = impl_decl_count.saturating_sub(1);
-                        for i in 0..fixed_user {
-                            case_args.push(
-                                static_user_args
-                                    .get(i)
-                                    .cloned()
-                                    .unwrap_or_else(|| undefined_lit.clone()),
-                            );
-                        }
-                        let rest_count = static_user_args.len().saturating_sub(fixed_user);
-                        let cap = (rest_count as u32).to_string();
-                        let mut rest_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                        for v in static_user_args.iter().skip(fixed_user) {
-                            let blk = ctx.block();
-                            rest_arr = blk.call(
-                                I64,
-                                "js_array_push_f64",
-                                &[(I64, &rest_arr), (DOUBLE, v)],
-                            );
-                        }
-                        let rest_box = nanbox_pointer_inline(ctx.block(), &rest_arr);
-                        case_args.push(rest_box);
-                    } else {
-                        for v in &static_user_args {
-                            case_args.push(v.clone());
-                        }
-                        // Issue #235: pad to the declared arity so the callee's
-                        // default-param desugaring fires for skipped trailing
-                        // params instead of reading an uninitialized arg slot.
-                        while case_args.len() < impl_decl_count + 1 {
-                            case_args.push(undefined_lit.clone());
-                        }
-                    }
+                    let case_args = build_direct_method_args(
+                        ctx,
+                        &recv_box,
+                        &static_user_args,
+                        impl_has_rest,
+                        impl_has_synth,
+                        impl_decl_count,
+                        &undefined_lit,
+                    );
                     let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
                         case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
                     match tower_pshape_route(ctx, owner.as_deref(), property, fname) {
@@ -737,18 +755,18 @@ pub(crate) fn try_lower_instance_method_call(
 
     if let Some(class_name) = receiver_class {
         // Step 1: walk parent chain for the static method name.
-        let mut static_fn: Option<String> = None;
+        let mut static_method: Option<(String, (String, String))> = None;
         let mut current_class = Some(class_name.clone());
         while let Some(cur) = current_class {
             let key = (cur.clone(), property.to_string());
             if let Some(fname) = ctx.methods.get(&key).cloned() {
-                static_fn = Some(fname);
+                static_method = Some((fname, key));
                 break;
             }
             current_class = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
         }
 
-        if let Some(fallback_fn) = static_fn {
+        if let Some((fallback_fn, fallback_key)) = static_method {
             // Step 2: collect overriding subclasses. For each
             // subclass C transitively extending class_name, look
             // up which method C uses for `property` (walking C's
@@ -756,6 +774,9 @@ pub(crate) fn try_lower_instance_method_call(
             // function than the static fallback, C needs an
             // explicit case in the dispatch table.
             let mut overrides: Vec<(u32, String)> = Vec::new();
+            // Exact direct-call ABI for each override, aligned with `overrides`:
+            // (has user rest, has synthesized arguments, declared count).
+            let mut override_meta: Vec<(bool, bool, usize)> = Vec::new();
             // Fixed order, not `HashMap` order — the virtual-override tower has
             // the same #7622 defect as the interface tower above, and for the
             // same reason: `overrides` is walked by index to emit the
@@ -787,18 +808,26 @@ pub(crate) fn try_lower_instance_method_call(
                 // Resolve the method for sub_name by walking its
                 // own parent chain (NOT class_name's chain).
                 let mut cur = Some(sub_name.clone());
-                let mut sub_fn: Option<String> = None;
+                let mut sub_method: Option<(String, (String, String))> = None;
                 while let Some(c) = cur {
                     let key = (c.clone(), property.to_string());
                     if let Some(fname) = ctx.methods.get(&key).cloned() {
-                        sub_fn = Some(fname);
+                        sub_method = Some((fname, key));
                         break;
                     }
                     cur = ctx.classes.get(&c).and_then(|c| c.extends_name.clone());
                 }
-                if let Some(sub_fn) = sub_fn {
+                if let Some((sub_fn, sub_key)) = sub_method {
                     if sub_fn != fallback_fn {
+                        let has_rest = matches!(ctx.method_has_rest.get(&sub_key), Some(&true));
+                        let has_synthetic_arguments = matches!(
+                            ctx.method_has_synthetic_arguments.get(&sub_key),
+                            Some(&true)
+                        );
+                        let declared_count =
+                            ctx.method_param_counts.get(&sub_key).copied().unwrap_or(0);
                         overrides.push((sub_id, sub_fn));
+                        override_meta.push((has_rest, has_synthetic_arguments, declared_count));
                     }
                 }
             }
@@ -824,20 +853,21 @@ pub(crate) fn try_lower_instance_method_call(
                 && overrides
                     .iter()
                     .all(|(_, f)| !f.starts_with("perry_static_"));
-            let mut lowered_args: Vec<String> = Vec::with_capacity(fallback_user_args.len() + 1);
-            lowered_args.push(recv_box.clone());
-            lowered_args.extend(fallback_user_args.iter().cloned());
-            // Issue #235: pad lowered_args with TAG_UNDEFINED so the
-            // callee's default-param desugaring fires when the call site
-            // passed fewer args than the method declares. Same approach
-            // and reasoning as the dynamic-dispatch branch above —
-            // applied here for the static-dispatch + virtual-override
-            // case (receiver class IS in `ctx.classes`).
-            //
-            // Walk the parent chain `static_fn` was resolved through to
-            // find the fallback's arity; take max across all overrides
-            // so the unified arg_slices works for every concrete callee.
-            let mut max_explicit_arity: usize = 0;
+            let fallback_decl_count = ctx
+                .method_param_counts
+                .get(&fallback_key)
+                .copied()
+                .unwrap_or(0);
+            let fallback_has_rest = matches!(ctx.method_has_rest.get(&fallback_key), Some(&true));
+            let fallback_has_synthetic_arguments = matches!(
+                ctx.method_has_synthetic_arguments.get(&fallback_key),
+                Some(&true)
+            );
+            // Keep the maximum declared arity only for selecting safe
+            // shape-guarded/typed fast-path arms below. Direct calls no longer
+            // share an ABI vector: the fallback and each virtual override are
+            // adapted independently from `fallback_user_args`.
+            let mut max_explicit_arity: usize = fallback_decl_count;
             let mut walk = Some(class_name.clone());
             while let Some(cur) = walk {
                 let key = (cur.clone(), property.to_string());
@@ -875,37 +905,14 @@ pub(crate) fn try_lower_instance_method_call(
                     }
                 }
             }
-            // Closes #484: bundle trailing user args into a rest
-            // array when the method has a `...rest` parameter.
-            // Walk the same parent chain to find has_rest. Same
-            // structural shape as the freestanding-function rest
-            // bundling at lower_call.rs:444 — but operates on
-            // `lowered_args` after the receiver was prepended.
-            let mut method_has_rest = false;
-            let mut method_has_synthetic_arguments = false;
-            let mut method_decl_count = max_explicit_arity;
-            let mut rest_walk = Some(class_name.clone());
-            while let Some(cur) = rest_walk {
-                let key = (cur.clone(), property.to_string());
-                if let Some(&true) = ctx.method_has_rest.get(&key) {
-                    method_has_rest = true;
-                    method_decl_count = ctx
-                        .method_param_counts
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(max_explicit_arity);
-                    method_has_synthetic_arguments =
-                        matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true));
-                    break;
-                }
-                rest_walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
-            }
             // Collapse a rest-bearing virtual dispatch HERE, before the rest
-            // array is materialized below — the by-name dispatch takes the raw
+            // arrays are materialized below — the by-name dispatch takes the raw
             // `fallback_user_args` and does its own rest-bundling, so the bundle
             // would be dead. (The non-rest collapse happens at the vdispatch
             // site below, where there is no array to skip.)
-            if method_has_rest && can_collapse_virtual {
+            if (fallback_has_rest || override_meta.iter().any(|meta| meta.0))
+                && can_collapse_virtual
+            {
                 return Ok(Some(emit_collapsed_instance_dispatch(
                     ctx,
                     &recv_box,
@@ -916,63 +923,17 @@ pub(crate) fn try_lower_instance_method_call(
                 )?));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            if method_has_synthetic_arguments {
-                // A synthesized `arguments` slot receives ALL values supplied
-                // at the call site, independently of the method's named
-                // parameters. Treating it like an ordinary `...rest` slot
-                // packed only values after `declared - 1`; a method such as
-                // `start(a, b, c, d) { Reflect.apply(fn, this, arguments) }`
-                // therefore observed an empty arguments object when called
-                // with three values. Next 16's ProxyTracer uses this exact
-                // forwarding shape in the production App Route path (#8036).
-                let visible_params = method_decl_count.saturating_sub(1);
-                while lowered_args.len() - 1 < visible_params {
-                    lowered_args.push(undefined_lit.clone());
-                }
-                let raw_count = fallback_user_args.len();
-                let cap = (raw_count as u32).to_string();
-                let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                for value in &fallback_user_args {
-                    let blk = ctx.block();
-                    raw_args = blk.call(
-                        I64,
-                        "js_array_push_f64",
-                        &[(I64, &raw_args), (DOUBLE, value)],
-                    );
-                }
-                let arguments_box = nanbox_pointer_inline(ctx.block(), &raw_args);
-                lowered_args.truncate(1 + visible_params);
-                lowered_args.push(arguments_box);
-            } else if method_has_rest {
-                // user-visible fixed param count = decl - 1 (the
-                // last param is the rest). lowered_args[0] is
-                // `this`, [1..] are user args.
-                let fixed_user = method_decl_count.saturating_sub(1);
-                // Pad missing fixed args first.
-                while lowered_args.len() - 1 < fixed_user {
-                    lowered_args.push(undefined_lit.clone());
-                }
-                // Bundle remaining trailing args into a fresh
-                // js_array. Index in lowered_args: 1 + fixed_user.
-                let split_at = 1 + fixed_user;
-                let rest_count = lowered_args.len().saturating_sub(split_at);
-                let cap = (rest_count as u32).to_string();
-                let mut rest_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                for v in &lowered_args[split_at..] {
-                    let blk = ctx.block();
-                    rest_arr = blk.call(I64, "js_array_push_f64", &[(I64, &rest_arr), (DOUBLE, v)]);
-                }
-                let rest_box = nanbox_pointer_inline(ctx.block(), &rest_arr);
-                lowered_args.truncate(split_at);
-                lowered_args.push(rest_box);
-            } else {
-                let target_total = max_explicit_arity + 1; // +1 for `this`
-                while lowered_args.len() < target_total {
-                    lowered_args.push(undefined_lit.clone());
-                }
-            }
+            let fallback_args = build_direct_method_args(
+                ctx,
+                &recv_box,
+                &fallback_user_args,
+                fallback_has_rest,
+                fallback_has_synthetic_arguments,
+                fallback_decl_count,
+                &undefined_lit,
+            );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             // Arms for the shape-guarded direct call: every class in
             // `class_name`'s subclass closure, paired with the body `property`
@@ -1063,7 +1024,7 @@ pub(crate) fn try_lower_instance_method_call(
                 subclass_arms.clear();
             }
 
-            if !method_has_rest {
+            if !fallback_has_rest {
                 let typed_method_key = (class_name.clone(), property.to_string());
                 let typed_formal_count = ctx
                     .method_param_counts
@@ -1336,7 +1297,7 @@ pub(crate) fn try_lower_instance_method_call(
                 // / native method) via `js_native_call_value`, which does its
                 // own arity/rest handling from a FLAT positional buffer. Pass
                 // the un-rest-bundled user args (`fallback_user_args`) — not the
-                // rest-bundled `lowered_args[1..]`, which would deliver the rest
+                // ABI-adapted `fallback_args[1..]`, which would deliver the rest
                 // array as one positional argument and break a native override
                 // such as `super.emit(event, ...args)` forwarding to
                 // EventEmitter (#620 / rest-spread-to-native-override).
@@ -1434,12 +1395,34 @@ pub(crate) fn try_lower_instance_method_call(
                 }
             }
 
-            // Each case block: call the override and branch to merge.
+            // Each case block: adapt the raw user arguments to THIS override's
+            // declared ABI, call it, and branch to merge. In particular, a
+            // synthesized `arguments` array belongs only to implementations
+            // that declare that hidden slot; it cannot be inherited from the
+            // fallback's signature or shared with a sibling override.
             let merge_label = ctx.block_label(merge_idx);
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for ((_, fname), &case_idx) in overrides.iter().zip(case_idxs.iter()) {
+            for (((_, fname), &(has_rest, has_synthetic_arguments, declared_count)), &case_idx) in
+                overrides
+                    .iter()
+                    .zip(override_meta.iter())
+                    .zip(case_idxs.iter())
+            {
                 ctx.current_block = case_idx;
-                let v = ctx.block().call(DOUBLE, fname, &arg_slices);
+                let case_args = build_direct_method_args(
+                    ctx,
+                    &recv_box,
+                    &fallback_user_args,
+                    has_rest,
+                    has_synthetic_arguments,
+                    declared_count,
+                    &undefined_lit,
+                );
+                let case_arg_slices: Vec<(crate::types::LlvmType, &str)> = case_args
+                    .iter()
+                    .map(|argument| (DOUBLE, argument.as_str()))
+                    .collect();
+                let v = ctx.block().call(DOUBLE, fname, &case_arg_slices);
                 let after_label = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);

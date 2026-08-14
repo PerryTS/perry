@@ -232,73 +232,212 @@ const CU_D_PAIRS: [(u32, usize); 4] = [
 /// Parse `__unwind_info` into flat sorted (function, encoding) + LSDA
 /// indexes. Mirrors the layout libunwind's UnwindCursor reads.
 fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>) {
-    let u32at =
-        |off: usize| -> u32 { u32::from_le_bytes(ui[off..off + 4].try_into().unwrap_or([0; 4])) };
-    let u16at =
-        |off: usize| -> u16 { u16::from_le_bytes(ui[off..off + 2].try_into().unwrap_or([0; 2])) };
-    let mut funcs = Vec::new();
-    let mut lsdas = Vec::new();
-    if ui.len() < 28 || u32at(0) != 1 {
-        return (funcs, lsdas, Vec::new());
+    fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+        let end = offset.checked_add(2)?;
+        Some(u16::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
     }
-    let common_off = u32at(4) as usize;
-    let common_count = u32at(8) as usize;
-    let personality_off = u32at(12) as usize;
-    let personality_count = u32at(16) as usize;
-    let index_off = u32at(20) as usize;
-    let index_count = u32at(24) as usize;
-    let common: Vec<u32> = (0..common_count)
-        .map(|i| u32at(common_off + 4 * i))
-        .collect();
-    // Each entry is an image-relative address of a GOT slot. The slot is
-    // rebound by dyld and contains the callable personality address.
-    let personalities: Vec<u64> = (0..personality_count)
-        .map(|i| image_base + u32at(personality_off + 4 * i) as u64)
-        .collect();
-    for i in 0..index_count.saturating_sub(1) {
-        let entry = index_off + 12 * i;
-        let page_off = u32at(entry + 4) as usize;
-        let lsda_start = u32at(entry + 8) as usize;
-        let lsda_end = u32at(index_off + 12 * (i + 1) + 8) as usize;
-        let mut off = lsda_start;
-        while off + 8 <= lsda_end {
-            lsdas.push((
-                image_base + u32at(off) as u64,
-                image_base + u32at(off + 4) as u64,
-            ));
-            off += 8;
-        }
-        if page_off == 0 {
-            continue;
-        }
-        let kind = u32at(page_off);
-        if kind == 2 {
-            let e_off = u16at(page_off + 4) as usize;
-            let count = u16at(page_off + 6) as usize;
-            for e in 0..count {
-                let at = page_off + e_off + 8 * e;
-                funcs.push((image_base + u32at(at) as u64, u32at(at + 4)));
-            }
-        } else if kind == 3 {
-            let fn_base = u32at(entry) as u64;
-            let e_off = u16at(page_off + 4) as usize;
-            let count = u16at(page_off + 6) as usize;
-            let enc_off = u16at(page_off + 8) as usize;
-            for e in 0..count {
-                let raw = u32at(page_off + e_off + 4 * e);
-                let idx = (raw >> 24) as usize;
-                let enc = if idx < common.len() {
-                    common[idx]
-                } else {
-                    u32at(page_off + enc_off + 4 * (idx - common.len()))
-                };
-                funcs.push((image_base + fn_base + (raw & 0x00FF_FFFF) as u64, enc));
-            }
-        }
+
+    fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+        let end = offset.checked_add(4)?;
+        Some(u32::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
     }
-    funcs.sort_unstable_by_key(|e| e.0);
-    lsdas.sort_unstable_by_key(|e| e.0);
-    (funcs, lsdas, personalities)
+
+    fn table_range(
+        bytes_len: usize,
+        offset: usize,
+        count: usize,
+        width: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let byte_len = count.checked_mul(width)?;
+        let end = offset.checked_add(byte_len)?;
+        (end <= bytes_len).then_some(offset..end)
+    }
+
+    // Every offset and count below comes from an untrusted Mach-O section.
+    // Parse transactionally: any invalid range discards all three indexes
+    // rather than publishing a valid-looking prefix from malformed metadata.
+    (|| -> Option<(Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>)> {
+        if ui.len() < 28 || read_u32(ui, 0)? != 1 {
+            return None;
+        }
+        let common_off = read_u32(ui, 4)? as usize;
+        let common_count = read_u32(ui, 8)? as usize;
+        let personality_off = read_u32(ui, 12)? as usize;
+        let personality_count = read_u32(ui, 16)? as usize;
+        let index_off = read_u32(ui, 20)? as usize;
+        let index_count = read_u32(ui, 24)? as usize;
+
+        let common_range = table_range(ui.len(), common_off, common_count, 4)?;
+        let mut common = Vec::with_capacity(common_count);
+        for offset in common_range.step_by(4) {
+            common.push(read_u32(ui, offset)?);
+        }
+
+        let personality_range = table_range(ui.len(), personality_off, personality_count, 4)?;
+        let mut personalities = Vec::with_capacity(personality_count);
+        // Each entry is an image-relative address of a GOT slot. The slot is
+        // rebound by dyld and contains the callable personality address.
+        for offset in personality_range.step_by(4) {
+            personalities.push(image_base.checked_add(read_u32(ui, offset)? as u64)?);
+        }
+
+        table_range(ui.len(), index_off, index_count, 12)?;
+        let mut funcs = Vec::new();
+        let mut lsdas = Vec::new();
+        for i in 0..index_count.saturating_sub(1) {
+            let entry = index_off.checked_add(i.checked_mul(12)?)?;
+            let next_entry = index_off.checked_add((i + 1).checked_mul(12)?)?;
+            let page_off = read_u32(ui, entry.checked_add(4)?)? as usize;
+            let lsda_start = read_u32(ui, entry.checked_add(8)?)? as usize;
+            let lsda_end = read_u32(ui, next_entry.checked_add(8)?)? as usize;
+            let lsda_len = lsda_end.checked_sub(lsda_start)?;
+            if lsda_len % 8 != 0 {
+                return None;
+            }
+            let lsda_range = table_range(ui.len(), lsda_start, lsda_len / 8, 8)?;
+            for offset in lsda_range.step_by(8) {
+                lsdas.push((
+                    image_base.checked_add(read_u32(ui, offset)? as u64)?,
+                    image_base.checked_add(read_u32(ui, offset.checked_add(4)?)? as u64)?,
+                ));
+            }
+
+            if page_off == 0 {
+                continue;
+            }
+            let kind = read_u32(ui, page_off)?;
+            match kind {
+                2 => {
+                    table_range(ui.len(), page_off, 1, 8)?;
+                    let entries_field = page_off.checked_add(4)?;
+                    let count_field = page_off.checked_add(6)?;
+                    let entries_offset =
+                        page_off.checked_add(read_u16(ui, entries_field)? as usize)?;
+                    let count = read_u16(ui, count_field)? as usize;
+                    let entries = table_range(ui.len(), entries_offset, count, 8)?;
+                    for offset in entries.step_by(8) {
+                        funcs.push((
+                            image_base.checked_add(read_u32(ui, offset)? as u64)?,
+                            read_u32(ui, offset.checked_add(4)?)?,
+                        ));
+                    }
+                }
+                3 => {
+                    table_range(ui.len(), page_off, 1, 12)?;
+                    let fn_base = read_u32(ui, entry)? as u64;
+                    let entries_field = page_off.checked_add(4)?;
+                    let entry_count_field = page_off.checked_add(6)?;
+                    let encodings_field = page_off.checked_add(8)?;
+                    let encoding_count_field = page_off.checked_add(10)?;
+                    let entries_offset =
+                        page_off.checked_add(read_u16(ui, entries_field)? as usize)?;
+                    let entry_count = read_u16(ui, entry_count_field)? as usize;
+                    let encodings_offset =
+                        page_off.checked_add(read_u16(ui, encodings_field)? as usize)?;
+                    let encoding_count = read_u16(ui, encoding_count_field)? as usize;
+                    let entries = table_range(ui.len(), entries_offset, entry_count, 4)?;
+                    let encodings = table_range(ui.len(), encodings_offset, encoding_count, 4)?;
+                    for offset in entries.step_by(4) {
+                        let raw = read_u32(ui, offset)?;
+                        let idx = (raw >> 24) as usize;
+                        let enc = if idx < common.len() {
+                            common[idx]
+                        } else {
+                            let local_idx = idx.checked_sub(common.len())?;
+                            if local_idx >= encoding_count {
+                                return None;
+                            }
+                            read_u32(ui, encodings.start.checked_add(local_idx.checked_mul(4)?)?)?
+                        };
+                        let function_offset = fn_base.checked_add((raw & 0x00FF_FFFF) as u64)?;
+                        funcs.push((image_base.checked_add(function_offset)?, enc));
+                    }
+                }
+                _ => return None,
+            }
+        }
+        funcs.sort_unstable_by_key(|entry| entry.0);
+        lsdas.sort_unstable_by_key(|entry| entry.0);
+        Some((funcs, lsdas, personalities))
+    })()
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod unwind_info_tests {
+    use super::parse_unwind_info;
+
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn assert_empty(parsed: (Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>)) {
+        assert!(parsed.0.is_empty());
+        assert!(parsed.1.is_empty());
+        assert!(parsed.2.is_empty());
+    }
+
+    fn regular_page() -> Vec<u8> {
+        let mut bytes = vec![0; 68];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, 28); // common encodings, empty
+        put_u32(&mut bytes, 12, 28); // personalities, empty
+        put_u32(&mut bytes, 20, 28); // two first-level entries
+        put_u32(&mut bytes, 24, 2);
+        put_u32(&mut bytes, 32, 52); // regular second-level page
+        put_u32(&mut bytes, 36, 52); // empty LSDA range
+        put_u32(&mut bytes, 48, 52);
+        put_u32(&mut bytes, 52, 2); // regular page kind
+        put_u16(&mut bytes, 56, 8); // entries start after header
+        put_u16(&mut bytes, 58, 1);
+        put_u32(&mut bytes, 60, 0x10);
+        put_u32(&mut bytes, 64, 0x0400_0000);
+        bytes
+    }
+
+    #[test]
+    fn parses_a_valid_regular_page() {
+        let parsed = parse_unwind_info(&regular_page(), 0x1000);
+        assert_eq!(parsed.0, vec![(0x1010, 0x0400_0000)]);
+        assert!(parsed.1.is_empty());
+        assert!(parsed.2.is_empty());
+    }
+
+    #[test]
+    fn rejects_overflowing_header_table_ranges() {
+        let mut bytes = vec![0; 28];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, u32::MAX);
+        put_u32(&mut bytes, 8, u32::MAX);
+        assert_empty(parse_unwind_info(&bytes, 0));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_first_level_index() {
+        let mut bytes = vec![0; 40];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, 28);
+        put_u32(&mut bytes, 12, 28);
+        put_u32(&mut bytes, 20, 28);
+        put_u32(&mut bytes, 24, 2);
+        assert_empty(parse_unwind_info(&bytes, 0));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_lsda_and_page_ranges_transactionally() {
+        let mut bad_lsda = regular_page();
+        put_u32(&mut bad_lsda, 36, 80);
+        put_u32(&mut bad_lsda, 48, 88);
+        assert_empty(parse_unwind_info(&bad_lsda, 0));
+
+        let mut bad_page = regular_page();
+        put_u16(&mut bad_page, 58, 2);
+        assert_empty(parse_unwind_info(&bad_page, 0));
+    }
 }
 
 #[cfg(target_os = "macos")]

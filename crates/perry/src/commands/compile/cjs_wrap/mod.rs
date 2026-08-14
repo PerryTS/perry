@@ -144,6 +144,24 @@ mod tests {
     }
 
     #[test]
+    fn computed_bare_directory_requires_use_the_calling_module_directory() {
+        let source = "module.exports = id => require(id);";
+        let path = PathBuf::from("/fixture/.next/server/webpack-runtime.js");
+        let wrapped = wrap_commonjs(source, &path);
+
+        for specifier in ["specifier === '.'", "specifier === '..'"] {
+            assert!(
+                wrapped.contains(specifier),
+                "computed require must treat {specifier} as relative\n{wrapped}"
+            );
+        }
+        assert!(
+            wrapped.contains("? \"/fixture/.next/server\" + '/' + specifier"),
+            "bare directory specifiers must be rebased before registry lookup\n{wrapped}"
+        );
+    }
+
+    #[test]
     fn does_not_detect_pure_esm() {
         assert!(!is_commonjs("import x from 'foo'; export const y = 1;"));
     }

@@ -83,3 +83,66 @@ fn collision_renamed_class_self_new_uses_unique_class_name() {
         instance.body
     );
 }
+
+#[test]
+fn method_parameter_shadows_class_self_name() {
+    let module = lower_src(
+        r#"
+        class C {
+            static make(C) { return new C(); }
+        }
+        "#,
+    );
+
+    let class = module
+        .classes
+        .iter()
+        .find(|class| class.name == "C")
+        .expect("class C should be lowered");
+    let make = class
+        .static_methods
+        .iter()
+        .find(|method| method.name == "make")
+        .expect("static make method should be lowered");
+    let parameter_id = make.params.first().expect("C parameter should exist").id;
+
+    assert!(
+        make.body.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Return(Some(Expr::NewDynamic { callee, .. }))
+                if matches!(callee.as_ref(), Expr::LocalGet(id) if *id == parameter_id)
+        )),
+        "method parameter C must shadow the class's inner name: {:#?}",
+        make.body
+    );
+}
+
+#[test]
+fn named_class_expression_self_new_uses_unique_class_name() {
+    let module = lower_src(
+        r#"
+        class h {}
+        const value = class h { static instance() { return new h(); } };
+        "#,
+    );
+
+    let class = module
+        .classes
+        .iter()
+        .find(|class| class.name == "value")
+        .expect("named class expression should use its unique binding registration name");
+    let instance = class
+        .static_methods
+        .iter()
+        .find(|method| method.name == "instance")
+        .expect("static instance method should be lowered");
+
+    assert!(
+        instance.body.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == &class.name
+        )),
+        "named class-expression self-construction must use its unique name: {:#?}",
+        instance.body
+    );
+}

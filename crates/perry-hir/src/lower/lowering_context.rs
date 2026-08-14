@@ -276,6 +276,12 @@ pub struct LoweringContext {
     pub(crate) deferred_unknown_native_imports: HashMap<String, (String, String, swc_common::Span)>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Function-scope depth at which `current_class`'s lexical inner binding
+    /// was introduced. A method parameter/local at a greater depth shadows the
+    /// class's own name; an outer local at the same or a shallower depth does
+    /// not. Kept alongside `current_class_inner_name` so `new C()` can apply
+    /// JavaScript's nearest-binding rule while a class body is lowered.
+    pub(crate) current_class_scope_depth: Option<usize>,
     /// Source-level inner name of the class currently being lowered — the
     /// binding visible *inside* the class body (`class C {...}` -> `C`,
     /// `const K = class Named {...}` -> `Named`). Unlike `current_class`
