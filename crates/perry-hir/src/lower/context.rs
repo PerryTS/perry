@@ -185,6 +185,7 @@ impl LoweringContext {
             nested_generator_forward_referenced: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),
             proxy_locals: HashSet::new(),
+            proxy_local_ids: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
             wasm_instance_locals: HashSet::new(),
             plain_object_locals: HashSet::new(),
@@ -855,6 +856,35 @@ impl LoweringContext {
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<LocalId> {
         self.locals.lookup(name)
+    }
+
+    /// Record that `id` holds a proxy. Called from the declarator lowering once
+    /// the binding has a resolved `LocalId` and its initializer has lowered to
+    /// `Expr::ProxyNew` (#7775).
+    pub(crate) fn register_proxy_local(&mut self, id: LocalId) {
+        self.proxy_local_ids.insert(id);
+    }
+
+    /// Is a bare `name` at THIS point in the lowering a proxy receiver?
+    ///
+    /// #7775: the answer is keyed on the resolved binding, not the spelling.
+    /// `proxy_locals` is a module-wide, scope-blind name set — a `new Proxy`
+    /// bound to `a` in one function made every other function's `a.prop` lower
+    /// to `js_proxy_get`, which answers `undefined` on a non-proxy. Whenever the
+    /// receiver resolves to a local we consult `proxy_local_ids` instead, so a
+    /// same-named non-proxy binding is simply a different binding.
+    ///
+    /// KNOWN HOLE, stated plainly: a receiver that resolves to NO local (a bare
+    /// global, or a module-level binding referenced from a function body lowered
+    /// before that binding was pre-registered) still falls back to the name set,
+    /// and is still scope-blind. That arm is kept because dropping it would
+    /// regress genuine proxies reached through those paths; it is strictly no
+    /// worse than the pre-#7775 behaviour, which used it for everything.
+    pub(crate) fn is_proxy_local(&self, name: &str) -> bool {
+        match self.lookup_local(name) {
+            Some(id) => self.proxy_local_ids.contains(&id),
+            None => self.proxy_locals.contains(name),
+        }
     }
 
     /// Like `lookup_local`, but only searches locals defined in the CURRENT

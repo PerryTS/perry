@@ -882,7 +882,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     arg_present,
                 });
             }
-            if ctx.proxy_locals.contains(&class_name) {
+            if ctx.is_proxy_local(&class_name) {
                 let args = new_expr
                     .args
                     .as_ref()

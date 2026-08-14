@@ -111,7 +111,7 @@ pub(super) fn try_local_array_methods(
                 // gate (a proxy local is typed `Named("Proxy")`), but
                 // `reduce`/`forEach`/`join`/`sort`/`splice`/… did not — guard
                 // them all here, uniformly, by falling through.
-                if ctx.proxy_locals.contains(&arr_name) {
+                if ctx.is_proxy_local(&arr_name) {
                     return Ok(Err(args));
                 }
                 // Check that this is NOT a String type (Array, Set, Map are all OK)

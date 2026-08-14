@@ -105,9 +105,11 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                 //
                 // Deliberately narrow: only call/await initializers, which are
                 // the opaque ones. A literal, a member read or an identifier
-                // copy stays unpoisoned, so the common `const p = new Proxy(…)`
-                // in a module that also does `const p = { … }` elsewhere is
-                // untouched by this arm.
+                // copy stays unpoisoned. That narrowness no longer decides
+                // correctness — `is_proxy_local` keys on the resolved binding
+                // and only consults this name set for a receiver that resolves
+                // to no local — but poisoning an ambiguous name still narrows
+                // that fallback, so the arm stays.
                 poison.insert(ident.id.sym.to_string());
             } else if let ast::Expr::Member(member) = init_unwrapped {
                 // #1750: `const w = path.win32` / `const p = path.posix`.
@@ -368,6 +370,14 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         // back. A genuine proxy keeps working through the ordinary dynamic
         // property path (asserted in
         // `test-files/test_gap_proxy_local_name_collision_7775.ts`).
+        //
+        // This subtraction is now a second line of defence, not the fix: the
+        // set it edits is only the `is_proxy_local` fallback for receivers that
+        // resolve to no local. Poisoning cannot reach a mis-keyed receiver that
+        // DOES resolve, which is why every shape in that file's second half
+        // (a parameter, `const a: P[] = []`, an identifier copy, a `for…of`
+        // head, a destructured binding, an object literal) needed the
+        // binding-keyed check instead.
         ctx.proxy_locals.remove(name);
     }
 }
