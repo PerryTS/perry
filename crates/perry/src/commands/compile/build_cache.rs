@@ -135,8 +135,9 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        current_perry_fingerprint, file_fingerprint, file_fingerprint_from_str,
-        BUILD_CACHE_ENV_EXCLUSIONS, BUILD_CACHE_ENV_VARS,
+        absolute_identity, current_env, current_perry_fingerprint, file_fingerprint,
+        file_fingerprint_from_str, BuildCacheManifest, BuildCacheProbe, BUILD_CACHE_ENV_EXCLUSIONS,
+        BUILD_CACHE_ENV_VARS, BUILD_CACHE_MANIFEST_VERSION,
     };
 
     /// The build cache must compare against the compiler RUNNING NOW, not the
@@ -171,6 +172,79 @@ mod tests {
         assert_ne!(
             running, recorded,
             "a manifest written by a different compiler must not match"
+        );
+    }
+
+    /// The expression test above pins the two comparisons in isolation, but it
+    /// never calls `probe()` — reverting the production call site to the buggy
+    /// form leaves it green. This one drives the real decision path, so it is
+    /// the one that actually guards the fix.
+    ///
+    /// Verified by sabotage: restoring
+    /// `file_fingerprint_from_str(&manifest.perry_build_id.path)` at the call
+    /// site turns this red while the expression test stays green.
+    #[test]
+    fn a_foreign_build_id_misses_at_the_probe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("in.ts");
+        let output = dir.path().join("out.bin");
+        let manifest_path = dir.path().join("manifest.json");
+        std::fs::write(&input, b"export {}\n").expect("write input");
+        std::fs::write(&output, b"binary").expect("write output");
+
+        // A build id belonging to some other compiler: any real file that is
+        // not this executable. It is unchanged on disk, which is precisely the
+        // condition under which the old self-comparison passed.
+        let foreign = file_fingerprint(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+        )
+        .expect("fingerprint the foreign build id");
+        assert_ne!(
+            foreign,
+            current_perry_fingerprint().expect("fingerprint the running binary"),
+            "precondition: the manifest must claim a DIFFERENT compiler"
+        );
+
+        let manifest = BuildCacheManifest {
+            version: BUILD_CACHE_MANIFEST_VERSION,
+            perry_version: env!("CARGO_PKG_VERSION").to_string(),
+            perry_build_id: foreign,
+            args_key: "args".to_string(),
+            env: current_env(),
+            input_path: absolute_identity(&input),
+            output_path: absolute_identity(&output),
+            target: "native".to_string(),
+            compiled_features: Vec::new(),
+            sources: Vec::new(),
+            config_inputs: Vec::new(),
+            runtime_inputs: Vec::new(),
+            object_fingerprints: Vec::new(),
+            native_modules: 0,
+            js_modules: 0,
+            output: file_fingerprint(&output).expect("fingerprint output"),
+        };
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let probe = BuildCacheProbe {
+            args_key: "args".to_string(),
+            manifest_path,
+            output_path: output,
+            target_name: "native".to_string(),
+            input_path: input,
+            project_root: dir.path().to_path_buf(),
+            cache_root: dir.path().to_path_buf(),
+            eligible: Ok(()),
+        };
+
+        let stats = probe.probe();
+        assert!(!stats.hit, "a manifest from another compiler must not hit");
+        assert_eq!(
+            stats.reason, "perry-build-id",
+            "must miss on the build id specifically, not incidentally on a later check"
         );
     }
 
