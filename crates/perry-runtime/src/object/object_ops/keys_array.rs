@@ -160,6 +160,7 @@ mod tests {
 
     #[test]
     fn define_property_key_growth_does_not_mutate_a_shared_shape_sibling() {
+        let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let packed = b"";
             let first =

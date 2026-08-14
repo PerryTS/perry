@@ -19,7 +19,7 @@
 use perry_hir::Class;
 
 use crate::expr::FnCtx;
-use crate::types::{I1, I8, I32, I64, PTR};
+use crate::types::{I1, I32, I64, I8, PTR};
 
 /// Load the immutable ShapeId paired with a class's canonical keys global.
 ///
@@ -353,8 +353,10 @@ fn emit_instance_alloc_inner(
         // So the choice is per site, not global: a `new` inside a loop takes
         // the inline bump (it runs many times, and the size cost is bounded to
         // loop bodies); everything else keeps the outlined call and
-        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` still
-        // forces the inline form everywhere, for A/B measurement.
+        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` forces
+        // the inline form for A/B measurement only when the exact descriptor
+        // facts below admit raw inline allocation; missing or mismatched facts
+        // still use the outlined entry point.
         //
         // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
         // the inline path, because an empty string is `Some("")`.

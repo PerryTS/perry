@@ -428,12 +428,16 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
             return (*arr).length as usize;
         }
     }
-    let raw = js_array_length(arr) as usize;
-    if arr.is_null() {
-        raw
-    } else {
-        raw.min((*arr).capacity as usize)
+    // A forwarding stub overwrites the old payload's `(length, capacity)`
+    // words with the target address. Resolve once, then read BOTH facts from
+    // the live header; mixing a resolved length with the stale from-space
+    // capacity can truncate an otherwise exact shape count.
+    let live = clean_arr_ptr(arr);
+    if live.is_null() {
+        return js_array_length(arr) as usize;
     }
+    let raw = js_array_length(live) as usize;
+    raw.min((*live).capacity as usize)
 }
 
 /// Read slot `index` of a dense internal keys/property array.

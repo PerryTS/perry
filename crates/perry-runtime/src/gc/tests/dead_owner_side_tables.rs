@@ -1066,6 +1066,80 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     js_shadow_slot_set(1, 0);
 }
 
+/// #8074 review: a forwarded array's from-space payload contains its forwarding
+/// address, not a usable `(length, capacity)` pair. Descriptor fact capture
+/// must resolve both values from the live array or the stale capacity word can
+/// truncate the logical count and make an immediate header rewrite fail closed.
+#[test]
+fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+
+    let old_keys = unsafe { alloc_nursery_test_array() };
+    let live_keys = unsafe { alloc_nursery_test_array() };
+    // `set_forwarding_address` stores this pointer over the old length/capacity
+    // pair. Pick a logical count one above the resulting stale capacity word,
+    // so the pre-fix mixed old/new read deterministically truncates it.
+    let stale_capacity = ((live_keys as u64) >> 32) as u32;
+    let logical_key_count = stale_capacity
+        .checked_add(1)
+        .expect("tracked array address unexpectedly fills the high u32");
+    unsafe {
+        (*old_keys).length = logical_key_count;
+        (*old_keys).capacity = logical_key_count;
+        (*live_keys).length = logical_key_count;
+        (*live_keys).capacity = logical_key_count;
+    }
+    let id = crate::object::shapes::shape_descriptor_ensure(old_keys, logical_key_count, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        (*owner).keys_array = old_keys;
+        (*owner).parent_class_id = id;
+    }
+
+    let old_header = unsafe { header_from_user_ptr(old_keys.cast()) } as *mut GcHeader;
+    let old_flags = unsafe { (*old_header).gc_flags };
+    let old_payload = unsafe { *(old_keys as *const u64) };
+    unsafe {
+        set_forwarding_address(old_header, live_keys.cast());
+        assert_eq!((*old_keys).capacity, stale_capacity);
+        assert!(
+            (*old_keys).capacity < logical_key_count,
+            "test premise: the stale capacity must truncate the live count"
+        );
+    }
+
+    let owner_header = unsafe { header_from_user_ptr(owner.cast()) } as *mut GcHeader;
+    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    let mut rewritten = 0usize;
+    unsafe {
+        visit_gc_layout_slot_descriptors(owner_header, &mut |descriptor| {
+            descriptor.visit_slots(&mut |slot| {
+                if slot.slot == header_keys_slot {
+                    *slot.slot = live_keys as u64;
+                    rewritten += 1;
+                }
+            });
+        });
+    }
+    assert_eq!(
+        rewritten, 1,
+        "the authoritative header edge must be rewritten once"
+    );
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("rewritten live descriptor disappeared");
+    assert_eq!(descriptor.keys, live_keys as u64);
+    assert_eq!(descriptor.logical_key_count, logical_key_count);
+    assert_eq!(descriptor.live_inline_slot_count, 0);
+
+    unsafe {
+        *(old_keys as *mut u64) = old_payload;
+        (*old_header).gc_flags = old_flags;
+    }
+    crate::object::shapes::test_clear_shape_table();
+}
+
 /// #8067 release fail-closed guard: descriptor fact capture must classify the
 /// keys word before reading ArrayHeader fields. A live GC_TYPE_OBJECT can
 /// carry a corrupt header edge and a real ShapeId at the same time; the
@@ -1096,6 +1170,11 @@ fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
         Some(1),
         "only the authoritative corrupt header slot may be enumerated"
     );
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("invalid header facts must not retire the unrelated descriptor");
+    assert_eq!(descriptor.keys, valid_keys as u64);
+    assert_eq!(descriptor.logical_key_count, 0);
+    assert_eq!(descriptor.live_inline_slot_count, 0);
 
     js_shadow_slot_set(0, 0);
     crate::object::shapes::test_drop_shape_descriptors(valid_keys as usize);
@@ -1109,15 +1188,19 @@ fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
 fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation() {
     let _guard = GcTestIsolationGuard::new();
     crate::object::shapes::test_clear_shape_table();
+    let frame = js_shadow_frame_push(1);
 
-    let keys = unsafe { alloc_nursery_test_array() };
-    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+    let keys_before = unsafe { alloc_nursery_test_array() };
+    js_shadow_slot_set(0, ptr_bits(keys_before as usize));
+    let id = crate::object::shapes::shape_descriptor_ensure(keys_before, 0, 0)
         .expect("shape range unexpectedly exhausted");
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let keys = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
     unsafe {
         (*owner).keys_array = keys;
         (*owner).parent_class_id = id;
     }
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
     let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)
         .expect("tracked object must have a rewrite descriptor");
     let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
@@ -1132,12 +1215,17 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
         crate::object::shapes::shape_descriptor_ensure(fake_keys as *const _, 0, 0)
             .expect("shape range unexpectedly exhausted during reallocation fixture");
     }
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let slots_after = crate::gc::test_gc_rewrite_slot_addresses(owner_after as usize)
+        .expect("rooted object must remain enumerable after table growth");
     assert_eq!(
-        unsafe { *header_keys_slot },
-        keys as u64,
-        "saved authoritative header slot did not survive descriptor-table growth"
+        slots_after,
+        vec![header_keys_slot as usize],
+        "descriptor-table growth changed the stable authoritative slot address"
     );
 
+    js_shadow_slot_set(0, 0);
+    js_shadow_frame_pop(frame);
     crate::object::shapes::test_clear_shape_table();
 }
 

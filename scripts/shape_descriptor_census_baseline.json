@@ -81,10 +81,11 @@
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 1,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|(*owner).keys_array = corrupt_keys as *mut crate::array::ArrayHeader;": 1,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|(*owner).keys_array = keys;": 1,
+    "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|(*owner).keys_array = old_keys;": 1,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|assert_eq!((*a_after).keys_array, (*b_after).keys_array);": 2,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|assert_eq!(descriptor.keys, (*a_after).keys_array as u64);": 1,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|assert_ne!((*a_after).keys_array as usize, old_keys);": 1,
-    "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };": 1,
+    "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };": 2,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|object_type|access|(*obj).object_type = 1;": 1,
     "crates/perry-runtime/src/gc/tests/layout_trace/typed_shape.rs|field_count|access|assert_eq!((*obj).field_count, 2);": 1,
     "crates/perry-runtime/src/gc/tests/layout_trace/typed_shape.rs|keys_array|access|(*first).keys_array,": 1,
@@ -360,7 +361,7 @@
     "raw_member_files": 104,
     "raw_member_sites": {
       "field_count": 165,
-      "keys_array": 193,
+      "keys_array": 195,
       "object_type": 54
     }
   }

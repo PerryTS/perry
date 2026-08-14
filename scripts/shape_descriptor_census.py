@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -39,9 +40,9 @@ def strip_rust_comments_and_literals(source: str) -> str:
     pos = 0
     while match := RUST_SPECIAL.search(source, pos):
         chunks.append(source[pos : match.start()])
-        token = match.group()
+        lexeme = match.group()
         end = match.end()
-        if token == "//":
+        if lexeme == "//":
             newline = source.find("\n", end)
             if newline < 0:
                 chunks.append(" ")
@@ -50,7 +51,7 @@ def strip_rust_comments_and_literals(source: str) -> str:
             chunks.append("\n")
             pos = newline + 1
             continue
-        if token == "/*":
+        if lexeme == "/*":
             depth = 1
             cursor = end
             while depth and (mark := BLOCK_COMMENT_MARK.search(source, cursor)):
@@ -58,8 +59,8 @@ def strip_rust_comments_and_literals(source: str) -> str:
                 cursor = mark.end()
             end = cursor if depth == 0 else len(source)
         else:
-            raw = RAW_STRING_START.fullmatch(token)
-            if token.endswith("'"):
+            raw = RAW_STRING_START.fullmatch(lexeme)
+            if lexeme.endswith("'"):
                 end = match.end()
             elif raw:
                 terminator = '"' + raw.group("hashes")
@@ -190,6 +191,11 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/gc/layout_slot_visit.rs",
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs",
     )
+    missing = [path for path in authority_paths if path not in sources]
+    if missing:
+        raise CensusError(
+            "shape descriptor authority source missing: " + ", ".join(missing)
+        )
     clean = stripped_sources({path: sources[path] for path in authority_paths})
     shapes = clean["crates/perry-runtime/src/object/shapes.rs"]
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
@@ -258,6 +264,14 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "(*obj).parent_class_id = id",
         "descriptor before ObjectHeader ShapeId",
     )
+    retirement = function_body(shapes, "retire_key_count_versions")
+    require_code(
+        retirement,
+        r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",
+        "keys-scoped descriptor retirement index",
+    )
+    if re.search(r"descriptors\s*\.\s*(?:iter|values|keys)\s*\(", retirement):
+        raise CensusError("shape descriptor retirement scans the global descriptor table")
     for name in ("shape_keys_grown", "shape_drop"):
         if "descriptors.remove" in function_body(shapes, name):
             raise CensusError(f"{name} eagerly deletes a sibling descriptor")
@@ -292,20 +306,7 @@ def swap_once(source: str, left: str, right: str) -> str:
     ).replace(marker_right, left, 1)
 
 
-def swap_last_once(source: str, left: str, right: str) -> str:
-    left_at = source.rfind(left)
-    right_at = source.rfind(right)
-    if left_at < 0 or right_at < 0:
-        raise CensusError(f"sabotage fixture missing: {left!r} / {right!r}")
-    marker_left = "__CENSUS_SWAP_LAST_LEFT__"
-    marker_right = "__CENSUS_SWAP_LAST_RIGHT__"
-    source = source[:left_at] + marker_left + source[left_at + len(left) :]
-    right_at = source.rfind(right)
-    source = source[:right_at] + marker_right + source[right_at + len(right) :]
-    return source.replace(marker_left, right, 1).replace(marker_right, left, 1)
-
-
-def expect_rejected(label: str, check: callable) -> None:
+def expect_rejected(label: str, check: Callable[[], None]) -> None:
     try:
         check()
     except CensusError:
@@ -314,6 +315,13 @@ def expect_rejected(label: str, check: callable) -> None:
 
 
 def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object]) -> None:
+    missing_authority = dict(sources)
+    missing_authority.pop("crates/perry-runtime/src/object/shapes.rs")
+    expect_rejected(
+        "missing authority source",
+        lambda: assert_authority_surfaces(missing_authority),
+    )
+
     raw_mutation = dict(sources)
     path = "crates/perry-runtime/src/object/mod.rs"
     raw_mutation[path] += "\nunsafe fn census_sabotage(o: *mut ObjectHeader) { (*o).keys_array = core::ptr::null_mut(); }\n"
@@ -358,14 +366,48 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
-    inverted_publication[path] = swap_last_once(
-        inverted_publication[path],
+    publication_body = function_body(
+        inverted_publication[path], "synchronize_object_shape_descriptor"
+    )
+    inverted_body = swap_once(
+        publication_body,
         "shape_descriptor_ensure(keys, key_count, (*obj).field_count)",
         "(*obj).parent_class_id = id",
+    )
+    inverted_publication[path] = inverted_publication[path].replace(
+        publication_body, inverted_body, 1
     )
     expect_rejected(
         "ObjectHeader id before descriptor publication",
         lambda: assert_authority_surfaces(inverted_publication),
+    )
+
+    unscoped_retirement = dict(sources)
+    path = "crates/perry-runtime/src/object/shapes.rs"
+    retirement_body = function_body(
+        unscoped_retirement[path], "retire_key_count_versions"
+    )
+    unscoped_body, substitutions = re.subn(
+        r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",
+        "ids_by_keys.get(&keys).cloned()",
+        retirement_body,
+        count=1,
+    )
+    if substitutions != 1:
+        raise CensusError("descriptor retirement sabotage fixture missing")
+    unscoped_retirement[path] = unscoped_retirement[path].replace(
+        retirement_body, unscoped_body, 1
+    )
+    expect_rejected(
+        "descriptor retirement without keys index",
+        lambda: assert_authority_surfaces(unscoped_retirement),
+    )
+
+    stale_summary = json.loads(json.dumps(baseline))
+    stale_summary["summary"]["raw_member_files"] += 1
+    expect_rejected(
+        "stale baseline summary",
+        lambda: compare_exact_census(observed_census(sources), stale_summary),
     )
 
 
@@ -373,10 +415,15 @@ def compare_exact_census(observed: dict[str, object], baseline: dict[str, object
     for key in (
         "raw_member_callsite_multiset",
         "codegen_object_header_size_callsite_multiset",
+        "summary",
     ):
         actual = observed.get(key)
         expected = baseline.get(key)
         if actual != expected:
+            if key == "summary":
+                raise CensusError(
+                    f"exact shape census summary changed; actual={actual}, expected={expected}"
+                )
             actual_counter = Counter(actual or {})
             expected_counter = Counter(expected or {})
             added = list((actual_counter - expected_counter).items())[:8]

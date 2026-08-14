@@ -60,6 +60,10 @@ struct ShapeTableInner {
     indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
     descriptors: HashMap<u32, ShapeDescriptor>,
     ids_by_facts: HashMap<ShapeFacts, u32>,
+    /// Keys-array address -> every descriptor id that currently names it.
+    /// Same-address key-count retirement uses this index instead of scanning
+    /// every shape ever observed by the agent.
+    ids_by_keys: HashMap<u64, Vec<u32>>,
 }
 
 pub(crate) struct ShapeTable {
@@ -73,9 +77,42 @@ impl ShapeTable {
                 indices: crate::fast_hash::new_ptr_hash_map(),
                 descriptors: HashMap::new(),
                 ids_by_facts: HashMap::new(),
+                ids_by_keys: HashMap::new(),
             }),
         }
     }
+}
+
+#[inline]
+fn descriptor_facts(descriptor: ShapeDescriptor) -> ShapeFacts {
+    ShapeFacts {
+        keys: descriptor.keys,
+        logical_key_count: descriptor.logical_key_count,
+        live_inline_slot_count: descriptor.live_inline_slot_count,
+    }
+}
+
+fn remove_id_from_keys_index(inner: &mut ShapeTableInner, keys: u64, id: u32) {
+    let remove_entry = if let Some(ids) = inner.ids_by_keys.get_mut(&keys) {
+        ids.retain(|&candidate| candidate != id);
+        ids.is_empty()
+    } else {
+        false
+    };
+    if remove_entry {
+        inner.ids_by_keys.remove(&keys);
+    }
+}
+
+fn rebuild_descriptor_reverse_indices(inner: &mut ShapeTableInner) {
+    let mut ids_by_facts = HashMap::with_capacity(inner.descriptors.len());
+    let mut ids_by_keys: HashMap<u64, Vec<u32>> = HashMap::new();
+    for (&id, &descriptor) in &inner.descriptors {
+        ids_by_facts.insert(descriptor_facts(descriptor), id);
+        ids_by_keys.entry(descriptor.keys).or_default().push(id);
+    }
+    inner.ids_by_facts = ids_by_facts;
+    inner.ids_by_keys = ids_by_keys;
 }
 
 /// #6759 C3c: ShapeIds live in their own u32 range, disjoint from every
@@ -177,6 +214,7 @@ pub(crate) fn shape_descriptor_ensure(
     // complete descriptor.
     inner.descriptors.insert(id, descriptor);
     inner.ids_by_facts.insert(facts, id);
+    inner.ids_by_keys.entry(facts.keys).or_default().push(id);
     Ok(id)
 }
 
@@ -262,7 +300,11 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 #[inline]
 pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
     let word = (*obj).parent_class_id;
-    if is_shape_id(word) { word } else { 0 }
+    if is_shape_id(word) {
+        word
+    } else {
+        0
+    }
 }
 
 /// Stamp `obj` with the exact ShapeId of `keys`, minting the descriptor on
@@ -358,10 +400,16 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor(
     let old_id = object_shape_stamp(obj);
     if let Some(old) = shape_descriptor_by_id(old_id) {
         if old.keys == keys as u64 && old.logical_key_count != key_count {
-            let gc =
-                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let shared = (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
-                && (*gc).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
+            let Some(gc) = crate::value::addr_class::try_read_tracked_gc_header(keys as usize)
+            else {
+                clear_object_shape_stamp(obj);
+                return 0;
+            };
+            if (*gc.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+                clear_object_shape_stamp(obj);
+                return 0;
+            }
+            let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
             debug_assert!(
                 !shared,
                 "shared keys array mutated in place under an immutable ShapeId"
@@ -385,21 +433,32 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor(
 
 fn retire_key_count_versions(keys: u64, current_key_count: u32) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let stale: Vec<u32> = inner
-        .descriptors
-        .iter()
-        .filter_map(|(&id, d)| {
-            (d.keys == keys && d.logical_key_count != current_key_count).then_some(id)
-        })
-        .collect();
-    for id in stale {
-        if let Some(d) = inner.descriptors.remove(&id) {
-            inner.ids_by_facts.remove(&ShapeFacts {
-                keys: d.keys,
-                logical_key_count: d.logical_key_count,
-                live_inline_slot_count: d.live_inline_slot_count,
-            });
+    let Some(ids) = inner.ids_by_keys.remove(&keys) else {
+        return;
+    };
+    let mut current_ids = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(descriptor) = inner.descriptors.get(&id).copied() else {
+            continue;
+        };
+        debug_assert_eq!(
+            descriptor.keys, keys,
+            "keys index contains a foreign descriptor"
+        );
+        if descriptor.keys != keys {
+            let correct_ids = inner.ids_by_keys.entry(descriptor.keys).or_default();
+            if !correct_ids.contains(&id) {
+                correct_ids.push(id);
+            }
+        } else if descriptor.logical_key_count != current_key_count {
+            inner.descriptors.remove(&id);
+            inner.ids_by_facts.remove(&descriptor_facts(descriptor));
+        } else {
+            current_ids.push(id);
         }
+    }
+    if !current_ids.is_empty() {
+        inner.ids_by_keys.insert(keys, current_ids);
     }
 }
 
@@ -451,37 +510,37 @@ pub(crate) unsafe fn synchronize_live_object_shape_descriptor_after_header_visit
     }
 
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let Some(descriptor) = inner.descriptors.get_mut(&shape_id) else {
-        // A foreign-agent/stale id fails closed; the authoritative header edge
-        // is still traced by the caller.
-        return false;
-    };
-    // Release-mode fail-closed gate. An id hit is insufficient: a foreign or
-    // stale id must never cause an unrelated descriptor pointer to be
-    // rekeyed. `new_header_keys` may differ after evacuation; a sibling
-    // may also have rewritten the shared descriptor before this object runs.
-    if descriptor.logical_key_count != logical_key_count
-        || descriptor.live_inline_slot_count != live_inline_slot_count
-        || (descriptor.keys != old_header_keys && descriptor.keys != new_header_keys)
-    {
-        return false;
-    }
-    let old_facts = ShapeFacts {
-        keys: descriptor.keys,
-        logical_key_count: descriptor.logical_key_count,
-        live_inline_slot_count: descriptor.live_inline_slot_count,
-    };
-    if descriptor.keys == old_header_keys && new_header_keys != old_header_keys {
-        descriptor.keys = new_header_keys;
-    }
-    let new_facts = ShapeFacts {
-        keys: descriptor.keys,
-        logical_key_count: descriptor.logical_key_count,
-        live_inline_slot_count: descriptor.live_inline_slot_count,
+    let (old_facts, new_facts) = {
+        let Some(descriptor) = inner.descriptors.get_mut(&shape_id) else {
+            // A foreign-agent/stale id fails closed; the authoritative header
+            // edge is still traced by the caller.
+            return false;
+        };
+        // Release-mode fail-closed gate. An id hit is insufficient: a foreign
+        // or stale id must never cause an unrelated descriptor pointer to be
+        // rekeyed. `new_header_keys` may differ after evacuation; a sibling
+        // may also have rewritten the shared descriptor before this object.
+        if descriptor.logical_key_count != logical_key_count
+            || descriptor.live_inline_slot_count != live_inline_slot_count
+            || (descriptor.keys != old_header_keys && descriptor.keys != new_header_keys)
+        {
+            return false;
+        }
+        let old_facts = descriptor_facts(*descriptor);
+        if descriptor.keys == old_header_keys && new_header_keys != old_header_keys {
+            descriptor.keys = new_header_keys;
+        }
+        (old_facts, descriptor_facts(*descriptor))
     };
     if new_facts != old_facts {
         inner.ids_by_facts.remove(&old_facts);
         inner.ids_by_facts.insert(new_facts, shape_id);
+        remove_id_from_keys_index(&mut inner, old_facts.keys, shape_id);
+        inner
+            .ids_by_keys
+            .entry(new_facts.keys)
+            .or_default()
+            .push(shape_id);
     }
     true
 }
@@ -654,23 +713,9 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
         }
         // Rebuild rather than removing by current facts one-at-a-time. A
         // deferred live-object rewrite may have changed the by-id pointer
-        // before the metadata scanner repaired the reverse accelerator; a
-        // rebuild cannot leave such an old-facts entry resolving to a retired
-        // id.
-        inner.ids_by_facts = inner
-            .descriptors
-            .iter()
-            .map(|(&id, descriptor)| {
-                (
-                    ShapeFacts {
-                        keys: descriptor.keys,
-                        logical_key_count: descriptor.logical_key_count,
-                        live_inline_slot_count: descriptor.live_inline_slot_count,
-                    },
-                    id,
-                )
-            })
-            .collect();
+        // before the metadata scanner repaired the reverse accelerators; a
+        // rebuild cannot retain either an old-facts or old-keys entry.
+        rebuild_descriptor_reverse_indices(&mut inner);
     }
 }
 
@@ -692,21 +737,7 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
     // move: an immediate live-object header callback may already have rekeyed
     // a shared descriptor, while a deferred callback relies on this pass.
     if descriptor_moved || visitor.is_metadata_rewrite_phase() {
-        let ids_by_facts = inner
-            .descriptors
-            .iter()
-            .map(|(&id, d)| {
-                (
-                    ShapeFacts {
-                        keys: d.keys,
-                        logical_key_count: d.logical_key_count,
-                        live_inline_slot_count: d.live_inline_slot_count,
-                    },
-                    id,
-                )
-            })
-            .collect();
-        inner.ids_by_facts = ids_by_facts;
+        rebuild_descriptor_reverse_indices(&mut inner);
     }
 
     if !visitor.is_metadata_rewrite_phase() || inner.indices.is_empty() {
@@ -755,23 +786,19 @@ pub(crate) fn test_clear_shape_table() {
     inner.indices.clear();
     inner.descriptors.clear();
     inner.ids_by_facts.clear();
+    inner.ids_by_keys.clear();
 }
 
 #[cfg(test)]
 pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let stale: Vec<u32> = inner
-        .descriptors
-        .iter()
-        .filter_map(|(&id, descriptor)| (descriptor.keys == keys_id as u64).then_some(id))
-        .collect();
+    let stale = inner
+        .ids_by_keys
+        .remove(&(keys_id as u64))
+        .unwrap_or_default();
     for id in stale {
         if let Some(descriptor) = inner.descriptors.remove(&id) {
-            inner.ids_by_facts.remove(&ShapeFacts {
-                keys: descriptor.keys,
-                logical_key_count: descriptor.logical_key_count,
-                live_inline_slot_count: descriptor.live_inline_slot_count,
-            });
+            inner.ids_by_facts.remove(&descriptor_facts(descriptor));
         }
     }
 }
@@ -798,9 +825,9 @@ pub(crate) fn test_seed_shape_entry(keys_id: usize) {
 pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
     let inner = crate::state::state().shapes.inner.borrow();
     inner
-        .descriptors
-        .iter()
-        .find_map(|(&id, d)| (d.keys == keys_id as u64).then_some(id))
+        .ids_by_keys
+        .get(&(keys_id as u64))
+        .and_then(|ids| ids.first().copied())
 }
 
 #[cfg(test)]
@@ -1101,6 +1128,43 @@ mod descriptor_tests_8067 {
         });
         assert_eq!(shape_descriptor_by_id(id).unwrap().keys, moved_keys);
         test_drop_shape_descriptors(moved_keys as usize);
+        assert_eq!(
+            shape_descriptor_by_id(id),
+            None,
+            "descriptor rekey did not update the keys-address index"
+        );
+    }
+
+    #[test]
+    fn key_count_retirement_is_scoped_to_one_keys_identity() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = 0x8067_0000_0000_2100usize;
+        let unrelated_keys = 0x8067_0000_0000_2200usize;
+        let stale_a = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
+            .expect("shape range unexpectedly exhausted");
+        let stale_b = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 2)
+            .expect("shape range unexpectedly exhausted");
+        let current = shape_descriptor_ensure(keys as *const ArrayHeader, 2, 2)
+            .expect("shape range unexpectedly exhausted");
+        let unrelated = shape_descriptor_ensure(unrelated_keys as *const ArrayHeader, 1, 1)
+            .expect("shape range unexpectedly exhausted");
+
+        retire_key_count_versions(keys as u64, 2);
+
+        assert_eq!(shape_descriptor_by_id(stale_a), None);
+        assert_eq!(shape_descriptor_by_id(stale_b), None);
+        assert!(shape_descriptor_by_id(current).is_some());
+        assert!(shape_descriptor_by_id(unrelated).is_some());
+        let inner = crate::state::state().shapes.inner.borrow();
+        let current_ids = inner
+            .ids_by_keys
+            .get(&(keys as u64))
+            .expect("current keys identity disappeared from retirement index");
+        assert_eq!(current_ids.as_slice(), &[current]);
+        drop(inner);
+
+        test_drop_shape_descriptors(keys);
+        test_drop_shape_descriptors(unrelated_keys);
     }
 
     #[test]

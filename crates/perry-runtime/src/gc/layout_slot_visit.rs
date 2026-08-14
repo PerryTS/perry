@@ -65,13 +65,18 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     // header and was excluded while capturing the facts above.
     if let Some((obj, old_keys, logical_key_count, live_inline_slot_count)) = object_shape_facts {
         let new_keys = (*obj).keys_array as u64;
-        crate::object::shapes::synchronize_live_object_shape_descriptor_after_header_visit(
-            obj,
-            old_keys,
-            new_keys,
-            logical_key_count,
-            live_inline_slot_count,
-        );
+        // Mark, verify, and deferred dirty scans leave the header edge
+        // unchanged. Only a copying rewrite needs to borrow and update the
+        // weak descriptor table.
+        if new_keys != old_keys {
+            crate::object::shapes::synchronize_live_object_shape_descriptor_after_header_visit(
+                obj,
+                old_keys,
+                new_keys,
+                logical_key_count,
+                live_inline_slot_count,
+            );
+        }
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));

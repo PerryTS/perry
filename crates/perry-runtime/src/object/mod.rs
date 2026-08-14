@@ -1681,7 +1681,9 @@ pub struct ObjectHeader {
     pub object_type: u32,
     /// Class ID for this object (used for instanceof, vtable lookup)
     pub class_id: u32,
-    /// Parent class ID for inheritance chain (0 if no parent)
+    /// Compatibility word: the parent class ID during allocation, then the
+    /// runtime `ShapeId` after shape stamping. Parent lookup must use the class
+    /// registry; direct reads of this word are not authoritative parent data.
     pub parent_class_id: u32,
     /// Number of fields in this object
     pub field_count: u32,
