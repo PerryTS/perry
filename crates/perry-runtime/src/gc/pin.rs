@@ -373,6 +373,14 @@ pub(super) fn pinned_young_move_report(
         "  copying walk phase: {}\n",
         copying_walk_phase().unwrap_or("(unset — not inside a named walk)")
     ));
+    // The collection is at a safepoint in the mutator. The frames below the
+    // copier name the compiled function whose statepoint live bundle (or
+    // shadow slot) held the stale pointer — #7803's missing owner.
+    out.push_str("  --- mutator backtrace at the latch ---\n");
+    out.push_str(&format!(
+        "{}\n  --- end mutator backtrace ---\n",
+        std::backtrace::Backtrace::force_capture()
+    ));
     if flags & super::types::GC_FLAG_TENURED != 0 {
         out.push_str(
             "  note: GC_FLAG_TENURED next to a young space is NOT an anomaly. The \

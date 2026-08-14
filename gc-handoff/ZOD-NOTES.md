@@ -1881,3 +1881,19 @@ module globals — not a named runtime scanner, not the remembered set, not
 the worklist drain. The stale pointer is in a slot the collector already
 believes is a root. Next cut: which of the three kinds
 (`shadow_stack` / `native_stack` / `global_root`).
+
+### Seed 3 on the kind-split binary: `mutable_root_slots/native_stack`
+
+`/tmp/zod-kind`, same knobs, abort 134:
+
+```
+copying walk phase: mutable_root_slots/native_stack
+safepoints=6795 scheduled_collections=701
+INCONSISTENT — INTERNED on a map
+```
+
+The stale pointer is in an **RS4GC statepoint live bundle** — a compiled
+frame the collector already treats as a root. That is why `--debug-symbols`
+suppresses (different register allocation / stack maps) and why four
+runtime-side rooting fixes did not. The latch now also dumps a mutator
+backtrace so the next abort names the function.
