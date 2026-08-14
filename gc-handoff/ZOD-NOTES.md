@@ -2163,3 +2163,52 @@ Standing evidence after the retraction:
 * the remembered-set reorder (ab558bf5e) keeps its soundness rationale
   (drain promotions genuinely postdate the old rebuild point) but has no
   dynamic evidence attached anymore.
+
+## 39. NAMED AND FIXED: the compact GC map collapsed RS4GC (base, derived) pairs — for-of cursors were unrewritable
+
+The latch identification dump (one seed-3 run) ended the hunt:
+
+```
+native root slot: owner=…schemas_ts__138 reg=31 offset=40
+                  raw_bits=0x7ffd_0529_988c_0508          ← boxed POINTER_TAG
+ENCLOSING live object: user=0x529988c0458 obj_type=1 (array) size=424
+                  — the followed address is +176 INTO it
+```
+
+The slot held a **boxed interior pointer**: the address of ELEMENT 21's slot
+of a live 52-element array of strings (the schema keys array). The seed-5
+abort was the same species from another observation point — the
+implicit-this CELL holding a one-past-end cursor (`&elements[len]`), landing
+in the bytes of the generated fastpass source string. Every "garbage header"
+this bug ever produced (INTERNED-on-map, 0x7FFF/0x7FFD sizes tracking the
+heap base) was the walker reading ARRAY ELEMENT WORDS at `interior - 8` as a
+GcHeader.
+
+**Root cause**: `perry-codegen/src/gc_map.rs`'s compact format was built on
+the stated premise "Perry has no interior pointers" and collapsed every
+statepoint (base, derived) pair to one slot. The premise is false: the RS4GC
+prelude (`mem2reg,sccp`) hoists for-of element GEPs into values live across
+the poll, recorded by LLVM as DERIVED pointers. With the pairing gone:
+1. the walker chased `&elements[i]` as an object start — the pin-latch
+   aborts (a DIAGNOSTIC misfire, the heap was fine at that instant);
+2. on a cycle that moved the array, the cursor slot was never rewritten as
+   `base' + delta` — the dangling cursor whose deref is `parse.ts:65`.
+
+Why every prior signature fits: shadow-stack era re-derived cursors per
+iteration (class born at #7370's statepoint default); `--debug-symbols`
+changes regalloc (cursor lives in a register, not a slot); the quarantine
+changes which bytes sit at the misread address (detection lottery, fixed
+schedule ordinal per seed); jitless never runs the fastpass corridor's key
+loops; and all six earlier fixes were runtime/codegen-side while the defect
+sits between the emitter and the walker.
+
+**Fix (gc_map v4 + walker)**: records keep `(base_index, reg, offset)`
+derived entries; the walkers exclude derived slots from the visited-root set
+and rewrite each as `new_base + (old_derived - old_base)` after its base,
+preserving the slot's stored form. All three walkers (Itanium, fp-chain,
+Windows). Version-gated both sides, fail-closed.
+
+Validation pending at the time of writing: seed 2/3/5 flip on the v4 binary
+(pre-fix arms: seed 3 = 2/2 abort, seed 2 = 2/3, seed 5 = 1/1 on the same
+tree minus the fix), full gap suite (the map change touches every compiled
+binary), perry-codegen + perry-runtime suites.
