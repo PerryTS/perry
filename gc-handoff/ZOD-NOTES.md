@@ -1536,3 +1536,75 @@ top of it. A run is now in flight (~10× the collections, so budget an hour).
 If it makes the failure deterministic, every A/B above becomes a single run
 instead of forty, and the four under-powered conclusions can be settled
 properly rather than hedged.
+
+## 31. The unpaced schedule works, and it inverts the picture
+
+`PERRY_GC_SCHEDULE_ALLOC_KB=0` (task-list item #3, unused until now), seed 1,
+rate 1, quarantine off:
+
+```
+[gc-schedule] done: seed=1 safepoints=63941 scheduled_collections=63941
+              polls_paced=0 copying_minors=63941 moved_objects=892662
+              loop_polls=63936
+```
+
+* `polls_paced=0` — the allocation pacing is gone, which was the point;
+* `safepoints=63941` = `loop_polls` (63,936) + 5 event-loop boundaries, so the
+  candidate set is now the ONE quantity §1 measured as stable across runs;
+* **63,941 collections** against ~6,840 paced: 9.4× the collection pressure.
+
+**And it passed.** That is the opposite of what more collection pressure is
+supposed to do to a rooting bug, and it is now the third independent
+observation of the same shape:
+
+| configuration | collections | failure rate |
+|---|---|---|
+| paced (default 4 KB) | ~6,840 | ~30–50% |
+| interpreter safepoints on (§23) | ~2× more candidates | 2/8 vs 6/8 |
+| **unpaced (`ALLOC_KB=0`)** | **63,941 (9.4×)** | passed seed 1 |
+
+**More collections make this bug LESS likely, consistently.** A value held
+unrooted across a collection point should get *more* dangerous as collections
+get denser; this gets safer. Four rooting fixes changing nothing fits the same
+story.
+
+### The hypothesis that predicts all of it
+
+`moved_objects` barely moved: 892,662 unpaced against ~862,000 paced, despite
+9.4× the cycles. So the extra collections are not relocating extra objects —
+they are relocating the same population *earlier*. Perry promotes a nursery
+survivor after **2 minor cycles** (two-bit aging, `HAS_SURVIVED` / `TENURED`),
+and old-gen objects are not moved by a minor.
+
+Dense collections therefore **promote objects out of the evacuating nursery
+sooner**, so any given object is evacuated FEWER times. If the defect needs an
+object to be relocated while some stale reference to it exists, then:
+
+* denser collections → earlier promotion → fewer relocations → safer ✓
+* the quarantine → retired pages held → the stale read finds the intact
+  original → safer ✓ (§16)
+* `--debug-symbols` → different layout → different reuse → safer ✓ (§13)
+* rooting fixes → do not change WHEN an object is promoted → no effect ✓
+
+That is the first hypothesis in this session that accounts for every
+observation rather than most of them. It points at **promotion / tenuring and
+the evacuation policy** (`gc/copying.rs`, the C4b policy, `HAS_SURVIVED` /
+`TENURED` transitions) rather than at anyone's root set.
+
+### The concrete next experiment
+
+Test the promotion boundary directly rather than the schedule:
+
+1. force immediate promotion (promote on the FIRST minor rather than the
+   second) — the hypothesis predicts the failure disappears;
+2. suppress promotion (never tenure) so everything is evacuated every cycle —
+   the hypothesis predicts the failure gets much worse, ideally deterministic;
+3. if (2) makes it reliable, that IS the reproducer this session lacked, and
+   the bug is then a stale reference to an object across an EVACUATION, which
+   `PERRY_GC_VERIFY_EVACUATION=1` and `PERRY_GC_FROMSPACE_SCAN=1` are both
+   built to catch — and both have been unusable so far only because the
+   failure was too rare to catch in the act.
+
+Determinism of the unpaced config is being re-checked (a second seed-1 run,
+comparing `safepoints`/`moved_objects` exactly); if it replays, every A/B in
+this note becomes one run per arm instead of forty.
