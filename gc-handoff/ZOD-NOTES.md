@@ -1400,3 +1400,38 @@ keyed on an address, rather than a value on anyone's stack. CLAUDE.md names
 that class and says the static checker cannot see it; the registry to audit is
 `gc_register_mutable_root_scanner`'s ~123 entries, and the ones reached only
 from the interpreted-dispatch path are the short list.
+
+## 28. Gap suite (partial, quiet host): no regressions, plus one pre-existing suite defect
+
+Re-run once the box dropped to load ~13. Through test 68/554, three failures,
+**none of them a regression**:
+
+| test | verdict |
+|---|---|
+| `test_gap_2159_defineproperty_class_prototype` | in `known_failures.json` |
+| `test_gap_2514_settracesigint` | in `known_failures.json` |
+| `test_gap_4510_enum_forward_ref` | **NOT a regression — see below** |
+
+`test_gap_4510_enum_forward_ref` fails with `Node exit: 1, Perry exit: 0`:
+Perry prints the correct `fwd: B` and **Node cannot run the file at all** —
+`--experimental-strip-types` rejects `enum`, which is not erasable syntax.
+Verified by hand.
+
+It is not in the skip list and it is not classified `node_fail`, because
+`run_parity_tests.sh:1341` records `node_fail` only for an ABNORMAL exit
+(`perry_abnormal_exit`, i.e. a signal). A clean `exit 1` falls through to the
+output comparison, and with no expected-output file the test is compared
+against Node's crash text. **So this test can never pass under the pinned
+Node**, regardless of what Perry does.
+
+That is the mirror image of the hazard CLAUDE.md describes for this suite. The
+documented failure mode is a node-unrunnable test being silently DROPPED from
+the gate; this one is silently RED instead, for the same underlying reason (the
+oracle can't run it). Either it needs an expected-output file, or the
+`node_fail` predicate needs to cover a clean non-zero exit. Worth its own
+issue; unrelated to #7803.
+
+**Bearing on the codegen change:** through 68 tests the three call arms
+introduce no new failure. That is not yet the clean run the PR needs — the
+suite was still running when this note was written — but it is the first
+evidence in either direction, and it is the right direction.
