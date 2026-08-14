@@ -1,0 +1,36 @@
+[package]
+name = "next-app-route-provider"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "next_app_route_provider"
+crate-type = ["cdylib"]
+
+[dependencies]
+perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = [
+  "async-runtime",
+  "bundled-events",
+  "bundled-streams",
+  "compression",
+  "crypto",
+  "external-http-client-pump",
+  "external-http-server-pump",
+  "external-net-pump",
+  "external-ws-pump",
+  "http-client",
+  "http-server",
+  "ids",
+] }
+perry-ext-http = { path = "../../../../crates/perry-ext-http" }
+
+[profile.provider]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = false
+
+[workspace]
