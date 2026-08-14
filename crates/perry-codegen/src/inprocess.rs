@@ -64,6 +64,21 @@ pub(crate) fn statepoint_rewritten_ir(
     effective_target: &str,
     module_name: &str,
 ) -> Result<String> {
+    statepoint_rewritten_ir_with_passes(
+        ll_text,
+        effective_target,
+        module_name,
+        STATEPOINT_REWRITE_PASSES,
+    )
+}
+
+#[cfg(test)]
+fn statepoint_rewritten_ir_with_passes(
+    ll_text: &str,
+    effective_target: &str,
+    module_name: &str,
+    passes: &str,
+) -> Result<String> {
     global_init(&[]);
     let context = Context::create();
     let module = parse_ir_text(&context, ll_text, module_name)?;
@@ -86,8 +101,8 @@ pub(crate) fn statepoint_rewritten_ir(
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected pre-statepoint module:\n{}", e))?;
     module
-        .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
-        .map_err(|e| anyhow!("`{STATEPOINT_REWRITE_PASSES}` failed:\n{}", e))?;
+        .run_passes(passes, &tm, PassBuilderOptions::create())
+        .map_err(|e| anyhow!("`{passes}` failed:\n{}", e))?;
     module
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected the statepoint module:\n{}", e))?;
@@ -448,16 +463,26 @@ mod tests {
                 "  %after{i} = load ptr addrspace(1), ptr %dslot{i}\n  %bits{i} = ptrtoint ptr addrspace(1) %after{i} to i64\n"
             ));
         }
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %cafter{i} = load ptr addrspace(1), ptr %cslot{i}\n  %cbits{i} = ptrtoint ptr addrspace(1) %cafter{i} to i64\n"
+            ));
+        }
         ir.push_str("  %x1 = xor i64 %bits0, %bits1\n");
         for i in 2..8 {
             ir.push_str(&format!("  %x{i} = xor i64 %x{}, %bits{i}\n", i - 1));
         }
-        ir.push_str("  ret i64 %x7\n}\n");
+        ir.push_str("  %y0 = xor i64 %x7, %cbits0\n");
+        for i in 1..8 {
+            ir.push_str(&format!("  %y{i} = xor i64 %y{}, %cbits{i}\n", i - 1));
+        }
+        ir.push_str("  ret i64 %y7\n}\n");
         ir
     }
 
     #[test]
     fn rs4gc_canonicalizes_construction_time_folds_before_root_liveness() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
         let target = crate::codegen::default_target_triple();
         let text_ir = constant_fold_order_fixture(false);
         let folded_ir = constant_fold_order_fixture(true);
@@ -469,8 +494,12 @@ mod tests {
                 !rewritten.contains("%cb0 = bitcast"),
                 "{label} fixture reached RS4GC before construction-time folds converged:\n{rewritten}"
             );
+            let live_bundle = rewritten
+                .lines()
+                .find(|line| line.contains("\"gc-live\""))
+                .unwrap_or_else(|| panic!("{label} fixture lost every dynamic root:\n{rewritten}"));
             assert!(
-                rewritten.contains("\"gc-live\"(ptr addrspace(1)"),
+                live_bundle.contains("%dp0"),
                 "{label} fixture lost every dynamic root:\n{rewritten}"
             );
             assert!(
@@ -490,6 +519,39 @@ mod tests {
         assert_eq!(
             text, folded,
             "construction-time constant folding must converge before RS4GC assigns root liveness"
+        );
+
+        const PRE_FIX_PASSES: &str = "function(mem2reg),rewrite-statepoints-for-gc";
+        let pre_fix_emit = |ir: &str, name: &str| {
+            let rewritten = statepoint_rewritten_ir_with_passes(
+                ir,
+                &target,
+                &format!("{name}_rewrite"),
+                PRE_FIX_PASSES,
+            )
+            .expect("pre-fix pipeline rewrites fixture");
+            let context = Context::create();
+            let module =
+                parse_ir_text(&context, &rewritten, name).expect("rewritten fixture parses");
+            let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+            (
+                rewritten,
+                optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()])
+                    .expect("rewritten fixture emits assembly"),
+            )
+        };
+        let (pre_fix_text_ir, pre_fix_text) = pre_fix_emit(&text_ir, "pre_fix_text");
+        let (_, pre_fix_folded) = pre_fix_emit(&folded_ir, "pre_fix_native");
+        assert!(
+            pre_fix_text_ir
+                .lines()
+                .find(|line| line.contains("\"gc-live\""))
+                .is_some_and(|line| line.contains("%cp0")),
+            "negative control must keep a constant-derived text root live across the safepoint:\n{pre_fix_text_ir}"
+        );
+        assert_ne!(
+            pre_fix_text, pre_fix_folded,
+            "fixture must fail byte equality under the pre-#8065 pass order"
         );
     }
 
