@@ -21,6 +21,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{lower_expr, FnCtx};
+use crate::rooting::{with_rooted_group, Repr};
 use crate::types::{DOUBLE, I64};
 
 mod abort;
@@ -45,21 +46,25 @@ pub(in crate::lower_call) fn build_headers_from_object(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
 ) -> Result<String> {
-    let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
-    for (k, vexpr) in props {
-        let key_expr = Expr::String(k.clone());
-        let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
-        let value = lower_expr(ctx, vexpr)?;
-        let val_ptr = ctx
-            .block()
-            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
-        ctx.block().call(
-            DOUBLE,
-            "js_headers_set",
-            &[(DOUBLE, &h), (I64, &key_ptr), (I64, &val_ptr)],
-        );
-    }
-    Ok(h)
+    with_rooted_group(ctx, 1, |ctx, group| {
+        let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
+        let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, !props.is_empty());
+        for (k, vexpr) in props {
+            let key_expr = Expr::String(k.clone());
+            let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
+            let value = lower_expr(ctx, vexpr)?;
+            let val_ptr = ctx
+                .block()
+                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
+            let h = group.reread_emitted(ctx, h_root);
+            ctx.block().call(
+                DOUBLE,
+                "js_headers_set",
+                &[(DOUBLE, &h), (I64, &key_ptr), (I64, &val_ptr)],
+            );
+        }
+        Ok(group.reread_emitted(ctx, h_root))
+    })
 }
 
 /// Phase 3 compat: extract `{key: value, ...}` pairs from an options
