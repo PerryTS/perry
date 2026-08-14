@@ -4,6 +4,23 @@
 use super::*;
 use std::os::raw::c_int;
 
+#[test]
+fn call_method_depth_drop_is_idempotent_after_exception_restore() {
+    let base = call_method_depth_savepoint();
+    let outer = CallMethodDepthGuard::enter("outer").unwrap();
+    let inner = CallMethodDepthGuard::enter("inner").unwrap();
+    assert_eq!(call_method_depth_savepoint(), base + 2);
+
+    // Generated exceptions restore at throw time because the fast transport
+    // skips cleanup frames. Its system-unwinder fallback then drops the Rust
+    // guards as well; those drops must not decrement below the savepoint.
+    call_method_depth_restore(base);
+    drop(inner);
+    drop(outer);
+
+    assert_eq!(call_method_depth_savepoint(), base);
+}
+
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     let closure_ptr = crate::closure::js_closure_alloc(
         crate::object::global_this_builtin_noop_thunk as *const u8,

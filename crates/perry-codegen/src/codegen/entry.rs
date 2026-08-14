@@ -461,18 +461,20 @@ pub(super) fn compile_module_entry(
         // `.next/server/**` module path now (before `main` borrows `llmod`); the
         // registration calls go in the block below. `(string_const_name,
         // byte_len, sanitized_prefix)`.
-        let nextjs_path_inits: Vec<(String, usize, String)> = if is_dylib {
-            Vec::new()
-        } else {
-            cross_module
-                .nextjs_path_init_modules
-                .iter()
-                .map(|(path, prefix)| {
-                    let (cn, len) = llmod.add_string_constant(path);
-                    (cn, len, prefix.clone())
-                })
-                .collect()
-        };
+        // Library entries need the same registry as executables. The host owns
+        // the event loop for a dylib, but `perry_module_init` still owns module
+        // initialization. In particular, a production Next App Route reaches
+        // its webpack chunks through runtime-computed `require(absolutePath)`
+        // calls after `perry_module_init` returns. Omitting these registrations
+        // makes the first dynamic import fail only in the shared-library path.
+        let nextjs_path_inits: Vec<(String, usize, String)> = cross_module
+            .nextjs_path_init_modules
+            .iter()
+            .map(|(path, prefix)| {
+                let (cn, len) = llmod.add_string_constant(path);
+                (cn, len, prefix.clone())
+            })
+            .collect();
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -634,18 +636,13 @@ pub(super) fn compile_module_entry(
             if !nextjs_path_inits.is_empty() {
                 blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             }
-            for prefix in non_entry_module_prefixes {
-                if cross_module.deferred_module_prefixes.contains(prefix) {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", prefix), &[]);
-            }
-            // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
-            // module's `__init` address under its absolute path so a runtime
-            // `require(absolutePath)` (turbopack page/chunk loading) can trigger
-            // its init lazily. No init runs here — only the address is recorded.
-            // The `<prefix>__init` symbols are already declared above for every
-            // non-entry prefix, so `ptrtoint` of the symbol resolves at link.
+            // Register Deferred runtime modules BEFORE eager module init. A
+            // production webpack runtime can execute a computed relative
+            // `require("./chunks/" + id)` from its own eager initializer; that
+            // chunk must already have an init address in the registry at that
+            // point. Registering after this loop made the same route work when
+            // loaded later by server.js but fail when its production handler
+            // bundle was the dylib's static entry dependency.
             for (const_name, byte_len, prefix) in &nextjs_path_inits {
                 let path_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();
@@ -658,6 +655,12 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
+            }
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                blk.call_void(&format!("{}__init", prefix), &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
@@ -800,6 +803,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,
@@ -1471,6 +1475,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,

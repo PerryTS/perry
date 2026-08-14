@@ -84,7 +84,13 @@ pub(crate) fn resolve_call2_direct(
 
 /// Call a closure with 2 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
+// A dynamically-dispatched closure can throw into a generated caller's catch
+// landing pad; this bridge is on Next's loadManifest/readFileSync path.
+pub extern "C-unwind" fn js_closure_call2(
+    closure: *const ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1]);

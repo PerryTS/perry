@@ -519,6 +519,11 @@ pub struct ImportedClass {
     /// fix for the freestanding-function path. Empty Vec means "fall through
     /// to the old behavior (no rest)".
     pub method_has_rest: Vec<bool>,
+    /// Parallel to `method_names`. `true` identifies the rest-shaped trailing
+    /// slot that Perry synthesized for a source method which reads
+    /// `arguments`. Unlike a user `...rest` slot, this slot receives every
+    /// actual argument while the named parameters remain positional.
+    pub method_has_synthetic_arguments: Vec<bool>,
     /// Static field names defined on this class. Used to declare the foreign
     /// `@perry_static_<src>__<class>__<field>` global with external linkage
     /// so cross-module `[Parent.Symbol.X] = …` reads/writes resolve to the
@@ -693,6 +698,11 @@ pub(crate) struct CrossModuleCtx {
     /// rest-bundling in `lower_call.rs`'s static / dynamic dispatch
     /// arms. Closes #484. Sparse map (only `true` entries stored).
     pub method_has_rest: std::collections::HashMap<(String, String), bool>,
+    /// Per-`(class, method)` synthesized-`arguments` flag. This is a subset of
+    /// `method_has_rest`, but the call-site packing semantics differ: the
+    /// synthetic slot receives all actual arguments rather than only the
+    /// values after the visible parameters.
+    pub method_has_synthetic_arguments: std::collections::HashMap<(String, String), bool>,
     /// Per-class `keys_array` global variable names. Each entry maps
     /// `class_name → @perry_class_keys_<modprefix>__<sanitized_class>`.
     /// Built once in `compile_module` (one entry per class — local

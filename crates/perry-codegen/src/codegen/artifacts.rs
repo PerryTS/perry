@@ -1221,14 +1221,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     }
 
     // #337: emit an always-defined fallback wrapper for the
-    // `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef` falls
-    // through to `wrap_name = "__perry_wrap_perry_unknown_func"` when the
+    // module-scoped `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef`
+    // falls through to `__perry_wrap_perry_unknown_func_<module>` when the
     // FuncRef's id isn't in `func_names` (cross-module reference whose
     // Source HIR wasn't lowered into THIS LLVM module — should normally
     // route to ExternFuncRef instead, but some HIR shapes still emit
     // FuncRef with an unresolvable id). Pre-fix the wrapper was never
     // defined and clang errored with `use of undefined value
-    // @__perry_wrap_perry_unknown_func`. This stub returns TAG_UNDEFINED
+    // @__perry_wrap_perry_unknown_func_<module>`. This stub returns TAG_UNDEFINED
     // (encoded as `f64::from_bits(0x7FFC_0000_0000_0001)` =
     // 1.7800590868057611e-307 — the canonical undefined sentinel matching
     // `value::TAG_UNDEFINED`); any runtime-side `js_closure_callN`
@@ -1240,9 +1240,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // Emitted unconditionally — link-time DCE strips it when no
     // `Expr::FuncRef(unknown_id)` site exists in this module.
     {
-        let wrap_name = "__perry_wrap_perry_unknown_func";
+        // Codegen-unit splitting promotes internal functions to external so
+        // calls can cross unit boundaries. Keep this name module-scoped so
+        // that promotion cannot collide when several large Next.js modules
+        // each need the fallback in one shared-library link.
+        let wrap_name = format!(
+            "__perry_wrap_perry_unknown_func_{}",
+            crate::expr::native_region_slug(module_prefix)
+        );
         let wf = llmod.define_function(
-            wrap_name,
+            &wrap_name,
             DOUBLE,
             vec![
                 (I64, "%this_closure".to_string()),
@@ -1253,14 +1260,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 (DOUBLE, "%a4".to_string()),
             ],
         );
-        // Fix #420 (v0.5.576): internal linkage so multi-module
-        // programs (drizzle-orm has 5+ modules each emitting this
-        // fallback) don't fail link with `duplicate symbol
-        // ___perry_wrap_perry_unknown_func`. Same pattern as the
-        // `__perry_wrap_extern_*` wrappers below — comment block at
-        // line ~1957 explicitly calls out that wrappers like this
-        // should be `internal` linkage so each module gets its own
-        // dead-code-eliminable copy.
+        // Internal in a single codegen unit; promoted under unit splitting,
+        // where the module suffix above preserves link-time uniqueness.
         wf.linkage = "internal".to_string();
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();

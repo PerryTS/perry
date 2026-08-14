@@ -620,6 +620,10 @@ pub(crate) struct FnCtx<'a> {
     /// of undefined". Same shape as `func_signatures`'s `has_rest`
     /// bit but for class-method dispatch.
     pub method_has_rest: &'a std::collections::HashMap<(String, String), bool>,
+    /// Subset of `method_has_rest` whose trailing rest-shaped slot is the
+    /// compiler-synthesized `arguments` binding and therefore receives every
+    /// actual argument.
+    pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
     /// FFI manifest: `name -> (params, return)` from `package.json`
     /// `nativeLibrary.functions`. Descriptors use the shared native-library
     /// ABI vocabulary. `lower_call` consults

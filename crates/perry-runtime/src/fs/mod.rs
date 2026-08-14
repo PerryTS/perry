@@ -285,13 +285,17 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
 /// Read a file synchronously and return its contents as a string
 /// Returns null pointer on error
 /// Accepts NaN-boxed string path
+// These readFileSync entry points intentionally throw on I/O failure. They
+// must permit the generated landingpad transport to cross their Rust FFI
+// frames so Node-style `try { readFileSync(optional) } catch { ... }` works
+// when runtime and application live in separate dynamic images.
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
+pub extern "C-unwind" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
     js_fs_read_file_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_sync_options(
+pub extern "C-unwind" fn js_fs_read_file_sync_options(
     path_value: f64,
     options_value: f64,
 ) -> *mut StringHeader {
@@ -379,7 +383,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
 }
 
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_dispatch(path_value: f64, options_value: f64) -> f64 {
+pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value: f64) -> f64 {
     if read_file_encoding(options_value).is_some() {
         let str_ptr = js_fs_read_file_sync_options(path_value, options_value);
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())

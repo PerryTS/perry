@@ -1231,13 +1231,13 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             native_abi,
             "KEEP_JS_NATIVE_CALL_METHOD_BY_ID",
-            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C\" fn(f64, i64, *const f64, usize) -> f64",
+            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C-unwind\" fn(",
             "js_native_call_method_by_id",
         ),
         (
             native_abi,
             "KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID",
-            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C\" fn(f64, i64, i64) -> f64",
+            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C-unwind\" fn(f64, i64, i64) -> f64",
             "js_native_call_method_apply_by_id",
         ),
         (
@@ -1531,13 +1531,13 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             trace,
             "static K30",
-            "static K30: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
+            "static K30: unsafe extern \"C-unwind\" fn(u64, f64, i64, *const f64, usize) -> f64",
             "js_typed_feedback_native_call_method_by_id",
         ),
         (
             trace,
             "static K31",
-            "static K31: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
+            "static K31: unsafe extern \"C-unwind\" fn(u64, f64, i64, i64) -> f64",
             "js_typed_feedback_native_call_method_apply_by_id",
         ),
     ] {

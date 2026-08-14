@@ -539,7 +539,7 @@ pub(crate) fn lower(
                 .func_names
                 .get(id)
                 .cloned()
-                .unwrap_or_else(|| "perry_unknown_func".to_string());
+                .unwrap_or_else(|| format!("perry_unknown_func_{}", ctx.module_slug));
             let wrap_name = format!("__perry_wrap_{}", func_name);
             let blk = ctx.block();
             let wrap_ptr = format!("@{}", wrap_name);

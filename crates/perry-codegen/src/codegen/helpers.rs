@@ -114,6 +114,14 @@ pub(crate) fn precise_root_analysis_enabled() -> bool {
 /// explicit bridge's hand emission and its conservative CFG-union liveness.
 /// Requires an `opt` binary (`PERRY_LLVM_OPT`, Homebrew LLVM, or PATH).
 pub(crate) fn rs4gc_enabled() -> bool {
+    // The shipped stack-map readers discover metadata in the process's main
+    // image. A separately loaded dylib is invisible to them, so emitting
+    // native roots there would leave the shared runtime with an empty root
+    // index. Keep the analysis enabled but lower it through shadow frames,
+    // whose state is owned by the shared runtime provider.
+    if !NATIVE_ROOTS_ARTIFACT_OK.with(|c| c.get()) {
+        return false;
+    }
     #[cfg(any(test, feature = "testing"))]
     if let Some(pinned) = NATIVE_ROOTS_OVERRIDE.with(|c| c.get()) {
         return pinned;
@@ -141,6 +149,7 @@ fn rs4gc_env_override() -> Option<bool> {
 
 thread_local! {
     static NATIVE_ROOTS_TARGET_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NATIVE_ROOTS_ARTIFACT_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 // The pin's backing cell. Separate from `NATIVE_ROOTS_TARGET_OK` on purpose:
@@ -235,6 +244,14 @@ pub(crate) fn set_native_roots_for_target(triple: &str) {
     // so no frame would ever be visited.
     let windows_ok = !triple.contains("windows") || triple.starts_with("x86_64");
     NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok));
+}
+
+/// Record whether the final artifact is one the runtime's native-stack map
+/// loader can discover. Today the loaders read only the process's main image;
+/// a `dlopen`ed Perry dylib must therefore use the shared shadow-stack
+/// lowering even on a target where executables default to native roots.
+pub(crate) fn set_native_roots_for_artifact(output_type: &str) {
+    NATIVE_ROOTS_ARTIFACT_OK.with(|c| c.set(output_type != "dylib"));
 }
 
 /// Whether precise roots should use a native-stack metadata backend rather
