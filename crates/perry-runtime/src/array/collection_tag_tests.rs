@@ -114,6 +114,10 @@ fn a_live_set_receiver_still_reads_its_elements_through_the_registry() {
     );
 
     let as_array = set as *const ArrayHeader;
+    assert!(
+        clean_arr_ptr(as_array).is_null(),
+        "#8041's array-only funnel must keep rejecting Set layout"
+    );
     let before = probes();
     assert_eq!(js_array_length(as_array), 3);
     assert_eq!(js_array_get_f64(as_array, 0), 5.0);
@@ -140,6 +144,10 @@ fn a_live_map_receiver_still_reports_its_size_through_the_registry() {
     );
 
     let as_array = map as *const ArrayHeader;
+    assert!(
+        clean_arr_ptr(as_array).is_null(),
+        "#8041's array-only funnel must keep rejecting Map layout"
+    );
     let before = probes();
     assert_eq!(js_array_length(as_array), 2);
     assert_eq!(js_array_get_f64(as_array, 0), 1.0, "entry 0's key");

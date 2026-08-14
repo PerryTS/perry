@@ -705,6 +705,8 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 /// Get an element from an array by index (returns f64)
 #[no_mangle]
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+
     // Issue #179 Phase 5: lazy fast path — must run BEFORE
     // `clean_arr_ptr` because that helper force-materializes a lazy
     // pointer into a regular ArrayHeader. For the common read-only
@@ -718,17 +720,19 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // around so the cache persists across calls. Strip the NaN-box
     // tag manually and check obj_type without going through the
     // clean-and-validate helper.
-    unsafe {
+    let raw_ptr = {
         let bits = arr as u64;
         let top16 = bits >> 48;
-        let raw_ptr = if top16 >= 0x7FF8 {
+        if top16 >= 0x7FF8 {
             if top16 == 0x7FFC {
                 return f64::NAN;
             }
             (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader
         } else {
             arr
-        };
+        }
+    };
+    unsafe {
         if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -741,6 +745,43 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             }
         }
     }
+
+    // #7765: one `GcHeader` read gates both collection registry probes and,
+    // after the array-only funnel, supplies the descriptor flags which
+    // `array_object_flags` used to re-derive through another clean/header read.
+    // A header-less Buffer/TypedArray can expose allocator bookkeeping here,
+    // but a coincidental collection tag is harmless: the authoritative
+    // registry answers false, and those receivers are routed below.
+    //
+    // #8060: #8041 correctly made `clean_arr_ptr` reject every tracked
+    // non-array. Map/Set indexed reads are an intentional array-like dispatch,
+    // though, so classify them before that strict array-only funnel — matching
+    // `js_array_length`. The managed-header tag only selects which authority to
+    // ask; the registry remains the liveness/layout proof.
+    let receiver_tag = array_receiver_gc_tag(raw_ptr);
+    if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(raw_ptr as usize) {
+        let set = raw_ptr as *const crate::set::SetHeader;
+        unsafe {
+            let size = (*set).size;
+            if index >= size {
+                return TAG_UNDEFINED_F64;
+            }
+            let elements = (*set).elements as *const f64;
+            return std::ptr::read(elements.add(index as usize));
+        }
+    }
+    if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(raw_ptr as usize) {
+        let map = raw_ptr as *const crate::map::MapHeader;
+        unsafe {
+            let size = (*map).size;
+            if index >= size {
+                return TAG_UNDEFINED_F64;
+            }
+            let entries = (*map).entries as *const f64;
+            return std::ptr::read(entries.add(index as usize * 2));
+        }
+    }
+
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
         // #7574: `a[i]` on a `class X extends Array` instance held in a
@@ -765,55 +806,14 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
         return byte_val as f64;
     }
-    // #7765: ONE `GcHeader` read now gates both collection probes below and
-    // supplies the descriptor flags further down, which `array_object_flags`
-    // used to re-derive through a second `clean_arr_ptr` and a second header
-    // read. On `gc-handoff/apps/asyncpipe_big.ts` this call site was 76% of all
-    // `is_registered_set` samples and 82% of all `is_registered_map` ones —
-    // both registries are non-empty there, so the #7474 latch is correctly
-    // armed and each probe really was resolving a thread-local and hashing, on
-    // every element read of an ordinary array, to prove an array is not a Map.
-    //
-    // The tag answers because every registered `Map`/`Set` IS its
-    // `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header (one registration
-    // site each), and it is ABA-proof by construction: it lives INSIDE the
-    // candidate bytes, so recycling the address into anything else rewrites it
-    // before the new pointer is handed out. That is exactly what an
-    // address-keyed negative memo could not offer (#7755).
-    //
-    // Correct for a header-LESS receiver too. Buffers and typed arrays are
-    // `std::alloc`-backed, so their preceding bytes are allocator bookkeeping —
-    // but both are already routed above, and whichever way those bytes read the
-    // outcome is unchanged: a bookkeeping byte that happens to read as
-    // `GC_TYPE_SET`/`GC_TYPE_MAP` still falls through to the authoritative
-    // registry (which answers `false`), and any other value skips a probe that
-    // would have answered `false` anyway.
-    let receiver_tag = array_receiver_gc_tag(arr);
-    // Check if this is a Set — read from elements pointer (not inline)
-    if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(arr as usize) {
-        let set = arr as *const crate::set::SetHeader;
-        unsafe {
-            let size = (*set).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let elements = (*set).elements as *const f64;
-            return std::ptr::read(elements.add(index as usize));
-        }
-    }
-    // Check if this is a Map — return entries as [key, value] pairs
-    if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(arr as usize) {
-        let map = arr as *const crate::map::MapHeader;
-        unsafe {
-            let size = (*map).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let entries = (*map).entries as *const f64;
-            // Map entries: key at index*2, return key for simple iteration
-            return std::ptr::read(entries.add(index as usize * 2));
-        }
-    }
+    // The usual case cleans to the same address, so reuse the header tag read
+    // above. A forwarded Array resolves to a different address and needs its
+    // live head's descriptor flags.
+    let receiver_tag = if arr == raw_ptr {
+        receiver_tag
+    } else {
+        array_receiver_gc_tag(arr)
+    };
     // #6748 grind: per-array flag, not the process-global gate (see
     // `array_has_own_index`) — this probe allocated two Strings on EVERY
     // checked element read once any descriptor existed process-wide, which
@@ -833,7 +833,6 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // JS spec: out-of-bounds array access returns `undefined`, not NaN.
     // This matters for destructuring defaults (`const [a, b, c = 30] = [1, 2]`)
     // where the `?? fallback` must see TAG_UNDEFINED, not NaN.
-    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
         if index >= length {
