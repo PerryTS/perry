@@ -1303,11 +1303,11 @@ message, on the argument that literally contains `issues: []`.
 And `_zod` is an ACCESSOR on zod's schema objects, which is the second arm.
 
 **MEASURED, and it does NOT close #7803.** `/tmp/zod-argfix`, same conditions:
-seeds 1, 2, 3, 5 pass — and **seed 4 fails** with `value is not a function` at
-safepoint 765. One failure is enough; a fix would need a clean sweep. So this
-section records a real defect found and fixed, and a cause REFUTED. (The rate
-over the full 16 is still running and only affects how *much* it helped, not
-whether it closed it.) The remaining raw-`args_ptr` arms
+**6/16 fail** (seeds 4, 9, 10, 14, 15, 16), against baselines of 3/8, 5/16 and
+8/16 on comparable binaries — squarely in the middle, i.e. no effect at all.
+One failure would have been enough to refute "fixed"; the full sweep says it
+did not even move the rate. A real defect found and fixed, and a cause
+REFUTED. The remaining raw-`args_ptr` arms
 (the JS-handle dispatcher at ~1496 and several others) were left alone: they
 need the same per-arm "can anything above me collect?" argument, and guessing
 uniformly would be the audit-by-eye that §21 already showed is unreliable.
@@ -1369,7 +1369,7 @@ boundary remains the place to look.
 | §18 | callee rooted, `new_dynamic.rs` ×2 + `call_spread.rs` | 66 → 26 | none (5/16) |
 | §22 | callee rooted, `early_branches.rs` | 26 → 3 | none (8/16) |
 | §21 | `dyn_eval` cooperative safepoints | — | rate *fell* 6/8 → 2/8, bug survives |
-| §25 | argument buffer refreshed, 2 dispatch arms | — | none (seed 4 fails) |
+| §25 | argument buffer refreshed, 2 dispatch arms | — | none (**6/16**, mid-baseline) |
 
 Four separate rooting defects, all real, all in the right family, none of them
 this bug. That is worth stating as its own finding: **the zod corpus under a
