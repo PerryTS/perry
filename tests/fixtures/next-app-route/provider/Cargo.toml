@@ -25,6 +25,16 @@ perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = fa
 ] }
 perry-ext-http = { path = "../../../../crates/perry-ext-http" }
 
+# #7302's bug class: Perry's invoke/landingpad exception transport requires any
+# workspace that builds a runtime archive to be `panic = "abort"`. Under
+# `unwind`, rustc plants RFC-2945 abort-on-unwind guards in every `extern "C"`
+# fn with an interior Rust call — `js_throw` included — so a JS throw aborts the
+# process below `_js_throw` with a handler already armed. `[profile.provider]`
+# alone is not enough: `release` would still take cargo's default here, and an
+# explicit override beats `inherits`.
+[profile.release]
+panic = "abort"
+
 [profile.provider]
 inherits = "release"
 opt-level = 2
