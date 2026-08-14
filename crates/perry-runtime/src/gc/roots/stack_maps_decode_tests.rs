@@ -20,35 +20,57 @@ mod tests {
         ((value << 1) ^ (value >> 31)) as u32 as u64
     }
 
-    /// Build one compact blob, mirroring `perry-codegen/src/gc_map.rs`.
-    /// `records` is `(instruction_offset, roots)`, roots as `(dwarf_reg, offset)`;
-    /// an empty root slice with `repeat` set encodes the repeat flag.
-    fn one_map(function: u64, records: &[(u32, Vec<(u16, i32)>, bool)]) -> Vec<u8> {
+    fn push_slots(stream: &mut Vec<u8>, slots: &[(u16, i32)]) {
+        let mut last: Option<i32> = None;
+        for (reg, offset) in slots {
+            let tag = match *reg {
+                DWARF_REG_FP_AARCH64 => 0u64,
+                DWARF_REG_SP_AARCH64 => 1,
+                _ => 2,
+            };
+            let delta = match last {
+                None => *offset,
+                Some(previous) => offset.wrapping_sub(previous),
+            };
+            push_varint(stream, (zigzag(delta) << 2) | tag);
+            if tag == 2 {
+                push_varint(stream, u64::from(*reg));
+            }
+            last = Some(*offset);
+        }
+    }
+
+    /// Build one compact blob, mirroring `perry-codegen/src/gc_map.rs` (v4).
+    /// `records` is `(instruction_offset, roots, derived, repeat)` — roots as
+    /// `(dwarf_reg, offset)`, derived as `(base_index, dwarf_reg, offset)`;
+    /// empty lists with `repeat` set encode the repeat flag.
+    #[allow(clippy::type_complexity)]
+    fn one_map_with_derived(
+        function: u64,
+        records: &[(u32, Vec<(u16, i32)>, Vec<(u32, u16, i32)>, bool)],
+    ) -> Vec<u8> {
         let mut offsets = Vec::new();
         let mut stream = Vec::new();
-        for (instruction_offset, roots, repeat) in records {
+        for (instruction_offset, roots, derived, repeat) in records {
             offsets.extend_from_slice(&instruction_offset.to_le_bytes());
             if *repeat {
                 push_varint(&mut stream, 1);
                 continue;
             }
-            push_varint(&mut stream, (roots.len() as u64) << 1);
-            let mut last: Option<i32> = None;
-            for (reg, offset) in roots {
-                let tag = match *reg {
-                    DWARF_REG_FP_AARCH64 => 0u64,
-                    DWARF_REG_SP_AARCH64 => 1,
-                    _ => 2,
-                };
-                let delta = match last {
-                    None => *offset,
-                    Some(previous) => offset.wrapping_sub(previous),
-                };
-                push_varint(&mut stream, (zigzag(delta) << 2) | tag);
-                if tag == 2 {
-                    push_varint(&mut stream, u64::from(*reg));
+            let has_derived = u64::from(!derived.is_empty());
+            push_varint(
+                &mut stream,
+                ((roots.len() as u64) << 2) | (has_derived << 1),
+            );
+            push_slots(&mut stream, roots);
+            if !derived.is_empty() {
+                push_varint(&mut stream, derived.len() as u64);
+                for &(base_index, _, _) in derived {
+                    push_varint(&mut stream, u64::from(base_index));
                 }
-                last = Some(*offset);
+                let slots: Vec<(u16, i32)> =
+                    derived.iter().map(|&(_, reg, off)| (reg, off)).collect();
+                push_slots(&mut stream, &slots);
             }
         }
 
@@ -79,6 +101,15 @@ mod tests {
         bytes
     }
 
+    /// The v3-shaped builder every existing test uses: roots only.
+    fn one_map(function: u64, records: &[(u32, Vec<(u16, i32)>, bool)]) -> Vec<u8> {
+        let with_derived: Vec<(u32, Vec<(u16, i32)>, Vec<(u32, u16, i32)>, bool)> = records
+            .iter()
+            .map(|(off, roots, repeat)| (*off, roots.clone(), Vec::new(), *repeat))
+            .collect();
+        one_map_with_derived(function, &with_derived)
+    }
+
     fn simple(function: u64, offset: u32, frame_offset: i32) -> Vec<u8> {
         one_map(function, &[(offset, vec![(29, frame_offset)], false)])
     }
@@ -86,7 +117,7 @@ mod tests {
     #[test]
     fn decodes_frame_location() {
         let bytes = simple(0x1000, 0x10, -8);
-        let (records, roots) = parse_gc_map(&bytes).expect("valid map");
+        let (records, roots, _) = parse_gc_map(&bytes).expect("valid map");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].pc, 0x1010);
         assert_eq!(records[0].function_address, 0x1000);
@@ -104,7 +135,7 @@ mod tests {
     fn decodes_linker_concatenated_input_sections() {
         let mut bytes = simple(0x1000, 0x10, -8);
         bytes.extend_from_slice(&simple(0x2000, 0x20, -16));
-        let (records, _) = parse_gc_map(&bytes).expect("concatenated maps");
+        let (records, _, _) = parse_gc_map(&bytes).expect("concatenated maps");
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].pc, 0x1010);
         assert_eq!(records[1].pc, 0x2020);
@@ -116,8 +147,11 @@ mod tests {
         let second = simple(0x2000, 0x20, -16);
         let mut records = Vec::new();
         let mut roots = Vec::new();
-        append_gc_map_section(&mut records, &mut roots, &first).expect("first image map");
-        append_gc_map_section(&mut records, &mut roots, &second).expect("second image map");
+        let mut derived = Vec::new();
+        append_gc_map_section(&mut records, &mut roots, &mut derived, &first)
+            .expect("first image map");
+        append_gc_map_section(&mut records, &mut roots, &mut derived, &second)
+            .expect("second image map");
 
         assert_eq!(records.len(), 2);
         assert_eq!(roots.len(), 2);
@@ -140,7 +174,7 @@ mod tests {
                 (0x30, vec![], true),
             ],
         );
-        let (records, roots) = parse_gc_map(&bytes).expect("valid map");
+        let (records, roots, _) = parse_gc_map(&bytes).expect("valid map");
         assert_eq!(records.len(), 3);
         assert_eq!(roots.len(), 2, "the repeats must not append new roots");
         for record in &records {
@@ -150,9 +184,58 @@ mod tests {
     }
 
     #[test]
+    fn decodes_derived_interior_slots_with_their_bases() {
+        // #7803: a for-of element cursor is a DERIVED pointer — the v3 format
+        // collapsed the (base, derived) pair, so the walker chased the
+        // interior address as an object start and never rewrote the cursor
+        // as base'+delta after a move. v4 keeps the pairing; the repeat flag
+        // must carry it too.
+        let bytes = one_map_with_derived(
+            0x1000,
+            &[
+                (0x10, vec![(29, -16), (29, -8)], vec![(1, 31, 24)], false),
+                (0x20, vec![], vec![], true),
+            ],
+        );
+        let (records, roots, derived) = parse_gc_map(&bytes).expect("valid map");
+        assert_eq!(records.len(), 2);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(
+            derived,
+            vec![StackMapDerived {
+                base_index: 1,
+                slot: StackMapLocation {
+                    dwarf_reg: 31,
+                    offset: 24,
+                },
+            }]
+        );
+        for record in &records {
+            assert_eq!(record.derived_start, 0);
+            assert_eq!(
+                record.derived_len, 1,
+                "the repeat must carry the derived set"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_derived_base_index_out_of_range() {
+        // Fail closed, like every other malformed map: a base index past the
+        // record's roots would make the walker read a base word from another
+        // record's slot.
+        let bytes =
+            one_map_with_derived(0x1000, &[(0x10, vec![(29, -8)], vec![(1, 31, 24)], false)]);
+        assert!(
+            parse_gc_map(&bytes).is_none(),
+            "base index 1 of 1 roots must not decode"
+        );
+    }
+
+    #[test]
     fn decodes_negative_and_ascending_root_offsets() {
         let bytes = one_map(0x1000, &[(0, vec![(29, -64), (29, -8), (31, 24)], false)]);
-        let (_, roots) = parse_gc_map(&bytes).expect("valid map");
+        let (_, roots, _) = parse_gc_map(&bytes).expect("valid map");
         assert_eq!(
             roots,
             vec![
@@ -178,7 +261,7 @@ mod tests {
         // stack allocation — 66 root slots in one real module. A single FP/SP
         // bit cannot express that, which is what forced the 2-bit base tag.
         let bytes = one_map(0x1000, &[(0x10, vec![(19, -40), (29, -8)], false)]);
-        let (_, roots) = parse_gc_map(&bytes).expect("valid map");
+        let (_, roots, _) = parse_gc_map(&bytes).expect("valid map");
         assert_eq!(
             roots,
             vec![
@@ -205,11 +288,14 @@ mod tests {
                 stack_size: 64,
                 roots_start: 0,
                 roots_len: 1,
+                derived_start: 0,
+                derived_len: 0,
             }],
             vec![StackMapLocation {
                 dwarf_reg: 19,
                 offset: -40,
             }],
+            Vec::new(),
         );
         assert!(!index.chain_walkable);
     }
@@ -283,6 +369,8 @@ mod tests {
             stack_size: 160,
             roots_start: 0,
             roots_len: 1,
+            derived_start: 0,
+            derived_len: 0,
         };
         // FP and SP are both walkable: SP resolves per frame by decoding the
         // owning function's prologue (#7173).
@@ -298,6 +386,7 @@ mod tests {
                     offset: -8,
                 },
             ],
+            Vec::new(),
         );
         assert!(walkable.chain_walkable);
         assert_eq!(walkable.min_pc, 0x1000);
@@ -310,6 +399,7 @@ mod tests {
                     dwarf_reg: 1,
                     offset: -8
                 }],
+                Vec::new()
             )
             .chain_walkable,
             "a non-FP/SP register must disable the fast walk"
@@ -329,6 +419,8 @@ mod tests {
                     stack_size: 32,
                     roots_start: 0,
                     roots_len: 1,
+                    derived_start: 0,
+                    derived_len: 0,
                 },
                 StackMapRecord {
                     pc: 0x2040,
@@ -336,12 +428,15 @@ mod tests {
                     stack_size: 32,
                     roots_start: 0,
                     roots_len: 1,
+                    derived_start: 0,
+                    derived_len: 0,
                 },
             ],
             vec![StackMapLocation {
                 dwarf_reg: 29,
                 offset: -8,
             }],
+            Vec::new(),
         );
         // 0x2004 is 8 bytes past A's last safepoint but lives in B.
         assert!(
@@ -361,6 +456,8 @@ mod tests {
             stack_size: 32,
             roots_start: 0,
             roots_len: 0,
+            derived_start: 0,
+            derived_len: 0,
         };
         let maps = vec![rec(0x1000), rec(0x1020)];
         assert_eq!(closest_record_pc(&maps, 0x1004), Some(0x1000));

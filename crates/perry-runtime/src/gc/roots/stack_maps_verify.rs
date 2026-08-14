@@ -239,7 +239,7 @@ mod tests {
     /// An index that vouches for NO function address, so the report never
     /// dereferences the synthetic addresses above.
     fn empty_index() -> StackMapIndex {
-        super::super::index_records(Vec::new(), Vec::new())
+        super::super::index_records(Vec::new(), Vec::new(), Vec::new())
     }
 
     #[test]

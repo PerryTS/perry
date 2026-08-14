@@ -58,7 +58,12 @@ use anyhow::{anyhow, Context, Result};
 /// Magic at the start of every emitted blob.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// Format version. Bump on any layout change — the runtime rejects others.
-const GC_MAP_VERSION: u8 = 3;
+/// v4 (#7803): the record header word gained a has-derived bit and records
+/// carry DERIVED (interior) pointer slots tied to their bases. v3 collapsed
+/// every statepoint (base, derived) pair to one slot on the false premise
+/// that Perry emits no interior pointers; the runtime decoder fails closed on
+/// a version mismatch, so both sides bump together.
+const GC_MAP_VERSION: u8 = 4;
 /// Section the compact map is emitted into, and the label it is given.
 const GC_MAP_LABEL: &str = "_perry_gc_map";
 const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
@@ -103,6 +108,19 @@ struct Record {
     instruction_offset: String,
     /// `(dwarf_reg, frame_offset)`, deduplicated and sorted by frame offset.
     roots: Vec<(u16, i32)>,
+    /// #7803: DERIVED (interior) pointer slots, each tied to the base root it
+    /// was derived from — `(index into `roots`, dwarf_reg, frame_offset)`.
+    ///
+    /// The v3 format collapsed every statepoint (base, derived) pair to one
+    /// slot on the stated premise that "Perry has no interior pointers". The
+    /// premise is false: the RS4GC prelude (`mem2reg,sccp`) hoists for-of
+    /// element GEPs into values that live across the poll, and LLVM records
+    /// them as derived pointers. Collapsing the pair made the runtime walker
+    /// treat `&elements[i]` as an object start — misread as a garbage header
+    /// by the pin-latch, and never rewritten as `base' + delta` when the
+    /// array moves, which dangles the cursor. Deduplicated and sorted by
+    /// frame offset, like `roots`.
+    derived: Vec<(u32, u16, i32)>,
 }
 
 /// One function's safepoints, keyed by the symbol the linker will relocate.
@@ -481,7 +499,12 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                     as usize;
                 pos += 16;
 
-                let mut roots: Vec<(u16, i32)> = Vec::new();
+                // Read every location first: the statepoint layout is
+                // POSITIONAL — three constants (calling convention, flags,
+                // deopt count), then that many deopt locations, then the GC
+                // pointer locations in (base, derived) PAIRS — and pairing
+                // cannot be recovered from a flat filter.
+                let mut locations: Vec<(u8, u16, u16, i32)> = Vec::with_capacity(location_count);
                 for location in 0..location_count {
                     let kind = *bytes.get(pos).ok_or_else(|| {
                         truncated(&format!("{symbol} record {index} location {location}"), pos)
@@ -495,14 +518,67 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                     let offset = read_u32(bytes, pos + 8).ok_or_else(|| {
                         truncated(&format!("{symbol} record {index} location {location}"), pos)
                     })? as i32;
-                    // Keep exactly what the collector keeps: 8-byte frame
-                    // slots, with the base/derived pair collapsed to one.
-                    if matches!(kind, LOCATION_DIRECT | LOCATION_INDIRECT) && size == 8 {
-                        if !roots.contains(&(dwarf_reg, offset)) {
-                            roots.push((dwarf_reg, offset));
+                    locations.push((kind, size, dwarf_reg, offset));
+                    pos += 12;
+                }
+
+                let is_root_slot = |&(kind, size, _, _): &(u8, u16, u16, i32)| {
+                    matches!(kind, LOCATION_DIRECT | LOCATION_INDIRECT) && size == 8
+                };
+                let mut roots: Vec<(u16, i32)> = Vec::new();
+                // `(base_reg, base_off, derived_reg, derived_off)` until the
+                // roots list is final and indices can be resolved.
+                let mut derived_pairs: Vec<(u16, i32, u16, i32)> = Vec::new();
+                // The deopt count is the third constant's small value. A
+                // malformed preamble (fewer than 3 locations, or a non-constant
+                // where the count belongs) falls back to the v3 flat filter —
+                // strictly the OLD behavior, never a new failure mode.
+                const LOCATION_CONSTANT: u8 = 4;
+                let gc_pairs_start = match locations.get(2) {
+                    Some(&(LOCATION_CONSTANT, _, _, deopt_count)) if deopt_count >= 0 => {
+                        Some(3usize + deopt_count as usize)
+                    }
+                    _ => None,
+                };
+                match gc_pairs_start {
+                    Some(start)
+                        if start <= locations.len() && (locations.len() - start) % 2 == 0 =>
+                    {
+                        for pair in locations[start..].chunks_exact(2) {
+                            let (base, derived) = (&pair[0], &pair[1]);
+                            if !is_root_slot(base) || !is_root_slot(derived) {
+                                // A constant/register operand (e.g. a null
+                                // base): keep whichever half IS a frame slot,
+                                // as the flat filter always has.
+                                for loc in pair.iter().filter(|l| is_root_slot(l)) {
+                                    if !roots.contains(&(loc.2, loc.3)) {
+                                        roots.push((loc.2, loc.3));
+                                    }
+                                }
+                                continue;
+                            }
+                            let base_slot = (base.2, base.3);
+                            let derived_slot = (derived.2, derived.3);
+                            if !roots.contains(&base_slot) {
+                                roots.push(base_slot);
+                            }
+                            if derived_slot != base_slot {
+                                derived_pairs.push((
+                                    base_slot.0,
+                                    base_slot.1,
+                                    derived_slot.0,
+                                    derived_slot.1,
+                                ));
+                            }
                         }
                     }
-                    pos += 12;
+                    _ => {
+                        for loc in locations.iter().filter(|l| is_root_slot(l)) {
+                            if !roots.contains(&(loc.2, loc.3)) {
+                                roots.push((loc.2, loc.3));
+                            }
+                        }
+                    }
                 }
 
                 pos = align_up(pos - record_start, 8) + record_start;
@@ -519,9 +595,33 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                 }
 
                 roots.sort_unstable_by_key(|(_, offset)| *offset);
+                // Resolve derived pairs against the SORTED roots list, drop
+                // duplicates, and drop any derived slot that is also a plain
+                // root (a slot cannot be both an object start and an interior
+                // pointer; preferring the root keeps v3's behavior for the
+                // ambiguous shape rather than inventing a new one).
+                let mut derived: Vec<(u32, u16, i32)> = Vec::new();
+                for (base_reg, base_off, d_reg, d_off) in derived_pairs {
+                    if roots.contains(&(d_reg, d_off)) {
+                        continue;
+                    }
+                    let Some(base_index) =
+                        roots.iter().position(|&slot| slot == (base_reg, base_off))
+                    else {
+                        continue;
+                    };
+                    // Slot-level dedup: one slot holds one value, so a second
+                    // pairing for the same (reg, offset) — same base or not —
+                    // must not produce a second rewrite of it.
+                    if !derived.iter().any(|&(_, r, o)| r == d_reg && o == d_off) {
+                        derived.push((base_index as u32, d_reg, d_off));
+                    }
+                }
+                derived.sort_unstable_by_key(|&(_, _, offset)| offset);
                 records.push(Record {
                     instruction_offset,
                     roots,
+                    derived,
                 });
             }
             out.push(FunctionMap {
@@ -578,17 +678,48 @@ const DWARF_REG_SP_AARCH64: u16 = 31;
 /// Frame pointer, the other base the single-bit encoding can express.
 const DWARF_REG_FP_AARCH64: u16 = 29;
 
+/// Emit one root list in the shared tag/delta encoding (see the header-word
+/// comment in [`encode_stream`]). Used for both the base roots and the
+/// derived slots — the derived list restarts its own delta chain.
+fn encode_slots(stream: &mut Vec<u8>, slots: impl Iterator<Item = (u16, i32)>) {
+    let mut previous: Option<i32> = None;
+    for (reg, offset) in slots {
+        let tag = match reg {
+            DWARF_REG_FP_AARCH64 => 0u64,
+            DWARF_REG_SP_AARCH64 => 1,
+            _ => 2,
+        };
+        let delta = match previous {
+            None => offset,
+            Some(prev) => offset.wrapping_sub(prev),
+        };
+        push_varint(stream, (zigzag(delta) << 2) | tag);
+        if tag == 2 {
+            push_varint(stream, u64::from(reg));
+        }
+        previous = Some(offset);
+    }
+}
+
 fn encode_stream(functions: &[FunctionMap]) -> Vec<u8> {
     let mut stream = Vec::new();
     for function in functions {
-        let mut previous_roots: Option<&Vec<(u16, i32)>> = None;
+        let mut previous_record: Option<(&Vec<(u16, i32)>, &Vec<(u32, u16, i32)>)> = None;
         for record in &function.records {
-            if previous_roots == Some(&record.roots) {
-                // Repeat flag: the live set is the previous record's.
+            if previous_record == Some((&record.roots, &record.derived)) {
+                // Repeat flag: the live set (bases AND deriveds) is the
+                // previous record's.
                 push_varint(&mut stream, 1);
                 continue;
             }
-            push_varint(&mut stream, (record.roots.len() as u64) << 1);
+            // v4 header word: (root_count << 2) | (has_derived << 1) | 0.
+            // Bit 0 stays the repeat flag, so a v3-shaped record (no
+            // deriveds) costs the same bytes it did.
+            let has_derived = u64::from(!record.derived.is_empty());
+            push_varint(
+                &mut stream,
+                ((record.roots.len() as u64) << 2) | (has_derived << 1),
+            );
 
             // Deltas are zigzagged rather than emitted raw. `decode_v3` sorts
             // roots so they are non-negative in practice, but a raw negative
@@ -602,24 +733,21 @@ fn encode_stream(functions: &[FunctionMap]) -> Vec<u8> {
             // format must not be the reason a root is unrepresentable.
             //   0 = frame pointer, 1 = stack pointer, 2 = explicit DWARF
             //   register number as a following varint.
-            let mut previous: Option<i32> = None;
-            for (reg, offset) in &record.roots {
-                let tag = match *reg {
-                    DWARF_REG_FP_AARCH64 => 0u64,
-                    DWARF_REG_SP_AARCH64 => 1,
-                    _ => 2,
-                };
-                let delta = match previous {
-                    None => *offset,
-                    Some(prev) => offset.wrapping_sub(prev),
-                };
-                push_varint(&mut stream, (zigzag(delta) << 2) | tag);
-                if tag == 2 {
-                    push_varint(&mut stream, u64::from(*reg));
+            encode_slots(&mut stream, record.roots.iter().copied());
+            if !record.derived.is_empty() {
+                push_varint(&mut stream, record.derived.len() as u64);
+                // Base indices first (into the sorted roots list), then the
+                // slots themselves in the shared encoding with a fresh delta
+                // chain.
+                for &(base_index, _, _) in &record.derived {
+                    push_varint(&mut stream, u64::from(base_index));
                 }
-                previous = Some(*offset);
+                encode_slots(
+                    &mut stream,
+                    record.derived.iter().map(|&(_, reg, off)| (reg, off)),
+                );
             }
-            previous_roots = Some(&record.roots);
+            previous_record = Some((&record.roots, &record.derived));
         }
     }
     stream
@@ -660,10 +788,51 @@ fn unzigzag(value: u32) -> i32 {
 /// Always on. It walks bytes already in cache and is far below the noise floor
 /// of the LLVM run that produced them, and an assertion that has to be switched
 /// on is one that is off when it matters.
+fn decode_slots(
+    stream: &[u8],
+    mut cursor: usize,
+    count: usize,
+    where_: &dyn Fn() -> String,
+) -> Result<(Vec<(u16, i32)>, usize), String> {
+    let mut slots = Vec::with_capacity(count);
+    let mut last: Option<i32> = None;
+    for slot in 0..count {
+        let (value, next) = read_varint(stream, cursor)
+            .ok_or_else(|| format!("{}: truncated slot {slot}", where_()))?;
+        cursor = next;
+        let dwarf_reg = match value & 3 {
+            0 => DWARF_REG_FP_AARCH64,
+            1 => DWARF_REG_SP_AARCH64,
+            2 => {
+                let (reg, next) = read_varint(stream, cursor).ok_or_else(|| {
+                    format!("{}: truncated explicit register for slot {slot}", where_())
+                })?;
+                cursor = next;
+                u16::try_from(reg)
+                    .map_err(|_| format!("{}: slot {slot} register {reg} exceeds u16", where_()))?
+            }
+            tag => {
+                return Err(format!(
+                    "{}: slot {slot} has reserved base tag {tag}",
+                    where_()
+                ))
+            }
+        };
+        let delta = unzigzag((value >> 2) as u32);
+        let offset = match last {
+            None => delta,
+            Some(previous_offset) => previous_offset.wrapping_add(delta),
+        };
+        last = Some(offset);
+        slots.push((dwarf_reg, offset));
+    }
+    Ok((slots, cursor))
+}
+
 fn verify_roundtrip(functions: &[FunctionMap], stream: &[u8]) -> Result<(), String> {
     let mut cursor = 0usize;
     for function in functions {
-        let mut previous: Option<Vec<(u16, i32)>> = None;
+        let mut previous: Option<(Vec<(u16, i32)>, Vec<(u32, u16, i32)>)> = None;
         for (index, record) in function.records.iter().enumerate() {
             let where_ = || format!("{} record {index}", function.symbol);
             let (header, next) = read_varint(stream, cursor)
@@ -674,49 +843,50 @@ fn verify_roundtrip(functions: &[FunctionMap], stream: &[u8]) -> Result<(), Stri
                     .clone()
                     .ok_or_else(|| format!("{}: repeat flag with no previous live set", where_()))?
             } else {
-                let count = (header >> 1) as usize;
-                let mut roots = Vec::with_capacity(count);
-                let mut last: Option<i32> = None;
-                for root in 0..count {
-                    let (value, next) = read_varint(stream, cursor)
-                        .ok_or_else(|| format!("{}: truncated root {root}", where_()))?;
+                let count = (header >> 2) as usize;
+                let has_derived = header & 2 != 0;
+                let (roots, next) = decode_slots(stream, cursor, count, &where_)?;
+                cursor = next;
+                let derived = if has_derived {
+                    let (derived_count, next) = read_varint(stream, cursor)
+                        .ok_or_else(|| format!("{}: truncated derived count", where_()))?;
                     cursor = next;
-                    let dwarf_reg = match value & 3 {
-                        0 => DWARF_REG_FP_AARCH64,
-                        1 => DWARF_REG_SP_AARCH64,
-                        2 => {
-                            let (reg, next) = read_varint(stream, cursor).ok_or_else(|| {
-                                format!("{}: truncated explicit register for root {root}", where_())
-                            })?;
-                            cursor = next;
-                            u16::try_from(reg).map_err(|_| {
-                                format!("{}: root {root} register {reg} exceeds u16", where_())
-                            })?
-                        }
-                        tag => {
+                    let mut bases = Vec::with_capacity(derived_count as usize);
+                    for entry in 0..derived_count {
+                        let (base_index, next) = read_varint(stream, cursor).ok_or_else(|| {
+                            format!("{}: truncated derived base index {entry}", where_())
+                        })?;
+                        cursor = next;
+                        if base_index as usize >= roots.len() {
                             return Err(format!(
-                                "{}: root {root} has reserved base tag {tag}",
-                                where_()
-                            ))
+                                "{}: derived entry {entry} names base {base_index} of {} roots",
+                                where_(),
+                                roots.len()
+                            ));
                         }
-                    };
-                    let delta = unzigzag((value >> 2) as u32);
-                    let offset = match last {
-                        None => delta,
-                        Some(previous_offset) => previous_offset.wrapping_add(delta),
-                    };
-                    last = Some(offset);
-                    roots.push((dwarf_reg, offset));
-                }
-                roots
+                        bases.push(base_index as u32);
+                    }
+                    let (slots, next) =
+                        decode_slots(stream, cursor, derived_count as usize, &where_)?;
+                    cursor = next;
+                    bases
+                        .into_iter()
+                        .zip(slots)
+                        .map(|(base, (reg, off))| (base, reg, off))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                (roots, derived)
             };
-            if decoded != record.roots {
+            if decoded.0 != record.roots || decoded.1 != record.derived {
                 return Err(format!(
                     "{}: the compact stream decodes to {decoded:?} but the stack map recorded \
-                     {:?}. Re-encoding changed this safepoint's live set, so the collector would \
-                     scan different words than LLVM described.",
+                     roots {:?} derived {:?}. Re-encoding changed this safepoint's live set, so \
+                     the collector would scan different words than LLVM described.",
                     where_(),
-                    record.roots
+                    record.roots,
+                    record.derived
                 ));
             }
             previous = Some(decoded);
@@ -1518,14 +1688,17 @@ mod tests {
                 Record {
                     instruction_offset: "0".to_string(),
                     roots: shared.clone(),
+                    derived: Vec::new(),
                 },
                 Record {
                     instruction_offset: "8".to_string(),
                     roots: shared.clone(),
+                    derived: Vec::new(),
                 },
                 Record {
                     instruction_offset: "16".to_string(),
                     roots: shared,
+                    derived: Vec::new(),
                 },
             ],
         }];
@@ -1560,6 +1733,54 @@ mod tests {
         assert!(out.contains("_perry_gc_map:"));
     }
 
+    /// #7803: derived (interior) slots survive the encode/decode round trip,
+    /// share the repeat flag with their bases, and a differing derived set
+    /// breaks the repeat.
+    #[test]
+    fn derived_slots_roundtrip_and_share_the_repeat_flag() {
+        let record = |off: &str, derived: Vec<(u32, u16, i32)>| Record {
+            instruction_offset: off.to_string(),
+            roots: vec![(29, -16), (29, -8)],
+            derived,
+        };
+        let repeated = vec![FunctionMap {
+            symbol: "probe".to_string(),
+            stack_size: 96,
+            records: vec![
+                record("0", vec![(1, 31, 24)]),
+                record("16", vec![(1, 31, 24)]),
+            ],
+        }];
+        let stream = encode_stream(&repeated);
+        verify_roundtrip(&repeated, &stream).expect("derived records must round-trip");
+        let single = vec![FunctionMap {
+            symbol: "probe".to_string(),
+            stack_size: 96,
+            records: vec![record("0", vec![(1, 31, 24)])],
+        }];
+        assert_eq!(
+            stream.len(),
+            encode_stream(&single).len() + 1,
+            "an identical (roots, derived) pair must cost one repeat byte"
+        );
+
+        let differing = vec![FunctionMap {
+            symbol: "probe".to_string(),
+            stack_size: 96,
+            records: vec![
+                record("0", vec![(1, 31, 24)]),
+                record("16", vec![(0, 31, 24)]),
+            ],
+        }];
+        let stream = encode_stream(&differing);
+        verify_roundtrip(&differing, &stream)
+            .expect("a differing derived set must re-encode, not repeat");
+        assert!(
+            stream.len() > encode_stream(&single).len() + 1,
+            "a record whose derived set differs must not take the repeat flag"
+        );
+    }
+
     /// The round-trip check must be able to FAIL. A verifier that only ever
     /// agrees with itself is CLAUDE.md's fourth gate-failure mode — the gate
     /// runs, its subject never did — so plant each way the stream can lie and
@@ -1575,10 +1796,12 @@ mod tests {
                 Record {
                     instruction_offset: "0".to_string(),
                     roots: vec![(7, 8), (7, 24), (7, 40)],
+                    derived: Vec::new(),
                 },
                 Record {
                     instruction_offset: "16".to_string(),
                     roots: vec![(7, 8), (7, 24), (7, 40)],
+                    derived: Vec::new(),
                 },
             ],
         }];
@@ -1587,7 +1810,7 @@ mod tests {
 
         // A dropped root: the header's count is the first byte of the stream.
         let mut short = stream.clone();
-        short[0] = 2 << 1;
+        short[0] = 2 << 2;
         assert!(
             verify_roundtrip(&functions, &short).is_err(),
             "a stream claiming fewer roots than the map recorded must be rejected"
