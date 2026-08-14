@@ -115,12 +115,14 @@ fn stream_functions<'ctx>(
         let header = synth_define_header(f, force_external);
         let mut stream = crate::dialect::FnStream::begin(context, module, &header)
             .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
-        if f.personality.is_some() {
-            // The invoke-EH phi-predecessor rewrite (#7302) needs
-            // whole-function analysis and therefore text; the line reader
-            // DOES understand invoke/landingpad, so this path constructs
-            // natively from the rewritten text rather than falling back to
-            // clang.
+        if f.personality.is_some() || f.stack_map_requested() {
+            // Invoke-EH phi predecessors and precise-root lowering both need
+            // whole-function analysis. The latter turns shadow-slot binds
+            // into addrspace(1) roots before RS4GC; streaming the pre-lowered
+            // FinalItems would produce a verifier-clean module with no roots.
+            // This remains native construction: only one finalized function
+            // is materialized and fed through the closed dialect line reader,
+            // never parsed as module-scale IR.
             let fn_text = f.to_ir();
             for line in fn_text.lines().skip(1) {
                 stream.line(line).map_err(|e| {
@@ -213,16 +215,29 @@ fn freeze_unit(
         skeleton.push_str(&crate::module::declare_line_for(&f));
         skeleton.push('\n');
         let mut items = Vec::new();
-        f.for_each_final_item::<anyhow::Error>(&mut |item| {
-            use crate::function::FinalItem as FI;
-            items.push(match item {
-                FI::Label(s) => FrozenItem::Label(s.to_string()),
-                FI::Blank => FrozenItem::Blank,
-                FI::Text(s) => FrozenItem::Text(s.to_string()),
-                FI::Inst(i) => FrozenItem::Inst(i.clone()),
-            });
-            Ok(())
-        })?;
+        if f.stack_map_requested() {
+            // `to_ir` is where precise roots are lowered. Freeze its body as
+            // owned lines so worker threads still receive an immutable payload
+            // and the module-scale text graph is never retained.
+            items.extend(
+                f.to_ir()
+                    .lines()
+                    .skip(1)
+                    .filter(|line| *line != "}")
+                    .map(|line| FrozenItem::Text(line.to_string())),
+            );
+        } else {
+            f.for_each_final_item::<anyhow::Error>(&mut |item| {
+                use crate::function::FinalItem as FI;
+                items.push(match item {
+                    FI::Label(s) => FrozenItem::Label(s.to_string()),
+                    FI::Blank => FrozenItem::Blank,
+                    FI::Text(s) => FrozenItem::Text(s.to_string()),
+                    FI::Inst(i) => FrozenItem::Inst(i.clone()),
+                });
+                Ok(())
+            })?;
+        }
         functions.push(FrozenFunction {
             name: f.name.clone(),
             header: synth_define_header(&f, true),
@@ -561,7 +576,84 @@ fn debug_dump(module: &Module<'_>, module_prefix: &str) {
 mod tests {
     use super::*;
     use crate::module::LlModule;
-    use crate::types::{I64, VOID};
+    use crate::types::{I32, I64, PTR, VOID};
+
+    fn precise_root_fixture(extra_plain_function: bool) -> LlModule {
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+        module.declare_function("js_map_alloc", I64, &[I32]);
+
+        let function = module.define_function("native_root_diff_fixture", I64, vec![]);
+        function.enable_shadow_frame(0);
+        let root_index = function
+            .reserve_shadow_slot()
+            .expect("native root fixture reserves one precise-root slot");
+        let root = function.alloca_entry(I64);
+        function.entry_allocas_push_store(I64, "0", &root);
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(I32, &root_index.to_string()), (PTR, &root)],
+        );
+        let entry = function.create_block("entry");
+        let value = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
+        entry.store(I64, &value, &root);
+        entry.ret(I64, &value);
+        if extra_plain_function {
+            let plain = module.define_function("native_root_diff_plain", VOID, vec![]);
+            plain.create_block("entry").ret_void();
+        }
+        module
+    }
+
+    #[test]
+    fn native_construction_lowers_precise_roots_before_rs4gc() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let module = precise_root_fixture(false);
+
+        let text_ir = module.to_ir();
+        assert!(
+            text_ir.contains("alloca ptr addrspace(1)"),
+            "control arm must demonstrably lower a precise root:\n{text_ir}"
+        );
+        assert!(
+            !text_ir.contains("call void @js_shadow_slot_bind"),
+            "native-root lowering must consume the shadow-stack bind:\n{text_ir}"
+        );
+
+        let text = crate::linker::compile_ll_to_object(&text_ir, None)
+            .expect("trusted text arm emits an object");
+        let native = compile_module_native(&module, None, "native_root_diff_fixture")
+            .expect("direct native arm emits an object");
+        assert_eq!(
+            native, text,
+            "a mapped function must be byte-identical after both arms run RS4GC; \
+             a behavior-only check is vacuous until a collection"
+        );
+    }
+
+    #[test]
+    fn split_native_construction_lowers_precise_roots_before_rs4gc() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let text_module = precise_root_fixture(true);
+        let units = text_module.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "fixture must exercise two real units");
+        let text = crate::linker::compile_units_to_object(&units, None)
+            .expect("trusted text units emit and partial-link");
+
+        let mut native_module = precise_root_fixture(true);
+        let native = compile_module_units_native(
+            &mut native_module,
+            2,
+            None,
+            "split_native_root_diff_fixture",
+        )
+        .expect("direct native units emit and partial-link");
+        assert_eq!(
+            native, text,
+            "split native units must freeze finalized precise-root IR, not \
+             pre-lowered shadow-slot calls"
+        );
+    }
 
     #[test]
     fn split_units_emit_and_merge_init_body_pointer_constant() {

@@ -649,6 +649,18 @@ impl LlFunction {
         self.blocks.len()
     }
 
+    /// Whether final rendering must lower shadow-slot bindings into native
+    /// `addrspace(1)` roots before RS4GC runs.
+    ///
+    /// The direct C-API backend normally consumes [`FinalItem`]s before
+    /// [`Self::to_ir`] applies this whole-function lowering. Its callers use
+    /// this bit to select the finalized text stream for mapped functions;
+    /// otherwise the native module keeps `js_shadow_slot_bind` calls while
+    /// claiming `gc "statepoint-example"`, and the collector gets no roots.
+    pub(crate) fn stack_map_requested(&self) -> bool {
+        self.stack_map_requested
+    }
+
     /// Label of the last-created block — convenience for expression codegen
     /// that needs to feed a phi node the predecessor label after compiling a
     /// sub-expression whose control flow may have split.
