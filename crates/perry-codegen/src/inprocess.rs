@@ -479,6 +479,20 @@ fn optimize_and_emit(
                     e.to_string()
                 )
             })?;
+        // Verify the rewritten module before it reaches the backend. RS4GC
+        // has produced verifier-invalid IR in the wild (#8082: it wrapped an
+        // inline-asm barrier into a gc.statepoint), and unlike the external
+        // `opt` path — whose verifier aborts with the broken instruction —
+        // the in-process pipeline would feed the broken module straight to
+        // ISel, where it dies as a bare SIGBUS with no diagnostic.
+        module.verify().map_err(|e| {
+            anyhow!(
+                "in-process rewrite-statepoints-for-gc produced a module the \
+                 verifier rejects (this is a Perry codegen bug — the input \
+                 shape must be exempted or fixed):\n{}",
+                e.to_string()
+            )
+        })?;
         // The #4880 opt-tier decision (`native_plan_args`) was made from
         // PRE-rewrite sizes, but RS4GC's relocation fan-out is quadratic-ish
         // in (live gc values x statepoints): one 51k-line minified-bundle
@@ -518,6 +532,66 @@ fn optimize_and_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn asm_barrier_fixture(leaf_attr: &str) -> String {
+        format!(
+            "declare i64 @may_collect()\n\n\
+             define i64 @f(i64 %a) gc \"statepoint-example\" {{\n\
+             entry:\n\
+             \x20 %slot = alloca ptr addrspace(1)\n\
+             \x20 %p = inttoptr i64 %a to ptr addrspace(1)\n\
+             \x20 store ptr addrspace(1) %p, ptr %slot\n\
+             \x20 call void asm sideeffect \"\", \"\"(){leaf_attr}\n\
+             \x20 %t = call i64 @may_collect()\n\
+             \x20 %after = load ptr addrspace(1), ptr %slot\n\
+             \x20 %bits = ptrtoint ptr addrspace(1) %after to i64\n\
+             \x20 %r = add i64 %t, %bits\n\
+             \x20 ret i64 %r\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn gc_leaf_asm_barrier_survives_rs4gc_unwrapped() {
+        // The shipped emitters stamp the loop-preservation barrier
+        // `"gc-leaf-function"`; RS4GC must leave it as a plain inline-asm
+        // call while still statepointing the real call next to it.
+        let rewritten = statepoint_rewritten_ir(
+            &asm_barrier_fixture(" \"gc-leaf-function\""),
+            "arm64-apple-darwin",
+            "asm_barrier_leaf",
+        )
+        .expect("attributed barrier must survive the rewrite");
+        assert!(
+            rewritten.contains("call void asm sideeffect"),
+            "barrier must remain a plain inline-asm call:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("elementtype(void ()) asm"),
+            "barrier must not be statepoint-wrapped:\n{rewritten}"
+        );
+        assert!(
+            rewritten.contains("@llvm.experimental.gc.statepoint"),
+            "the genuine call must still be statepointed:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn unattributed_asm_barrier_is_rejected_not_miscompiled() {
+        // Sabotage arm: without the attribute RS4GC wraps the asm into a
+        // gc.statepoint whose callee is inline asm — invalid IR. The
+        // pipeline must fail verification loudly (#8082's SIGBUS shape),
+        // proving the leaf test above can actually fail.
+        let result = statepoint_rewritten_ir(
+            &asm_barrier_fixture(""),
+            "arm64-apple-darwin",
+            "asm_barrier_broken",
+        );
+        assert!(
+            result.is_err(),
+            "an unattributed barrier must be rejected by the verifier"
+        );
+    }
 
     #[test]
     fn relocation_bloated_function_is_demoted_to_optnone_and_its_sibling_is_not() {
