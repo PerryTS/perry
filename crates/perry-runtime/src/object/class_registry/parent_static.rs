@@ -418,16 +418,20 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 }
 
 /// #1789: stamp a freshly-allocated object as a heap "class object" (the
-/// value a class EXPRESSION evaluates to). Sets `object_type =
-/// OBJECT_TYPE_CLASS` so `typeof` reports "function" and `new`/`instanceof`
-/// read `class_id` from it. Called by codegen right after `js_object_alloc`
-/// in the `ClassExprFresh` lowering.
+/// value a class EXPRESSION evaluates to). Transitions the authoritative
+/// ShapeId descriptor kind and updates `object_type` only as a compatibility
+/// mirror. Called by codegen right after `js_object_alloc` in the
+/// `ClassExprFresh` lowering.
 #[no_mangle]
 pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
-            let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+            let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+                return;
+            };
+            if header.obj_type != crate::gc::GC_TYPE_OBJECT
+                || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            {
                 return;
             }
             // Compatibility mirror only; all semantic reads use the ShapeId
@@ -1720,7 +1724,15 @@ mod shape_authority_tests_8067 {
     }
 
     #[test]
-    fn class_kind_survives_numeric_and_pointer_static_field_installation() {
+    fn mark_class_rejects_non_heap_addresses() {
+        // Representative ids from the native-handle and proxy bands. The
+        // extern entry point must validate before reading a preceding header.
+        super::js_object_mark_class(0x40000);
+        super::js_object_mark_class(1);
+    }
+
+    #[test]
+    fn class_kind_survives_static_field_installation_and_deletion() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             const CID: u32 = 0x8067;
@@ -1782,6 +1794,29 @@ mod shape_authority_tests_8067 {
                     .object_kind,
                 crate::object::shapes::ShapeObjectKind::Class,
                 "class kind must never share storage with GC layout flags"
+            );
+
+            // Deletion installs a cloned keys array, which clears the current
+            // stamp. The replacement descriptor must inherit class kind from
+            // the predecessor captured before that clear.
+            assert_eq!(
+                crate::object::js_object_delete_field(
+                    obj_handle.get_raw_mut_ptr(),
+                    numeric_key.get_raw_const_ptr(),
+                ),
+                1
+            );
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            assert!(
+                super::is_class_object_ptr(obj.cast()),
+                "deleting a static field erased class descriptor lineage: {:?}",
+                crate::object::shapes::object_shape_descriptor(obj)
+            );
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .expect("post-delete class descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Class
             );
 
             let class_value = crate::value::js_nanbox_pointer(obj as i64);

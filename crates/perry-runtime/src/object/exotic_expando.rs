@@ -222,6 +222,12 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
     tables.entries.borrow_mut().remove(&addr);
 }
 
+/// Drop an expando entry when its owner is finalized directly rather than
+/// discovered by the shared dead-owner pruning pass.
+pub(crate) fn exotic_expando_owner_clear_dead(addr: usize) {
+    expando_clear_on_alloc(addr);
+}
+
 /// Death pruning (2026-07-09 GC audit wave 2): the root scanner
 /// (`scan_exotic_expando_roots_mut`) strongly roots EVERY owner's values,
 /// dead owners included, so a dead Date/RegExp/Promise/Map/Set's expando

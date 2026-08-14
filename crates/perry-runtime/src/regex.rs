@@ -186,6 +186,7 @@ pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
     REGEX_SOURCE_TABLE.with(|table| {
         table.borrow_mut().remove(&addr);
     });
+    crate::object::exotic_expando::exotic_expando_owner_clear_dead(addr);
 }
 
 #[cfg(test)]

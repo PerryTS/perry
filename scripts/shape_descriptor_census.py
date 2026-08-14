@@ -33,8 +33,13 @@ def rust_sources() -> dict[str, str]:
     }
 
 
-def strip_rust_comments_and_literals(source: str) -> str:
-    """Blank comments/string literals while preserving code and newlines."""
+def _rust_without_comments_and_literals(source: str, preserve_offsets: bool) -> str:
+    """Blank comments/literals, optionally preserving every source offset."""
+
+    def blank_span(span: str) -> str:
+        if preserve_offsets:
+            return "".join("\n" if char == "\n" else " " for char in span)
+        return " " + "\n" * span.count("\n")
 
     chunks: list[str] = []
     pos = 0
@@ -45,11 +50,11 @@ def strip_rust_comments_and_literals(source: str) -> str:
         if lexeme == "//":
             newline = source.find("\n", end)
             if newline < 0:
-                chunks.append(" ")
-                pos = len(source)
-                break
-            chunks.append("\n")
-            pos = newline + 1
+                end = len(source)
+            else:
+                end = newline + 1
+            chunks.append(blank_span(source[match.start() : end]))
+            pos = end
             continue
         if lexeme == "/*":
             depth = 1
@@ -69,10 +74,22 @@ def strip_rust_comments_and_literals(source: str) -> str:
             else:
                 tail = QUOTED_STRING_TAIL.match(source, end)
                 end = len(source) if tail is None else tail.end()
-        chunks.append(" " + "\n" * source[match.start() : end].count("\n"))
+        chunks.append(blank_span(source[match.start() : end]))
         pos = end
     chunks.append(source[pos:])
     return "".join(chunks)
+
+
+def strip_rust_comments_and_literals(source: str) -> str:
+    """Blank comments/string literals while preserving code and newlines."""
+
+    return _rust_without_comments_and_literals(source, preserve_offsets=False)
+
+
+def blank_rust_comments_and_literals(source: str) -> str:
+    """Blank comments/literals while preserving every source-string offset."""
+
+    return _rust_without_comments_and_literals(source, preserve_offsets=True)
 
 
 def stripped_sources(sources: dict[str, str]) -> dict[str, str]:
@@ -90,6 +107,15 @@ def run_literal_lexer_selftest() -> None:
     clean = strip_rust_comments_and_literals(fixture)
     if len(re.findall(r"\.\s*keys_array\b", clean)) != 1:
         raise CensusError("literal lexer swallowed a real member between quote-char literals")
+    brace_fixture = '''fn brace_fixture() {
+        let string_brace = "}";
+        let char_brace = '{';
+        // } must not close the function
+        let live_after_literal_braces = 1;
+    }
+    '''
+    if "live_after_literal_braces" not in function_body(brace_fixture, "brace_fixture"):
+        raise CensusError("raw function-body extraction counted literal/comment braces")
 
 
 def normalize_line(line: str) -> str:
@@ -154,17 +180,18 @@ def observed_census(sources: dict[str, str]) -> dict[str, object]:
 
 
 def function_body(source: str, name: str) -> str:
-    match = re.search(rf"\bfn\s+{re.escape(name)}\b", source)
+    blanked = blank_rust_comments_and_literals(source)
+    match = re.search(rf"\bfn\s+{re.escape(name)}\b", blanked)
     if not match:
         raise CensusError(f"missing function body: {name}")
-    start = source.find("{", match.end())
+    start = blanked.find("{", match.end())
     if start < 0:
         raise CensusError(f"missing opening brace: {name}")
     depth = 0
-    for i in range(start, len(source)):
-        if source[i] == "{":
+    for i in range(start, len(blanked)):
+        if blanked[i] == "{":
             depth += 1
-        elif source[i] == "}":
+        elif blanked[i] == "}":
             depth -= 1
             if depth == 0:
                 return source[start + 1 : i]
@@ -453,10 +480,22 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError(f"{name} emits a removed ObjectHeader fact")
 
     require_code(gc_types, r"GC_TYPE_REGEXP\s*:\s*u8", "RegExp external discriminator")
-    require_code(
+    regexp_info_match = re.search(
+        r"gc_type_info_entry\(\s*GC_TYPE_REGEXP\b[\s\S]*?\n\s*\)\s*\)",
         gc_types,
-        r"GC_TYPE_REGEXP[\s\S]*GcMoveHookKind::RegExpSideTables",
+    )
+    if not regexp_info_match:
+        raise CensusError("shape descriptor authority surface missing: RegExp type metadata")
+    regexp_info = regexp_info_match.group(0)
+    require_code(
+        regexp_info,
+        r"GcMoveHookKind::RegExpSideTables",
         "RegExp address-owned relocation hook",
+    )
+    require_code(
+        regexp_info,
+        r"GcFinalizeHookKind::RegExpSideTables",
+        "RegExp malloc-finalize side-table hook",
     )
     if "OBJ_FLAG_CLASS_OBJECT" in gc_types + class_guard + element_guard + write_pics:
         raise CensusError("class kind reintroduced a GcHeader layout-bit alias")
@@ -579,11 +618,15 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     legacy_ir = dict(sources)
     path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
-    legacy_ir[path] = legacy_ir[path].replace(
-        'add(I64, &obj_handle, "8")',
+    legacy_body, substitutions = re.subn(
+        r'add\(I64, &obj_handle, "8"\)',
         'add(I64, &obj_handle, "16")',
-        1,
+        legacy_ir[path],
+        count=1,
     )
+    if substitutions != 1:
+        raise CensusError("legacy emitted-offset sabotage fixture missing")
+    legacy_ir[path] = legacy_body
     expect_rejected(
         "legacy keys-header offset in emitted PIC",
         lambda: assert_authority_surfaces(legacy_ir),

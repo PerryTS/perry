@@ -23,6 +23,35 @@ fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
 }
 
 #[test]
+fn malloc_finalize_clears_regexp_address_owned_tables() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("finalize"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = js_regexp_new(
+        pattern.get_raw_mut_ptr::<StringHeader>(),
+        flags.get_raw_mut_ptr::<StringHeader>(),
+    );
+    let addr = re as usize;
+    assert!(test_regex_pointer_entry_exists(addr));
+    assert!(test_regex_source_entry_exists(addr));
+    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+        addr,
+        "owned",
+        crate::value::TAG_TRUE,
+    );
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_REGEXP, re.cast::<u8>());
+    }
+
+    assert!(!test_regex_pointer_entry_exists(addr));
+    assert!(!test_regex_source_entry_exists(addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+}
+
+#[test]
 fn js_replacement_expands_special_patterns() {
     let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
     let subj = "John Smith";
