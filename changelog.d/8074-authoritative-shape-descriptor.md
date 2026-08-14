@@ -1,4 +1,4 @@
-**First authoritative-shape prerequisite slice (#8067; #8047 remains blocked).**
+**First authoritative-shape prerequisite slice (PR #8074; refs #8067; #8047 remains blocked).**
 
 `ShapeId` now resolves through the current agent's `RuntimeState` to a
 descriptor containing a moving weak mirror of the rooted ordered keys array,
