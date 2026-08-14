@@ -1632,3 +1632,61 @@ on**, and treat the paced config as a rate-survey tool only.
 Cost: ~9.4× the collections, so budget 30–60 minutes per run on a quiet box.
 Worth it — the paced config's cheapness was false economy, since its results
 needed forty runs to mean anything.
+
+## 32. The promotion hypothesis is NOT supported either — and why I stopped here
+
+`PERRY_GC_TENURING_SURVIVALS` (commit `b7dbe5c3d`) pins the promotion age,
+overriding the adaptive threshold. Paced schedule, seeds 1–5, same binary:
+
+| promotion age | relocations per object | failures |
+|---|---|---|
+| `=255` (never promote by age) | **most** — every survivor re-evacuated every cycle | **0/5** |
+| `=1` (promote on first minor) | **fewest** | **1/5** |
+| adaptive (#7432, default) | in between | ~40% (3/6 on the sibling binary) |
+
+§31 predicted `=255` becomes RELIABLE and `=1` disappears. Neither happened.
+
+And the shape kills the follow-on story too. When `=255` and `=1` both looked
+clean I reached for "it is the adaptive TRANSITIONS, not the value" — two
+opposite interventions sharing only a fixed threshold. Then `=1` failed a seed.
+A pinned threshold has no transitions, so that explanation is gone as well.
+
+What is left is non-monotonic: most relocations is safest, fewest is middling,
+and the adaptive middle is worst. No story about relocation count fits that,
+and at n=5 (0.6⁵ ≈ 8% by chance for `=255`) none of these cells is individually
+significant anyway.
+
+### Tally of hypotheses tested against this bug
+
+| # | hypothesis | verdict |
+|---|---|---|
+| 1 | `Object.defineProperty` rooting (#7962/#7978) | refuted (session 1, §2) |
+| 2 | callee unrooted across arguments, compiled code | real defect, **not this bug** (§19) |
+| 3 | `dyn_eval`'s own `root_push` discipline | audited sound (§21); more collection there made it *better* (§23) |
+| 4 | stale argument buffer in the dispatch tower | real defect, **not this bug** (§25, 6/16) |
+| 5 | promotion / tenuring age | **not supported** (this section) |
+
+Five hypotheses, two real defects fixed, bug still standing.
+
+### Why I am stopping rather than trying a sixth
+
+Not because the leads are exhausted — because the *measurement* cannot support
+another one. §30 laid out the arithmetic and this section is another instance
+of it: a ~40% base rate, ~1–4% schedule drift, and five-run arms. Every cell in
+the table above is under-powered, and I would be pattern-matching on noise.
+
+The honest state is: **the next person should not run another 5-seed sweep.**
+They should either
+
+* build a deterministic FAILING reproducer — §31 pinned the schedule exactly
+  (`ALLOC_KB=0`, 63,941 safepoints reproduced to the digit) but seed 1 passes
+  there, so the remaining work is a seed search under that config until one
+  fails, after which every A/B is one run per arm; or
+* attack it statically instead — the remaining unaudited surface is the
+  interpreted/compiled BOUNDARY (`dyn_eval/bridge.rs`, the raw-`args_ptr` arms
+  below `native_call_method.rs:1496`, and whatever caches the interpreted
+  dispatch path populates), where a hazard can be found by reading rather than
+  by sampling.
+
+Everything needed for either route is committed: five diagnostics, a pinned
+schedule, a symbolicating build mode, and this note.
