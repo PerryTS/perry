@@ -208,6 +208,25 @@ pub(super) struct ResolvedRoot {
 }
 
 impl ResolvedRoot {
+    /// Visit this slot with its provenance published for the pin-latch abort:
+    /// the walker resolved the owning function, record and address, and until
+    /// #7803 threw all of it away one call before the latch printed
+    /// `mutable_root_slots/native_stack` with no owner. Two `Cell` stores per
+    /// slot; the clear keeps a later phase from being blamed on this frame.
+    fn visit_with_context(self, visit: &mut impl FnMut(MutableRootSlot)) {
+        super::super::pin::set_native_root_slot_context(Some(
+            super::super::pin::NativeRootSlotContext {
+                ip: self.ip,
+                function_address: self.function_address,
+                dwarf_reg: self.dwarf_reg,
+                offset: self.offset,
+                slot_addr: self.address,
+            },
+        ));
+        visit(self.slot());
+        super::super::pin::set_native_root_slot_context(None);
+    }
+
     fn slot(self) -> MutableRootSlot {
         MutableRootSlot {
             kind: MutableRootSlotKind::NativeStack,
@@ -671,16 +690,20 @@ pub(super) fn visit_stack_map_root_slots(
         return NativeStackWalkStats::default();
     }
     match walker_mode() {
-        WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| visit(root.slot())),
+        WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| {
+            root.visit_with_context(visit)
+        }),
         WalkerMode::Fast => {
             if index.chain_walkable {
-                if let Some(stats) =
-                    fp_chain::visit(index, &mut |root: ResolvedRoot| visit(root.slot()))
-                {
+                if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
+                    root.visit_with_context(visit)
+                }) {
                     return stats;
                 }
             }
-            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| visit(root.slot()));
+            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
+                root.visit_with_context(visit)
+            });
             stats.fallback_walks = 1;
             stats
         }

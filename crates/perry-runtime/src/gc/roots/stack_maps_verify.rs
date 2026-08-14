@@ -54,10 +54,9 @@ pub(super) fn visit(
     let mut slow: Vec<ResolvedRoot> = Vec::new();
     let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
         slow.push(root);
-        visit(MutableRootSlot {
-            kind: super::MutableRootSlotKind::NativeStack,
-            ptr: root.address as *mut u64,
-        });
+        // Same provenance publication as the non-verify walks, so a latch
+        // fired under PERRY_STACKMAP_WALKER=verify names its frame too.
+        root.visit_with_context(visit);
     });
 
     if !addresses_agree(&fast, &slow) {

@@ -110,6 +110,66 @@ fn copying_walk_phase() -> Option<&'static str> {
     COPYING_WALK_PHASE.with(|c| c.get())
 }
 
+/// The native stack-map slot the walker is currently visiting, so the
+/// pin-latch abort can name the OWNING FRAME — the compiled function, its
+/// statepoint record and the slot address — instead of only the walk phase.
+///
+/// §35's cut left exactly this gap: `mutable_root_slots/native_stack` says a
+/// statepoint live bundle held the stale pointer, and the mutator backtrace
+/// lists every candidate frame without saying which one. The walker resolves
+/// all of it (`ResolvedRoot` in roots/stack_maps.rs) and then threw it away
+/// one call before the latch.
+#[derive(Clone, Copy)]
+pub(crate) struct NativeRootSlotContext {
+    /// The frame's return address the record was matched on.
+    pub(crate) ip: usize,
+    /// Start of the compiled function owning the matched record.
+    pub(crate) function_address: usize,
+    /// The record's base register (29 = FP, 31 = SP on aarch64).
+    pub(crate) dwarf_reg: u16,
+    /// The record's frame offset from that base.
+    pub(crate) offset: i32,
+    /// Resolved slot address (base register + offset).
+    pub(crate) slot_addr: usize,
+}
+
+crate::perry_thread_local! {
+    static NATIVE_ROOT_SLOT: Cell<Option<NativeRootSlotContext>> =
+        const { Cell::new(None) };
+}
+
+/// Set around each native stack-map slot visit; cleared after. Two `Cell`
+/// stores per slot, no allocation — the walk body already does strictly more
+/// per slot than this.
+#[inline]
+pub(crate) fn set_native_root_slot_context(context: Option<NativeRootSlotContext>) {
+    NATIVE_ROOT_SLOT.with(|c| c.set(context));
+}
+
+fn native_root_slot_context() -> Option<NativeRootSlotContext> {
+    NATIVE_ROOT_SLOT.with(|c| c.get())
+}
+
+/// Best-effort symbol name for an address, via `dladdr` — same approach as
+/// `eh_walker.rs`. `PERRY_KEEP_SYMBOLS=1` binaries resolve their own
+/// `perry_closure_*` symbols; stripped ones print only the address.
+#[cfg(unix)]
+fn symbol_near(addr: usize) -> Option<String> {
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } == 0
+        || info.dli_sname.is_null()
+    {
+        return None;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) };
+    Some(name.to_string_lossy().into_owned())
+}
+
+#[cfg(not(unix))]
+fn symbol_near(_addr: usize) -> Option<String> {
+    None
+}
+
 /// Has any object in a space the copying minor relocates ever been pinned?
 ///
 /// Monotone: set by [`pin_object`], never cleared outside tests. Cleared only
@@ -373,6 +433,26 @@ pub(super) fn pinned_young_move_report(
         "  copying walk phase: {}\n",
         copying_walk_phase().unwrap_or("(unset — not inside a named walk)")
     ));
+    // #7803: name the owning frame. Only the native stack-map walk sets this;
+    // for every other phase it prints as absent rather than as a stale value.
+    match native_root_slot_context() {
+        Some(context) => {
+            let function = symbol_near(context.function_address)
+                .unwrap_or_else(|| "<no symbol — stripped binary>".to_string());
+            out.push_str(&format!(
+                "  native root slot: owner={function} fn={:#x} ip={:#x} \
+                 reg={} offset={} slot_addr={:#x}\n",
+                context.function_address,
+                context.ip,
+                context.dwarf_reg,
+                context.offset,
+                context.slot_addr,
+            ));
+        }
+        None => out.push_str(
+            "  native root slot: (not visiting a native stack-map slot)\n",
+        ),
+    }
     // The collection is at a safepoint in the mutator. The frames below the
     // copier name the compiled function whose statepoint live bundle (or
     // shadow slot) held the stale pointer — #7803's missing owner.
