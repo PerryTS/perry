@@ -119,7 +119,7 @@ fn copying_walk_phase() -> Option<&'static str> {
 /// lists every candidate frame without saying which one. The walker resolves
 /// all of it (`ResolvedRoot` in roots/stack_maps.rs) and then threw it away
 /// one call before the latch.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct NativeRootSlotContext {
     /// The frame's return address the record was matched on.
     pub(crate) ip: usize,
@@ -146,7 +146,7 @@ pub(crate) fn set_native_root_slot_context(context: Option<NativeRootSlotContext
     NATIVE_ROOT_SLOT.with(|c| c.set(context));
 }
 
-fn native_root_slot_context() -> Option<NativeRootSlotContext> {
+pub(crate) fn native_root_slot_context() -> Option<NativeRootSlotContext> {
     NATIVE_ROOT_SLOT.with(|c| c.get())
 }
 
@@ -453,9 +453,7 @@ pub(super) fn pinned_young_move_report(
                 unsafe { *(context.slot_addr as *const u64) },
             ));
         }
-        None => out.push_str(
-            "  native root slot: (not visiting a native stack-map slot)\n",
-        ),
+        None => out.push_str("  native root slot: (not visiting a native stack-map slot)\n"),
     }
     // #7803 target identification: the garbage "header" values this abort
     // has printed were NaN-boxed VALUE words, which is what the memory looks
@@ -473,7 +471,11 @@ pub(super) fn pinned_young_move_report(
             if delta < 0 { "-" } else { "+" },
             delta.abs(),
             bits,
-            if delta == 0 { "   <-- reported header" } else { "" },
+            if delta == 0 {
+                "   <-- reported header"
+            } else {
+                ""
+            },
         ));
     }
     let valid = super::trace::build_valid_pointer_set();

@@ -168,7 +168,7 @@ fn fromspace_scan_abort() -> bool {
 /// so is whichever survivor semispace was active going INTO the cycle (the
 /// flip happens later, inside `copying_reset_from_spaces_and_flip`).
 #[inline]
-fn is_from_space(space: crate::arena::HeapSpace) -> bool {
+pub(super) fn is_from_space(space: crate::arena::HeapSpace) -> bool {
     space == crate::arena::HeapSpace::NurseryEden || space == crate::arena::active_survivor_space()
 }
 
@@ -401,7 +401,11 @@ unsafe fn dump_owner(r: &FromSpaceRef) {
             bits,
             format!("{:e}", f64::from_bits(bits)),
             class,
-            if i * 8 == r.slot_offset { "   <-- OFFENDER" } else { "" },
+            if i * 8 == r.slot_offset {
+                "   <-- OFFENDER"
+            } else {
+                ""
+            },
         );
     }
 }

@@ -129,6 +129,48 @@ impl StackMapIndex {
 
 static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 
+/// #7803 creation-cycle verifier (diagnostic, `PERRY_GC_NATIVE_SLOT_VERIFY=1`).
+///
+/// Runs a SECOND, non-rewriting native-slot walk after the rewrite passes of
+/// a copying minor, while from-space is still classifiable, and aborts on the
+/// FIRST slot still naming a from-space address. A stale native slot whose
+/// target later becomes unclassifiable is skipped silently by every ordinary
+/// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
+/// never printed anything — this names it, with the owning frame from the
+/// pin-latch context.
+pub(in crate::gc) fn verify_native_slots_post_walk() {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_NATIVE_SLOT_VERIFY").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    }) {
+        return;
+    }
+    let _phase = super::super::pin::CopyingWalkPhaseGuard::enter("native_slot_verify");
+    visit_stack_map_root_slots(&mut |slot| unsafe {
+        let bits = *slot.ptr;
+        let Some(word) = super::super::root_words::decode_root_word(bits) else {
+            return;
+        };
+        let target = word.addr();
+        if !super::super::fromspace_scan::is_from_space(crate::arena::classify_heap_space(target))
+        {
+            return;
+        }
+        let context = super::super::pin::native_root_slot_context();
+        panic!(
+            "[gc-native-slot-verify] a native stack-map slot still names a from-space \
+             address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
+             target={target:#x} context={context:?} — this is the CREATION cycle of the \
+             stale slot the pin-latch only catches many cycles later (#7803)",
+            slot.ptr as usize,
+        );
+    });
+}
+
 /// Upper bound on how far a derived pointer may sit from its base before the
 /// rewrite refuses to touch it. LLVM only pairs a derived pointer with the
 /// base it was actually derived from, so a delta beyond any plausible object
