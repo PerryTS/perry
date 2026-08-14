@@ -99,7 +99,7 @@ jobs:
       # files were. A diagnostic that cannot report the problem it exists to
       # report is worse than no diagnostic; it was reassuring three readers
       # while the corpora sat 151 commits behind.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
