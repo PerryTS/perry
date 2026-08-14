@@ -49,3 +49,7 @@ the Actions log instead of being lost behind the final compilation summary.
 The scoped end-to-end inventory now classifies the typed-array local-length
 specialization suite, keeping the codegen source-to-suite map complete as new
 in-process regression coverage is added.
+
+The Argon2 extension now enables `rand_core`'s OS-randomness feature directly,
+so its salt generation builds in isolation instead of depending on another
+workspace package to feature-unify `OsRng` into the graph.
