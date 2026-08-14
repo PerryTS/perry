@@ -2137,3 +2137,29 @@ Next instrument (building now): the scan abort dumps the OWNER ARRAY —
 header words + first 24 payload words with per-word classification — to
 identify the structure semantically. lldb watchpoints are defeated by mmap
 ASLR (heap addresses differ run-to-run even under lldb).
+
+### §38 second amendment — the cycle-2 scan finding was a FALSE POSITIVE
+
+The owner dump (one 5-second run) settled it: the "Old array +120 bare"
+offender is a live length-8/capacity-16 array whose UNUSED CAPACITY — a
+hole-reused old block — still holds the previous occupant's bytes: a dead
+StringHeader (`byte_len=13`, ASCII `Stri|ngDecode|r` = "StringDecoder") and
+the flagged survivor word at element 14, PAST the array's length. No
+collector walk can ever rewrite capacity slack (the element range is
+length-keyed by design), so the scan manufactured a deterministic
+MISSING-REWRITE out of dead bytes. The scan now stops at
+ArrayHeader+length (`array_slack_skipped=` counts the exclusion).
+
+Standing evidence after the retraction:
+* the pin-latch aborts (seeds 2/3/5, fixed per-seed ordinals) remain REAL
+  and unexplained — the victim slot is 138's saved implicit `this` at a
+  call statepoint (SP+40), and the "garbage headers" at its target are
+  NaN-boxed VALUE words;
+* that value-word signature fits an address pointing INTO live data (an
+  interior pointer / non-header address) as well as it fits recycled
+  memory. The pin-latch now prints the victim slot's raw word, a
+  neighborhood dump, and the census-backed ENCLOSING live object of the
+  followed address, which separates those two futures in one abort.
+* the remembered-set reorder (ab558bf5e) keeps its soundness rationale
+  (drain promotions genuinely postdate the old rebuild point) but has no
+  dynamic evidence attached anymore.
