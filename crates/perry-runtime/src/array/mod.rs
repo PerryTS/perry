@@ -202,18 +202,17 @@ pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codep
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
     array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
-    array_receiver_addr,
     array_named_property_get, array_named_property_get_by_name, array_named_property_has,
     array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
     array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
-    array_object_flags_from_tag, array_ptr_as_proxy, array_receiver_gc_tag,
+    array_object_flags_from_tag, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
     canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
     note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
     refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, transfer_array_numeric_layout, typed_array_receiver,
-    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    store_array_slot, transfer_array_numeric_layout, typed_array_receiver, value_bits_to_number,
+    NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

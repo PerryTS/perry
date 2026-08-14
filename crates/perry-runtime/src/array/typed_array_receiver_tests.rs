@@ -41,9 +41,11 @@
 //!   ordinary path.
 
 use super::*;
-use crate::array::{js_array_alloc, js_array_copy_within, js_array_fill, js_array_fill_range,
-    js_array_push_f64, js_array_reverse};
-use crate::typedarray::{TypedArrayHeader, js_typed_array_get, js_typed_array_set};
+use crate::array::{
+    js_array_alloc, js_array_copy_within, js_array_fill, js_array_fill_range, js_array_push_f64,
+    js_array_reverse,
+};
+use crate::typedarray::{js_typed_array_get, js_typed_array_set, TypedArrayHeader};
 
 /// `Uint16Array` (kind 4 per `elem_size_for_kind`) — 2-byte elements, so a
 /// value above 0xFFFF proves the store went through the per-kind accessor.
@@ -141,7 +143,10 @@ fn js_array_copy_within_copies_typed_elements() {
     // `c.copyWithin(0, 2)` — no end argument (has_end == 0 means "to length").
     let ta = typed(UINT16, &[1.0, 2.0, 3.0, 4.0]);
     let out = js_array_copy_within(as_array(ta), 0.0, 2.0, 0, 0.0);
-    assert!(!out.is_null(), "copyWithin must return its receiver, not null");
+    assert!(
+        !out.is_null(),
+        "copyWithin must return its receiver, not null"
+    );
     assert_eq!(read_back(ta, 4), vec![3.0, 4.0, 3.0, 4.0]);
 
     // Negative target/start, and an out-of-range end that clamps to length.
