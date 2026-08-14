@@ -455,17 +455,15 @@ fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
     // about and left the directory — harmless while clang was the default, a
     // leak per compile once in-process became it.
     //
-    // The pin is what makes this test non-vacuous. Only the statepoint
-    // backends route through assembly, and only that arm CREATES the scratch
-    // dir; without the pin this passes on a host that never enters the arm at
-    // all, which is the shape of gate the repo keeps getting bitten by.
+    // The explicit native-roots decision is what makes this test non-vacuous.
+    // Only the statepoint backends route through assembly, and only that arm
+    // CREATES the scratch dir; `false` would exercise a path that never creates
+    // the directory this regression is meant to observe.
     let Some(root) = temp_root_if_clang_available("inprocess_statepoint") else {
         return;
     };
-    let _pin = crate::codegen::helpers::NativeRootsPin::native();
-
     for nth in 0..3 {
-        let bytes = compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN)
+        let bytes = compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN, true)
             .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
         assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
         assert_eq!(
