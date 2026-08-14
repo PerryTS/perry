@@ -320,11 +320,12 @@ pub(crate) unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
     // `scripts/addr_class_inventory.py`'s `handle-floor` regex (it only
     // matches `ptr`/`addr`/`bits`-shaped identifiers) -- this site was debt
     // the ratchet could not even see.
-    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
-        return None;
-    }
-    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let gc_type = (*header).obj_type;
+    // A magnitude check alone does not prove that arbitrary receiver bits are
+    // mapped. Require arena or tracked-malloc ownership before reading the
+    // header, including for Linux AArch64 addresses in the upper low-48-bit
+    // userspace range (#8067).
+    let header = crate::value::addr_class::try_read_tracked_gc_header(raw)?;
+    let gc_type = (*header.as_ptr()).obj_type;
     if gc_type <= crate::gc::GC_TYPE_MAX {
         Some(gc_type)
     } else {
@@ -771,5 +772,28 @@ mod gc_type_for_ptr_tests {
                 "{addr:#x} must not resolve to an ObjectHeader"
             );
         }
+    }
+
+    #[test]
+    fn unmapped_heap_range_receiver_is_rejected_without_dereferencing() {
+        // This is inside the permissive heap-magnitude window but outside
+        // every Perry arena and tracked malloc allocation. A magnitude-only
+        // guard would read its unmapped predecessor as a GcHeader.
+        let addr = 0x0000_0001_0000_0000usize;
+        assert!(addr_class::is_plausible_heap_addr(addr));
+        let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+        assert!(object_ptr_from_value(boxed).is_none());
+    }
+
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[test]
+    fn unmapped_upper_low_48_bit_receiver_is_rejected_without_dereferencing() {
+        let addr = 0x0000_e000_0000_1000usize;
+        assert!(addr_class::is_plausible_heap_addr(addr));
+        let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+        assert!(object_ptr_from_value(boxed).is_none());
     }
 }
