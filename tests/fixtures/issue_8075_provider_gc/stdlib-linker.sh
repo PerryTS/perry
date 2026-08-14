@@ -7,7 +7,26 @@ host_os=$(uname -s)
 arguments=()
 skip_export_list_value=false
 original_export_list=""
+original_version_script=""
 saw_runtime_rlib=false
+stdlib_provider_exports=(
+  issue_8075_stdlib_runtime_probe
+  js_fetch_response_status
+  js_fetch_response_status_text
+  js_headers_append
+  js_headers_get
+  js_headers_new
+  js_headers_set
+  js_readable_stream_get_reader_with_options
+  js_readable_stream_new_from_source_object
+  js_reader_read
+  js_response_body
+  js_response_body_init_ptr
+  js_response_get_headers
+  js_response_new
+  js_stdlib_init_dispatch
+  js_stream_unwrap_handle
+)
 
 for argument in "$@"; do
   if [[ "$skip_export_list_value" == true ]]; then
@@ -33,13 +52,18 @@ for argument in "$@"; do
     -Wl,-exported_symbols_list,*)
       original_export_list=${argument#-Wl,-exported_symbols_list,}
       ;;
+    -Wl,--version-script=*)
+      original_version_script=${argument#-Wl,--version-script=}
+      ;;
     *) arguments+=("$argument") ;;
   esac
 done
 
 custom_export_list=""
+custom_version_script=""
 cleanup() {
   [[ -z "$custom_export_list" ]] || rm -f "$custom_export_list"
+  [[ -z "$custom_version_script" ]] || rm -f "$custom_version_script"
 }
 trap cleanup EXIT
 
@@ -48,11 +72,26 @@ if [[ -n "$original_export_list" ]]; then
     custom_export_list=$(mktemp "${TMPDIR:-/tmp}/perry-8075-exports.XXXXXX")
     {
       sed -n '/issue_8075_stdlib_runtime_probe/p' "$original_export_list"
+      printf '_%s\n' "${stdlib_provider_exports[@]}"
       nm -gU "$runtime_library" | awk 'NF >= 3 { print $3 }'
     } | sort -u > "$custom_export_list"
     arguments+=('-Wl,-exported_symbols_list' "-Wl,$custom_export_list")
   else
     arguments+=('-Wl,-exported_symbols_list' "-Wl,$original_export_list")
+  fi
+fi
+
+if [[ -n "$original_version_script" ]]; then
+  if [[ "$saw_runtime_rlib" == true ]]; then
+    custom_version_script=$(mktemp "${TMPDIR:-/tmp}/perry-8075-version.XXXXXX")
+    {
+      echo '{ global:'
+      printf '  %s;\n' "${stdlib_provider_exports[@]}"
+      echo 'local: *; };'
+    } > "$custom_version_script"
+    arguments+=("-Wl,--version-script=$custom_version_script")
+  else
+    arguments+=("-Wl,--version-script=$original_version_script")
   fi
 fi
 
