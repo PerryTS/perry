@@ -1542,11 +1542,13 @@ def self_test(_args: argparse.Namespace) -> int:
     # RULE present, but on the wrong POSITION. With the rule and the context
     # floored independently this passed; keyed as one tuple it cannot.
     swapped = json.loads(json.dumps(good))
-    swapped[fixture]["alloc_buckets"] = {
-        alloc_bucket_key("ptr-shape", c, r): 1
-        for c, r in bucket_rows
-        if c != "return"
-    }
+    swapped[fixture]["alloc_buckets"] = dict(
+        Counter(
+            alloc_bucket_key("ptr-shape", c, r)
+            for c, r in bucket_rows
+            if c != "return"
+        )
+    )
     swapped[fixture]["alloc_buckets"][
         alloc_bucket_key(
             "ptr-shape",
