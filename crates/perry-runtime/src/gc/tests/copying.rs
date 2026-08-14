@@ -4,6 +4,7 @@ mod deferred_finalize_7635;
 mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
+mod promoted_remembered_7803;
 mod survival_and_malloc;
 mod weak_holder_registry;
 mod weak_semantics;

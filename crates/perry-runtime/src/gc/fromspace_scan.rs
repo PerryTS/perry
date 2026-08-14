@@ -336,8 +336,54 @@ fn describe(r: &FromSpaceRef) -> String {
     )
 }
 
+/// #7803 identification dump: the offender line names the owner's GC type
+/// and slot offset, which for an array does not say WHICH array. Dump its
+/// header words and the first payload words with a per-word classification
+/// so the abort identifies the structure semantically — one run instead of
+/// a watchpoint hunt (mmap ASLR defeats address-pinned watchpoints here).
+unsafe fn dump_owner(r: &FromSpaceRef) {
+    let header = r.owner_header as *const GcHeader;
+    let user = (r.owner_header as *const u8).add(GC_HEADER_SIZE);
+    let total = (*header).size as usize;
+    let payload_words = ((total - GC_HEADER_SIZE) / 8).min(24);
+    eprintln!(
+        "[gc-fromspace-scan abort] owner dump: obj_type={} size={} first_u32={} second_u32={}",
+        (*header).obj_type,
+        total,
+        *(user as *const u32),
+        *(user.add(4) as *const u32),
+    );
+    let words = user as *const u64;
+    for i in 0..payload_words {
+        let bits = *words.add(i);
+        let decoded = super::root_words::decode_root_word(bits);
+        let class = match decoded {
+            Some(w) => format!(
+                "heap({:?}{})",
+                crate::arena::classify_heap_space(w.addr()),
+                match w {
+                    super::root_words::RootWord::Nanboxed { .. } => ", boxed",
+                    super::root_words::RootWord::Bare { .. } => ", bare",
+                }
+            ),
+            None => "-".to_string(),
+        };
+        eprintln!(
+            "[gc-fromspace-scan abort]   +{:<4} {:#018x} f64={:<24} {}{}",
+            i * 8,
+            bits,
+            format!("{:e}", f64::from_bits(bits)),
+            class,
+            if i * 8 == r.slot_offset { "   <-- OFFENDER" } else { "" },
+        );
+    }
+}
+
 fn report_and_abort(report: &FromSpaceScanReport) -> ! {
     emit_report(report, "abort");
+    for sample in &report.samples {
+        unsafe { dump_owner(sample) };
+    }
     // The scan runs inside the collector, so this backtrace names the
     // COLLECTION, not the mutator store that created the stale slot — which is
     // exactly the limitation `PERRY_GC_PROTECT_FROMSPACE` exists to remove

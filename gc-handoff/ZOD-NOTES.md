@@ -2114,3 +2114,26 @@ the child) and asserts the parent's capture slot tracks the child, with
 subject-liveness asserts at each stage (parent actually in old-gen, child
 actually still young). Sabotage = revert the reorder; the slot keeps the
 from-space address and the test fails.
+
+### §38 amendment — the reorder is NECESSARY but did not close the scan finding
+
+On the rebuilt binary (reorder fix in): the seed-3 FROMSPACE_SCAN_ABORT run
+still aborts at scheduled collection #2 with the IDENTICAL offender (same
+page offsets `…c3d0`/`…8148`, Old array +120 bare -> Survivor1 object,
+never_dirty), and seed 2 still aborts the plain run. `not_in_snapshot` even
+though the owner was promoted a full cycle earlier means the CYCLE-1
+(post-drain, fixed) rebuild also produced no entry for this slot — i.e.
+**`visit_gc_rewrite_slots` does not enumerate it**. A slot no enumerated walk
+can see cannot be remembered by any rebuild ordering. The reorder stays (it
+is a real gap for enumerable slots: unit-test probe shows the post-drain
+rebuild classifying exactly — parent's page dirty via its own entry,
+intermediate's correctly clean — where pre-fix the intermediate was
+remembered on a from-space over-approximation), but the live defect is the
+UNENUMERATED BARE SLOT.
+
+Candidates ruled out by reading: object spill (barriers its own slot address,
+stores boxed), growth stubs (carry GC_FLAG_FORWARDED, scan skips them).
+Next instrument (building now): the scan abort dumps the OWNER ARRAY —
+header words + first 24 payload words with per-word classification — to
+identify the structure semantically. lldb watchpoints are defeated by mmap
+ASLR (heap addresses differ run-to-run even under lldb).
