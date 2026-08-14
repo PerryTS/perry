@@ -84,6 +84,11 @@ pub(crate) struct FromSpaceRef {
 pub(crate) struct FromSpaceScanReport {
     pub(crate) objects_scanned: usize,
     pub(crate) words_scanned: usize,
+    /// Words inside an array's unused capacity, excluded from the scan: no
+    /// collector walk can ever rewrite them, so they can only manufacture
+    /// false MISSING-REWRITEs (see the bound in `scan_object`). Counted so
+    /// the exclusion is visible in the report, not a silent shrink.
+    pub(crate) array_slack_words_skipped: usize,
     /// Owners skipped because they are themselves FORWARDED (dead relocation
     /// stubs). Reported so the filter can never be mistaken for a fix.
     pub(crate) forwarded_owners_skipped: usize,
@@ -204,7 +209,29 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     }
     report.objects_scanned += 1;
 
-    let payload_words = (total - GC_HEADER_SIZE) / 8;
+    let mut payload_words = (total - GC_HEADER_SIZE) / 8;
+    // #7803 identification postmortem: an ARRAY's payload past
+    // `ArrayHeader + length*8` is unused capacity, and on an old-gen HOLE
+    // REUSE it still holds the previous occupant's bytes — the dump that
+    // settled this showed a dead StringHeader ("StringDecoder") and a stale
+    // survivor pointer sitting in the slack of a live 8-element array.
+    // Marking, rewriting and the dirty scan all stop at `length` (the
+    // element range is length-keyed), so a word past it is invisible to
+    // every collector walk BY DESIGN and can never be rewritten. Scanning
+    // it manufactures a deterministic MISSING-REWRITE that reads exactly
+    // like the defect this instrument hunts — it cost this hunt a full
+    // false root cause before the owner dump exposed it. Bound the scan by
+    // the same length the collector uses; the bound is counted so a
+    // shrinking scan cannot silently read as a cleaner heap.
+    if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        let arr = user as *const crate::array::ArrayHeader;
+        let live_words =
+            std::mem::size_of::<crate::array::ArrayHeader>() / 8 + (*arr).length as usize;
+        if live_words < payload_words {
+            report.array_slack_words_skipped += payload_words - live_words;
+            payload_words = live_words;
+        }
+    }
     let words = user as *const u64;
     for i in 0..payload_words {
         let bits = *words.add(i);
@@ -402,10 +429,11 @@ fn report_and_abort(report: &FromSpaceScanReport) -> ! {
 
 pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
     eprintln!(
-        "[gc-fromspace-scan {}] objects={} words={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
+        "[gc-fromspace-scan {}] objects={} words={} array_slack_skipped={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
         phase,
         report.objects_scanned,
         report.words_scanned,
+        report.array_slack_words_skipped,
         report.forwarded_owners_skipped,
         report.missing_rewrites,
         report.dangling,

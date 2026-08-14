@@ -441,16 +441,61 @@ pub(super) fn pinned_young_move_report(
                 .unwrap_or_else(|| "<no symbol — stripped binary>".to_string());
             out.push_str(&format!(
                 "  native root slot: owner={function} fn={:#x} ip={:#x} \
-                 reg={} offset={} slot_addr={:#x}\n",
+                 reg={} offset={} slot_addr={:#x} raw_bits={:#018x}\n",
                 context.function_address,
                 context.ip,
                 context.dwarf_reg,
                 context.offset,
                 context.slot_addr,
+                // Re-read the slot: the raw word says whether the value was
+                // NaN-boxed (and with which tag) or bare — the deref above
+                // only saw the masked address.
+                unsafe { *(context.slot_addr as *const u64) },
             ));
         }
         None => out.push_str(
             "  native root slot: (not visiting a native stack-map slot)\n",
+        ),
+    }
+    // #7803 target identification: the garbage "header" values this abort
+    // has printed were NaN-boxed VALUE words, which is what the memory looks
+    // like when the followed address points INTO live data rather than at an
+    // object start. Dump the neighborhood and, decisively, the live object
+    // that ENCLOSES the target (census + floor lookup — expensive, but this
+    // path is about to abort the process).
+    out.push_str("  target neighborhood (target-64 .. target+88):\n");
+    let target_user = header_addr + super::types::GC_HEADER_SIZE;
+    for delta in (-64i64..=88).step_by(8) {
+        let addr = (header_addr as i64 + delta) as usize;
+        let bits = unsafe { *(addr as *const u64) };
+        out.push_str(&format!(
+            "    {}{:<4} {:#018x}{}\n",
+            if delta < 0 { "-" } else { "+" },
+            delta.abs(),
+            bits,
+            if delta == 0 { "   <-- reported header" } else { "" },
+        ));
+    }
+    let valid = super::trace::build_valid_pointer_set();
+    match valid.enclosing_object(target_user) {
+        Some(enclosing) if enclosing != target_user => {
+            let eh = (enclosing - super::types::GC_HEADER_SIZE) as *const super::types::GcHeader;
+            out.push_str(&format!(
+                "  ENCLOSING live object: user={enclosing:#x} obj_type={} ({}) size={} — the \
+                 followed address is +{} INTO it (an interior pointer, not a stale one)\n",
+                unsafe { (*eh).obj_type },
+                gc_type_label(unsafe { (*eh).obj_type }),
+                unsafe { (*eh).size },
+                target_user - enclosing,
+            ));
+        }
+        Some(_) => out.push_str(
+            "  enclosing-object check: target IS an object start (interior-pointer \
+             hypothesis rejected for this abort)\n",
+        ),
+        None => out.push_str(
+            "  enclosing-object check: target is inside no censused live object \
+             (dead/recycled memory — consistent with a genuinely stale slot)\n",
         ),
     }
     // The collection is at a safepoint in the mutator. The frames below the
