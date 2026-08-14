@@ -1,4 +1,4 @@
-//! #6759 Phase C1: first-class Shape records, keyed on keys_array identity.
+//! Agent-local authoritative object-shape descriptors (#8067).
 //!
 //! A shared `keys_array` already IS a shape (same pointer ⟹ same ordered
 //! key list, because mutation always forks a private clone). This module
@@ -10,42 +10,70 @@
 //! * `WIDE_KEY_INDEX` — keys-keyed but capped at a 4-entry LRU, so any
 //!   working set past 4 wide shapes thrashed.
 //!
-//! Trust model (inherited from both): entries are accelerators, never
-//! authoritative. Every hit re-validates the stored key bytes at the
-//! returned slot; a recycled keys_array address or an in-place mutation
-//! fails validation, drops the entry, and the caller falls back to the
-//! linear scan. Staleness is therefore harmless; the dead-owner prune
-//! exists for memory, not correctness. See docs/shape-tree-plan.md.
+//! The pointer-keyed key→slot index remains an accelerator: every hit still
+//! re-validates the key bytes. Separately, every published `ShapeId` resolves
+//! in this agent's `RuntimeState` to an immutable descriptor containing the
+//! ordered-keys edge plus the exact logical-key and live-inline-slot bounds.
+//! The descriptor table is weak: a live object's authoritative header edge
+//! keeps keys alive and synchronizes the descriptor mirror, while dead-key
+//! entries are pruned after tracing. This avoids
+//! turning historical shapes into permanent roots. `ObjectHeader::{keys_array,
+//! field_count}` remain authoritative in this first slice; publication helpers
+//! assert descriptor parity and every old guard stays in place as redundant
+//! evidence.
 
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-pub(crate) struct Shape {
+pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
     /// incrementally (append-only while shared); shorter ⟹ a delete
     /// compacted it — drop and rebuild on next lookup.
     indexed_len: u32,
-    /// #6759 Phase C3a/C3c: stable shape identity, allocated once at
-    /// record birth and preserved by [`shape_keys_grown`] when an owned
-    /// keys array reallocates. Stamped into a plain object's
-    /// `parent_class_id` header word (dead weight for `class_id == 0`)
-    /// and used as the FIELD_CACHE key, so lookups stop churning on
-    /// capacity doublings and GC moves. 0 is never allocated ("no id").
-    shape_id: u32,
     /// FNV-1a content hash of key bytes → candidate slots (collisions
     /// resolved by the per-hit content validation).
     slots: HashMap<u64, Vec<u32>>,
 }
 
+/// Immutable facts named by one ShapeId. The raw keys pointer is a weak mirror
+/// of the authoritative `ObjectHeader::keys_array` edge: live-object scans
+/// rekey it immediately after visiting that header slot, and the metadata pass
+/// repairs deferred forwarding. The table itself never exposes a GC slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ShapeDescriptor {
+    /// Raw ArrayHeader address in Perry's fixed-width heap-word ABI. Keeping
+    /// this weak mirror u64 preserves identical representation on ILP32/LP64.
+    pub(crate) keys: u64,
+    pub(crate) logical_key_count: u32,
+    pub(crate) live_inline_slot_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ShapeFacts {
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+}
+
+struct ShapeTableInner {
+    indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
+    descriptors: HashMap<u32, ShapeDescriptor>,
+    ids_by_facts: HashMap<ShapeFacts, u32>,
+}
+
 pub(crate) struct ShapeTable {
-    entries: RefCell<crate::fast_hash::PtrHashMap<usize, Shape>>,
+    inner: RefCell<ShapeTableInner>,
 }
 
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
-            entries: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
+            inner: RefCell::new(ShapeTableInner {
+                indices: crate::fast_hash::new_ptr_hash_map(),
+                descriptors: HashMap::new(),
+                ids_by_facts: HashMap::new(),
+            }),
         }
     }
 }
@@ -90,43 +118,89 @@ pub(crate) fn is_shape_id_token(v: usize) -> bool {
 /// (4611686018427387904 = 1 << 62).
 pub(crate) const PIC_ID_TOKEN_BIT: u64 = 1 << 62;
 
-fn alloc_shape_id() -> u32 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ShapeIdExhausted;
+
+fn alloc_shape_id_from(next: &std::sync::atomic::AtomicU32) -> Result<u32, ShapeIdExhausted> {
     use std::sync::atomic::Ordering;
-    let id = SHAPE_ID_NEXT.fetch_add(1, Ordering::Relaxed);
-    if id >= SHAPE_ID_END {
-        // Range exhausted: park the counter (every subsequent call lands
-        // here again, so it can never wrap back into the valid range) and
-        // stop handing out ids — 0 disables the acceleration, never
-        // correctness.
-        SHAPE_ID_NEXT.store(SHAPE_ID_END, Ordering::Relaxed);
-        return 0;
+    loop {
+        let id = next.load(Ordering::Relaxed);
+        if id >= SHAPE_ID_END {
+            // Park at the exclusive end. In particular, never fetch_add at
+            // END: wrapping to zero could eventually alias a live ShapeId.
+            next.store(SHAPE_ID_END, Ordering::Relaxed);
+            return Err(ShapeIdExhausted);
+        }
+        if next
+            .compare_exchange_weak(id, id + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(id);
+        }
     }
-    id
 }
 
-/// #6759 C3c: get-or-create the shape record for `keys` and return its
-/// stable id (0 only if the id range is exhausted). Used by the resolve
-/// paths to stamp a plain object's header after a successful lookup.
-pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
+fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
+    alloc_shape_id_from(&SHAPE_ID_NEXT)
+}
+
+/// Get or create the exact descriptor. Exhaustion is recoverable and
+/// fail-closed: callers leave the object unstamped and continue through the
+/// retained authoritative header pointer/count guards. No id is reused and no
+/// descriptor lookup can alias.
+pub(crate) fn shape_descriptor_ensure(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+) -> Result<u32, ShapeIdExhausted> {
     let keys_id = keys as usize;
     if keys_id == 0 {
-        return 0;
+        return Err(ShapeIdExhausted);
     }
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    entries
-        .entry(keys_id)
-        .or_insert_with(|| Shape {
-            indexed_len: 0,
-            shape_id: alloc_shape_id(),
-            // `key_count` is a capacity HINT only — some callers pass an
-            // unvalidated header length, so cap it before it sizes an
-            // allocation.
-            slots: HashMap::with_capacity(key_count.min(4096) as usize),
-        })
-        .shape_id
+    let facts = ShapeFacts {
+        keys: keys_id as u64,
+        logical_key_count,
+        live_inline_slot_count,
+    };
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(&id) = inner.ids_by_facts.get(&facts) {
+        return Ok(id);
+    }
+    let id = alloc_shape_id()?;
+    let descriptor = ShapeDescriptor {
+        keys: keys_id as u64,
+        logical_key_count,
+        live_inline_slot_count,
+    };
+    // Publish by-id first, then the reverse accelerator. An ObjectHeader is
+    // stamped only after this function returns, so a visible id always has a
+    // complete descriptor.
+    inner.descriptors.insert(id, descriptor);
+    inner.ids_by_facts.insert(facts, id);
+    Ok(id)
 }
 
-/// Mint (or retrieve) the stable ShapeId paired with a canonical keys array.
+/// Compatibility mint for canonical shapes whose key and live-slot counts are
+/// identical. New object-aware paths use [`shape_descriptor_ensure`] directly.
+pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
+    shape_descriptor_ensure(keys, key_count, key_count).unwrap_or(0)
+}
+
+pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
+    if !is_shape_id(shape_id) {
+        return None;
+    }
+    crate::state::state()
+        .shapes
+        .inner
+        .borrow()
+        .descriptors
+        .get(&shape_id)
+        .copied()
+}
+
+/// Mint (or retrieve) the ShapeId paired with canonical keys and equal
+/// key/live-slot counts.
 ///
 /// Codegen calls this once per class during module initialization and stores
 /// the result beside `@perry_class_keys_*`. It deliberately takes a raw u64
@@ -188,17 +262,13 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 #[inline]
 pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
     let word = (*obj).parent_class_id;
-    if is_shape_id(word) {
-        word
-    } else {
-        0
-    }
+    if is_shape_id(word) { word } else { 0 }
 }
 
-/// Stamp `obj` with the stable ShapeId of `keys`, minting the shape record on
+/// Stamp `obj` with the exact ShapeId of `keys`, minting the descriptor on
 /// first touch. Returns the id, or 0 when the receiver is not stampable (a
-/// RegExp alias) or the id range is exhausted — in which case the caller keeps
-/// its keys-address fallback, which is never a correctness difference.
+/// RegExp alias) or the id range is exhausted. Exhaustion leaves the object
+/// unstamped so the retained header pointer/count checks remain authoritative.
 #[inline]
 pub(crate) unsafe fn stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
@@ -208,16 +278,19 @@ pub(crate) unsafe fn stamp_object_shape(
     if !shape_word_is_writable(obj) {
         return 0;
     }
-    let id = shape_id_for_keys_ensure(keys, key_count);
-    if id != 0 {
-        (*obj).parent_class_id = id;
-    }
+    let Ok(id) = shape_descriptor_ensure(keys, key_count, (*obj).field_count) else {
+        clear_object_shape_stamp(obj);
+        return 0;
+    };
+    (*obj).parent_class_id = id;
+    debug_assert_object_shape_parity(obj);
     id
 }
 
-/// Birth-stamp a NEWBORN receiver with an already-minted ShapeId. A zero id —
-/// no shape-cache record yet, or the id range exhausted — leaves the word
-/// alone, which preserves the pre-stamp fallback rather than inventing one.
+/// Birth-stamp a NEWBORN receiver with an already-minted ShapeId after checking
+/// its descriptor against the completed header. A missing, foreign, or
+/// count-mismatched id is replaced with an exact local descriptor when ids
+/// remain available; exhaustion leaves the receiver explicitly unstamped.
 ///
 /// ★ **A shape's population must be UNIFORMLY stamped or uniformly not.** The
 /// emitted read PIC derives its ENTIRE cache token from this word
@@ -255,9 +328,162 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
     runtime_shape_id: u32,
 ) {
-    if is_shape_id(runtime_shape_id) {
+    if is_shape_id(runtime_shape_id) && descriptor_matches_object(runtime_shape_id, obj) {
         (*obj).parent_class_id = runtime_shape_id;
+        debug_assert_object_shape_parity(obj);
+    } else {
+        synchronize_object_shape_descriptor(obj);
     }
+}
+
+/// Install the exact descriptor for the object's current authoritative header
+/// facts. This is the only shape publication operation used by mutations.
+/// Exhaustion (or no keys) clears the stamp, retaining the old exact guards.
+pub(crate) unsafe fn synchronize_object_shape_descriptor(
+    obj: *mut crate::object::ObjectHeader,
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
+    let keys = (*obj).keys_array;
+    if keys.is_null() {
+        clear_object_shape_stamp(obj);
+        return 0;
+    }
+    let key_count = crate::array::keys_array_len_capped_to_capacity(keys) as u32;
+
+    // A same-address length change is legal only for an owned keys array. A
+    // shared array must have cloned before push; otherwise siblings already
+    // observe mutated bytes and no descriptor can make that state sound.
+    let old_id = object_shape_stamp(obj);
+    if let Some(old) = shape_descriptor_by_id(old_id) {
+        if old.keys == keys as u64 && old.logical_key_count != key_count {
+            let gc =
+                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let shared = (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+                && (*gc).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
+            debug_assert!(
+                !shared,
+                "shared keys array mutated in place under an immutable ShapeId"
+            );
+            if shared {
+                clear_object_shape_stamp(obj);
+                return 0;
+            }
+            retire_key_count_versions(keys as u64, key_count);
+        }
+    }
+
+    let Ok(id) = shape_descriptor_ensure(keys, key_count, (*obj).field_count) else {
+        clear_object_shape_stamp(obj);
+        return 0;
+    };
+    (*obj).parent_class_id = id;
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
+fn retire_key_count_versions(keys: u64, current_key_count: u32) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let stale: Vec<u32> = inner
+        .descriptors
+        .iter()
+        .filter_map(|(&id, d)| {
+            (d.keys == keys && d.logical_key_count != current_key_count).then_some(id)
+        })
+        .collect();
+    for id in stale {
+        if let Some(d) = inner.descriptors.remove(&id) {
+            inner.ids_by_facts.remove(&ShapeFacts {
+                keys: d.keys,
+                logical_key_count: d.logical_key_count,
+                live_inline_slot_count: d.live_inline_slot_count,
+            });
+        }
+    }
+}
+
+fn descriptor_matches_object(shape_id: u32, obj: *const crate::object::ObjectHeader) -> bool {
+    let Some(d) = shape_descriptor_by_id(shape_id) else {
+        return false;
+    };
+    unsafe {
+        let keys = (*obj).keys_array;
+        !keys.is_null()
+            && d.keys == keys as u64
+            && d.logical_key_count == crate::array::keys_array_len_capped_to_capacity(keys) as u32
+            && d.live_inline_slot_count == (*obj).field_count
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
+    let id = object_shape_stamp(obj);
+    if id != 0 {
+        debug_assert!(
+            descriptor_matches_object(id, obj),
+            "published ShapeId disagrees with authoritative ObjectHeader facts"
+        );
+    }
+}
+
+/// Validate and immediately mirror a live object's authoritative keys edge
+/// after that header slot has been visited. No address inside the descriptor
+/// HashMap is ever handed to a generic visitor: remembered-set enumeration can
+/// save slot pointers across budgeted mutator resumptions, while descriptor
+/// insertion/pruning may reallocate the table in between.
+///
+/// An immediate copying visitor has already rewritten `new_header_keys`; a
+/// deferred dirty-work visitor leaves it equal to `old_header_keys`, and the
+/// registered metadata forwarding pass repairs the weak mirror after copying.
+/// Exact release-mode facts prevent a stale or foreign id from rekeying an
+/// unrelated descriptor. Returns whether the descriptor facts validated.
+pub(crate) unsafe fn synchronize_live_object_shape_descriptor_after_header_visit(
+    obj: *const crate::object::ObjectHeader,
+    old_header_keys: u64,
+    new_header_keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+) -> bool {
+    let shape_id = object_shape_stamp(obj);
+    if shape_id == 0 {
+        return false;
+    }
+
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let Some(descriptor) = inner.descriptors.get_mut(&shape_id) else {
+        // A foreign-agent/stale id fails closed; the authoritative header edge
+        // is still traced by the caller.
+        return false;
+    };
+    // Release-mode fail-closed gate. An id hit is insufficient: a foreign or
+    // stale id must never cause an unrelated descriptor pointer to be
+    // rekeyed. `new_header_keys` may differ after evacuation; a sibling
+    // may also have rewritten the shared descriptor before this object runs.
+    if descriptor.logical_key_count != logical_key_count
+        || descriptor.live_inline_slot_count != live_inline_slot_count
+        || (descriptor.keys != old_header_keys && descriptor.keys != new_header_keys)
+    {
+        return false;
+    }
+    let old_facts = ShapeFacts {
+        keys: descriptor.keys,
+        logical_key_count: descriptor.logical_key_count,
+        live_inline_slot_count: descriptor.live_inline_slot_count,
+    };
+    if descriptor.keys == old_header_keys && new_header_keys != old_header_keys {
+        descriptor.keys = new_header_keys;
+    }
+    let new_facts = ShapeFacts {
+        keys: descriptor.keys,
+        logical_key_count: descriptor.logical_key_count,
+        live_inline_slot_count: descriptor.live_inline_slot_count,
+    };
+    if new_facts != old_facts {
+        inner.ids_by_facts.remove(&old_facts);
+        inner.ids_by_facts.insert(new_facts, shape_id);
+    }
+    true
 }
 
 /// Drop the stamp iff the word currently holds one, leaving a real
@@ -277,7 +503,7 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
 }
 
 /// Build (or extend) the slot map for `keys` covering `key_count` keys.
-unsafe fn index_range(shape: &mut Shape, keys: *const ArrayHeader, key_count: u32) {
+unsafe fn index_range(shape: &mut ShapeIndex, keys: *const ArrayHeader, key_count: u32) {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (slots, slot_len) = super::keys_array_dense_slots(keys);
     for i in shape.indexed_len..key_count.min(slot_len as u32) {
@@ -306,12 +532,12 @@ pub(crate) unsafe fn shape_slot_lookup(
     build: bool,
 ) -> Option<u32> {
     let keys_id = keys as usize;
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    let shape = match entries.get_mut(&keys_id) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let shape = match inner.indices.get_mut(&keys_id) {
         Some(s) => {
             if s.indexed_len > key_count {
                 // Shrink (delete/compaction): slots are untrustworthy.
-                entries.remove(&keys_id);
+                inner.indices.remove(&keys_id);
                 return None;
             }
             s
@@ -320,9 +546,8 @@ pub(crate) unsafe fn shape_slot_lookup(
             if !build {
                 return None;
             }
-            entries.entry(keys_id).or_insert(Shape {
+            inner.indices.entry(keys_id).or_insert(ShapeIndex {
                 indexed_len: 0,
-                shape_id: alloc_shape_id(),
                 slots: HashMap::with_capacity(key_count as usize),
             })
         }
@@ -356,8 +581,8 @@ pub(crate) fn shape_note_append(
     key_hash: u64,
     slot: u32,
 ) {
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    if let Some(shape) = entries.get_mut(&(keys as usize)) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
         if shape.indexed_len + 1 == new_count {
             shape.indexed_len = new_count;
             shape.slots.entry(key_hash).or_default().push(slot);
@@ -368,18 +593,18 @@ pub(crate) fn shape_note_append(
 /// Back-fill a linear-scan hit (no-op when the shape has no entry — the
 /// next lookup builds it wholesale at the caller's threshold).
 pub(crate) fn shape_note_hit(keys: *const ArrayHeader, key_hash: u64, slot: u32) {
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    if let Some(shape) = entries.get_mut(&(keys as usize)) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
         shape.slots.entry(key_hash).or_default().push(slot);
     }
 }
 
-/// #6759 Phase C3a: an OWNED (non-`GC_FLAG_SHAPE_SHARED`) keys array was
-/// reallocated by `js_array_push` — the SAME logical shape now lives at a
-/// new address. Migrate the record (slot map, indexed_len, shape_id) so it
-/// survives the capacity doubling; pre-C3a the record was orphaned at the
-/// old address and the next lookup rebuilt it O(key_count), making every
-/// doubling of a wide object's build pay a full re-index.
+/// An OWNED (non-`GC_FLAG_SHAPE_SHARED`) keys array was reallocated while
+/// `js_array_push` appended a key. Migrate only the validated slot-index
+/// accelerator so it survives capacity growth. The weak old descriptor is not
+/// eagerly deleted: even if a release-only invariant regression left a sibling
+/// naming it, that sibling must continue to resolve. Post-trace dead-key
+/// pruning retires it once no live owner reaches the old array.
 ///
 /// Callers must pass the OWNED-grow pair only: a shared array's fork is a
 /// genuine transition (the clone starts a NEW identity and the old address
@@ -392,48 +617,103 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
     if old_keys == 0 || new_id == 0 || old_keys == new_id {
         return;
     }
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    if let Some(shape) = entries.remove(&old_keys) {
-        entries.insert(new_id, shape);
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(shape) = inner.indices.remove(&old_keys) {
+        inner.indices.insert(new_id, shape);
     }
 }
 
-/// Drop the shape for a keys_array that was compacted/retired in place
-/// (delete path). Address-recycled arrays need no eager drop — validation
-/// rejects them — but the delete path knows the map is stale NOW.
+/// Drop only the validated slot-index accelerator for a keys array that was
+/// compacted/retired (delete path). Descriptors are weak and exact-fact gated,
+/// but are not eagerly removed: another live sibling may still name one. The
+/// post-trace dead-key fan-out retires them when the array is actually dead.
 pub(crate) fn shape_drop(keys: *const ArrayHeader) {
-    crate::state::state()
-        .shapes
-        .entries
-        .borrow_mut()
-        .remove(&(keys as usize));
+    let keys = keys as usize;
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    inner.indices.remove(&keys);
 }
 
-/// Memory prune for the dead-owner fan-out: drop shapes whose keys_array
-/// is dead. Correctness never depends on this (validation-on-hit).
+/// Post-trace weak-table prune: drop slot indices and by-id descriptors whose
+/// keys array is dead. A live object has already traced its authoritative
+/// header edge and synchronized the descriptor named by its ShapeId, so a
+/// descriptor removed here cannot be named by a live object. Correctness fails
+/// closed on a missing lookup, independently of pruning.
 pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    if !entries.is_empty() {
-        entries.retain(|keys_id, _| !is_dead_owner(*keys_id));
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if !inner.indices.is_empty() {
+        inner.indices.retain(|keys_id, _| !is_dead_owner(*keys_id));
+    }
+    let stale: Vec<u32> = inner
+        .descriptors
+        .iter()
+        .filter_map(|(&id, descriptor)| is_dead_owner(descriptor.keys as usize).then_some(id))
+        .collect();
+    if !stale.is_empty() {
+        for id in stale {
+            inner.descriptors.remove(&id);
+        }
+        // Rebuild rather than removing by current facts one-at-a-time. A
+        // deferred live-object rewrite may have changed the by-id pointer
+        // before the metadata scanner repaired the reverse accelerator; a
+        // rebuild cannot leave such an old-facts entry resolving to a retired
+        // id.
+        inner.ids_by_facts = inner
+            .descriptors
+            .iter()
+            .map(|(&id, descriptor)| {
+                (
+                    ShapeFacts {
+                        keys: descriptor.keys,
+                        logical_key_count: descriptor.logical_key_count,
+                        live_inline_slot_count: descriptor.live_inline_slot_count,
+                    },
+                    id,
+                )
+            })
+            .collect();
     }
 }
 
-/// #6759 Phase C3a: rekey shape records when GC evacuation MOVES their
-/// keys array, so a wide object's slot map (and its stable `shape_id`)
-/// survives a copied minor instead of being orphaned at the from-space
-/// address and rebuilt O(key_count) on the next lookup. Metadata-rewrite
-/// only — the records hold no heap references (slot indexes + an address
-/// used as identity), so outside that phase this scanner is a no-op and
-/// marks nothing. Same pattern as the descriptor-table owner rekey.
+/// Metadata-only forwarding repair for the weak descriptor table and
+/// pointer-keyed slot indices. Mark/copy mode does not root anything; live
+/// object scans provide descriptor reachability, and post-copy rewrite follows
+/// only forwarding records those live edges already created.
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if !visitor.is_metadata_rewrite_phase() {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let mut descriptor_moved = false;
+    for descriptor in inner.descriptors.values_mut() {
+        let mut addr = descriptor.keys as usize;
+        if visitor.visit_metadata_usize_slot(&mut addr) {
+            descriptor.keys = addr as u64;
+            descriptor_moved = true;
+        }
+    }
+    // Rebuild throughout rewrite phase even when this pass itself observed no
+    // move: an immediate live-object header callback may already have rekeyed
+    // a shared descriptor, while a deferred callback relies on this pass.
+    if descriptor_moved || visitor.is_metadata_rewrite_phase() {
+        let ids_by_facts = inner
+            .descriptors
+            .iter()
+            .map(|(&id, d)| {
+                (
+                    ShapeFacts {
+                        keys: d.keys,
+                        logical_key_count: d.logical_key_count,
+                        live_inline_slot_count: d.live_inline_slot_count,
+                    },
+                    id,
+                )
+            })
+            .collect();
+        inner.ids_by_facts = ids_by_facts;
+    }
+
+    if !visitor.is_metadata_rewrite_phase() || inner.indices.is_empty() {
         return;
     }
-    let mut entries = crate::state::state().shapes.entries.borrow_mut();
-    if entries.is_empty() {
-        return;
-    }
-    let moved: Vec<(usize, usize)> = entries
+    let moved: Vec<(usize, usize)> = inner
+        .indices
         .keys()
         .filter_map(|&keys_id| {
             let mut addr = keys_id;
@@ -442,8 +722,8 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
         })
         .collect();
     for (old, new) in moved {
-        if let Some(shape) = entries.remove(&old) {
-            entries.insert(new, shape);
+        if let Some(shape) = inner.indices.remove(&old) {
+            inner.indices.insert(new, shape);
         }
     }
 }
@@ -452,32 +732,75 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
 pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
     crate::state::state()
         .shapes
-        .entries
+        .inner
         .borrow()
+        .indices
         .get(&keys_id)
         .is_some()
 }
 
 #[cfg(test)]
+pub(crate) fn test_shape_descriptor_count() -> usize {
+    crate::state::state()
+        .shapes
+        .inner
+        .borrow()
+        .descriptors
+        .len()
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_shape_table() {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    inner.indices.clear();
+    inner.descriptors.clear();
+    inner.ids_by_facts.clear();
+}
+
+#[cfg(test)]
+pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let stale: Vec<u32> = inner
+        .descriptors
+        .iter()
+        .filter_map(|(&id, descriptor)| (descriptor.keys == keys_id as u64).then_some(id))
+        .collect();
+    for id in stale {
+        if let Some(descriptor) = inner.descriptors.remove(&id) {
+            inner.ids_by_facts.remove(&ShapeFacts {
+                keys: descriptor.keys,
+                logical_key_count: descriptor.logical_key_count,
+                live_inline_slot_count: descriptor.live_inline_slot_count,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn test_seed_shape_entry(keys_id: usize) {
-    crate::state::state().shapes.entries.borrow_mut().insert(
-        keys_id,
-        Shape {
-            indexed_len: 0,
-            shape_id: alloc_shape_id(),
-            slots: HashMap::new(),
-        },
-    );
+    crate::state::state()
+        .shapes
+        .inner
+        .borrow_mut()
+        .indices
+        .insert(
+            keys_id,
+            ShapeIndex {
+                indexed_len: 0,
+                slots: HashMap::new(),
+            },
+        );
+    let _ = shape_descriptor_ensure(keys_id as *const ArrayHeader, 0, 0)
+        .expect("test shape id range unexpectedly exhausted");
 }
 
 #[cfg(test)]
 pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
-    crate::state::state()
-        .shapes
-        .entries
-        .borrow()
-        .get(&keys_id)
-        .map(|s| s.shape_id)
+    let inner = crate::state::state().shapes.inner.borrow();
+    inner
+        .descriptors
+        .iter()
+        .find_map(|(&id, d)| (d.keys == keys_id as u64).then_some(id))
 }
 
 #[cfg(test)]
@@ -489,7 +812,7 @@ mod c3c_tests {
     }
 
     /// #6759 C3c: ids come from the dedicated range (disjoint from real and
-    /// builtin class ids), are stable per keys identity, and distinct
+    /// builtin class ids), are stable per exact descriptor facts, and distinct
     /// across identities.
     #[test]
     fn shape_ids_are_range_disjoint_and_stable() {
@@ -508,6 +831,8 @@ mod c3c_tests {
         assert!(!is_shape_id(0xFFFF_0005));
         shape_drop(a as *const ArrayHeader);
         shape_drop(b as *const ArrayHeader);
+        test_drop_shape_descriptors(a);
+        test_drop_shape_descriptors(b);
     }
 
     /// #6759 C3 rung 2: the codegen-facing allocator receives the id minted
@@ -544,9 +869,10 @@ mod c3c_tests {
 
     /// #6759 C3c stamp invariant on a REAL object through the real
     /// write/read paths: a read resolution stamps a shape id into the
-    /// plain object's `parent_class_id`; after further appends the stamp
-    /// is either cleared (keys pointer changed) or still equal to the
-    /// current keys' id (in-place append / migrated grow).
+    /// plain object's `parent_class_id`; after further appends any surviving
+    /// stamp resolves to exact current pointer/logical/live facts. This fixture
+    /// deliberately reserves eight live inline slots while owning fewer keys,
+    /// so the old key-count-only compatibility mint is not the expected id.
     #[test]
     fn plain_object_stamp_lifecycle() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -568,14 +894,15 @@ mod c3c_tests {
             let stamp2 = (*obj).parent_class_id;
             if stamp2 != 0 {
                 assert!(is_shape_id(stamp2));
-                let cur = shape_id_for_keys_ensure(
-                    (*obj).keys_array,
-                    crate::array::js_array_length((*obj).keys_array),
-                );
+                let descriptor = shape_descriptor_by_id(stamp2)
+                    .expect("a surviving stamp must resolve in this agent");
+                assert_eq!(descriptor.keys, (*obj).keys_array as u64);
                 assert_eq!(
-                    stamp2, cur,
-                    "a surviving stamp must equal the CURRENT keys' id"
+                    descriptor.logical_key_count,
+                    crate::array::js_array_length((*obj).keys_array)
                 );
+                assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
+                debug_assert_object_shape_parity(obj);
             }
 
             // Reads still resolve correctly through the id-keyed cache.
@@ -675,6 +1002,190 @@ mod c6804_tests {
                 is_shape_id(stamp),
                 "first-key birth must stamp the new shape, got {stamp:#x}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests_8067 {
+    use super::*;
+
+    fn key(name: &str) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    }
+
+    #[test]
+    fn exhaustion_parks_without_reuse_or_alias() {
+        let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
+        assert_eq!(alloc_shape_id_from(&next), Ok(SHAPE_ID_END - 1));
+        assert_eq!(alloc_shape_id_from(&next), Err(ShapeIdExhausted));
+        assert_eq!(alloc_shape_id_from(&next), Err(ShapeIdExhausted));
+        assert_eq!(
+            next.load(std::sync::atomic::Ordering::Relaxed),
+            SHAPE_ID_END,
+            "exhaustion must park instead of wrapping into an alias"
+        );
+    }
+
+    #[test]
+    fn a_foreign_agent_id_misses_instead_of_aliasing_same_address() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let fake_keys = 0x8067_0000_0000_1000usize;
+        let local = shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
+            .expect("shape range unexpectedly exhausted");
+        let foreign = std::thread::spawn(move || {
+            assert_eq!(
+                shape_descriptor_by_id(local),
+                None,
+                "another RuntimeState resolved a foreign agent's ShapeId"
+            );
+            shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
+                .expect("shape range unexpectedly exhausted")
+        })
+        .join()
+        .expect("agent-isolation thread panicked");
+        assert_ne!(
+            local, foreign,
+            "process-global ids must not alias by address"
+        );
+        shape_drop(fake_keys as *const ArrayHeader);
+        test_drop_shape_descriptors(fake_keys);
+    }
+
+    #[test]
+    fn gc_descriptor_mirror_requires_exact_release_facts() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = 0x8067_0000_0000_2000usize;
+        let id = shape_descriptor_ensure(keys as *const ArrayHeader, 3, 2)
+            .expect("shape range unexpectedly exhausted");
+        let obj = crate::object::ObjectHeader {
+            object_type: 1,
+            class_id: 0,
+            parent_class_id: id,
+            field_count: 2,
+            keys_array: keys as *mut ArrayHeader,
+            meta: std::ptr::null_mut(),
+        };
+
+        unsafe {
+            assert!(
+                !synchronize_live_object_shape_descriptor_after_header_visit(
+                    &obj,
+                    keys as u64 + 0x1000,
+                    keys as u64 + 0x2000,
+                    3,
+                    2,
+                )
+            );
+            assert!(
+                !synchronize_live_object_shape_descriptor_after_header_visit(
+                    &obj,
+                    keys as u64,
+                    keys as u64,
+                    4,
+                    2,
+                )
+            );
+        }
+        assert_eq!(shape_descriptor_by_id(id).unwrap().keys, keys as u64);
+
+        let moved_keys = keys as u64 + 0x3000;
+        assert!(unsafe {
+            synchronize_live_object_shape_descriptor_after_header_visit(
+                &obj,
+                keys as u64,
+                moved_keys,
+                3,
+                2,
+            )
+        });
+        assert_eq!(shape_descriptor_by_id(id).unwrap().keys, moved_keys);
+        test_drop_shape_descriptors(moved_keys as usize);
+    }
+
+    #[test]
+    fn shape_drop_does_not_delete_a_potential_siblings_descriptor() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = 0x8067_0000_0000_3000usize;
+        let id = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
+            .expect("shape range unexpectedly exhausted");
+
+        shape_drop(keys as *const ArrayHeader);
+
+        assert_eq!(
+            shape_descriptor_by_id(id).map(|descriptor| descriptor.keys),
+            Some(keys as u64),
+            "shape_drop eagerly invalidated a descriptor a sibling may still name"
+        );
+        test_drop_shape_descriptors(keys);
+    }
+
+    #[test]
+    fn live_slot_growth_versions_descriptor_before_value_publication() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let packed = b"slot8067_a";
+            let obj = crate::object::js_object_alloc_with_shape(
+                0x8067_1001,
+                1,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let keys = (*obj).keys_array as usize;
+            let before = (*obj).parent_class_id;
+            let before_descriptor = shape_descriptor_by_id(before).expect("birth descriptor");
+            assert_eq!(before_descriptor.live_inline_slot_count, 1);
+
+            crate::object::js_object_set_field(obj, 1, crate::JSValue::string_ptr(key("value")));
+            let after = (*obj).parent_class_id;
+            assert_ne!(before, after);
+            let after_descriptor = shape_descriptor_by_id(after).expect("grown descriptor");
+            assert_eq!(after_descriptor.keys, keys as u64);
+            assert_eq!(after_descriptor.logical_key_count, 1);
+            assert_eq!(after_descriptor.live_inline_slot_count, 2);
+            debug_assert_object_shape_parity(obj);
+        }
+    }
+
+    #[test]
+    fn shared_sibling_append_clones_before_descriptor_version_changes() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let packed = b"sib8067_a";
+            let a = crate::object::js_object_alloc_with_shape(
+                0x8067_1002,
+                1,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let b = crate::object::js_object_alloc_with_shape(
+                0x8067_1002,
+                1,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let shared_keys = (*a).keys_array;
+            let shared_id = (*a).parent_class_id;
+            assert_eq!(shared_keys, (*b).keys_array);
+            assert_eq!(shared_id, (*b).parent_class_id);
+
+            crate::object::js_object_set_field_by_name(a, key("sib8067_b"), 2.0);
+
+            assert_ne!((*a).keys_array, shared_keys);
+            assert_eq!((*b).keys_array, shared_keys);
+            assert_eq!((*b).parent_class_id, shared_id);
+            assert_ne!((*a).parent_class_id, shared_id);
+            assert_eq!(
+                shape_descriptor_by_id(shared_id)
+                    .expect("untouched sibling descriptor")
+                    .logical_key_count,
+                1
+            );
+            let transitioned =
+                shape_descriptor_by_id((*a).parent_class_id).expect("transitioned descriptor");
+            assert_eq!(transitioned.keys, (*a).keys_array as u64);
+            assert_eq!(transitioned.logical_key_count, 2);
+            assert_eq!(transitioned.live_inline_slot_count, 2);
         }
     }
 }

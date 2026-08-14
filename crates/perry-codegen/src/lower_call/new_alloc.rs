@@ -19,7 +19,7 @@
 use perry_hir::Class;
 
 use crate::expr::FnCtx;
-use crate::types::{I1, I32, I64, I8, PTR};
+use crate::types::{I1, I8, I32, I64, PTR};
 
 /// Load the immutable ShapeId paired with a class's canonical keys global.
 ///
@@ -123,6 +123,15 @@ fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
     // ±1.6% floor — and 15 of 19 binaries came out byte-identical, so the
     // widening reaches four programs, not the corpus.
     ctx.func.alloc_hot
+}
+
+/// Whether the raw inline allocator can publish the class's pre-minted
+/// descriptor without asking the runtime to repair its live-slot facts.
+fn inline_shape_descriptor_facts_exact(
+    canonical_key_count: Option<u32>,
+    allocation_field_count: u32,
+) -> bool {
+    canonical_key_count.is_some_and(|key_count| key_count == allocation_field_count)
 }
 
 /// Emit the instance allocation for `new <class_name>(...)` and return the raw
@@ -350,7 +359,16 @@ fn emit_instance_alloc_inner(
         // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
         // the inline path, because an empty string is `Some("")`.
         let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
-        if !force_inline_new && !new_site_is_in_loop(ctx) {
+        // #8067: the raw inline allocator cannot ask the runtime to validate
+        // descriptor facts after writing the ShapeId. Admit it only when the
+        // allocation's live-slot bound exactly equals the module-init keys
+        // count used to mint that id. Width-hinted/mismatched allocations use
+        // the outlined entry point, which installs an exact local descriptor.
+        let descriptor_facts_exact = inline_shape_descriptor_facts_exact(
+            ctx.class_field_counts.get(class_name).copied(),
+            field_count,
+        );
+        if !descriptor_facts_exact || (!force_inline_new && !new_site_is_in_loop(ctx)) {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
@@ -569,9 +587,9 @@ fn emit_instance_alloc_inner(
 
             // Second 8 bytes: ShapeId (u32, low) | field_count (u32, high).
             // Rung 0 removed the last inheritance consumer of this word; the
-            // parent edge was registered during module init. Keep the old
-            // parent value only if the process-global ShapeId range was
-            // exhausted and init returned 0, preserving the lazy fallback.
+            // parent edge was registered during module init. A zero id is the
+            // recoverable exhaustion path: retain the old parent word and let
+            // the still-authoritative pointer/count guards handle the object.
             let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
             let has_shape_id = blk.icmp_ne(I32, &shape_id, "0");
             let shape_word = blk.select(I1, &has_shape_id, I32, &shape_id, &parent_cid.to_string());
@@ -679,5 +697,17 @@ fn emit_instance_alloc_inner(
                 (I32, &keys_len_str),
             ],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_shape_descriptor_facts_exact;
+
+    #[test]
+    fn raw_inline_shape_stamp_requires_exact_descriptor_facts() {
+        assert!(inline_shape_descriptor_facts_exact(Some(5), 5));
+        assert!(!inline_shape_descriptor_facts_exact(Some(5), 8));
+        assert!(!inline_shape_descriptor_facts_exact(None, 5));
     }
 }

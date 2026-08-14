@@ -169,15 +169,15 @@ pub extern "C" fn js_object_set_field_by_name(
                                         .add(std::mem::size_of::<ObjectHeader>())
                                         as *mut JSValue;
                                     let slot = fields_ptr.add(slot_idx as usize);
+                                    if slot_idx >= (*o).field_count {
+                                        set_object_live_slot_count(o, slot_idx + 1);
+                                    }
                                     crate::gc::runtime_store_jsvalue_slot(
                                         o as usize,
                                         slot as usize,
                                         slot_idx as usize,
                                         vbits,
                                     );
-                                    if slot_idx >= (*o).field_count {
-                                        (*o).field_count = slot_idx + 1;
-                                    }
                                 } else {
                                     overflow_set(o as usize, slot_idx as usize, vbits);
                                 }

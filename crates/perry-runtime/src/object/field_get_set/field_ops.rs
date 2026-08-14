@@ -163,7 +163,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // widening here can only ever expose non-pointer sentinels ahead of
         // the store that is about to fill this one in.
         if field_index >= (*obj).field_count {
-            (*obj).field_count = field_index + 1;
+            set_object_live_slot_count(obj, field_index + 1);
         }
         crate::gc::runtime_store_jsvalue_slot(
             obj as usize,

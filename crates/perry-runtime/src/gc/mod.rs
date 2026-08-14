@@ -830,9 +830,9 @@ pub fn gc_init() {
     // reflect-metadata store were invisible to GC — values swept/moved under
     // live references, owner keys stale after evacuation.
     reg_scanner!(crate::object::descriptor_state::scan_descriptor_roots_mut);
-    // #6759 Phase C3a: shape records follow their keys array across
-    // evacuation (metadata-rewrite rekey only; the records hold no heap
-    // references and mark nothing).
+    // #8067: the descriptor table is weak. Live-object layout scans trace its
+    // ordered-keys slot; this scanner only follows existing forwarding records
+    // for descriptors and the pointer-keyed slot accelerator after evacuation.
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
     reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in

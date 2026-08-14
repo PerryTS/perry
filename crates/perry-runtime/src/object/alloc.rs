@@ -332,8 +332,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
 /// initialization. Installing it after the existing allocator returns keeps
 /// every allocation/rooting/layout invariant above in one implementation,
 /// while making a fresh class instance immediately usable by ShapeId guards.
-/// A zero/exhausted id preserves the allocation-time parent word and therefore
-/// falls back to the pre-rung-2 lazy-stamping behavior.
+/// A zero/exhausted id preserves the allocation-time parent word; the retained
+/// pointer/count guards remain the fail-closed source of truth.
 #[no_mangle]
 pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     class_id: u32,
@@ -344,10 +344,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
 ) -> *mut ObjectHeader {
     let ptr =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
-    if crate::object::shapes::is_shape_id(shape_id) {
-        unsafe {
-            (*ptr).parent_class_id = shape_id;
-        }
+    unsafe {
+        crate::object::shapes::birth_stamp_object_shape(ptr, shape_id);
     }
     ptr
 }
@@ -755,9 +753,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         // newborn literals carry their stable identity immediately, so
         // typed_feedback tokens and the id-keyed FIELD_CACHE never see a
         // pre-stamp window for shape-cached objects.
-        if runtime_shape_id != 0 {
-            (*obj_ptr).parent_class_id = runtime_shape_id;
-        }
+        crate::object::shapes::birth_stamp_object_shape(obj_ptr, runtime_shape_id);
     }
 
     obj_handle.get_raw_mut_ptr::<ObjectHeader>()

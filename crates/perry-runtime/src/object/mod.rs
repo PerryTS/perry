@@ -1830,13 +1830,10 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
     // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
-    // described the OLD keys array — clear it on a pointer CHANGE so the stamp
-    // invariant (`stamp != 0 ⟹ stamp == id of current keys`) holds; the resolve
-    // paths re-stamp on their next successful lookup. A same-pointer update
-    // (in-place append) keeps the stamp: slots are append-only, existing
-    // mappings stay valid — and the C3a grow-migration keeps the id itself
-    // alive across reallocs, so the fresh stamp after a grow resolves to the
-    // SAME id.
+    // described the OLD keys array — clear it on a pointer CHANGE so no stale
+    // id is visible while the authoritative header changes. A same-pointer
+    // append is versioned by `synchronize_object_shape_descriptor` below; an
+    // immutable old descriptor is never silently changed in place.
     //
     // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
     // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
@@ -1865,6 +1862,27 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         &(*obj).keys_array as *const _ as usize,
         keys_array as u64,
     );
+    // #8067: the old header edge remains authoritative, but every visible
+    // ShapeId must now resolve to the exact rooted ordered-keys/live-slot
+    // descriptor. Same-pointer appends are versioned inside the helper.
+    shapes::synchronize_object_shape_descriptor(obj);
+}
+
+/// Publish a new authoritative live-inline-slot bound without ever exposing a
+/// ShapeId whose descriptor disagrees with `ObjectHeader.field_count`.
+///
+/// Callers growing the traced range must invoke this before publishing the
+/// pointer-bearing field value (#7154): old stamp clear → header count write →
+/// complete descriptor install → new stamp → value-slot store.
+#[inline]
+pub(super) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
+    if (*obj).field_count != field_count {
+        shapes::clear_object_shape_stamp(obj);
+        (*obj).field_count = field_count;
+        shapes::synchronize_object_shape_descriptor(obj);
+    } else {
+        shapes::debug_assert_object_shape_parity(obj);
+    }
 }
 
 #[inline]

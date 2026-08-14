@@ -377,18 +377,19 @@ pub extern "C" fn js_object_delete_field(
         //    After the rebuild above, the survivors occupy slots `0..new_count`,
         //    inline up to the allocation's capacity. That is exactly
         //    `min(new_count, alloc_limit)`.
-        (*obj).field_count = std::cmp::min(new_count, alloc_limit) as u32;
+        set_object_live_slot_count(obj, std::cmp::min(new_count, alloc_limit) as u32);
 
-        // 4) Drop the (post-compaction) keys array's shape record — slots
-        //    past `i` have shifted, so any map is stale. The shrink check
-        //    in `shape_slot_lookup` would also catch this lazily; dropping
-        //    eagerly keeps the record from serving hash misses meanwhile.
+        // 4) Drop the (post-compaction) keys array's slot-index accelerator —
+        //    slots past `i` have shifted, so any map is stale. Descriptors are
+        //    not eagerly deleted because a sibling may still name one; exact
+        //    new facts are published below and weak post-trace pruning retires
+        //    dead historical descriptors.
         crate::object::shapes::shape_drop((*obj).keys_array);
         // #6759 C3c: the compaction changed the layout under the SAME keys
         //    address, so the stamped shape id no longer describes this
-        //    object. Ids are never reused, so clearing here (plus the
-        //    record drop above) makes every stale id-keyed cache entry a
-        //    permanent miss; the next resolve stamps a fresh id.
+        //    object. Ids are never reused, so clearing here makes every stale
+        //    id-keyed cache entry a permanent miss for this receiver; the
+        //    synchronization below stamps exact post-delete facts.
         //
         //    #6759 C3 rung 1: this now fires for CLASS INSTANCES too — the
         //    whole point of the rung. A delete on a class instance is exactly
@@ -407,6 +408,7 @@ pub extern "C" fn js_object_delete_field(
         //    `shape_slot_lookup`'s shrink check already anticipates), so
         //    deleting it would silently make that path wrong.
         crate::object::shapes::clear_object_shape_stamp(obj);
+        crate::object::shapes::synchronize_object_shape_descriptor(obj);
 
         1
     }
@@ -650,11 +652,10 @@ mod shape_transition_tests_6759 {
         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
     }
 
-    /// A plain object's `delete` DOES mint a new ShapeId — lazily. The record
-    /// for the compacted keys array is dropped (`shape_drop`) and the stamp
-    /// cleared, so the next resolve allocates a genuinely fresh id rather than
-    /// reviving the old one. Ids are never reused, so "different" is the whole
-    /// property.
+    /// A plain object's `delete` mints a new authoritative ShapeId eagerly. The
+    /// stale slot index is dropped, the stamp is cleared, then the compacted
+    /// facts install a genuinely fresh id rather than reviving the old one.
+    /// Ids are never reused, so "different" is the whole property.
     #[test]
     fn delete_mints_a_fresh_shape_id_for_a_plain_object() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -672,14 +673,7 @@ mod shape_transition_tests_6759 {
 
             assert_eq!(js_object_delete_field(obj, key("del6759_a")), 1);
 
-            // The stamp is cleared eagerly …
-            assert_eq!(
-                (*obj).parent_class_id,
-                0,
-                "the stamp still describes the PRE-delete key list"
-            );
-            // … and re-minted, distinctly, on the next resolve.
-            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_c"));
+            // The compacted descriptor is installed before delete returns.
             let after = (*obj).parent_class_id;
             assert!(
                 is_shape_id(after),
@@ -690,6 +684,11 @@ mod shape_transition_tests_6759 {
                 "the delete re-used the pre-delete ShapeId — a shape-id compare \
                  would accept a compacted object as its own class's shape"
             );
+            let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
+                .expect("delete must publish a by-id descriptor");
+            assert_eq!(descriptor.keys, (*obj).keys_array as u64);
+            assert_eq!(descriptor.logical_key_count, 2);
+            assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
         }
     }
 
@@ -698,8 +697,8 @@ mod shape_transition_tests_6759 {
     /// This is the assertion `delete_leaves_a_class_instance_with_no_shape_word_to_transition`
     /// asked to be replaced by. A class instance now HAS a shape word, so a
     /// `delete` on it transitions the same way a plain object's does: the
-    /// compaction clears the stamp, and the next resolve mints a genuinely
-    /// fresh id (ids are never reused) rather than reviving the class's
+    /// compaction clears the stamp, then installs a genuinely fresh id before
+    /// returning (ids are never reused) rather than reviving the class's
     /// canonical one.
     ///
     /// The old test's other half — that `class_id` is preserved and the keys
@@ -751,14 +750,7 @@ mod shape_transition_tests_6759 {
                 30.0,
                 "test premise: the delete did not compact the slots"
             );
-            // The stamp is cleared eagerly …
-            assert_eq!(
-                (*obj).parent_class_id,
-                0,
-                "the stamp still describes the PRE-delete key list"
-            );
-            // … and re-minted, distinctly, on the next resolve.
-            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_z"));
+            // The compacted descriptor is installed before delete returns.
             let after = (*obj).parent_class_id;
             assert!(
                 is_shape_id(after),
@@ -769,6 +761,11 @@ mod shape_transition_tests_6759 {
                 "the delete re-used the pre-delete ShapeId — a shape-id compare \
                  would accept a compacted class instance as its own class's shape"
             );
+            let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
+                .expect("class delete must publish a by-id descriptor");
+            assert_eq!(descriptor.keys, (*obj).keys_array as u64);
+            assert_eq!(descriptor.logical_key_count, 2);
+            assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
 
             // Still true, and still what the guard compares until rung 3.
             assert_ne!(

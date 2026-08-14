@@ -476,22 +476,17 @@ pub(super) fn set_field_by_name_object_tail(
                     let fields_ptr =
                         (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                     let slot = fields_ptr.add(slot_idx as usize);
+                    // Publish the expanded traced range and its exact
+                    // descriptor before the pointer-bearing slot value.
+                    if slot_idx >= (*obj).field_count {
+                        set_object_live_slot_count(obj, slot_idx + 1);
+                    }
                     crate::gc::runtime_store_jsvalue_slot(
                         obj as usize,
                         slot as usize,
                         slot_idx as usize,
                         vbits,
                     );
-                    // Bump field_count only for inline slots — leaving
-                    // it at the physical capacity is what steers
-                    // `js_object_get_field_by_name`'s reads to the
-                    // overflow map for slots ≥ alloc_limit. Bumping it
-                    // past capacity would make reads dereference past
-                    // the object's inline field array into adjacent
-                    // arena data.
-                    if slot_idx >= (*obj).field_count {
-                        (*obj).field_count = slot_idx + 1;
-                    }
                 } else {
                     // Cached slot is past the object's inline capacity —
                     // store in the overflow map (same as the slow path's
@@ -538,7 +533,7 @@ pub(super) fn set_field_by_name_object_tail(
             // can only expose non-pointer sentinels — then publish the value.
             // Bump field_count so Object.keys()/values()/entries() see the new property.
             if (*obj).field_count == 0 {
-                (*obj).field_count = 1;
+                set_object_live_slot_count(obj, 1);
             }
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
@@ -710,10 +705,10 @@ pub(super) fn set_field_by_name_object_tail(
                 refresh_roots_after_alloc!();
                 set_object_keys_array(obj, new_keys);
                 super::mark_object_dynamic_shape_unknown(obj);
-                // #6759 Phase C3a: an owned grow keeps its shape identity —
-                // migrate the record instead of orphaning it (a shared
-                // fork must NOT migrate: the old address still describes
-                // the siblings' live shape).
+                // #8067: migrate only the owned array's validated slot index;
+                // the immutable descriptor is versioned to the new facts. A
+                // shared fork must NOT migrate: the old address still serves
+                // the siblings' live shape.
                 if !keys_shared {
                     super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
                 }
@@ -748,8 +743,8 @@ pub(super) fn set_field_by_name_object_tail(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
-            // #6759 Phase C3a: owned grow keeps its shape identity (see the
-            // overflow branch above).
+            // #8067: owned grow keeps the slot index, while the immutable
+            // descriptor is versioned (see the overflow branch above).
             if !keys_shared {
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
@@ -760,7 +755,7 @@ pub(super) fn set_field_by_name_object_tail(
             // slot is undefined-initialized at allocation, so the widened range
             // can only expose non-pointer sentinels — then publish the value.
             if new_index as u32 >= (*obj).field_count {
-                (*obj).field_count = new_index as u32 + 1;
+                set_object_live_slot_count(obj, new_index as u32 + 1);
             }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
@@ -911,7 +906,7 @@ pub(super) fn set_field_by_name_object_tail(
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
-            // #6759 Phase C3a: owned grow keeps its shape identity.
+            // #8067: migrate the owned slot index, not the descriptor id.
             if !keys_shared {
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
@@ -963,7 +958,7 @@ pub(super) fn set_field_by_name_object_tail(
         // Update the object's keys_array pointer in case js_array_push reallocated
         set_object_keys_array(obj, new_keys);
         super::mark_object_dynamic_shape_unknown(obj);
-        // #6759 Phase C3a: owned grow keeps its shape identity.
+        // #8067: migrate the owned slot index, not the descriptor id.
         if !keys_shared {
             super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
         }
@@ -977,7 +972,7 @@ pub(super) fn set_field_by_name_object_tail(
         // can only expose non-pointer sentinels — then publish the value.
         // Bump field_count to reflect the newly added property
         if new_index as u32 >= (*obj).field_count {
-            (*obj).field_count = new_index as u32 + 1;
+            set_object_live_slot_count(obj, new_index as u32 + 1);
         }
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
         refresh_roots_after_alloc!();

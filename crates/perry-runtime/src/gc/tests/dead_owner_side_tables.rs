@@ -576,6 +576,7 @@ fn test_object_dead_payload_arm_clears_keys_index() {
         "a live keys_array's shape record must survive the prune"
     );
     crate::object::shapes::shape_drop(live_keys as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(live_keys);
 }
 
 #[test]
@@ -903,9 +904,10 @@ fn test_descriptor_meta_summary_survives_copied_minor_move() {
     js_shadow_slot_set(0, 0);
 }
 
-/// #6759 Phase C3a: an owned keys array's grow-realloc migrates the shape
-/// record (slot map + stable shape_id) to the new address instead of
-/// orphaning it.
+/// #8067: an owned keys array's append-reallocation may migrate its validated
+/// slot-index accelerator, but must neither repoint nor eagerly delete the old
+/// immutable descriptor. A sibling naming it remains valid; otherwise weak
+/// post-trace pruning eventually retires it.
 #[test]
 fn test_shape_record_migrates_on_owned_grow() {
     let _global = global_side_table_test_lock();
@@ -924,11 +926,19 @@ fn test_shape_record_migrates_on_owned_grow() {
     );
     assert_eq!(
         crate::object::shapes::test_shape_id_for_keys(new_addr),
-        Some(id),
-        "the record — including its stable shape_id — must move to the new address"
+        None,
+        "an append-reallocation must not repoint the old immutable descriptor"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id)
+            .expect("grow must not delete a potentially sibling-owned descriptor")
+            .keys,
+        old_addr as u64,
+        "an append-reallocation repointed the old immutable descriptor"
     );
     // Cleanup so the seeded address can't leak into later tests.
     crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(old_addr);
 }
 
 /// #6759 Phase C3a: GC evacuation MOVES a live keys array — the shape
@@ -963,7 +973,172 @@ fn test_shape_record_rekeys_on_copied_minor_move() {
     );
 
     crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(new_addr);
     js_shadow_slot_set(0, 0);
+}
+
+/// #8067: the by-id table is weak. Churning shapes without any live object
+/// owners must return the descriptor census to baseline after a full trace;
+/// otherwise the descriptor's keys copy would make historical arrays immortal.
+#[test]
+fn test_dead_shape_descriptor_churn_returns_to_baseline_after_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+    let baseline = crate::object::shapes::test_shape_descriptor_count();
+    let mut ids = Vec::new();
+    for _ in 0..32 {
+        let keys = unsafe { alloc_nursery_test_array() };
+        ids.push(
+            crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+                .expect("shape range unexpectedly exhausted"),
+        );
+    }
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        baseline + ids.len(),
+        "test premise: churn must publish one descriptor per distinct keys array"
+    );
+
+    full_gc_with_no_block_persistence();
+
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        baseline,
+        "weak descriptor table retained dead shape keys"
+    );
+    assert!(
+        ids.into_iter()
+            .all(|id| crate::object::shapes::shape_descriptor_by_id(id).is_none()),
+        "a dead shape id still resolved after its keys array was reclaimed"
+    );
+}
+
+/// #8067: the header is the sole strong edge; a live stamped object's scan
+/// synchronizes its weak descriptor mirror. Two siblings share one descriptor;
+/// after copied-minor evacuation both headers and that descriptor must agree.
+#[test]
+fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    crate::object::shapes::test_clear_shape_table();
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let keys = unsafe { alloc_nursery_test_array() };
+    let old_keys = keys as usize;
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (a, _) = unsafe { alloc_nursery_test_object(0) };
+    let (b, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        (*a).keys_array = keys;
+        (*a).parent_class_id = id;
+        (*b).keys_array = keys;
+        (*b).parent_class_id = id;
+    }
+    assert_eq!(
+        crate::gc::test_gc_rewrite_slot_count(a as usize),
+        Some(1),
+        "a stamped object must enumerate only its authoritative header keys slot"
+    );
+    js_shadow_slot_set(0, ptr_bits(a as usize));
+    js_shadow_slot_set(1, ptr_bits(b as usize));
+
+    let _ = gc_collect_minor();
+
+    let a_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let b_after = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("live shared descriptor disappeared during evacuation");
+    unsafe {
+        assert_eq!((*a_after).parent_class_id, id);
+        assert_eq!((*b_after).parent_class_id, id);
+        assert_eq!((*a_after).keys_array, (*b_after).keys_array);
+        assert_ne!((*a_after).keys_array as usize, old_keys);
+        assert_eq!(descriptor.keys, (*a_after).keys_array as u64);
+    }
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        1,
+        "two live siblings must retain exactly their one shared descriptor"
+    );
+    crate::object::shapes::shape_drop(descriptor.keys as usize as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(descriptor.keys as usize);
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}
+
+/// #8067 release fail-closed guard: descriptor fact capture must classify the
+/// keys word before reading ArrayHeader fields. A live GC_TYPE_OBJECT can
+/// carry a corrupt header edge and a real ShapeId at the same time; the
+/// authoritative header edge remains visible, but descriptor synchronization
+/// must skip without dereferencing that word.
+#[test]
+fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+
+    let valid_keys = unsafe { alloc_nursery_test_array() };
+    let id = crate::object::shapes::shape_descriptor_ensure(valid_keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let corrupt_keys = 0x2800_0203usize;
+    assert!(
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(corrupt_keys) }.is_none(),
+        "test premise: the plausible misaligned word is not an exact tracked allocation"
+    );
+    unsafe {
+        (*owner).keys_array = corrupt_keys as *mut crate::array::ArrayHeader;
+        (*owner).parent_class_id = id;
+    }
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+
+    assert_eq!(
+        crate::gc::test_gc_rewrite_slot_count(owner as usize),
+        Some(1),
+        "only the authoritative corrupt header slot may be enumerated"
+    );
+
+    js_shadow_slot_set(0, 0);
+    crate::object::shapes::test_drop_shape_descriptors(valid_keys as usize);
+}
+
+/// #8067: DirtyHeaderSlotScan retains enumerated raw slot pointers between
+/// budgeted work units. Descriptor-table growth in that mutator window must
+/// not invalidate any saved pointer, so a stamped object's enumeration may
+/// contain its stable ObjectHeader slot but never a HashMap bucket address.
+#[test]
+fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+
+    let keys = unsafe { alloc_nursery_test_array() };
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        (*owner).keys_array = keys;
+        (*owner).parent_class_id = id;
+    }
+    let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)
+        .expect("tracked object must have a rewrite descriptor");
+    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    assert_eq!(
+        saved_slots,
+        vec![header_keys_slot as usize],
+        "deferred work retained a descriptor-table bucket address"
+    );
+
+    for i in 0..1024usize {
+        let fake_keys = 0x8067_1000_0000_0000usize + i * 0x1000;
+        crate::object::shapes::shape_descriptor_ensure(fake_keys as *const _, 0, 0)
+            .expect("shape range unexpectedly exhausted during reallocation fixture");
+    }
+    assert_eq!(
+        unsafe { *header_keys_slot },
+        keys as u64,
+        "saved authoritative header slot did not survive descriptor-table growth"
+    );
+
+    crate::object::shapes::test_clear_shape_table();
 }
 
 /// #6759 Phase B: the meta record is kept alive by its owner (the header
