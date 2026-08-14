@@ -197,7 +197,11 @@ mod module_globals_emit;
 #[cfg(test)]
 mod number_exactness_tests;
 mod opts;
+#[cfg(test)]
+mod ordinary_param_guard_tests;
+mod param_guard;
 mod spec_abi;
+mod spec_return_proof;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;
@@ -1906,6 +1910,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
+        spec_return_proofs: std::collections::HashMap::new(),
         spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
         typed_i32_functions,
@@ -2385,14 +2390,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // BEFORE any rejection was constructed, so `--opt-report` said
             // nothing at all about the function: indistinguishable from "not
             // analysed" and from "analysed and denied". Say "moot" instead.
-            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
-                reject(
-                    typed_abi::TypedCloneRejectionReason::SpecNoCallSites,
-                    &mut typed_clone_rejection_records,
-                );
-                continue;
-            };
-            if f.is_async || f.is_generator || f.was_plain_async {
+            let sites = spec_facts.call_sites.get(&f.id);
+            // A guard executed when a generator object is CREATED cannot
+            // prove the argument when its body later runs. Likewise, an
+            // async body may let external code mutate a reachable argument
+            // across `await`. Async functions with no suspension execute
+            // their entire body synchronously and are safe to clone.
+            if f.is_generator
+                || f.was_plain_async
+                || (f.is_async && param_guard::body_contains_await(&f.body))
+            {
                 reject(
                     typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
                     &mut typed_clone_rejection_records,
@@ -2455,25 +2462,88 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let demoted: Vec<bool> = f
                 .params
                 .iter()
-                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
+                .map(|p| {
+                    reassigned.contains(&p.id)
+                        || closure_refs.contains(&p.id)
+                        || crate::collectors::has_any_mutation(&f.body, p.id)
+                })
                 .collect();
-            let plan = match spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted) {
-                Some((reps, _matching_sites)) => SpecFnPlan {
-                    reps,
-                    dispatch: SpecDispatch::Static,
-                },
+            let declaration_guards = param_guard::declaration_guards(
+                f.id,
+                &module_prefix,
+                &f.params,
+                &demoted,
+                &cross_module.type_aliases,
+                &cross_module.interfaces,
+                &class_table,
+                &class_ids,
+            );
+            let plan = match sites
+                .and_then(|sites| spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted))
+            {
+                Some((reps, _matching_sites)) => {
+                    // Raw slots already carry a by-construction proof. Boxed
+                    // slots may additionally recover an ordinary declared
+                    // parameter fact, but only through their runtime
+                    // descriptor. TaPtr remains a construction-only ABI: an
+                    // unknown/public caller has no equivalent cheap guard for
+                    // the raw pointer + length contract, so mixed TaPtr plans
+                    // keep their existing static-only route.
+                    let guards: Vec<_> = if reps
+                        .iter()
+                        .any(|rep| matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }))
+                    {
+                        vec![None; reps.len()]
+                    } else {
+                        declaration_guards
+                            .into_iter()
+                            .zip(reps.iter())
+                            .map(|(guard, rep)| {
+                                matches!(rep, crate::collectors::SpecParamRep::Boxed)
+                                    .then_some(guard)
+                                    .flatten()
+                            })
+                            .collect()
+                    };
+                    let dispatch = if guards.iter().any(Option::is_some) {
+                        SpecDispatch::Guarded
+                    } else {
+                        SpecDispatch::Static
+                    };
+                    SpecFnPlan {
+                        reps,
+                        dispatch,
+                        guards,
+                    }
+                }
                 None => {
-                    // Tier B: declaration-derived tuple, runtime-guarded
-                    // dispatch. Only viable with ≥1 declared-Int32 param.
+                    // Tier B: declaration-derived tuple plus descriptors for
+                    // boxed ordinary parameters. The raw tuple can be all
+                    // Boxed here: the clone's win is its post-guard parameter
+                    // facts rather than a calling-convention change.
                     let reps = spec_abi::declaration_tuple(&f.params, &demoted);
-                    if spec_abi::spec_tuple_is_viable(&reps) {
+                    let guards: Vec<_> = declaration_guards
+                        .into_iter()
+                        .zip(reps.iter())
+                        .map(|(guard, rep)| {
+                            matches!(rep, crate::collectors::SpecParamRep::Boxed)
+                                .then_some(guard)
+                                .flatten()
+                        })
+                        .collect();
+                    if spec_abi::spec_tuple_is_viable(&reps) || guards.iter().any(Option::is_some) {
                         SpecFnPlan {
                             reps,
                             dispatch: SpecDispatch::Guarded,
+                            guards,
                         }
                     } else {
                         reject(
-                            typed_abi::TypedCloneRejectionReason::SpecTupleUnproven,
+                            if sites.is_none() {
+                                typed_abi::TypedCloneRejectionReason::SpecNoCallSites
+                            } else {
+                                typed_abi::TypedCloneRejectionReason::SpecTupleUnproven
+                            },
                             &mut typed_clone_rejection_records,
                         );
                         continue;
@@ -2491,6 +2561,26 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             cross_module.spec_abi_functions.insert(f.id, plan);
         }
         cross_module.spec_ta_bindings = spec_facts.ta_bindings;
+        cross_module.spec_return_proofs = spec_return_proof::collect_proven_returns(
+            hir,
+            &cross_module.spec_abi_functions,
+            &cross_module.type_aliases,
+        );
+
+        // The descriptor is immutable rodata, not a GC object. Emit in HIR
+        // order (never HashMap order) so cache/object bytes stay deterministic.
+        for f in &hir.functions {
+            let Some(plan) = cross_module.spec_abi_functions.get(&f.id) else {
+                continue;
+            };
+            for guard in plan.guards.iter().flatten() {
+                llmod.add_named_string_constant(
+                    &guard.descriptor_name,
+                    guard.descriptor.len() + 1,
+                    &param_guard::descriptor_llvm_literal(&guard.descriptor),
+                );
+            }
+        }
     }
 
     progress.checkpoint("locals, closures, and module globals analysis");

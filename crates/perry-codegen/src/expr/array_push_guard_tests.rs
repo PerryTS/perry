@@ -228,6 +228,24 @@ fn inbounds_block(ir: &str) -> String {
     rest[..end].to_string()
 }
 
+fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
+    let start = ir
+        .match_indices("define ")
+        .find(|(index, _)| {
+            ir[*index..]
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains(marker))
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| panic!("missing function containing {marker}:\n{ir}"));
+    let end = ir[start..]
+        .find("\n}")
+        .map(|offset| start + offset)
+        .expect("function terminator");
+    &ir[start..end]
+}
+
 /// A canonical numeric `+` whose operands have runtime-derived evidence. The
 /// live-bits guard remains useful because NaN payloads still require GC-layout
 /// bookkeeping even though neither operand rests on source metadata.
@@ -420,14 +438,18 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
         metadata_numeric_add_push(),
         Vec::new(),
     ));
+    // #8079 may additionally emit a declaration-guarded clone. This test's
+    // safety subject is the unchanged generic fallback, where the annotation
+    // is still metadata rather than proof.
+    let generic = function_body(&ir, "$generic(");
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
-            && ir.contains("call i64 @js_array_numeric_push_f64_unboxed")
-            && ir.contains("call i64 @js_array_push_f64"),
-        "a declared-number addition must validate the live value and retain the generic push fallback:\n{ir}"
+        generic.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
+            && generic.contains("call i64 @js_array_numeric_push_f64_unboxed")
+            && generic.contains("call i64 @js_array_push_f64"),
+        "a declared-number addition must validate the live value and retain the generic push fallback:\n{generic}"
     );
     assert!(
-        !ir.contains(GUARD_BLOCK),
-        "metadata alone must not reach the pointer-only inline bookkeeping guard:\n{ir}"
+        !generic.contains(GUARD_BLOCK),
+        "metadata alone must not reach the pointer-only inline bookkeeping guard:\n{generic}"
     );
 }

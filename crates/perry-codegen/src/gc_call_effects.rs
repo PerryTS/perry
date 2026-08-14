@@ -38,6 +38,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_i1_arg_to_raw"
         | "js_typed_i32_arg_to_raw"
         | "js_typed_string_arg_guard"
+        // `param_type_guard.rs`: read-only descriptor/heap traversal. It may
+        // use Rust Vec/TLS registries, but never allocates in Perry's heap or
+        // invokes JavaScript getters, proxies, coercions, or callbacks.
+        | "js_param_type_guard"
         | "js_is_truthy"
         | "js_typed_feedback_plain_array_index_get_guard"
         | "js_typed_feedback_numeric_array_index_get_guard"

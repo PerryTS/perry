@@ -36,6 +36,7 @@
 
 use std::collections::HashMap;
 
+pub(crate) use super::param_guard::SpecParamGuard;
 pub(crate) use crate::collectors::SpecParamRep;
 use crate::types::{LlvmType, DOUBLE, I32, I64};
 
@@ -82,6 +83,10 @@ pub(crate) enum SpecDispatch {
 pub(crate) struct SpecFnPlan {
     pub reps: Vec<SpecParamRep>,
     pub dispatch: SpecDispatch,
+    /// Declared-type candidates validated at the direct call boundary. A
+    /// successful descriptor guard is what licenses the matching HIR proof in
+    /// the clone; `None` keeps that parameter fully generic.
+    pub guards: Vec<Option<SpecParamGuard>>,
 }
 
 /// LLVM parameter type for a rep slot.
@@ -283,11 +288,12 @@ mod tests {
     #[test]
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [&str; 4] = [
-            "codegen/spec_abi.rs",    // naming + this test
-            "codegen/function.rs",    // entry emission
-            "codegen/mod.rs",         // eligibility/budget loop
-            "lower_call/func_ref.rs", // direct-call dispatch
+        let allowed: [&str; 5] = [
+            "codegen/spec_abi.rs",                   // naming + this test
+            "codegen/function.rs",                   // entry emission
+            "codegen/mod.rs",                        // eligibility/budget loop
+            "codegen/ordinary_param_guard_tests.rs", // structural assertion only
+            "lower_call/func_ref.rs",                // direct-call dispatch
         ];
         let mut offenders: Vec<String> = Vec::new();
         fn visit(

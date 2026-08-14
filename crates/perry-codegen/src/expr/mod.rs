@@ -238,6 +238,11 @@ pub(crate) struct FnCtx<'a> {
     /// initializer. Unlike `local_types`, this map never receives a declared
     /// annotation or a type inferred from one.
     pub proven_local_types: std::collections::HashMap<u32, HirType>,
+    /// Immutable CSE/local aliases of a property read from another local,
+    /// recorded as `alias_id -> (owner_id, property)`. Guarded discriminant
+    /// narrowing uses this only after proving the owner at runtime; the alias
+    /// itself contributes no type evidence.
+    pub guarded_discriminant_aliases: std::collections::HashMap<u32, (u32, String)>,
     /// Module-global proofs used only by cross-thread admission. These are
     /// collected from structural initializers with module-wide write
     /// invalidation; ordinary local type predicates do not consult them.
@@ -1028,6 +1033,10 @@ pub(crate) struct FnCtx<'a> {
     /// entry in this module. Direct `FuncRef` call sites consult this to
     /// dispatch statically-proven sites to the raw-ABI symbol.
     pub spec_abi_functions: &'a std::collections::HashMap<u32, crate::codegen::SpecFnPlan>,
+
+    /// Constructively verified return facts for specialized module functions.
+    /// Consumed only when the current call's arguments prove the same plan.
+    pub spec_return_proofs: &'a std::collections::HashMap<u32, HirType>,
 
     /// Phase 2 pre-pass output (`collectors/spec_abi_sites.rs`): LocalIds
     /// proven to permanently hold one specific non-view typed array. A call

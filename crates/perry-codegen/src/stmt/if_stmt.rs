@@ -160,6 +160,11 @@ pub(crate) fn lower_if(
         return Ok(());
     }
 
+    let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
+    let saved_guarded_proof = branch_proofs
+        .as_ref()
+        .and_then(|(id, _, _)| ctx.proven_local_types.get(id).cloned());
+
     let i1 = lower_if_condition_i1(ctx, condition)?;
     let alias_entry_snapshot = NativeArenaOwnerAliasSnapshot::capture(ctx);
 
@@ -176,6 +181,9 @@ pub(crate) fn lower_if(
 
     // Compile then branch.
     ctx.current_block = then_idx;
+    if let Some((id, Some(proof), _)) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     let guard_scope_id = ctx.next_loop_proof_scope_id();
     let guarded = crate::expr::guarded_buffer_indices_for_condition(ctx, condition, guard_scope_id);
     ctx.guarded_buffer_index_pairs.extend(guarded);
@@ -188,11 +196,22 @@ pub(crate) fn lower_if(
         ctx.block().br(&merge_label);
     }
 
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = saved_guarded_proof.as_ref() {
+            ctx.proven_local_types.insert(*id, proof.clone());
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
+    }
+
     // Compile else branch. If there's no explicit else, the else block is
     // still created so both sides of the condBr have a valid target — it
     // just branches immediately to merge.
     alias_entry_snapshot.restore(ctx);
     ctx.current_block = else_idx;
+    if let Some((id, _, Some(proof))) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     if let Some(else_stmts) = else_branch {
         lower_stmts(ctx, else_stmts)?;
     }
@@ -200,6 +219,29 @@ pub(crate) fn lower_if(
     let else_reaches_merge = !ctx.block().is_terminated();
     if else_reaches_merge {
         ctx.block().br(&merge_label);
+    }
+
+    // If one successor terminates, the merge block is reached exclusively
+    // through the other successor and may retain that successor's narrowed
+    // proof. This is what makes a sequence of early-return discriminator
+    // checks progressively eliminate union arms. When both successors reach
+    // the merge, neither branch-local subset dominates and only the incoming
+    // proof remains valid.
+    let merged_guarded_proof = branch_proofs.as_ref().map(|(_, then_proof, else_proof)| {
+        if then_reaches_merge && !else_reaches_merge {
+            then_proof.clone().or_else(|| saved_guarded_proof.clone())
+        } else if else_reaches_merge && !then_reaches_merge {
+            else_proof.clone().or_else(|| saved_guarded_proof.clone())
+        } else {
+            saved_guarded_proof.clone()
+        }
+    });
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = merged_guarded_proof.flatten() {
+            ctx.proven_local_types.insert(*id, proof);
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
     }
 
     let mut alias_exits = Vec::new();

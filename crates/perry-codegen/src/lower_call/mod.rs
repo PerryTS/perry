@@ -54,6 +54,10 @@ mod extern_func;
 mod extern_timers;
 mod field_init;
 mod func_ref;
+pub(crate) use func_ref::{
+    guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
+    guarded_path_type,
+};
 mod jsx;
 mod method_override;
 mod namespace_call;

@@ -1,9 +1,8 @@
 /// (Issue #50) Return `true` if any statement in `stmts` mutates the local
 /// `id`. A local is "mutated" if:
 ///   - It's the target of a `LocalSet` or `Update` (reassignment), or
-///   - An `IndexSet` has a root object that resolves to `LocalGet(id)` —
-///     covers `X[i] = v` directly, plus `X[i][j] = v` and deeper chains
-///     via nested `IndexGet`s.
+///   - A property/index set or update has a root object that resolves to
+///     `LocalGet(id)` — covers direct and nested reachable-value writes.
 ///   - A `NativeMethodCall` targets `LocalGet(id)` with a name from the
 ///     Array mutating set (`push`, `pop`, `shift`, `unshift`, `splice`,
 ///     `sort`, `reverse`, `fill`, `copyWithin`).
@@ -212,9 +211,27 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         }
         Expr::PropertyGet { object, .. } => expr_has_mutation(object, id),
         Expr::PropertySet { object, value, .. } => {
-            expr_has_mutation(object, id) || expr_has_mutation(value, id)
+            is_local_get_chain(object, id)
+                || expr_has_mutation(object, id)
+                || expr_has_mutation(value, id)
         }
-        Expr::PropertyUpdate { object, .. } => expr_has_mutation(object, id),
+        Expr::PropertyUpdate { object, .. } => {
+            is_local_get_chain(object, id) || expr_has_mutation(object, id)
+        }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            is_local_get_chain(target, id)
+                || is_local_get_chain(receiver, id)
+                || expr_has_mutation(target, id)
+                || expr_has_mutation(key, id)
+                || expr_has_mutation(value, id)
+                || expr_has_mutation(receiver, id)
+        }
         Expr::IndexGet { object, index } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
@@ -241,5 +258,43 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 || items.iter().any(|it| expr_has_mutation(it, id))
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{BinaryOp, Expr};
+
+    #[test]
+    fn direct_property_writes_mutate_the_root_binding_value() {
+        let set = Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(7)),
+            property: "count".to_string(),
+            value: Box::new(Expr::String("lie".to_string())),
+        };
+        let update = Expr::PropertyUpdate {
+            object: Box::new(Expr::LocalGet(7)),
+            property: "count".to_string(),
+            op: BinaryOp::Add,
+            prefix: false,
+        };
+        assert!(expr_has_mutation(&set, 7));
+        assert!(expr_has_mutation(&update, 7));
+        assert!(!expr_has_mutation(&set, 8));
+    }
+
+    #[test]
+    fn lowered_put_value_write_mutates_target_and_receiver_roots() {
+        let set = Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(7)),
+            key: Box::new(Expr::String("count".to_string())),
+            value: Box::new(Expr::String("changed".to_string())),
+            receiver: Box::new(Expr::LocalGet(8)),
+            strict: true,
+        };
+        assert!(expr_has_mutation(&set, 7));
+        assert!(expr_has_mutation(&set, 8));
+        assert!(!expr_has_mutation(&set, 9));
     }
 }

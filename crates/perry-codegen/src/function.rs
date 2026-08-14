@@ -26,6 +26,9 @@ pub struct LlFunction {
     /// function at every call site, exposing integer operations to the
     /// caller's optimizer context (critical for vectorization of clamp patterns).
     pub force_inline: bool,
+    /// When true, keep a small routing wrapper as an optimization boundary.
+    /// Used when inlining would duplicate guarded fast/fallback call graphs.
+    pub no_inline: bool,
     /// When true (and `force_inline` is not), emit the `inlinehint` attribute.
     /// Unlike `alwaysinline`, `inlinehint` only *raises* LLVM's inline
     /// threshold for this callee — LLVM keeps its `-O3` growth budget and can
@@ -232,6 +235,7 @@ impl LlFunction {
             params,
             linkage: String::new(),
             force_inline: false,
+            no_inline: false,
             inline_hint: false,
             hot_loop_callee: false,
             alloc_hot: false,
@@ -717,6 +721,8 @@ impl LlFunction {
 
         let attrs = if self.force_inline {
             " alwaysinline"
+        } else if self.no_inline {
+            " noinline"
         } else if self.inline_hint {
             " inlinehint"
         } else {

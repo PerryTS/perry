@@ -10,16 +10,6 @@ use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
-fn is_i32_expr(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
-    match arg {
-        Expr::Integer(n) => (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n),
-        _ => matches!(
-            crate::type_analysis::static_type_of(ctx, arg),
-            Some(perry_hir::types::Type::Int32)
-        ),
-    }
-}
-
 fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
@@ -146,9 +136,10 @@ fn try_emit_spec_static_call(
     Some(result)
 }
 
-/// Phase 2, Tier B: declaration-proven reps keep the existing runtime-guarded
-/// diamond shape — guard each raw slot, call the specialized entry on the
-/// fast arm, the PUBLIC boxed body on the fallback arm, merge with a phi.
+/// Phase 2, Tier B: only a call site whose current facts prove every
+/// declaration-guarded slot may bypass the public wrapper. Unknown and
+/// indirect callers target that wrapper, which owns the runtime guard and
+/// generic fallback.
 fn try_emit_spec_guarded_call(
     ctx: &mut FnCtx<'_>,
     fname: &str,
@@ -156,108 +147,435 @@ fn try_emit_spec_guarded_call(
     args: &[Expr],
     lowered: &[String],
 ) -> Option<String> {
-    use crate::collectors::SpecParamRep;
-    if plan.reps.len() != args.len() || plan.reps.len() != lowered.len() {
+    if plan.reps.len() != args.len()
+        || plan.reps.len() != lowered.len()
+        || !plan.guards.iter().zip(args.iter()).all(|(guard, arg)| {
+            guard
+                .as_ref()
+                .is_none_or(|candidate| guarded_argument_proves(ctx, arg, &candidate.proof))
+        })
+    {
         return None;
     }
-    // Static filter first (same spirit as typed_param_reps_match_args): only
-    // sites whose args are statically i32-shaped take the guarded route.
-    for (rep, arg) in plan.reps.iter().zip(args.iter()) {
-        match rep {
-            SpecParamRep::I32 => {
-                if !is_i32_expr(ctx, arg) {
+    try_emit_spec_static_call(ctx, fname, plan, args, lowered)
+}
+fn normalize_guard_type(ctx: &FnCtx<'_>, ty: &perry_hir::types::Type) -> perry_hir::types::Type {
+    let mut current = ty.clone();
+    for _ in 0..16 {
+        let perry_hir::types::Type::Named(name) = &current else {
+            break;
+        };
+        let Some(next) = ctx.type_aliases.get(name) else {
+            break;
+        };
+        current = next.clone();
+    }
+    current
+}
+
+fn guarded_type_assignable(
+    ctx: &FnCtx<'_>,
+    actual: &perry_hir::types::Type,
+    expected: &perry_hir::types::Type,
+    depth: usize,
+) -> bool {
+    use perry_hir::types::Type;
+    if actual == expected {
+        return true;
+    }
+    if depth > 32 {
+        return false;
+    }
+    let actual = normalize_guard_type(ctx, actual);
+    let expected = normalize_guard_type(ctx, expected);
+    if actual == expected {
+        return true;
+    }
+    match (&actual, &expected) {
+        (Type::Never, _) => true,
+        (Type::Int32, Type::Number) | (Type::StringLiteral(_), Type::String) => true,
+        (Type::Union(actual), _) => actual
+            .iter()
+            .all(|variant| guarded_type_assignable(ctx, variant, &expected, depth + 1)),
+        (_, Type::Union(expected)) => expected
+            .iter()
+            .any(|variant| guarded_type_assignable(ctx, &actual, variant, depth + 1)),
+        (Type::Array(actual), Type::Array(expected)) => {
+            guarded_type_assignable(ctx, actual, expected, depth + 1)
+        }
+        (Type::Tuple(actual), Type::Tuple(expected)) if actual.len() == expected.len() => actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| guarded_type_assignable(ctx, actual, expected, depth + 1)),
+        (Type::Object(actual), Type::Object(expected)) => {
+            expected.properties.iter().all(|(name, expected_field)| {
+                !expected_field.optional
+                    && actual.properties.get(name).is_some_and(|actual_field| {
+                        !actual_field.optional
+                            && guarded_type_assignable(
+                                ctx,
+                                &actual_field.ty,
+                                &expected_field.ty,
+                                depth + 1,
+                            )
+                    })
+            })
+        }
+        _ => false,
+    }
+}
+
+fn guarded_property_type(
+    ctx: &FnCtx<'_>,
+    owner: &perry_hir::types::Type,
+    property: &str,
+    depth: usize,
+) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::Type;
+    if depth > 16 {
+        return None;
+    }
+    match owner {
+        Type::Named(name) => {
+            if let Some(alias) = ctx.type_aliases.get(name) {
+                return guarded_property_type(ctx, alias, property, depth + 1);
+            }
+            if let Some(interface) = ctx.interfaces.get(name) {
+                return interface
+                    .properties
+                    .iter()
+                    .find(|candidate| candidate.name == property)
+                    .map(|candidate| candidate.ty.clone());
+            }
+            let class = ctx.classes.get(name)?;
+            if let Some(field) = class.fields.iter().find(|field| field.name == property) {
+                return Some(field.ty.clone());
+            }
+            let mut parent = class.extends_name.as_deref();
+            while let Some(name) = parent {
+                let class = ctx.classes.get(name)?;
+                if let Some(field) = class.fields.iter().find(|field| field.name == property) {
+                    return Some(field.ty.clone());
+                }
+                parent = class.extends_name.as_deref();
+            }
+            None
+        }
+        Type::Object(object) => object
+            .properties
+            .get(property)
+            .map(|candidate| candidate.ty.clone()),
+        Type::Union(variants) => {
+            // A path is unconditional evidence only when every possible arm
+            // declares the field with the same type. Branch-specific
+            // narrowing is not represented in FnCtx; skipping an arm that
+            // lacks the field would turn that arm's runtime `undefined` into
+            // a false proof.
+            let mut found: Option<Type> = None;
+            for variant in variants {
+                let candidate = guarded_property_type(ctx, variant, property, depth + 1)?;
+                if found.as_ref().is_some_and(|existing| {
+                    normalize_guard_type(ctx, existing) != normalize_guard_type(ctx, &candidate)
+                }) {
                     return None;
                 }
+                found = Some(candidate);
             }
-            SpecParamRep::Boxed => {}
-            // Declaration tuples only contain I32/Boxed slots in this phase.
-            _ => return None,
+            found
         }
+        _ => None,
     }
+}
 
-    let spec_name = crate::codegen::spec_function_name(fname, &plan.reps);
-    let mut guard: Option<String> = None;
-    for (value, rep) in lowered.iter().zip(plan.reps.iter()) {
-        if !matches!(rep, SpecParamRep::I32) {
-            continue;
-        }
-        let ok = crate::codegen::emit_typed_arg_guard(
-            ctx.block(),
-            crate::codegen::TypedParamRep::I32,
-            value,
-        );
-        guard = Some(match guard {
-            Some(prev) => ctx.block().and(I1, &prev, &ok),
-            None => ok,
-        });
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GuardedLiteralRelation {
+    Equal,
+    NotEqual,
+    Unknown,
+}
+
+fn guarded_string_literal_relation(
+    ctx: &FnCtx<'_>,
+    ty: &perry_hir::types::Type,
+    literal: &str,
+    depth: usize,
+) -> GuardedLiteralRelation {
+    use perry_hir::types::Type;
+    if depth > 16 {
+        return GuardedLiteralRelation::Unknown;
     }
-    let fast_idx = ctx.new_block("spec_guarded_call.fast");
-    let fallback_idx = ctx.new_block("spec_guarded_call.fallback");
-    let merge_idx = ctx.new_block("spec_guarded_call.merge");
-    let fast_label = ctx.block_label(fast_idx);
-    let fallback_label = ctx.block_label(fallback_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    if let Some(guard) = guard {
-        ctx.block().cond_br(&guard, &fast_label, &fallback_label);
+    match normalize_guard_type(ctx, ty) {
+        Type::StringLiteral(value) if value == literal => GuardedLiteralRelation::Equal,
+        Type::StringLiteral(_) => GuardedLiteralRelation::NotEqual,
+        Type::Union(variants) => {
+            let mut relation = None;
+            for variant in variants {
+                let candidate = guarded_string_literal_relation(ctx, &variant, literal, depth + 1);
+                if candidate == GuardedLiteralRelation::Unknown
+                    || relation.is_some_and(|existing| existing != candidate)
+                {
+                    return GuardedLiteralRelation::Unknown;
+                }
+                relation = Some(candidate);
+            }
+            relation.unwrap_or(GuardedLiteralRelation::Unknown)
+        }
+        _ => GuardedLiteralRelation::Unknown,
+    }
+}
+
+fn guarded_union_subset(
+    ctx: &FnCtx<'_>,
+    proof: &perry_hir::types::Type,
+    property: &str,
+    literal: &str,
+    keep_equal: bool,
+) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::Type;
+    let Type::Union(variants) = normalize_guard_type(ctx, proof) else {
+        return None;
+    };
+    let original_len = variants.len();
+    let mut retained = Vec::new();
+    for variant in variants {
+        let relation = guarded_property_type(ctx, &variant, property, 0)
+            .map(|field| guarded_string_literal_relation(ctx, &field, literal, 0))
+            .unwrap_or(GuardedLiteralRelation::Unknown);
+        let retain = match relation {
+            GuardedLiteralRelation::Equal => keep_equal,
+            GuardedLiteralRelation::NotEqual => !keep_equal,
+            // A broad string field, an absent field, or an unresolved type
+            // can satisfy either branch at runtime. It may not be discarded.
+            GuardedLiteralRelation::Unknown => true,
+        };
+        if retain {
+            retained.push(variant);
+        }
+    }
+    if retained.is_empty() || retained.len() == original_len {
+        return None;
+    }
+    if retained.len() == 1 {
+        retained.pop()
     } else {
-        ctx.block().br(&fast_label);
+        Some(Type::Union(retained))
     }
+}
 
-    ctx.current_block = fast_idx;
-    let mut raw_storage: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(lowered.len());
-    for (value, rep) in lowered.iter().zip(plan.reps.iter()) {
-        match rep {
-            SpecParamRep::I32 => {
-                let raw = crate::codegen::emit_typed_arg_to_raw(
-                    ctx.block(),
-                    crate::codegen::TypedParamRep::I32,
-                    value,
-                );
-                raw_storage.push((I32, raw));
+/// Narrow an entry-guarded discriminated union for the two successors of a
+/// strict string comparison. The returned facts are branch-local: callers
+/// must restore the original proof after lowering each successor.
+///
+/// This deliberately starts from `stable_local_type_proof`, never from a
+/// declaration. Consequently `if (value.kind === "x")` cannot turn an erased
+/// annotation into evidence; it can only refine a value already accepted by
+/// the public ordinary-parameter guard (or otherwise constructively proven).
+pub(crate) fn guarded_discriminant_branch_proofs(
+    ctx: &FnCtx<'_>,
+    condition: &Expr,
+) -> Option<(
+    u32,
+    Option<perry_hir::types::Type>,
+    Option<perry_hir::types::Type>,
+)> {
+    use perry_hir::CompareOp;
+
+    let Expr::Compare { op, left, right } = condition else {
+        return None;
+    };
+    if !matches!(op, CompareOp::Eq | CompareOp::Ne) {
+        return None;
+    }
+    fn discriminant_path(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(u32, String)> {
+        match expr {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let Expr::LocalGet(owner_id) = object.as_ref() else {
+                    return None;
+                };
+                Some((*owner_id, property.clone()))
             }
-            _ => raw_storage.push((DOUBLE, value.clone())),
+            Expr::LocalGet(alias_id) if !ctx.reassigned_locals.contains(alias_id) => {
+                ctx.guarded_discriminant_aliases.get(alias_id).cloned()
+            }
+            _ => None,
         }
     }
-    let fast_args: Vec<(crate::types::LlvmType, &str)> = raw_storage
-        .iter()
-        .map(|(ty, v)| (*ty, v.as_str()))
-        .collect();
-    let fast_value = ctx.block().call(DOUBLE, &spec_name, &fast_args);
-    let after_fast = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
 
-    ctx.current_block = fallback_idx;
-    let boxed_args: Vec<(crate::types::LlvmType, &str)> =
-        lowered.iter().map(|v| (DOUBLE, v.as_str())).collect();
-    let fallback_value = ctx.block().call(DOUBLE, fname, &boxed_args);
-    let after_fallback = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
+    let (id, property, literal) = match (left.as_ref(), right.as_ref()) {
+        (candidate, Expr::String(literal)) => {
+            let (id, property) = discriminant_path(ctx, candidate)?;
+            (id, property, literal)
+        }
+        (Expr::String(literal), candidate) => {
+            let (id, property) = discriminant_path(ctx, candidate)?;
+            (id, property, literal)
+        }
+        _ => return None,
+    };
+    let proof = ctx.stable_local_type_proof(&id)?;
+    let equal = guarded_union_subset(ctx, proof, &property, literal, true);
+    let not_equal = guarded_union_subset(ctx, proof, &property, literal, false);
+    let (then_proof, else_proof) = if matches!(op, CompareOp::Eq) {
+        (equal, not_equal)
+    } else {
+        (not_equal, equal)
+    };
+    (then_proof.is_some() || else_proof.is_some()).then_some((id, then_proof, else_proof))
+}
 
-    ctx.current_block = merge_idx;
-    let result = ctx.block().phi(
-        DOUBLE,
-        &[
-            (fast_value.as_str(), after_fast.as_str()),
-            (fallback_value.as_str(), after_fallback.as_str()),
-        ],
-    );
-    ctx.record_lowered_value(
-        "Call",
-        None,
-        "spec_abi_guarded_call",
-        &LoweredValue::js_value(result.clone()),
-        None,
-        None,
-        None,
-        false,
-        false,
-        vec![format!("spec_call=guarded; symbol={spec_name}")],
-    );
-    Some(result)
+pub(crate) fn guarded_path_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::{ObjectType, PropertyInfo, Type};
+    match expr {
+        Expr::LocalGet(id) => ctx.stable_local_type_proof(id).cloned(),
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            let owner = guarded_path_type(ctx, object)?;
+            guarded_property_type(ctx, &owner, property, 0)
+        }
+        Expr::IndexGet { object, index } => {
+            let owner = normalize_guard_type(ctx, &guarded_path_type(ctx, object)?);
+            match owner {
+                Type::Array(element) => Some(*element),
+                Type::Tuple(elements) if !elements.is_empty() => match index.as_ref() {
+                    Expr::Integer(index) => elements.get(usize::try_from(*index).ok()?).cloned(),
+                    _ if elements.windows(2).all(|pair| pair[0] == pair[1]) => {
+                        elements.first().cloned()
+                    }
+                    _ => None,
+                },
+                Type::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+                    type_args.into_iter().next()
+                }
+                _ => None,
+            }
+        }
+        Expr::Array(elements) => {
+            if elements.is_empty() {
+                return Some(Type::Array(Box::new(Type::Never)));
+            }
+            let mut element_types = Vec::new();
+            for element in elements {
+                let ty = guarded_path_type(ctx, element)?;
+                if !element_types.contains(&ty) {
+                    element_types.push(ty);
+                }
+            }
+            let element = if element_types.len() == 1 {
+                element_types.pop().unwrap()
+            } else {
+                Type::Union(element_types)
+            };
+            Some(Type::Array(Box::new(element)))
+        }
+        Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            let class = ctx.classes.get(class_name)?;
+            if class.fields.len() != args.len() {
+                return None;
+            }
+            let mut properties = std::collections::HashMap::new();
+            let mut order = Vec::new();
+            for (field, arg) in class.fields.iter().zip(args) {
+                order.push(field.name.clone());
+                properties.insert(
+                    field.name.clone(),
+                    PropertyInfo {
+                        ty: guarded_path_type(ctx, arg)?,
+                        optional: false,
+                        readonly: false,
+                    },
+                );
+            }
+            Some(Type::Object(ObjectType {
+                name: None,
+                properties,
+                property_order: Some(order),
+                index_signature: None,
+            }))
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_ty = guarded_path_type(ctx, then_expr)?;
+            let else_ty = guarded_path_type(ctx, else_expr)?;
+            if guarded_type_assignable(ctx, &then_ty, &else_ty, 0) {
+                Some(else_ty)
+            } else if guarded_type_assignable(ctx, &else_ty, &then_ty, 0) {
+                Some(then_ty)
+            } else {
+                Some(Type::Union(vec![then_ty, else_ty]))
+            }
+        }
+        Expr::String(value) => Some(Type::StringLiteral(value.clone())),
+        Expr::WtfString(_) => Some(Type::String),
+        Expr::Bool(_) => Some(Type::Boolean),
+        Expr::Number(_) => Some(Type::Number),
+        Expr::Integer(value) if i32::try_from(*value).is_ok() => Some(Type::Int32),
+        Expr::Integer(_) => Some(Type::Number),
+        Expr::Null => Some(Type::Null),
+        Expr::Undefined | Expr::Void(_) => Some(Type::Void),
+        Expr::Call { .. } => guarded_call_return_proof(ctx, expr),
+        _ => None,
+    }
+}
+
+fn guarded_argument_proves(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    expected: &perry_hir::types::Type,
+) -> bool {
+    let actual = guarded_path_type(ctx, expr);
+    let Some(actual) = actual else {
+        return false;
+    };
+    let actual = normalize_guard_type(ctx, &actual);
+    let expected = normalize_guard_type(ctx, expected);
+    guarded_type_assignable(ctx, &actual, &expected, 0)
+}
+
+/// A proof established by the expression's runtime construction or by a
+/// constructively verified guarded call. Used only to seed clone-local facts;
+/// the generic body never consults declaration metadata through this route.
+pub(crate) fn guarded_expr_proof(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    expected: &perry_hir::types::Type,
+) -> Option<perry_hir::types::Type> {
+    guarded_argument_proves(ctx, expr, expected).then(|| expected.clone())
+}
+
+/// Return evidence from a specialized call is usable only when the producer's
+/// body was constructively verified and this exact call's live arguments prove
+/// every descriptor slot. A generic fallback result never reaches this path.
+pub(crate) fn guarded_call_return_proof(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+) -> Option<perry_hir::types::Type> {
+    let Expr::Call { callee, args, .. } = expr else {
+        return None;
+    };
+    let Expr::FuncRef(function_id) = callee.as_ref() else {
+        return None;
+    };
+    let plan = ctx.spec_abi_functions.get(function_id)?;
+    let proof = ctx.spec_return_proofs.get(function_id)?;
+    if plan.reps.len() != args.len()
+        || plan.guards.len() != args.len()
+        || !plan.guards.iter().zip(args).all(|(guard, arg)| {
+            guard
+                .as_ref()
+                .is_some_and(|candidate| guarded_argument_proves(ctx, arg, &candidate.proof))
+        })
+    {
+        return None;
+    }
+    Some(proof.clone())
 }
 
 fn typed_signature_note(
@@ -484,7 +802,15 @@ pub fn try_lower_func_ref_call(
                     try_emit_spec_static_call(ctx, &fname, &plan, args, &lowered)
                 }
                 crate::codegen::SpecDispatch::Guarded => {
-                    try_emit_spec_guarded_call(ctx, &fname, &plan, args, &lowered)
+                    if plan.guards.iter().zip(args.iter()).all(|(guard, arg)| {
+                        guard.as_ref().is_none_or(|candidate| {
+                            guarded_argument_proves(ctx, arg, &candidate.proof)
+                        })
+                    }) {
+                        try_emit_spec_guarded_call(ctx, &fname, &plan, args, &lowered)
+                    } else {
+                        None
+                    }
                 }
             },
             None => None,

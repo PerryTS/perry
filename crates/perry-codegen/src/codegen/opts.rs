@@ -786,6 +786,11 @@ pub(crate) struct CrossModuleCtx {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// Declared return types independently verified from the specialized
+    /// body's guarded inputs and runtime-derived constructions. A direct call
+    /// result may become a local proof only when its arguments also route to
+    /// the matching specialized entry.
+    pub spec_return_proofs: std::collections::HashMap<u32, perry_hir::types::Type>,
     /// Phase 2 pre-pass: LocalIds proven to permanently hold one specific
     /// non-view typed array (see `collectors/spec_abi_sites.rs`).
     pub spec_ta_bindings: std::collections::HashMap<u32, crate::collectors::SpecTaBinding>,

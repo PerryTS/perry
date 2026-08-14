@@ -298,6 +298,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if matches!(
+                crate::lower_call::guarded_path_type(ctx, e),
+                Some(HirType::Number | HirType::Int32)
+            ) {
+                return true;
+            }
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
