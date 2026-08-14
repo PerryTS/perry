@@ -2055,3 +2055,62 @@ two new tests FAIL; with the fix they pass.
    flip measured on the fix binary (see below). —
 3. Sabotage: compile-time flip demonstrated (tests red on reverted arm);
    dynamic sabotage arm = the pre-fix binary itself (aborting). ✓
+
+## 38. §37 WAS WRONG about the writer — the root cause is the remembered-set rebuild running BEFORE the drain
+
+The spread-new fix flipped nothing: on the fixed binary seed 2 aborted 2/6,
+seed 3 1/1, seed 5 1/1 — the same rate. §37's forensics (0x7FFF string
+high-halves tracking the heap base) never discriminated "stale WRITE sprayed
+a header" from "stale SLOT resurrects recycled bytes"; any NaN-boxed word in
+recycled memory produces the same picture. Both the mechanism sentence and
+the scoreboard in §37 over-claimed. The spread-new + super-spread rooting fix
+is REAL (checker fingerprint gone, sabotage-tested IR-ordering tests) and
+stays — hypothesis #6, sixth real defect, not the cause.
+
+What found the truth: the instruments finally became cheap together. With
+the frame-namer every abort named the SAME victim slot (138's saved implicit
+`this`, SP+40, at its `js_closure_call1` statepoint), and
+`PERRY_GC_FROMSPACE_SCAN_ABORT=1` under the pinned seed-3 schedule aborts at
+**scheduled collection #2, safepoints=12, in seconds**:
+
+```
+owner=0x… type=1(array) space=Old +120 bare -> 0x… (type=2 object, Survivor1)
+MISSING-REWRITE (target moved) [dirty_now=false ever_dirty=false] never_dirty=1 not_in_snapshot=1
+```
+
+An Old parent, never dirty, whose young child moved without the slot being
+rewritten. `owner_flags=0x23` = MARKED|ARENA|TENURED. The stack: zod
+`$constructor` machinery during corpus module init.
+
+**The defect** (`gc/copying.rs`, `run_copied_minor_attempt`):
+`rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers)` ran
+ABOVE `collector.drain()`. `moved_headers` at that point holds only what the
+ROOT walks moved; everything the DRAIN promotes — every transitively-reachable
+object — is appended after the rebuild already ran. A parent promoted to Old
+mid-drain with a still-young child therefore had NO remembered-set entry: the
+collector's own drain rewrote its slots (no mutator barrier fires for
+collector writes, so the page was never dirty), and the next minor moved the
+child again without tracing the parent. Stale slot; recycled bytes read back
+as objects; every downstream symptom follows. Under production pacing the
+child promotes ~2 cycles later so the window is short (the original 1-in-60
+rarity); the seeded schedule multiplies exposed edges (30–50%).
+
+Why five hypotheses and six fixes missed it: the failure is created by the
+COLLECTOR, not the mutator — no codegen window, no runtime cache, no rooting
+discipline touches it. The static checker cannot see it by construction. And
+every prior from-space scan ran on binaries where an earlier collection had
+already recycled the evidence; the pinned schedule finally made collection #2
+observable.
+
+**The fix** (`ab558bf5e` + follow-up): move the rebuild (and the old-young
+edge verifier) BELOW the post-drain runtime-scanner walks — the last phase
+that can move an object — where `moved_headers` is complete and every slot
+holds its final address.
+
+**Regression test**: `gc/tests/copying/promoted_remembered_7803.rs` — stages
+exactly the drain-promotion shape (rooted intermediate → parent → fresh young
+child; parent promoted on the 4th survival VIA THE DRAIN; next minor moves
+the child) and asserts the parent's capture slot tracks the child, with
+subject-liveness asserts at each stage (parent actually in old-gen, child
+actually still young). Sabotage = revert the reorder; the slot keeps the
+from-space address and the test fails.
