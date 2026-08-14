@@ -595,6 +595,8 @@ mod tests {
 
     fn precise_root_fixture(extra_plain_function: bool) -> LlModule {
         let mut module = LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
+        module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
         module.declare_function("js_map_alloc", I64, &[I32]);
         module.declare_function("may_collect", I64, &[]);
@@ -677,24 +679,52 @@ mod tests {
         }
     }
 
-    fn assert_compact_gc_map(object: &[u8], label: &str) {
-        let section_name: &[u8] = if cfg!(target_os = "macos") {
+    fn compact_gc_map_section_name() -> &'static [u8] {
+        if cfg!(target_os = "macos") {
             b"__perry_gcmap"
         } else if cfg!(target_os = "windows") {
             b".pgcmap"
         } else {
             b".perry_gcmap"
-        };
+        }
+    }
+
+    fn object_contains(object: &[u8], needle: &[u8]) -> bool {
+        object.windows(needle.len()).any(|window| window == needle)
+    }
+
+    fn assert_compact_gc_map(object: &[u8], label: &str) {
+        let section_name = compact_gc_map_section_name();
         assert!(
-            object
-                .windows(section_name.len())
-                .any(|window| window == section_name),
+            object_contains(object, section_name),
             "{label} object has no compact GC-map section"
         );
         assert!(
-            object.windows(4).any(|window| window == b"PGCM"),
+            object_contains(object, b"PGCM"),
             "{label} compact GC-map section has no map payload"
         );
+    }
+
+    fn assert_no_compact_gc_map(object: &[u8], label: &str) {
+        assert!(
+            !object_contains(object, compact_gc_map_section_name()),
+            "{label} shadow-stack object unexpectedly has a compact GC-map section"
+        );
+        assert!(
+            !object_contains(object, b"PGCM"),
+            "{label} shadow-stack object unexpectedly has a compact GC-map payload"
+        );
+    }
+
+    fn compile_text_units_on_producer(units: &[String]) -> Vec<u8> {
+        let objects = units
+            .iter()
+            .map(|unit| {
+                crate::linker::compile_ll_to_object(unit, None)
+                    .expect("trusted text unit emits an object")
+            })
+            .collect::<Vec<_>>();
+        crate::linker::merge_unit_objects(&objects).expect("trusted text units partial-link")
     }
 
     #[test]
@@ -736,15 +766,7 @@ mod tests {
         // machine-dependent: on a high-core host it spawned workers too, both
         // arms lost the same thread-local decision, and byte equality passed
         // while BOTH objects omitted the map (#8070).
-        let text_objects = units
-            .iter()
-            .map(|unit| {
-                crate::linker::compile_ll_to_object(unit, None)
-                    .expect("trusted text unit emits an object")
-            })
-            .collect::<Vec<_>>();
-        let text = crate::linker::merge_unit_objects(&text_objects)
-            .expect("trusted text units partial-link");
+        let text = compile_text_units_on_producer(&units);
         assert_compact_gc_map(&text, "trusted text");
 
         let mut native_module = precise_root_fixture(true);
@@ -760,6 +782,39 @@ mod tests {
             native, text,
             "split native units must freeze finalized precise-root IR, not \
              pre-lowered shadow-slot calls"
+        );
+    }
+
+    #[test]
+    fn split_native_construction_propagates_shadow_backend_to_workers() {
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        let text_module = precise_root_fixture(true);
+        let text_ir = text_module.to_ir();
+        assert!(
+            text_ir.contains("call void @js_shadow_slot_bind"),
+            "negative control must demonstrably use the shadow-stack lowering:\n{text_ir}"
+        );
+        assert!(
+            !text_ir.contains("alloca ptr addrspace(1)"),
+            "negative control must not contain native-stack root allocas:\n{text_ir}"
+        );
+        let units = text_module.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "fixture must exercise two real units");
+        let text = compile_text_units_on_producer(&units);
+        assert_no_compact_gc_map(&text, "trusted text");
+
+        let mut native_module = precise_root_fixture(true);
+        let native = compile_module_units_native(
+            &mut native_module,
+            2,
+            None,
+            "split_shadow_root_diff_fixture",
+        )
+        .expect("direct shadow-stack native units emit and partial-link");
+        assert_no_compact_gc_map(&native, "split native");
+        assert_eq!(
+            native, text,
+            "split native workers must preserve the producer's shadow-stack backend decision"
         );
     }
 
