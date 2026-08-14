@@ -442,3 +442,37 @@ fn elf_compile_with(
     }
     fs::read(&obj).ok()
 }
+
+#[test]
+fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
+    // The leak that turned `repsel-census` red on main for eight consecutive
+    // nightlies: 58 compiles left 58 `perry_llvm_scratch_<pid>_<counter>`
+    // directories, one per compile.
+    //
+    // Why the tests above did not see it. They drive `compile_ll_to_object_in`,
+    // which takes the CLANG path, and clang's cleanup has always been a
+    // `remove_dir_all`. The in-process backend removed the two files it knew
+    // about and left the directory — harmless while clang was the default, a
+    // leak per compile once in-process became it.
+    //
+    // The pin is what makes this test non-vacuous. Only the statepoint
+    // backends route through assembly, and only that arm CREATES the scratch
+    // dir; without the pin this passes on a host that never enters the arm at
+    // all, which is the shape of gate the repo keeps getting bitten by.
+    let Some(root) = temp_root_if_clang_available("inprocess_statepoint") else {
+        return;
+    };
+    let _pin = crate::codegen::helpers::NativeRootsPin::native();
+
+    for nth in 0..3 {
+        let bytes = compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN)
+            .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
+        assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
+        assert_eq!(
+            entries(&root),
+            Vec::<String>::new(),
+            "in-process compile {nth} left a scratch directory behind"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}

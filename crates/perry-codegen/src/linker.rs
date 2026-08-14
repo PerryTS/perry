@@ -876,8 +876,14 @@ fn compile_ll_inprocess_in(
             let obj = fs::read(&plan.obj_path)
                 .with_context(|| format!("Failed to read assembled {}", plan.obj_path.display()))?;
             if !policy.keep {
-                let _ = fs::remove_file(asm_path);
-                let _ = fs::remove_file(&plan.obj_path);
+                // `remove_dir_all`, not the two names we know about — the same
+                // reason the clang path gives. This arm is the only in-process
+                // one that CREATES the scratch dir (writing the assembly), so
+                // unlinking just the files left an empty husk per compile: a
+                // leak counted in compiles rather than in distinct IR, which is
+                // what turned the temp-hygiene gate red once this backend
+                // became the default and the clang cleanup stopped running.
+                let _ = fs::remove_dir_all(&paths.scratch_dir);
             }
             Ok(obj)
         }
