@@ -39,12 +39,13 @@ The native GC root-dominance corpus also reads the production statepoint pass
 constant independently of rustfmt's one-line or wrapped layout, preserving the
 single-source drift check when the Rust declaration is reformatted.
 
-The full extension release-link gate now invokes Cargo once per extension so
-one provider's runtime features cannot leak into unrelated test binaries. This
-prevents `perry-ext-fetch`'s external-symbol mode from making node-forge expect
-fetch symbols it does not link, while retaining target reuse across packages.
-If Cargo does fail, its captured structured diagnostics are rendered back into
-the Actions log instead of being lost behind the final compilation summary.
+The full extension release-link gate now checks every extension independently,
+then links three feature-compatible groups so provider runtime features cannot
+leak into unrelated test binaries. This prevents `perry-ext-fetch`'s
+external-symbol mode from making node-forge expect fetch symbols it does not
+link without multiplying the expensive release link across every package. If
+Cargo does fail, its captured structured diagnostics are rendered back into the
+Actions log instead of being lost behind the final compilation summary.
 
 The scoped end-to-end inventory now classifies the typed-array local-length
 specialization suite, keeping the codegen source-to-suite map complete as new
