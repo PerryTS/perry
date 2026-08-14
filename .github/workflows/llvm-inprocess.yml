@@ -125,10 +125,10 @@ jobs:
             --features llvm-inprocess --lib 2>&1) || { echo "$out"; exit 1; }
           # The corpus gates must have RUN, not skipped: a checkout missing
           # the tracked .ll corpora would otherwise green vacuously.
-          echo "$out" | grep -q "dialect::tests::corpus_spike ... ok"
-          echo "$out" | grep -q "dialect::tests::corpus_batch_kernel ... ok"
-          echo "$out" | grep -q "dialect::tests::corpus_exception_handling ... ok"
-          echo "$out" | grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok"
+          grep -q "dialect::tests::corpus_spike ... ok" <<<"$out"
+          grep -q "dialect::tests::corpus_batch_kernel ... ok" <<<"$out"
+          grep -q "dialect::tests::corpus_exception_handling ... ok" <<<"$out"
+          grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok" <<<"$out"
 
 
       # The tracked `.ll` corpora above are a SNAPSHOT of what the compiler

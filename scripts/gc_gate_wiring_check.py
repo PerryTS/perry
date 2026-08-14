@@ -340,6 +340,31 @@ def check_schedule_group(text: str, wf_name: str) -> list[str]:
     ]
 
 
+def check_pipefail_early_exit_pipelines(text: str, wf_name: str) -> list[str]:
+    """Reject liveness checks whose successful match can fail via SIGPIPE.
+
+    `grep -q` intentionally closes its input after the first match. Under
+    `pipefail`, feeding a large captured log through `echo ... | grep -q`
+    therefore lets the upstream writer's SIGPIPE turn a successful liveness
+    match into a failed step. Use a here-string or let grep read a file.
+    """
+    problems: list[str] = []
+    for chunk in re.split(r"^      - ", text, flags=re.M)[1:]:
+        chunk = "        " + chunk
+        run = _block(chunk, "run", 8)
+        if not re.search(r"\bset\s+-[a-z]*e[a-z]*\s+pipefail\b", run):
+            continue
+        for line in run.splitlines():
+            stripped = line.strip()
+            if re.search(r"\becho\b[^|\n]*\|\s*grep\b[^\n]*\s-q(?:\s|$)", stripped):
+                problems.append(
+                    f"{wf_name}: `pipefail` liveness check can report a false "
+                    f"failure when `grep -q` closes early and `echo` receives "
+                    f"SIGPIPE: {stripped[:90]}. Use a here-string or a file."
+                )
+    return problems
+
+
 CLEAN = """\
 name: X
 on:
@@ -528,6 +553,29 @@ def _self_test() -> int:
         False,
     )
 
+    # A positive match is not a failure. With a large `$out`, however,
+    # `grep -q` closes the pipe before echo finishes and `pipefail` reports
+    # echo's SIGPIPE. This is the exact llvm-inprocess unit-gate relapse.
+    cases += 1
+    broken_pipe = CLEAN.replace(
+        "        run: ./scripts/thing.sh",
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        "          echo \"$out\" | grep -q \"corpus_spike ... ok\"",
+    )
+    got = check_pipefail_early_exit_pipelines(broken_pipe, "fixture.yml")
+    if not got or "SIGPIPE" not in got[0]:
+        failures.append(f"pipefail grep-q SIGPIPE: expected a problem, got {got}")
+
+    cases += 1
+    fixed_pipe = broken_pipe.replace(
+        'echo "$out" | grep -q "corpus_spike ... ok"',
+        'grep -q "corpus_spike ... ok" <<<"$out"',
+    )
+    got = check_pipefail_early_exit_pipelines(fixed_pipe, "fixture.yml")
+    if got:
+        failures.append(f"pipefail here-string: expected clean, got {got}")
+
     if failures:
         for f in failures:
             print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
@@ -571,7 +619,9 @@ def main() -> int:
     scanned = 0
     for path in sorted(wf_dir.glob("*.yml")):
         scanned += 1
-        problems.extend(check_schedule_group(path.read_text(encoding="utf-8"), path.name))
+        text = path.read_text(encoding="utf-8")
+        problems.extend(check_schedule_group(text, path.name))
+        problems.extend(check_pipefail_early_exit_pipelines(text, path.name))
 
     if problems:
         print("GC GATE WIRING: one or more gates cannot fail where it matters.\n", file=sys.stderr)
