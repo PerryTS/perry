@@ -468,15 +468,12 @@ NONCOLLECTING = {
     # cannot -- side-table metadata writes through the system allocator, which
     # arms no Perry GC trigger.
     "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
-    "js_gc_layout_note_slot",
     "js_write_barrier_root_nanbox", "js_write_barrier_slot",
-    "js_runtime_write_barrier_slot", "js_gc_register_global_root",
+    "js_gc_register_global_root",
     # pure value predicates / bit twiddling
-    "js_is_truthy", "js_nanbox_get_pointer", "js_value_is_object",
-    "js_value_is_string", "js_typeof_tag",
+    "js_is_truthy", "js_nanbox_get_pointer",
     # inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
-    "js_typed_feedback_shape_guard", "js_typed_feedback_note",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
@@ -505,7 +502,15 @@ NONCOLLECTING = {
     "js_closure_unbox_callee_checked",
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
-    "js_gc_note_slot_layout", "js_string_addref_if_heap_string",
+    # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
+    # (:833). `_aware` is the same body behind an early return taken when
+    # neither the new nor the old bits are pointer-bearing, so it does strictly
+    # LESS than the entry point beside it -- the same "differ only by doing
+    # less" argument this file already accepts for `declare` vs `init` above.
+    # A phantom third spelling, `js_gc_layout_note_slot`, sat in this set (and
+    # in `root_reload.rs`) and matched no symbol in the tree.
+    "js_gc_note_slot_layout", "js_gc_note_slot_layout_aware",
+    "js_string_addref_if_heap_string",
     # `js_get_string_pointer_unified` is deliberately NOT here. Its SSO branch
     # calls `js_string_materialize_to_heap`, which allocates (value/nanbox.rs:268),
     # so it is a collection point by this file's one-sided rule even though the
