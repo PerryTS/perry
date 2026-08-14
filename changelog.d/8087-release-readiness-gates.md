@@ -15,9 +15,11 @@ GC allocation windows in `json_tape.rs` and `object/spill.rs` now reacquire raw
 pointers through rooted handles, lowering the raw-handle debt baseline instead
 of raising it. The two timer drain tests moved to
 `timer/drain_expired_tests.rs`, returning `timer.rs` below the 2,000-line gate.
-Finally, the Windows ARM64 workflow resolves the linked executable and invokes
-it with PowerShell's call operator, so the smoke gate runs the artifact rather
-than looking for its relative path in `PATH`.
+Finally, the Windows ARM64 workflow initializes the ARM64 MSVC environment so
+the linker can find the installed Windows SDK import libraries, then resolves
+the linked executable and invokes it with PowerShell's call operator. The smoke
+gate now reaches the final PE link and runs the artifact instead of relying on
+an uninitialized SDK path or looking for the relative executable in `PATH`.
 
 Validation covered warning-denied runtime, product, and host-compatible
 workspace checks; both CI clippy scopes; the pre-tag structural audit suite;
