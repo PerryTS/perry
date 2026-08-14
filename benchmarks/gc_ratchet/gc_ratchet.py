@@ -1338,10 +1338,22 @@ def _inspect_accepted_deterministic_deltas(
         value = receipt.get(field)
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
             artifact_defect(f"accepted_deterministic_deltas.{field} is not a full git hash")
-    for field in ("generated_at", "notes"):
-        value = receipt.get(field)
-        if not isinstance(value, str) or not value.strip():
-            artifact_defect(f"accepted_deterministic_deltas.{field} is empty")
+    generated_at = receipt.get("generated_at")
+    try:
+        parsed_generated_at = datetime.fromisoformat(generated_at)
+    except (TypeError, ValueError):
+        parsed_generated_at = None
+    if (
+        parsed_generated_at is None
+        or parsed_generated_at.tzinfo is None
+        or parsed_generated_at.utcoffset() != timezone.utc.utcoffset(None)
+    ):
+        artifact_defect(
+            "accepted_deterministic_deltas.generated_at must be an ISO-8601 UTC timestamp"
+        )
+    notes = receipt.get("notes")
+    if not isinstance(notes, str) or not notes.strip():
+        artifact_defect("accepted_deterministic_deltas.notes is empty")
 
     measurement = receipt.get("measurement")
     expected_measurement_keys = {"platform", "repeats", "traced_runs", "binaries"}

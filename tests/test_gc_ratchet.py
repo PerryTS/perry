@@ -530,6 +530,13 @@ class ArtifactValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RatchetError, "does not match pinned median"):
             validate_artifact(tampered)
 
+    def test_selective_refresh_receipt_rejects_a_malformed_timestamp(self):
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        tampered = copy.deepcopy(artifact)
+        tampered["accepted_deterministic_deltas"]["generated_at"] = "unknown"
+        with self.assertRaisesRegex(RatchetError, "ISO-8601 UTC timestamp"):
+            validate_artifact(tampered)
+
     def test_selective_refresh_does_not_allow_a_future_unexplained_delta(self):
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
         current = copy.deepcopy(artifact)
