@@ -463,7 +463,17 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     ):
         for name in names:
             body = function_body(source, name)
-            if re.search(r"expected_keys|add\s*\([^\n]*\"(?:0|12|16)\"", body):
+            # Match BOTH emission forms. These four guards build their header
+            # address with `blk.gep(I8, &p, &[(I64, "N")])`, not `add(..)`, so
+            # an `add`-only pattern was vacuous for every function in this
+            # list -- planting `gep(I8, &elem_ptr, &[(I64, "16")])` in
+            # `emit_element_shape_field_load` left the census green.
+            if re.search(
+                r"expected_keys"
+                r"|add\s*\([^\n]*\"(?:0|12|16)\""
+                r"|gep\s*\([^\n]*\(\s*I64\s*,\s*\"(?:0|12|16)\"\s*\)",
+                body,
+            ):
                 raise CensusError(f"{name} emits a removed ObjectHeader fact")
 
     generic_body = function_body(raw_generic_pic, "lower_generic_property_get")
