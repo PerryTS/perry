@@ -563,6 +563,21 @@ pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     format!("perry_fn_{}__{}", module_prefix, sanitize_member(hir_name))
 }
 
+/// Stable, module-scoped sentinel used when a [`perry_hir::Expr::FuncRef`]
+/// cannot be resolved in the module's function registry.
+///
+/// The fallback wrapper is emitted once per source module. Keeping the module
+/// prefix in the sentinel name is required when codegen-unit splitting
+/// promotes that wrapper from internal to external linkage for cross-unit
+/// calls: independently compiled modules must not publish the same symbol.
+pub(crate) fn unknown_func_name(module_prefix: &str) -> String {
+    format!("perry_unknown_func_{module_prefix}")
+}
+
+pub(crate) fn unknown_func_wrapper_name(module_prefix: &str) -> String {
+    format!("__perry_wrap_{}", unknown_func_name(module_prefix))
+}
+
 pub(super) fn scoped_static_method_name(
     module_prefix: &str,
     class_id: u32,

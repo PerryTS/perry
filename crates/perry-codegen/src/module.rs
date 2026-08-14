@@ -1301,6 +1301,75 @@ mod tests {
     }
 
     #[test]
+    fn split_modules_keep_unknown_fallback_wrappers_distinct_at_shared_link() {
+        // #8064: splitting promotes internal definitions so sibling units can
+        // call them. Before the fallback name was module-scoped, each module's
+        // merged object therefore exported the same
+        // `__perry_wrap_perry_unknown_func` symbol and the application link
+        // failed only after every module had emitted successfully.
+        fn split_object(module_prefix: &str) -> Vec<u8> {
+            let mut module = LlModule::new(crate::codegen::default_target_triple());
+            let wrapper_name = crate::codegen::helpers::unknown_func_wrapper_name(module_prefix);
+
+            let wrapper = module.define_function(
+                &wrapper_name,
+                DOUBLE,
+                vec![
+                    (I64, "%this_closure".to_string()),
+                    (DOUBLE, "%a0".to_string()),
+                    (DOUBLE, "%a1".to_string()),
+                    (DOUBLE, "%a2".to_string()),
+                    (DOUBLE, "%a3".to_string()),
+                    (DOUBLE, "%a4".to_string()),
+                ],
+            );
+            wrapper.linkage = "internal".to_string();
+            wrapper
+                .create_block("entry")
+                .ret(DOUBLE, "0x7FFC000000000001");
+
+            let caller = module.define_function(
+                format!("perry_fn_{module_prefix}__use_unknown"),
+                DOUBLE,
+                vec![],
+            );
+            let entry = caller.create_block("entry");
+            let result = entry.call(
+                DOUBLE,
+                &wrapper_name,
+                &[
+                    (I64, "0"),
+                    (DOUBLE, "0.0"),
+                    (DOUBLE, "0.0"),
+                    (DOUBLE, "0.0"),
+                    (DOUBLE, "0.0"),
+                    (DOUBLE, "0.0"),
+                ],
+            );
+            entry.ret(DOUBLE, &result);
+
+            let units = module.render_codegen_units(2);
+            assert_eq!(units.len(), 2, "fixture must exercise split units");
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|unit| unit.contains(&format!("define double @{wrapper_name}(")))
+                    .count(),
+                1,
+                "the internal fallback must be promoted in exactly one split unit"
+            );
+            crate::linker::compile_units_to_object(&units, None)
+                .expect("split module units emit and partial-link")
+        }
+
+        let alpha = split_object("alpha_ts");
+        let beta = split_object("beta_ts");
+        let linked = crate::linker::merge_unit_objects(&[alpha, beta])
+            .expect("two split module objects must share a final link");
+        assert!(!linked.is_empty(), "shared link must emit an object");
+    }
+
+    #[test]
     fn owner_only_global_declares_cross_unit_function_from_initializer() {
         // An unreferenced generated global is retained in unit 0. If its
         // initializer names a function assigned to another unit, unit 0 must
