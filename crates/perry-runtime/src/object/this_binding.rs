@@ -161,7 +161,7 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
 /// downstream then misreads array element bytes as a GcHeader. The abort at
 /// the STORE names the producer, which the collector-side latch cannot.
 #[inline]
-fn this_set_check(value: f64) {
+fn this_set_check(value: f64, side: &str) {
     use std::sync::OnceLock;
     static MODE: OnceLock<u8> = OnceLock::new();
     let mode = *MODE.get_or_init(|| {
@@ -192,7 +192,7 @@ fn this_set_check(value: f64) {
         unsafe { ((*header).obj_type, (*header).size, (*header).gc_flags) };
     if crate::gc::header_incoherence_for_diagnostics(obj_type, size, flags).is_some() {
         eprintln!(
-            "[gc-this-set-check] implicit this set to {bits:#018x} — target header \
+            "[gc-this-set-check] {side} value {bits:#018x} — target header \
              obj_type={obj_type} size={size} flags={flags:#04x} is INCOHERENT \
              (an interior or stale pointer entering the this cell).\n\
              --- setter backtrace ---\n{}",
@@ -209,8 +209,14 @@ fn this_set_check(value: f64) {
 /// duration of a single method-style call.
 #[no_mangle]
 pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
-    this_set_check(value);
-    IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
+    this_set_check(value, "INCOMING (read from a frame save slot — the WALKER corrupted the slot)");
+    let previous = IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())));
+    // Under the trap, grade the OUTGOING value too: an incoherent incoming
+    // value was read from a frame save slot (the walker corrupted the SLOT),
+    // an incoherent outgoing one was sitting in the cell (the scanner
+    // corrupted the CELL). Which side fires first is the decisive bit.
+    this_set_check(previous, "OUTGOING (was sitting in the cell — the SCANNER corrupted the cell)");
+    previous
 }
 
 /// Read the current `new.target` value for ordinary function bodies.
