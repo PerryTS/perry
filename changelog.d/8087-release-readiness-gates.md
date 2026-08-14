@@ -45,3 +45,7 @@ prevents `perry-ext-fetch`'s external-symbol mode from making node-forge expect
 fetch symbols it does not link, while retaining target reuse across packages.
 If Cargo does fail, its captured structured diagnostics are rendered back into
 the Actions log instead of being lost behind the final compilation summary.
+
+The scoped end-to-end inventory now classifies the typed-array local-length
+specialization suite, keeping the codegen source-to-suite map complete as new
+in-process regression coverage is added.
