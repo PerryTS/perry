@@ -1271,8 +1271,9 @@ pub unsafe fn alloc_lazy_array(
     (*hdr).cumulative_walk_steps = 0;
     (*hdr).sequential_streak = 0;
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
-    json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize);
-    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    let (_, hdr) = hdr_handle.across_mut::<LazyArrayHeader, _>(|| {
+        json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize)
+    });
     (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
     note_lazy_raw_slot(
         hdr,

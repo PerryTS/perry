@@ -64,13 +64,16 @@
 3 crates/perry-runtime/src/gc/tests/copying.rs
 4 crates/perry-runtime/src/gc/tests/helper_stores.rs
 47 crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+4 crates/perry-runtime/src/gc/tests/runtime_roots/fs_options_object.rs
 3 crates/perry-runtime/src/gc/tests/runtime_roots/hook_dispatch_handles.rs
+3 crates/perry-runtime/src/gc/tests/runtime_roots/json_shape_template.rs
 1 crates/perry-runtime/src/gc/tests/runtime_roots/string_slice.rs
 10 crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs
 11 crates/perry-runtime/src/json/replacer.rs
 26 crates/perry-runtime/src/json/reviver.rs
 3 crates/perry-runtime/src/json/stringify.rs
 1 crates/perry-runtime/src/json/stringify_scalars.rs
+2 crates/perry-runtime/src/json/stringify_shape_template.rs
 21 crates/perry-runtime/src/json_tape.rs
 26 crates/perry-runtime/src/map.rs
 2 crates/perry-runtime/src/module_require.rs
@@ -103,12 +106,12 @@
 19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
 26 crates/perry-runtime/src/object/native_module/callable_exports.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
-3 crates/perry-runtime/src/object/object_ops/define_property.rs
+2 crates/perry-runtime/src/object/object_ops/define_property.rs
 3 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs
 6 crates/perry-runtime/src/object/polymorphic_index.rs
-4 crates/perry-runtime/src/object/reflect_support.rs
+3 crates/perry-runtime/src/object/reflect_support.rs
 3 crates/perry-runtime/src/object/spill.rs
 2 crates/perry-runtime/src/object/typed_array_define.rs
 3 crates/perry-runtime/src/os.rs
@@ -132,7 +135,7 @@
 2 crates/perry-runtime/src/string/append.rs
 7 crates/perry-runtime/src/string/concat.rs
 1 crates/perry-runtime/src/string/mod.rs
-10 crates/perry-runtime/src/string/split.rs
+7 crates/perry-runtime/src/string/split.rs
 2 crates/perry-runtime/src/symbol/iterator.rs
 27 crates/perry-runtime/src/thread.rs
 7 crates/perry-runtime/src/timer.rs
@@ -151,6 +154,3 @@
 19 crates/perry-runtime/src/wasi.rs
 6 crates/perry-runtime/src/weakref.rs
 23 crates/perry-runtime/src/webassembly.rs
-3 crates/perry-runtime/src/gc/tests/runtime_roots/json_shape_template.rs
-2 crates/perry-runtime/src/json/stringify_shape_template.rs
-4 crates/perry-runtime/src/gc/tests/runtime_roots/fs_options_object.rs
