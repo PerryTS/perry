@@ -105,33 +105,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                     if declared_count > 0 {
                         let fixed = declared_count.saturating_sub(1);
-                        if lowered.len() >= fixed {
-                            let trailing: Vec<String> = lowered.split_off(fixed);
-                            let arr_handle = ctx.block().call(
+                        let all_actual = std::mem::take(&mut lowered);
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        for i in 0..fixed {
+                            lowered
+                                .push(all_actual.get(i).cloned().unwrap_or_else(|| undef.clone()));
+                        }
+                        let has_synthetic_arguments = ctx
+                            .method_has_synthetic_arguments
+                            .get(&key)
+                            .copied()
+                            .unwrap_or(false);
+                        let packed = if has_synthetic_arguments {
+                            all_actual.as_slice()
+                        } else {
+                            all_actual.get(fixed..).unwrap_or(&[])
+                        };
+                        let arr_handle = ctx.block().call(
+                            I64,
+                            "js_array_alloc",
+                            &[(I32, &packed.len().to_string())],
+                        );
+                        // js_array_push_f64 may realloc and return a
+                        // possibly-new handle; thread it.
+                        let mut handle_cur = arr_handle;
+                        for value in packed {
+                            handle_cur = ctx.block().call(
                                 I64,
-                                "js_array_alloc",
-                                &[(I32, &trailing.len().to_string())],
+                                "js_array_push_f64",
+                                &[(I64, &handle_cur), (DOUBLE, value)],
                             );
-                            // js_array_push_f64 may realloc and return a
-                            // possibly-new handle; thread it.
-                            let mut handle_cur = arr_handle;
-                            for v in &trailing {
-                                handle_cur = ctx.block().call(
-                                    I64,
-                                    "js_array_push_f64",
-                                    &[(I64, &handle_cur), (DOUBLE, v)],
-                                );
-                            }
-                            let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
-                            lowered.push(arr_box);
                         }
-                        // Pad fixed slots with undefined when caller under-supplied.
-                        while lowered.len() < declared_count {
-                            // Insert undefined at the rest-slot's predecessor.
-                            let undef = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
-                            let idx = lowered.len().saturating_sub(1);
-                            lowered.insert(idx, undef);
-                        }
+                        let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
+                        lowered.push(arr_box);
                     }
                 } else {
                     // Issue #235: a static method called with fewer args than

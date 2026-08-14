@@ -1,0 +1,11 @@
+[package]
+name = "perry-next-runtime-provider"
+version = "0.0.0"
+edition.workspace = true
+
+[lib]
+name = "perry_next_runtime_provider"
+crate-type = ["staticlib"]
+
+[dependencies]
+perry-runtime-core = { package = "perry-runtime", path = "../../../../../../crates/perry-runtime", features = ["default", "stdlib"] }

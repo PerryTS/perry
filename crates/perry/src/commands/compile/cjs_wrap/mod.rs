@@ -129,6 +129,21 @@ mod tests {
     }
 
     #[test]
+    fn computed_relative_require_uses_the_calling_module_directory() {
+        let source = "module.exports = id => require('./chunks/' + id + '.js');";
+        let path = PathBuf::from("/fixture/.next/server/webpack-runtime.js");
+        let wrapped = wrap_commonjs(source, &path);
+
+        assert!(
+            wrapped.contains(
+                "? \"/fixture/.next/server\" + '/' + specifier\n                    : specifier"
+            ),
+            "computed relative require must be rebased before the path-registry lookup"
+        );
+        assert!(wrapped.contains("__perry_require_path_module(__perry_path_specifier)"));
+    }
+
+    #[test]
     fn does_not_detect_pure_esm() {
         assert!(!is_commonjs("import x from 'foo'; export const y = 1;"));
     }

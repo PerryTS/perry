@@ -20,9 +20,9 @@
 //! The personality routine and LSDA walk are a port of Rust std's
 //! `rust_eh_personality` / `sys::personality::dwarf` (MIT OR Apache-2.0),
 //! trimmed to the encodings LLVM emits for Perry's targets and with the
-//! type-table/filter logic dropped (Perry landing pads are always
-//! `catch ptr null` — catch-all; there are no cleanups and no filters in
-//! generated code).
+//! type-table/filter logic dropped (Perry handler landing pads are always
+//! `catch ptr null` — catch-all; cleanup-only pads have a zero call-site
+//! action and filters are never emitted).
 
 #![allow(non_upper_case_globals)]
 
@@ -215,17 +215,26 @@ pub unsafe extern "C" fn perry_eh_personality(
     };
     if actions & _UA_SEARCH_PHASE != 0 {
         match lpad {
-            Some(_) => _URC_HANDLER_FOUND,
-            None => _URC_CONTINUE_UNWIND,
+            Some(LandingPad::Handler(_)) => _URC_HANDLER_FOUND,
+            Some(LandingPad::Cleanup(_)) | None => _URC_CONTINUE_UNWIND,
         }
     } else {
         match lpad {
-            Some(lpad) => {
+            Some(LandingPad::Handler(lpad)) => {
                 // W1 diff mode (#7302 follow-up): the owned walker predicted
                 // where this throw lands before the raise; the system
                 // unwinder is the oracle. Any mismatch is a walker bug —
                 // fail loudly here, where both answers are in hand.
                 crate::eh_walker::verify_prediction(lpad as u64, _Unwind_GetCFA(context) as u64);
+                _Unwind_SetGR(context, UNWIND_DATA_REG.0, exception_object as usize);
+                _Unwind_SetGR(context, UNWIND_DATA_REG.1, 0);
+                _Unwind_SetIP(context, lpad);
+                _URC_INSTALL_CONTEXT
+            }
+            Some(LandingPad::Cleanup(lpad)) => {
+                // A cleanup is an intermediate stop, not the handler the
+                // owned walker predicts. Let phase two run it without
+                // consuming the pending handler prediction.
                 _Unwind_SetGR(context, UNWIND_DATA_REG.0, exception_object as usize);
                 _Unwind_SetGR(context, UNWIND_DATA_REG.1, 0);
                 _Unwind_SetIP(context, lpad);
@@ -237,7 +246,7 @@ pub unsafe extern "C" fn perry_eh_personality(
 }
 
 /// LSDA walk: map the frame's current IP to its landing pad, if any.
-unsafe fn find_landing_pad(context: *mut UnwindContext) -> Result<Option<usize>, ()> {
+unsafe fn find_landing_pad(context: *mut UnwindContext) -> Result<Option<LandingPad>, ()> {
     let lsda = _Unwind_GetLanguageSpecificData(context);
     if lsda.is_null() {
         return Ok(None);
@@ -252,19 +261,25 @@ unsafe fn find_landing_pad(context: *mut UnwindContext) -> Result<Option<usize>,
         ip.wrapping_sub(1)
     };
     let func_start = _Unwind_GetRegionStart(context);
-    find_landing_pad_in_lsda(lsda, ip, func_start)
+    find_landing_pad_action_in_lsda(lsda, ip, func_start)
 }
 
 /// The GCC-style LSDA layout: header (landing-pad base encoding + optional
 /// base, type-table encoding + optional offset, call-site encoding), then the
-/// call-site table sorted by start offset. Perry generates only catch-all
-/// handlers, so the action/type tables need no interpretation: any non-zero
-/// landing-pad offset is a handler.
-pub(crate) unsafe fn find_landing_pad_in_lsda(
+/// call-site table sorted by start offset. A zero action denotes a cleanup;
+/// Perry's catch-all handlers use a non-zero action record. The action record
+/// itself needs no interpretation because Perry emits no typed catches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LandingPad {
+    Handler(usize),
+    Cleanup(usize),
+}
+
+unsafe fn find_landing_pad_action_in_lsda(
     lsda: *const u8,
     ip: usize,
     func_start: usize,
-) -> Result<Option<usize>, ()> {
+) -> Result<Option<LandingPad>, ()> {
     let mut reader = DwarfReader::new(lsda);
 
     let start_encoding = reader.read_u8();
@@ -288,7 +303,7 @@ pub(crate) unsafe fn find_landing_pad_in_lsda(
         let cs_start = read_encoded_offset(&mut reader, call_site_encoding)?;
         let cs_len = read_encoded_offset(&mut reader, call_site_encoding)?;
         let cs_lpad = read_encoded_offset(&mut reader, call_site_encoding)?;
-        let _cs_action = reader.read_uleb128();
+        let cs_action = reader.read_uleb128();
         // Sorted by cs_start: once past the ip, stop.
         if ip < func_start.wrapping_add(cs_start) {
             break;
@@ -297,12 +312,32 @@ pub(crate) unsafe fn find_landing_pad_in_lsda(
             return Ok(if cs_lpad == 0 {
                 None
             } else {
-                Some(lpad_base.wrapping_add(cs_lpad))
+                let address = lpad_base.wrapping_add(cs_lpad);
+                Some(if cs_action == 0 {
+                    LandingPad::Cleanup(address)
+                } else {
+                    LandingPad::Handler(address)
+                })
             });
         }
     }
-    // IP not in the table: a non-invoke call site — no handler in this frame.
+    // IP not in the table: a non-invoke call site — no pad in this frame.
     Ok(None)
+}
+
+/// Handler-only LSDA query used by the owned single-phase walker. It jumps
+/// directly to the catch selected by Perry's handler stack and deliberately
+/// skips cleanup-only pads, matching the savepoint restoration performed by
+/// `js_throw` before transport begins.
+pub(crate) unsafe fn find_landing_pad_in_lsda(
+    lsda: *const u8,
+    ip: usize,
+    func_start: usize,
+) -> Result<Option<usize>, ()> {
+    find_landing_pad_action_in_lsda(lsda, ip, func_start).map(|landing| match landing {
+        Some(LandingPad::Handler(address)) => Some(address),
+        Some(LandingPad::Cleanup(_)) | None => None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +529,16 @@ mod tests {
         let base = 0x2000usize;
         let got = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), base + 0x12, base) };
         assert_eq!(got.unwrap(), None);
+    }
+
+    #[test]
+    fn cleanup_lpad_is_not_a_handler() {
+        let lsda = synth_lsda(&[(0x10, 0x8, 0x40, 0)]);
+        let base = 0x2000usize;
+        let landing = unsafe { find_landing_pad_action_in_lsda(lsda.as_ptr(), base + 0x12, base) };
+        assert_eq!(landing.unwrap(), Some(LandingPad::Cleanup(base + 0x40)));
+        let handler = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), base + 0x12, base) };
+        assert_eq!(handler.unwrap(), None);
     }
 
     #[test]

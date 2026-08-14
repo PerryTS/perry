@@ -252,6 +252,16 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.params.iter().any(|param| param.is_rest))
             .collect(),
+        method_has_synthetic_arguments: class
+            .methods
+            .iter()
+            .map(|method| {
+                method
+                    .params
+                    .last()
+                    .is_some_and(|param| param.arguments_object.is_some())
+            })
+            .collect(),
         static_field_names: class
             .static_fields
             .iter()

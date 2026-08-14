@@ -340,6 +340,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Native roots are the default lowering wherever the runtime can walk the
     // frames, and the shadow stack elsewhere. Same per-module discipline.
     helpers::set_native_roots_for_target(&triple);
+    // Native-root metadata is currently discovered only in the process's
+    // main image. A separately loaded dylib shares its provider's shadow
+    // stack instead; otherwise the provider sees zero compiled frame roots.
+    helpers::set_native_roots_for_artifact(&opts.output_type);
 
     // `--opt-report` (#6952): mark the closures that are iterating-builtin
     // callbacks before any region is lowered, so their denials carry the
@@ -1370,12 +1374,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // already had `func_signatures.has_rest`.
     let mut method_has_rest: std::collections::HashMap<(String, String), bool> =
         std::collections::HashMap::new();
+    let mut method_has_synthetic_arguments: std::collections::HashMap<(String, String), bool> =
+        std::collections::HashMap::new();
     for cls in &hir.classes {
         for m in &cls.methods {
-            method_param_counts.insert((cls.name.clone(), m.name.clone()), m.params.len());
+            let key = (cls.name.clone(), m.name.clone());
+            method_param_counts.insert(key.clone(), m.params.len());
             let has_rest = m.params.iter().any(|p| p.is_rest);
             if has_rest {
-                method_has_rest.insert((cls.name.clone(), m.name.clone()), true);
+                method_has_rest.insert(key.clone(), true);
+            }
+            if m.params
+                .last()
+                .is_some_and(|param| param.arguments_object.is_some())
+            {
+                method_has_synthetic_arguments.insert(key, true);
             }
         }
         // Issue #894: track static methods too. Effect's `static pipe()` /
@@ -1391,7 +1404,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             method_param_counts.insert((cls.name.clone(), key.clone()), sm.params.len());
             let has_rest = sm.params.iter().any(|p| p.is_rest);
             if has_rest {
-                method_has_rest.insert((cls.name.clone(), key), true);
+                method_has_rest.insert((cls.name.clone(), key.clone()), true);
+            }
+            if sm
+                .params
+                .last()
+                .is_some_and(|param| param.arguments_object.is_some())
+            {
+                method_has_synthetic_arguments.insert((cls.name.clone(), key), true);
             }
         }
     }
@@ -1415,6 +1435,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 method_has_rest.insert((ic.name.clone(), mname.clone()), true);
                 if effective_name != ic.name {
                     method_has_rest.insert((effective_name.clone(), mname.clone()), true);
+                }
+            }
+            if ic
+                .method_has_synthetic_arguments
+                .get(i)
+                .copied()
+                .unwrap_or(false)
+            {
+                method_has_synthetic_arguments.insert((ic.name.clone(), mname.clone()), true);
+                if effective_name != ic.name {
+                    method_has_synthetic_arguments
+                        .insert((effective_name.clone(), mname.clone()), true);
                 }
             }
         }
@@ -1812,6 +1844,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         func_returns_class: func_returns_class_map,
         method_param_counts,
         method_has_rest,
+        method_has_synthetic_arguments,
         class_keys_globals: class_keys_globals_map,
         class_field_counts: class_field_counts_map,
         class_init_chains: class_init_chains_map,

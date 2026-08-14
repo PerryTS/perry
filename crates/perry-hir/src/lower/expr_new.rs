@@ -201,9 +201,25 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // Try to extract class name from callee
     match callee_expr {
         ast::Expr::Ident(ident) => {
-            // Resolve through any scope-local class rename so `new X` binds to
-            // the lexically-correct (possibly disambiguated) class.
-            let mut class_name = ctx.resolve_class_name(ident.sym.as_str());
+            // The inner name of the class currently being lowered is a lexical
+            // binding that wins over every same-named outer local. Minified
+            // webpack bundles commonly have a module-wide `var h` and a
+            // factory-local `class h`; inside `h`'s static `instance()` method,
+            // `new h` must therefore construct the class, not capture the outer
+            // (usually still-undefined) `var h`.
+            //
+            // Use `current_class` rather than merely resolving the source name:
+            // it also carries the unique registration key for collision-renamed
+            // declarations (`h$0`) and named class expressions. All other
+            // identifiers continue through the ordinary scope-local rename map.
+            let is_current_class_self = ctx.current_class_inner_name.as_deref()
+                == Some(ident.sym.as_str())
+                && ctx.current_class.is_some();
+            let mut class_name = if is_current_class_self {
+                ctx.current_class.clone().unwrap()
+            } else {
+                ctx.resolve_class_name(ident.sym.as_str())
+            };
             // Snapshot the callee identifier's local/param binding at the TOP
             // of the ident arm, before any argument lowering or native-module
             // probing below runs. Two distinct hazards make a later lookup
@@ -248,11 +264,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // intrinsic — a lexical `class Set {}` / `const Set = …` must NOT
             // capture it. Suppress the local snapshot (and the shadow flag
             // below) so the built-in arms fire.
-            let callee_local_at_entry: Option<LocalId> = if force_global_intrinsic {
-                None
-            } else {
-                ctx.lookup_local(&class_name)
-            };
+            let callee_local_at_entry: Option<LocalId> =
+                if force_global_intrinsic || is_current_class_self {
+                    None
+                } else {
+                    ctx.lookup_local(&class_name)
+                };
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in

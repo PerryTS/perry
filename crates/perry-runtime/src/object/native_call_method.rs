@@ -462,7 +462,7 @@ unsafe fn builtin_proto_user_method(
 /// `this.session[isOneTimeQuery ? "prepareOneTimeQuery" :
 /// "prepareQuery"](...)` chain.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_str_key(
+pub unsafe extern "C-unwind" fn js_native_call_method_str_key(
     object: f64,
     name_handle: i64,
     args_ptr: *const f64,
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn js_native_call_method_str_key(
 /// a thread-local heap pointer. The runtime resolves it to its read-only byte
 /// slice while preserving the existing dispatch tower.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_by_id(
+pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     object: f64,
     method_id: i64,
     args_ptr: *const f64,
@@ -501,7 +501,7 @@ pub unsafe extern "C" fn js_native_call_method_by_id(
 
 /// Apply/spread sibling of `js_native_call_method_by_id`.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_apply_by_id(
+pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
     object: f64,
     method_id: i64,
     args_array_handle: i64,
@@ -552,7 +552,7 @@ fn numeric_index_key(key: JSValue) -> Option<f64> {
 /// keys read the symbol property; other keys go through the polymorphic index
 /// read. In every case the resolved callable is invoked with `this` bound.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_value(
+pub unsafe extern "C-unwind" fn js_native_call_method_value(
     object: f64,
     key: f64,
     args_ptr: *const f64,
@@ -806,7 +806,7 @@ pub unsafe extern "C" fn js_native_call_method_value(
 /// `js_native_call_method`. Lets the caller use a single uniform shape for
 /// `recv.method(...args)` without exposing array layout to the dispatcher.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_apply(
+pub unsafe extern "C-unwind" fn js_native_call_method_apply(
     object: f64,
     method_name_ptr: *const i8,
     method_name_len: usize,
@@ -843,7 +843,7 @@ pub unsafe extern "C" fn js_native_call_method_apply(
 /// `js_native_call_method_value`, which resolves the method by key and binds
 /// `this = obj`.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_value_apply(
+pub unsafe extern "C-unwind" fn js_native_call_method_value_apply(
     object: f64,
     key: f64,
     args_array_handle: i64,
@@ -995,7 +995,7 @@ pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHead
 /// pre-fix non-crashing behavior — `undefined` instead broke downstream code
 /// that expected a number); otherwise dispatches identically.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method_nullsafe(
+pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     object: f64,
     method_name_ptr: *const i8,
     method_name_len: usize,
@@ -1038,7 +1038,10 @@ pub unsafe extern "C" fn js_native_call_method_nullsafe(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_method(
+// Dynamic native calls may synchronously throw from the selected module
+// implementation. Keep this bridge unwind-capable so a generated caller's JS
+// catch handler remains reachable across the Rust dispatch frame.
+pub unsafe extern "C-unwind" fn js_native_call_method(
     object: f64,
     method_name_ptr: *const i8,
     method_name_len: usize,

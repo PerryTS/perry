@@ -257,8 +257,15 @@ pub fn js_call_catching(f: impl FnOnce() -> f64) -> Result<f64, f64> {
 }
 
 /// Throw an exception with the given value
+///
+/// `C-unwind` is required for the landingpad transport: when the fast walker
+/// declines (notably across separately loaded provider/app images), the system
+/// unwinder must be allowed to leave this Rust ABI boundary and reach the
+/// generated frame's handler. Plain `extern "C"` installs an aborting guard at
+/// the function boundary and turns a catchable JS throw into
+/// `panic_cannot_unwind` before the landing pad can run.
 #[no_mangle]
-pub extern "C" fn js_throw(value: f64) -> ! {
+pub extern "C-unwind" fn js_throw(value: f64) -> ! {
     // Pull the transport decision out under the TLS borrow, then act after
     // dropping it (neither longjmp nor a raise returns here, so leaving the
     // TLS access "open" would leave the cell permanently borrowed on this
@@ -305,10 +312,11 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         shadow_stack_restore((*s).shadow_savepoints[depth]);
         runtime_handle_stack_restore((*s).runtime_handle_savepoints[depth]);
         // Restore the method-dispatch recursion depth captured when this `try`
-        // was pushed. The frames we are about to `longjmp` past never run their
-        // `CallMethodDepthGuard` `Drop`s, so without this the counter leaks one
-        // per caught throw and eventually wedges every method call into the
-        // depth-guard fallback (#5591).
+        // was pushed. The direct and longjmp transports skip the guards'
+        // `Drop`s. A system-unwinder fallback does run them, but the guards use
+        // their entry depths to make cleanup after this eager restore a no-op;
+        // otherwise caught throws wrap the counter below zero and wedge every
+        // later method call into the depth-guard fallback (#5591).
         crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
         crate::object::prototype_chain::resolution_stack_restore(
             (*s).prototype_resolution_depths[depth],

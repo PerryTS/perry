@@ -211,11 +211,15 @@ static KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID: extern "C" fn(*mut ObjectHeader,
     crate::object::js_object_set_field_by_property_id;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C" fn(f64, i64, *const f64, usize) -> f64 =
-    crate::object::js_native_call_method_by_id;
+static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
+    f64,
+    i64,
+    *const f64,
+    usize,
+) -> f64 = crate::object::js_native_call_method_by_id;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C" fn(f64, i64, i64) -> f64 =
+static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
 
 /// Validate and lower a manifest `f32` parameter.

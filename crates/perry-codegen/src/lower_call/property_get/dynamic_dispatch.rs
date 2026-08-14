@@ -251,7 +251,7 @@ pub(crate) fn try_lower_instance_method_call(
         // #5437: (has_rest, decl_param_count) per implementor, aligned 1:1 with
         // `implementors`, so each case block can build its own per-arity args
         // without rescanning `ctx.methods`.
-        let mut impl_meta: Vec<(bool, usize)> = Vec::new();
+        let mut impl_meta: Vec<(bool, bool, usize)> = Vec::new();
         // #7142: aligned 1:1 with `implementors` — `Some(class)` exactly when
         // the receiver class of this case DECLARES `property` itself (the walk
         // stopped at its own entry). That is the condition a proven-`this`
@@ -285,10 +285,12 @@ pub(crate) fn try_lower_instance_method_call(
                         // `key` is the exact (defining-class, property) where the
                         // method resolved, so its arity metadata is available now.
                         let has_rest = matches!(ctx.method_has_rest.get(&key), Some(&true));
+                        let has_synthetic_arguments =
+                            matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true));
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                         impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
                         implementors.push((start_cid, fname));
-                        impl_meta.push((has_rest, decl));
+                        impl_meta.push((has_rest, has_synthetic_arguments, decl));
                     }
                     break;
                 }
@@ -505,13 +507,18 @@ pub(crate) fn try_lower_instance_method_call(
             }
 
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for (case_no, ((((_, fname), &case_idx), &(impl_has_rest, impl_decl_count)), owner)) in
-                implementors
-                    .iter()
-                    .zip(case_idxs.iter())
-                    .zip(impl_meta.iter())
-                    .zip(impl_owner.iter())
-                    .enumerate()
+            for (
+                case_no,
+                (
+                    (((_, fname), &case_idx), &(impl_has_rest, impl_has_synth, impl_decl_count)),
+                    owner,
+                ),
+            ) in implementors
+                .iter()
+                .zip(case_idxs.iter())
+                .zip(impl_meta.iter())
+                .zip(impl_owner.iter())
+                .enumerate()
             {
                 ctx.current_block = case_idx;
                 // #1758: a `perry_static_*` implementor is a STATIC method on a
@@ -561,7 +568,28 @@ pub(crate) fn try_lower_instance_method_call(
                     // to receive a bundled array in place of positional params.
                     let mut case_args: Vec<String> = Vec::with_capacity(impl_decl_count + 1);
                     case_args.push(recv_box.clone());
-                    if impl_has_rest {
+                    if impl_has_synth {
+                        let visible_params = impl_decl_count.saturating_sub(1);
+                        for i in 0..visible_params {
+                            case_args.push(
+                                static_user_args
+                                    .get(i)
+                                    .cloned()
+                                    .unwrap_or_else(|| undefined_lit.clone()),
+                            );
+                        }
+                        let cap = (static_user_args.len() as u32).to_string();
+                        let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                        for value in &static_user_args {
+                            let blk = ctx.block();
+                            raw_args = blk.call(
+                                I64,
+                                "js_array_push_f64",
+                                &[(I64, &raw_args), (DOUBLE, value)],
+                            );
+                        }
+                        case_args.push(nanbox_pointer_inline(ctx.block(), &raw_args));
+                    } else if impl_has_rest {
                         let fixed_user = impl_decl_count.saturating_sub(1);
                         for i in 0..fixed_user {
                             case_args.push(
@@ -854,6 +882,7 @@ pub(crate) fn try_lower_instance_method_call(
             // bundling at lower_call.rs:444 — but operates on
             // `lowered_args` after the receiver was prepended.
             let mut method_has_rest = false;
+            let mut method_has_synthetic_arguments = false;
             let mut method_decl_count = max_explicit_arity;
             let mut rest_walk = Some(class_name.clone());
             while let Some(cur) = rest_walk {
@@ -865,6 +894,8 @@ pub(crate) fn try_lower_instance_method_call(
                         .get(&key)
                         .copied()
                         .unwrap_or(max_explicit_arity);
+                    method_has_synthetic_arguments =
+                        matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true));
                     break;
                 }
                 rest_walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
@@ -885,7 +916,34 @@ pub(crate) fn try_lower_instance_method_call(
                 )?));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            if method_has_rest {
+            if method_has_synthetic_arguments {
+                // A synthesized `arguments` slot receives ALL values supplied
+                // at the call site, independently of the method's named
+                // parameters. Treating it like an ordinary `...rest` slot
+                // packed only values after `declared - 1`; a method such as
+                // `start(a, b, c, d) { Reflect.apply(fn, this, arguments) }`
+                // therefore observed an empty arguments object when called
+                // with three values. Next 16's ProxyTracer uses this exact
+                // forwarding shape in the production App Route path (#8036).
+                let visible_params = method_decl_count.saturating_sub(1);
+                while lowered_args.len() - 1 < visible_params {
+                    lowered_args.push(undefined_lit.clone());
+                }
+                let raw_count = fallback_user_args.len();
+                let cap = (raw_count as u32).to_string();
+                let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                for value in &fallback_user_args {
+                    let blk = ctx.block();
+                    raw_args = blk.call(
+                        I64,
+                        "js_array_push_f64",
+                        &[(I64, &raw_args), (DOUBLE, value)],
+                    );
+                }
+                let arguments_box = nanbox_pointer_inline(ctx.block(), &raw_args);
+                lowered_args.truncate(1 + visible_params);
+                lowered_args.push(arguments_box);
+            } else if method_has_rest {
                 // user-visible fixed param count = decl - 1 (the
                 // last param is the rest). lowered_args[0] is
                 // `this`, [1..] are user args.
