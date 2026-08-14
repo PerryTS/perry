@@ -153,11 +153,63 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
     value
 }
 
+/// #7803 producer trap (diagnostic, default-off, parsed by value):
+/// `PERRY_GC_THIS_SET_CHECK=1` prints — `=abort` aborts with — a backtrace
+/// the moment a POINTER_TAG value whose header-at-minus-8 is incoherent
+/// enters the implicit-this cell. The seed-3 latch shows the cell (and its
+/// frame saves) holding `boxed(array + interior_offset)`; every walk
+/// downstream then misreads array element bytes as a GcHeader. The abort at
+/// the STORE names the producer, which the collector-side latch cannot.
+#[inline]
+fn this_set_check(value: f64) {
+    use std::sync::OnceLock;
+    static MODE: OnceLock<u8> = OnceLock::new();
+    let mode = *MODE.get_or_init(|| {
+        match std::env::var("PERRY_GC_THIS_SET_CHECK").ok().as_deref() {
+            Some("abort") => 2,
+            Some("1") | Some("on") | Some("true") => 1,
+            _ => 0,
+        }
+    });
+    if mode == 0 {
+        return;
+    }
+    let bits = value.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if addr < crate::gc::GC_HEADER_SIZE
+        || !crate::value::addr_class::is_plausible_heap_addr(addr)
+        || !crate::arena::pointer_in_nursery(addr)
+    {
+        // Only young-arena candidates: the observed interiors are nursery
+        // arrays, and old/malloc objects have differently-managed headers.
+        return;
+    }
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let (obj_type, size, flags) =
+        unsafe { ((*header).obj_type, (*header).size, (*header).gc_flags) };
+    if crate::gc::header_incoherence_for_diagnostics(obj_type, size, flags).is_some() {
+        eprintln!(
+            "[gc-this-set-check] implicit this set to {bits:#018x} — target header \
+             obj_type={obj_type} size={size} flags={flags:#04x} is INCOHERENT \
+             (an interior or stale pointer entering the this cell).\n\
+             --- setter backtrace ---\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        if mode == 2 {
+            std::process::abort();
+        }
+    }
+}
+
 /// Set the implicit `this` and return the previous value.
 /// Callers must restore the previous value to scope the binding to the
 /// duration of a single method-style call.
 #[no_mangle]
 pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
+    this_set_check(value);
     IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
