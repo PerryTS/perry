@@ -746,9 +746,21 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         }
     }
 
-    // #7765: one `GcHeader` read gates both collection registry probes and,
-    // after the array-only funnel, supplies the descriptor flags which
-    // `array_object_flags` used to re-derive through another clean/header read.
+    // #7765: ONE `GcHeader` read gates both collection probes and, after the
+    // array-only funnel, supplies the descriptor flags which
+    // `array_object_flags` used to re-derive through a second `clean_arr_ptr`
+    // and a second header read. On `gc-handoff/apps/asyncpipe_big.ts` this call
+    // site was 76% of all `is_registered_set` samples and 82% of all
+    // `is_registered_map` ones — both registries are non-empty there, so the
+    // #7474 latch is armed and each probe really resolves a thread-local and
+    // hashes on every ordinary-array element read unless this tag gates it.
+    //
+    // The tag answers because every registered `Map`/`Set` IS its
+    // `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header, and it is
+    // ABA-proof: recycling the address into anything else rewrites the tag
+    // before the new pointer is handed out. That is exactly what an
+    // address-keyed negative memo could not offer (#7755).
+    //
     // A header-less Buffer/TypedArray can expose allocator bookkeeping here,
     // but a coincidental collection tag is harmless: the authoritative
     // registry answers false, and those receivers are routed below.
