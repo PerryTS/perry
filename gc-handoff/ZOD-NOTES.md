@@ -1690,3 +1690,56 @@ They should either
 
 Everything needed for either route is committed: five diagnostics, a pinned
 schedule, a symbolicating build mode, and this note.
+
+## 33. Measured: the stale-argument population in the dispatch tower is 36 sites, not 10
+
+Route 2 from §32, done rather than handed off. The question §25 left open was how
+many dispatch arms in `js_native_call_method` pass the caller's raw `args_ptr`
+below the handle scope. Counting by eye is exactly the audit-by-judgement that
+created the problem, so I let the compiler count.
+
+**The enforcement experiment.** Immediately after `arg_handles` is built,
+shadow the raws so no arm below can name them:
+
+```rust
+#[allow(unused_variables)]
+let args_ptr = ();
+#[allow(unused_variables)]
+let args_len = ();
+```
+
+`cargo check` then reports **36 errors** — 36 places that reach past the rooted
+handles for the caller's memory. #7528 converted ten of them. The other 26 were
+never distinguished from the ten by anything except an author's per-arm
+judgement at the time.
+
+The file's own justification is what makes this a defect rather than a style
+question. #7528 re-reads the RECEIVER at every use, and says why:
+
+> a value READ OUT of a root and held in a local is not rooted — the collector
+> rewrites the SLOT, not the copy. This function then runs ~1160 more lines
+> across a dozen probes that allocate.
+
+`arg_handles` is the slot; `args_ptr` is the copy. The argument that forces the
+receiver to be re-read forces the arguments to be re-read, at every one of the
+36.
+
+**Reverted, not landed.** Fixing them correctly needs a per-site
+`let ra = refreshed_args();` — a single refresh at the top is precisely the
+mistake #7528 documents — which is 36 individually-checked edits. That is a
+focused change someone should make with a clean host and the gap suite, not
+something to bolt on at the end of a session. The shadowing trick above is the
+enforcement mechanism to land WITH it, so the population cannot regrow: the
+losing spelling stops compiling, the same move `RootedGroup` made on the
+codegen side.
+
+**Cost note, since it is the obvious objection:** the genuinely hot path does
+not pay. `try_class_vtable_fast_dispatch` returns above the handle scope
+entirely, so all 36 sites are already slow paths.
+
+**Is one of the 26 this bug?** Unknown, and I am not going to guess after five
+refuted hypotheses. What can be said: two of the arms in this family were
+verified to have a collection point before the dispatch (§25) and fixing them
+did not close #7803 (6/16). The remaining 26 are a real, enumerated,
+compiler-checkable defect population on the exact frame in the failing stack —
+which is worth fixing whether or not it is this bug.
