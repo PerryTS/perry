@@ -77,19 +77,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED};
 
-/// Which copying-minor walk is currently handing addresses to `move_young`.
-///
-/// The pin-latch abort used to print only the garbage header. On #7803/#7990
-/// that header is *incoherent* (INTERNED on a Map, a 2 GiB nursery size), so
-/// the interesting fact is which walk followed the stale slot. Set around
-/// each mark/rewrite walk in `copying.rs`; read by
-/// [`pinned_young_move_report`].
 crate::perry_thread_local! {
     static COPYING_WALK_PHASE: Cell<Option<&'static str>> =
         const { Cell::new(None) };
 }
 
 /// RAII label for the walk that is about to call into `move_young`.
+///
+/// The pin-latch abort used to print only the garbage header. On #7803/#7990
+/// that header is *incoherent* (INTERNED on a Map, a 2 GiB nursery size), so
+/// the interesting fact is which walk followed the stale slot. Set around
+/// each mark/rewrite walk in `copying.rs`; read by
+/// [`pinned_young_move_report`].
 pub(super) struct CopyingWalkPhaseGuard {
     prev: Option<&'static str>,
 }

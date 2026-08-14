@@ -1406,6 +1406,17 @@ pub(super) enum MutableRootSlotKind {
     GlobalRoot,
 }
 
+impl MutableRootSlotKind {
+    /// Label for the pin-latch abort's `copying walk phase` line.
+    pub(super) fn walk_phase_name(self) -> &'static str {
+        match self {
+            Self::ShadowStack => "mutable_root_slots/shadow_stack",
+            Self::NativeStack => "mutable_root_slots/native_stack",
+            Self::GlobalRoot => "mutable_root_slots/global_root",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct MutableRootSlot {
     pub(super) kind: MutableRootSlotKind,

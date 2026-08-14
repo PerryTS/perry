@@ -1865,3 +1865,19 @@ rooting.
 `CopyingWalkPhaseGuard` is committed so the next abort (after a rebuild)
 prints `copying walk phase: <scanner|remembered_set|worklist_drain>`.
 The latch still does not name the slot; the phase is the next cut.
+
+### Seed 3 on the walk-phase binary: `mutable_root_slots`
+
+`/tmp/zod-phase` (archives 11:19, KEEP_SYMBOLS, no `-g`), same knobs:
+
+```
+copying walk phase: mutable_root_slots
+safepoints=52836 scheduled_collections=5319
+obj_type=8 (map) size=2147418931  (incoherent)
+```
+
+That is the precise-root walk — shadow stack + RS4GC native stack maps +
+module globals — not a named runtime scanner, not the remembered set, not
+the worklist drain. The stale pointer is in a slot the collector already
+believes is a root. Next cut: which of the three kinds
+(`shadow_stack` / `native_stack` / `global_root`).
