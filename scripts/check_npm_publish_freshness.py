@@ -669,7 +669,18 @@ def self_test() -> int:
         raise RegistryError("Temporary failure in name resolution")
 
     dead = evaluate([anchor], repo_version, now, dead_fetch)
-    if not dead[0].stale:
+    # Check the COUNT before indexing. The failure being guarded against here is
+    # a `continue` that drops the unreachable package instead of recording a
+    # verdict for it, which leaves this list empty -- and a bare `dead[0]` turns
+    # that into an IndexError traceback rather than the sentence explaining what
+    # broke. Both exit non-zero, so the gate holds either way; the difference is
+    # whether the next reader has to reverse-engineer the mutation.
+    if not dead:
+        failures.append(
+            "an unreachable registry produced NO verdict at all -- it was dropped "
+            "rather than reported, which is the silence this check exists to end"
+        )
+    elif not dead[0].stale:
         failures.append("an unreachable registry passed -- a skip is reading as a pass")
     if _exit_code(dead) == 0:
         failures.append("exit code was 0 for an unreachable registry")
