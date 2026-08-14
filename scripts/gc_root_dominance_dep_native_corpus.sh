@@ -31,8 +31,14 @@ ENTRY="${ENTRY:-test-files/gc-dep-corpus/main.ts}"
 
 # Single-sourced from the Rust const, never retyped (same reason the curated
 # script gives: a fourth copy is how the pass string drifts from production).
-PASSES="$(sed -n 's/^pub(crate) const STATEPOINT_REWRITE_PASSES: &str = "\(.*\)";$/\1/p' \
-  crates/perry-codegen/src/inprocess.rs)"
+# Join continuation lines up to the `;` first: rustfmt wraps the initializer
+# when the line grows (#8068 did), and a single-line match then reads nothing.
+PASSES="$(awk '/const STATEPOINT_REWRITE_PASSES: &str/ {
+    buf = $0
+    while (buf !~ /;[[:space:]]*$/ && (getline line) > 0) buf = buf " " line
+    if (match(buf, /"[^"]*"/)) print substr(buf, RSTART + 1, RLENGTH - 2)
+    exit
+  }' crates/perry-codegen/src/inprocess.rs)"
 [ -n "$PASSES" ] || { echo "could not read STATEPOINT_REWRITE_PASSES" >&2; exit 2; }
 OPT_BIN="${PERRY_LLVM_OPT:-/opt/homebrew/opt/llvm/bin/opt}"
 if [ ! -x "$OPT_BIN" ]; then

@@ -172,7 +172,16 @@ rs4gc_pass_string() {
     return 1
   fi
   local value
-  value="$(sed -n 's/^pub(crate) const STATEPOINT_REWRITE_PASSES: &str = "\(.*\)";$/\1/p' "$src")"
+  # Join the declaration with any continuation lines up to the terminating
+  # `;` before extracting the quoted string — rustfmt is free to wrap the
+  # initializer onto its own line (it did at #8068, which turned this reader's
+  # previous single-line match into "not found" on every run).
+  value="$(awk '/const STATEPOINT_REWRITE_PASSES: &str/ {
+      buf = $0
+      while (buf !~ /;[[:space:]]*$/ && (getline line) > 0) buf = buf " " line
+      if (match(buf, /"[^"]*"/)) print substr(buf, RSTART + 1, RLENGTH - 2)
+      exit
+    }' "$src")"
   if [ -z "$value" ]; then
     echo "::error::could not read STATEPOINT_REWRITE_PASSES out of $src." >&2
     echo "The native corpus reproduces production's statepoint rewrite, and it" >&2
