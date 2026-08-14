@@ -1435,3 +1435,48 @@ issue; unrelated to #7803.
 introduce no new failure. That is not yet the clean run the PR needs — the
 suite was still running when this note was written — but it is the first
 evidence in either direction, and it is the right direction.
+
+## 29. Gap suite, complete: no regressions from this branch
+
+554/554 on a quiet host (load ~10-20, 1h25m). The harness's own verdict, with
+attribution:
+
+**"REGRESSIONS — these were expected to pass"** (2):
+
+| test | verdict |
+|---|---|
+| `test_gap_specabi_reassign` | **NOT this branch.** Reverted the three codegen files to `410dadd45`, rebuilt `perry`, ran it: byte-identical failure (`plain: 0 0 2`, `captured: 0:2` where node gives `99 101 2` / `77:2`). Pre-existing on main. |
+| `test_gap_zlib_4917_level` (`compile_fail`) | **Spurious — my fault.** I started `cargo build -p perry` WHILE the suite was running, which swapped `target/release/perry` mid-run. Recompiled by hand afterwards: compiles clean and matches node byte-for-byte. |
+
+**"STATUS CHANGES: node_fail -> parity_fail"** (10) — all oracle-side, all
+`Node exit: 1, Perry exit: 0`, Perry printing the right answer in every case:
+
+* 6 need npm packages this worktree does not have (`backoff`, `cron`, `dayjs`,
+  `moment`, `slugify`, `ratelimiter` — `npm ci` was never run here);
+* 4 are TypeScript Node cannot strip — `enum` and parameter properties are not
+  erasable syntax (`4510_enum_forward_ref`, `enum_in_function_body`,
+  `derived_param_props`, `prop_plan_cache_invalidation`).
+
+They flipped from `node_fail` to `parity_fail` because `node_fail` is recorded
+only for an ABNORMAL exit (`run_parity_tests.sh:1341`); a clean `exit 1` falls
+through to the output comparison. **1 improvement**: `iterator_helpers_2874`
+now passes.
+
+### Verdict
+
+**The three call arms introduce no gap regression.** That was the one thing
+blocking the codegen PR, and it is now cleared — with two caveats stated rather
+than buried: the run had an incomplete `node_modules`, and I polluted it with a
+concurrent rebuild (the one test that touched is individually verified above).
+A clean-environment CI run remains the real gate.
+
+### Two findings for other people
+
+1. **`test_gap_specabi_reassign` is failing on `main`** and is not in
+   `known_failures.json`. It is #6906/#7052's own regression test — a
+   reassigned binding proving `TaPtr` and reading a plain array through
+   typed-array lowering, which is exactly the unsoundness those issues closed.
+   The gap suite is tag-gated, so nothing per-PR would have caught it.
+2. **A gap test the oracle cannot run reads as RED, not as skipped.** See §28.
+   Ten tests are in that state right now. Either they need expected-output
+   files or `node_fail` must cover a clean non-zero exit.
