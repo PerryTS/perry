@@ -594,7 +594,14 @@ mod tests {
     use crate::types::{I1, I32, I64, PTR, VOID};
 
     fn precise_root_fixture(extra_plain_function: bool) -> LlModule {
-        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        precise_root_fixture_for(
+            &crate::codegen::default_target_triple(),
+            extra_plain_function,
+        )
+    }
+
+    fn precise_root_fixture_for(triple: &str, extra_plain_function: bool) -> LlModule {
+        let mut module = LlModule::new(triple);
         module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
         module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
@@ -782,6 +789,38 @@ mod tests {
             native, text,
             "split native units must freeze finalized precise-root IR, not \
              pre-lowered shadow-slot calls"
+        );
+    }
+
+    /// #8087: the same construction-path comparison, pinned to an **ELF**
+    /// target rather than the host's.
+    ///
+    /// The three sibling tests above ran only against the host triple, so on a
+    /// macOS developer machine they exercised Mach-O exclusively — and Mach-O
+    /// records no `STT_FILE` symbol. That is precisely why a module-name
+    /// difference that made all of them fail on the Linux runner was invisible
+    /// locally for two days. Naming the object format explicitly keeps this
+    /// check honest on every host.
+    #[test]
+    fn native_and_text_arms_agree_on_an_elf_target() {
+        const ELF_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let module = precise_root_fixture_for(ELF_TRIPLE, false);
+
+        let text = crate::linker::compile_ll_to_object(&module.to_ir(), Some(ELF_TRIPLE))
+            .expect("trusted text arm emits an ELF object");
+        let native = compile_module_native(&module, Some(ELF_TRIPLE), "native_root_elf_fixture")
+            .expect("direct native arm emits an ELF object");
+
+        assert_eq!(
+            &text[..4],
+            b"\x7fELF",
+            "fixture must actually produce ELF, or this test proves nothing"
+        );
+        assert_eq!(
+            native, text,
+            "native and text construction must emit byte-identical ELF objects; \
+             a difference here is a recorded-name or lowering divergence (#8087)"
         );
     }
 
