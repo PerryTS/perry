@@ -1480,3 +1480,59 @@ A clean-environment CI run remains the real gate.
 2. **A gap test the oracle cannot run reads as RED, not as skipped.** See §28.
    Ten tests are in that state right now. Either they need expected-output
    files or `node_fail` must cover a clean non-zero exit.
+
+## 30. The poison result is INCONCLUSIVE, and that is the session's real blocker
+
+`PERRY_GC_POISON_FROMSPACE` (§ commit `ed543fb5e`), one binary, seeds 1–6:
+
+| | failures |
+|---|---|
+| poison off | 3/6 |
+| poison on | **0/6** |
+
+The tempting read is "a fifth suppression". It is not supportable. Checking
+what else moved, which is the discipline this whole session has run on:
+
+| seed | off (safepoints) | on (safepoints) |
+|---|---|---|
+| 1 | 6834 | 6889 |
+| 3 | 6828 | 6874 |
+| 4 | 6871 | 6836 |
+
+The schedules differ by ±0.7% between arms — the same magnitude as the
+ordinary run-to-run drift §1 measured at a FIXED seed (6627→6909, and passing
+runs spanning 6804–6931). So the two arms did not run the same schedule, the
+difference is indistinguishable from noise, and Fisher on 0/6 vs 3/6 is
+p ≈ 0.09 anyway. **It neither confirms nor refutes the mechanism.**
+
+### The design problem, stated plainly
+
+This workload cannot support the experiments being asked of it:
+
+* the failure rate is ~30–50%;
+* run-to-run schedule drift at a fixed seed is ~1–4%;
+* **every** intervention — a rooting fix, an extra safepoint, a memset —
+  perturbs the schedule by about that much;
+* so no 6-to-16-run sweep can attribute anything, and each run costs 3–20
+  minutes.
+
+Attributing a 50%→30% shift at p<0.05 needs ~40 runs per arm; that is 2–13
+hours per arm on this box. Four of this session's conclusions (§19, §23, §27,
+§30) are rate comparisons that are individually under-powered, and only §20
+(0/16 vs 8/16) clears that bar comfortably.
+
+**The fix is not more runs, it is a deterministic reproducer**, and the lever
+for one has been sitting unused since §3 of the task list:
+`PERRY_GC_SCHEDULE_ALLOC_KB=0` makes EVERY loop poll a schedule candidate,
+which removes the allocation-pacing feedback (`schedule_poll_collection_due`
+compares against a from-space high-water mark, so a byte of drift moves which
+polls become candidates, and the effect compounds). Unpaced, the candidate set
+is `loop_polls`, which §1 already measured as *stable at 63,936 across runs*.
+
+That is the one number on this workload that does not drift, and it has been in
+the notes since the first session without anyone building the experiment on
+top of it. A run is now in flight (~10× the collections, so budget an hour).
+
+If it makes the failure deterministic, every A/B above becomes a single run
+instead of forty, and the four under-powered conclusions can be settled
+properly rather than hedged.
