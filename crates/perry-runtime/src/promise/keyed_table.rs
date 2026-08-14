@@ -71,6 +71,130 @@ use std::collections::HashMap;
 
 use crate::fast_hash::{PtrHashMap, PtrHasher};
 
+// Unit tests substitute a transparent key wrapper that counts the actual hash
+// and equality probes performed inside `HashMap`. Production keeps the exact
+// `usize` key type: the instrumentation therefore cannot change shipped code or
+// make a slow lookup look cheap by counting only the call to `HashMap::remove`.
+#[cfg(not(test))]
+type IndexKey = usize;
+
+#[cfg(test)]
+mod operation_probe {
+    use std::cell::Cell;
+    use std::hash::{Hash, Hasher};
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(super) struct Counts {
+        pub(super) hashes: usize,
+        pub(super) index_equalities: usize,
+        pub(super) slot_equalities: usize,
+    }
+
+    thread_local! {
+        static COUNTS: Cell<Counts> = const { Cell::new(Counts {
+            hashes: 0,
+            index_equalities: 0,
+            slot_equalities: 0,
+        }) };
+    }
+
+    #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, Eq)]
+    pub(super) struct Key(pub(super) usize);
+
+    impl PartialEq for Key {
+        fn eq(&self, other: &Self) -> bool {
+            COUNTS.with(|counts| {
+                let mut next = counts.get();
+                next.index_equalities += 1;
+                counts.set(next);
+            });
+            self.0 == other.0
+        }
+    }
+
+    #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialOrd)]
+    pub(super) struct SlotPosition(pub(super) u32);
+
+    impl PartialEq for SlotPosition {
+        fn eq(&self, other: &Self) -> bool {
+            COUNTS.with(|counts| {
+                let mut next = counts.get();
+                next.slot_equalities += 1;
+                counts.set(next);
+            });
+            self.0 == other.0
+        }
+    }
+
+    impl Hash for Key {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            COUNTS.with(|counts| {
+                let mut next = counts.get();
+                next.hashes += 1;
+                counts.set(next);
+            });
+            // Identical to `usize::hash`: keep `PtrHasher`'s production hash
+            // and bucket distribution, merely count that it was requested.
+            state.write_usize(self.0);
+        }
+    }
+
+    pub(super) fn reset() {
+        COUNTS.with(|counts| counts.set(Counts::default()));
+    }
+
+    pub(super) fn counts() -> Counts {
+        COUNTS.with(Cell::get)
+    }
+}
+
+#[cfg(test)]
+type IndexKey = operation_probe::Key;
+
+#[cfg(not(test))]
+type SlotPosition = u32;
+
+#[cfg(test)]
+type SlotPosition = operation_probe::SlotPosition;
+
+#[cfg(not(test))]
+#[inline]
+fn index_key(key: usize) -> IndexKey {
+    key
+}
+
+#[cfg(test)]
+#[inline]
+fn index_key(key: usize) -> IndexKey {
+    operation_probe::Key(key)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn slot_position(position: u32) -> SlotPosition {
+    position
+}
+
+#[cfg(test)]
+#[inline]
+fn slot_position(position: u32) -> SlotPosition {
+    operation_probe::SlotPosition(position)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn raw_slot_position(position: SlotPosition) -> u32 {
+    position
+}
+
+#[cfg(test)]
+#[inline]
+fn raw_slot_position(position: SlotPosition) -> u32 {
+    position.0
+}
+
 /// One parked reaction. `key` is the pending promise's address — a GC-visible
 /// metadata slot, rewritten in place by evacuation.
 pub(super) struct Entry<T> {
@@ -94,8 +218,8 @@ pub(super) struct Entry<T> {
 /// overwhelmingly common single-entry case so a `Promise.all` over N distinct
 /// promises does not allocate N side `Vec`s.
 enum Slots {
-    One(u32),
-    Many(Vec<u32>),
+    One(SlotPosition),
+    Many(Vec<SlotPosition>),
 }
 
 impl Slots {
@@ -105,18 +229,18 @@ impl Slots {
     fn push(&mut self, position: u32) -> u32 {
         match self {
             Slots::One(first) => {
-                *self = Slots::Many(vec![*first, position]);
+                *self = Slots::Many(vec![*first, slot_position(position)]);
                 1
             }
             Slots::Many(positions) => {
-                positions.push(position);
+                positions.push(slot_position(position));
                 (positions.len() - 1) as u32
             }
         }
     }
 
     #[inline]
-    fn as_slice(&self) -> &[u32] {
+    fn as_slice(&self) -> &[SlotPosition] {
         match self {
             Slots::One(first) => std::slice::from_ref(first),
             Slots::Many(positions) => positions,
@@ -131,12 +255,12 @@ impl Slots {
         match self {
             Slots::One(first) => {
                 debug_assert_eq!(offset, 0, "a One slot list has only offset 0");
-                *first = new_position;
+                *first = slot_position(new_position);
             }
             Slots::Many(positions) => {
                 debug_assert!((offset as usize) < positions.len(), "slot offset in range");
                 if let Some(position) = positions.get_mut(offset as usize) {
-                    *position = new_position;
+                    *position = slot_position(new_position);
                 }
             }
         }
@@ -150,7 +274,7 @@ pub(super) struct PromiseKeyedTable<T> {
     /// Derived: promise address → positions in `entries`. Rebuilt wholesale
     /// whenever a GC path touches `entries` (see `index_dirty`). Keys are raw
     /// promise pointers, so `PtrHasher` (one multiply) rather than SipHash.
-    index: PtrHashMap<usize, Slots>,
+    index: PtrHashMap<IndexKey, Slots>,
     /// Set by every GC path that can invalidate `index` (key rewritten by
     /// evacuation, entries dropped/rekeyed by the copied-minor cleanup). The
     /// next lookup rebuilds the index from `entries`.
@@ -211,10 +335,11 @@ impl<T> PromiseKeyedTable<T> {
     /// within that key's slot list.
     #[inline]
     fn index_slot_for(&mut self, key: usize, position: u32) -> u32 {
-        match self.index.get_mut(&key) {
+        match self.index.get_mut(&index_key(key)) {
             Some(slots) => slots.push(position),
             None => {
-                self.index.insert(key, Slots::One(position));
+                self.index
+                    .insert(index_key(key), Slots::One(slot_position(position)));
                 0
             }
         }
@@ -248,11 +373,11 @@ impl<T> PromiseKeyedTable<T> {
             return Vec::new();
         }
         self.ensure_index();
-        let Some(slots) = self.index.remove(&key) else {
+        let Some(slots) = self.index.remove(&index_key(key)) else {
             return Vec::new();
         };
 
-        let mut positions: Vec<u32> = slots.as_slice().to_vec();
+        let mut positions: Vec<SlotPosition> = slots.as_slice().to_vec();
         // Remove from the highest position down. `swap_remove(p)` backfills `p`
         // with the element that was last; taking the largest of OUR positions
         // first guarantees that element is never another entry we still have to
@@ -263,6 +388,7 @@ impl<T> PromiseKeyedTable<T> {
 
         let mut drained: Vec<Entry<T>> = Vec::with_capacity(positions.len());
         for position in positions {
+            let position = raw_slot_position(position);
             let entry = self.entries.swap_remove(position as usize);
             debug_assert_eq!(entry.key, key);
             let vacated = position as usize;
@@ -279,7 +405,7 @@ impl<T> PromiseKeyedTable<T> {
                 debug_assert_ne!(moved.key, key, "displaced entry must be foreign");
                 let moved_key = moved.key;
                 let moved_slot = moved.slot;
-                if let Some(slots) = self.index.get_mut(&moved_key) {
+                if let Some(slots) = self.index.get_mut(&index_key(moved_key)) {
                     slots.relocate(moved_slot, position);
                 }
             }
@@ -324,7 +450,7 @@ impl<T> PromiseKeyedTable<T> {
     pub(super) fn count_for_key(&mut self, key: usize) -> usize {
         self.ensure_index();
         self.index
-            .get(&key)
+            .get(&index_key(key))
             .map(|slots| slots.as_slice().len())
             .unwrap_or(0)
     }
@@ -347,6 +473,11 @@ impl<T> PromiseKeyedTable<T> {
         self.index_dirty = false;
     }
 
+    #[cfg(test)]
+    fn reset_operation_probes(&mut self) {
+        operation_probe::reset();
+    }
+
     /// Debug-only: the index must describe `entries` exactly, each key's slot
     /// list must be in registration (seq) order, and every entry's reverse
     /// `slot` must point back at the slot that points at it.
@@ -360,8 +491,9 @@ impl<T> PromiseKeyedTable<T> {
         for (key, slots) in self.index.iter() {
             let mut last_seq = None;
             for (offset, &position) in slots.as_slice().iter().enumerate() {
+                let position = raw_slot_position(position);
                 let entry = &self.entries[position as usize];
-                assert_eq!(entry.key, *key, "indexed position must hold that key");
+                assert_eq!(entry.key, key.0, "indexed position must hold that key");
                 assert_eq!(
                     entry.slot as usize, offset,
                     "entry must record its own offset in its key's slot list"
@@ -524,30 +656,36 @@ mod tests {
     /// `draining_a_heavily_populated_key_ahead_of_another_is_not_quadratic`.
     #[test]
     fn settling_many_keys_is_not_quadratic() {
-        use std::time::Instant;
+        const N: usize = 20_000;
 
-        fn drain_all(n: usize) -> std::time::Duration {
-            let mut table: PromiseKeyedTable<usize> = PromiseKeyedTable::new();
-            for i in 0..n {
-                table.push(i * 64, i);
-            }
-            let start = Instant::now();
-            for i in 0..n {
-                assert_eq!(table.take_all(i * 64), vec![i]);
-            }
-            start.elapsed()
+        let mut table: PromiseKeyedTable<usize> = PromiseKeyedTable::new();
+        for i in 0..N {
+            table.push(i * 64, i);
         }
 
-        // Warm the allocator so the small run isn't paying first-touch costs.
-        drain_all(4_000);
-        let small = drain_all(20_000).as_secs_f64();
-        let large = drain_all(80_000).as_secs_f64();
-        // 4x the entries. Linear ⇒ ~4x. Quadratic ⇒ ~16x. Allow a wide margin
-        // for timer noise on loaded CI hosts but still fail the O(n²) shape.
+        // Measure the algorithm, not how much CPU time libtest happened to get.
+        // The test-only transparent wrappers count the actual HashMap and slot
+        // comparisons while preserving the production hash and key layout.
+        table.reset_operation_probes();
+        for i in 0..N {
+            assert_eq!(table.take_all(i * 64), vec![i]);
+        }
+        assert!(table.is_empty());
+
+        let probes = super::operation_probe::counts();
+        // N successful removes, plus at most one relocation lookup for each
+        // removed entry. A full-table key scan performs no indexed remove and
+        // therefore fails the lower bound; a pathological index fails the
+        // equality bound.
+        assert!(probes.hashes >= N && probes.hashes <= N * 2);
         assert!(
-            large < small * 8.0 + 0.05,
-            "drain looks super-linear: 20k took {small:.4}s, 80k took {large:.4}s"
+            probes.index_equalities >= probes.hashes
+                && probes.index_equalities <= probes.hashes * 2,
+            "indexed drain used {} hashes but {} equality probes",
+            probes.hashes,
+            probes.index_equalities
         );
+        assert_eq!(probes.slot_equalities, 0);
     }
 
     /// The OTHER quadratic — the one the many-keys/one-entry benchmark above
@@ -563,43 +701,53 @@ mod tests {
     /// the relocation is a single indexed store.
     #[test]
     fn draining_a_heavily_populated_key_ahead_of_another_is_not_quadratic() {
-        use std::time::Instant;
-
         const A: usize = 0x1000;
         const B: usize = 0x2000;
+        const M: usize = 20_000;
 
-        fn drain_first_of_two(m: usize) -> std::time::Duration {
-            let mut table: PromiseKeyedTable<usize> = PromiseKeyedTable::new();
-            for i in 0..m {
-                table.push(A, i);
-            }
-            for i in 0..m {
-                table.push(B, m + i);
-            }
-
-            let start = Instant::now();
-            let drained = table.take_all(A);
-            let elapsed = start.elapsed();
-
-            // Correctness, not just speed: A drains in registration order and
-            // B is left whole (and still in registration order).
-            assert_eq!(drained, (0..m).collect::<Vec<_>>());
-            assert_eq!(table.len(), m);
-            table.assert_invariants();
-            assert_eq!(table.take_all(B), (m..2 * m).collect::<Vec<_>>());
-            assert!(table.is_empty());
-            elapsed
+        let mut table: PromiseKeyedTable<usize> = PromiseKeyedTable::new();
+        for i in 0..M {
+            table.push(A, i);
+        }
+        for i in 0..M {
+            table.push(B, M + i);
         }
 
-        drain_first_of_two(1_000);
-        let small = drain_first_of_two(20_000).as_secs_f64();
-        let large = drain_first_of_two(80_000).as_secs_f64();
-        eprintln!("two-key drain: M=20k {small:.4}s, M=80k {large:.4}s");
-        // 4x the entries per key. Linear ⇒ ~4x. Quadratic ⇒ ~16x.
+        table.reset_operation_probes();
+        let drained = table.take_all(A);
+        let probes = super::operation_probe::counts();
+
+        // Correctness, not just work: A drains in registration order and B is
+        // left whole. Since A occupied the front half, every one of its M
+        // removals displaces a B entry. Each displaced entry must perform one
+        // indexed B lookup and one direct `Entry::slot` relocation — the old
+        // scan of B's M slots performed ~M² position comparisons instead.
+        assert_eq!(drained, (0..M).collect::<Vec<_>>());
+        assert_eq!(table.len(), M);
+        assert_eq!(probes.hashes, M + 1);
         assert!(
-            large < small * 8.0 + 0.05,
-            "displaced-entry relocation looks super-linear: \
-             M=20k took {small:.4}s, M=80k took {large:.4}s"
+            probes.index_equalities >= probes.hashes
+                && probes.index_equalities <= probes.hashes * 2,
+            "relocation used {} hashes but {} equality probes",
+            probes.hashes,
+            probes.index_equalities
+        );
+        assert_eq!(
+            probes.slot_equalities, 0,
+            "relocation must use Entry::slot directly, without searching B's slot list"
+        );
+        table.assert_invariants();
+
+        table.reset_operation_probes();
+        assert_eq!(table.take_all(B), (M..2 * M).collect::<Vec<_>>());
+        assert!(table.is_empty());
+        assert_eq!(
+            super::operation_probe::counts(),
+            super::operation_probe::Counts {
+                hashes: 1,
+                index_equalities: 1,
+                slot_equalities: 0,
+            }
         );
     }
 }
