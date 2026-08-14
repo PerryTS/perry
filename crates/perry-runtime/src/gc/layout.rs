@@ -444,6 +444,37 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
 }
 
+/// Does the all-pointer claim actually hold for a payload that **already holds
+/// initialized slots** — the non-empty array literal `const a: C[] = [x, y]`?
+///
+/// [`layout_init_all_pointer_slots`]' array caller
+/// (`js_array_declare_all_pointer_elements`) used to refuse every non-empty
+/// array outright, because the claim covers `0..length` and only an empty array
+/// makes it vacuously true. #8102 is what that cost: the declaration is emitted
+/// from the `Stmt::Let` tail, i.e. *after* a literal's element stores have
+/// installed a per-slot side mask, so for a non-empty literal it was a silent
+/// no-op and every later `push` lost #7469's elided store.
+///
+/// This predicate discharges the claim instead of assuming it. Every slot must
+/// be pointer-bearing by [`layout_pointer_bearing_bits`] — the same test the
+/// mask builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation apply — so the
+/// declaration never has to trust a caller's static proof. `slot_count == 0` is
+/// the empty case and holds vacuously, which keeps the pre-#8102 path
+/// bit-identical.
+#[inline]
+pub(crate) unsafe fn layout_all_pointer_slots_would_hold(
+    slots: *const u64,
+    slot_count: usize,
+) -> bool {
+    if slot_count == 0 {
+        return true;
+    }
+    if slots.is_null() {
+        return false;
+    }
+    (0..slot_count).all(|i| layout_pointer_bearing_bits(*slots.add(i)))
+}
+
 /// #7630: settle a materialiser-built object's layout state ONCE, after its
 /// construction loop elided the per-slot notes
 /// (`runtime_store_jsvalue_slot_layout_deferred`). Two exact outcomes:

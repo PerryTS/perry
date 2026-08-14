@@ -1619,11 +1619,29 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
 ///    read (`mark_field_into_worklist` re-validates every word), never a
 ///    stranded live child.
 ///
-/// Refused on a non-empty array: the claim covers `0..length`, and only on an
-/// empty array is it vacuously true of what is already stored. A refusal is
-/// silent and safe — the header keeps whatever layout it had, and the codegen
-/// header test then declines the elided store and routes the push through
-/// `js_array_push_f64`, which notes every slot as it always did.
+/// On a **non-empty** array the claim is not vacuous, so it is discharged
+/// rather than assumed: every slot in `0..length` must be pointer-bearing by
+/// `gc::layout_pointer_bearing_bits`, the same predicate the layout mask
+/// builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation use. The walk is
+/// O(literal size), runs once at the binding, and does not have to trust the
+/// caller's static proof.
+///
+/// #8102 is why that path exists. `emit_all_pointer_array_declaration` is
+/// emitted from the `Stmt::Let` tail, i.e. *after* an array literal's element
+/// stores have already installed a per-slot side mask. Refusing every
+/// non-empty array therefore made the declaration a **silent no-op** for
+/// `const a: C[] = [x, y]`, so every later `a.push(…)` failed the codegen
+/// header test and paid the per-store layout note #7469 exists to delete —
+/// measured at +33.9% instructions on a 4M-push loop, against the
+/// byte-for-byte equivalent array built empty and pushed into.
+/// `collectors/all_pointer_arrays.rs` already admits such a literal (see
+/// `literal_of_object_elements_is_admitted`), so the proof was being issued and
+/// then discarded.
+///
+/// A refusal is still silent and safe — the header keeps whatever layout it
+/// had, and the codegen header test then declines the elided store and routes
+/// the push through `js_array_push_f64`, which notes every slot as it always
+/// did.
 #[no_mangle]
 pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
     let arr = clean_arr_ptr_mut(arr);
@@ -1631,7 +1649,15 @@ pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
         return;
     }
     unsafe {
-        if (*arr).length != 0 {
+        let length = (*arr).length as usize;
+        let slots = if length == 0 {
+            std::ptr::null()
+        } else {
+            array_elements_ptr(arr) as *const u64
+        };
+        // Clear the raw-f64 claim FIRST only when the declaration will stick:
+        // a refused declaration must leave the header exactly as it found it.
+        if !crate::gc::layout_all_pointer_slots_would_hold(slots, length) {
             return;
         }
         clear_array_numeric_layout(arr);
