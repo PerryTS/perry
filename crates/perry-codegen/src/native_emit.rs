@@ -392,8 +392,16 @@ pub fn compile_module_units_native(
         std::sync::mpsc::sync_channel::<(usize, Result<FrozenUnit>)>(jobs.max(1));
     let receiver = std::sync::Mutex::new(receiver);
     std::thread::scope(|scope| {
-        for _ in 0..jobs {
-            scope.spawn(|| loop {
+        for worker_index in 0..jobs {
+            // LLVM recursion depth scales with function size, and a post-RS4GC
+            // relocation-fan-out function reaches millions of instructions
+            // (#8082) — Rust's default 2 MiB worker stack SIGBUSes on the
+            // guard page mid-pass with no crash report. Reserve a deep stack;
+            // it is address space, not resident memory, until touched.
+            std::thread::Builder::new()
+                .name(format!("perry-llvm-unit-{worker_index}"))
+                .stack_size(64 * 1024 * 1024)
+                .spawn_scoped(scope, || loop {
                 let received = receiver
                     .lock()
                     .expect("native freeze queue poisoned")
@@ -416,7 +424,8 @@ pub fn compile_module_units_native(
                     );
                 }
                 *slots[i].lock().expect("native codegen-unit slot poisoned") = Some(out);
-            });
+                })
+                .expect("spawn LLVM unit worker");
         }
         let freeze_started = std::time::Instant::now();
         let report_step = (unit_total / 20).max(1);
