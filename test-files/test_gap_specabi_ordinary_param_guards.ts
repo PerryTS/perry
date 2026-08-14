@@ -130,13 +130,34 @@ console.log("class-wrong", bumpBox(new StringBox("s") as any));
 
 // Keep the guarded parameter live across enough allocations for the moving-GC
 // matrix. Both the clone and a failed-guard fallback execute this body.
+//
+// The count is load-bearing, not arbitrary. A two-field literal is ~72 bytes,
+// so the original 50_000 allocated ~3.6 MB against a 64 MB initial nursery
+// threshold and triggered ZERO collections: under
+// `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` the run reported
+// `copying_minors=0` with no `[gc-fromspace-protect]` line, so the fixture
+// would have passed unchanged while the clone held a stale pointer across an
+// evacuation. 1_200_000 is ~86 MB, which clears the threshold, and dropping
+// all but every 4096th object keeps a small live set churning so survivors
+// evacuate out of retired blocks instead of everything promoting together.
+//
+// Verified: `copying_minors=20` with 20 `[gc-fromspace-protect]
+// mode=ProtectPages` lines (bytes_protected=18874368 on the first retirement),
+// output byte-exact against node. With the from-space pages mprotect'd, a
+// guarded clone holding a stale parameter now faults at the offending
+// instruction instead of passing silently.
 function surviveMovingGc(payload: Payload): string {
   const before = payload.label;
-  const junk: any[] = [];
-  for (let i = 0; i < 50000; i++) {
-    junk.push({ i, text: "j" + i });
+  const kept: any[] = [];
+  let batch: any[] = [];
+  for (let i = 0; i < 1200000; i++) {
+    batch.push({ i, text: "j" + (i & 1023) });
+    if (batch.length >= 4096) {
+      kept.push(batch[0]);
+      batch = [];
+    }
   }
-  return before + ":" + payload.label + ":" + junk.length;
+  return before + ":" + payload.label + ":" + kept.length;
 }
 
 console.log("moving-clone", surviveMovingGc({ label: "live", count: 1 }));
