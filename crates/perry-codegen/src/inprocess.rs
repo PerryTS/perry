@@ -38,7 +38,16 @@ use inkwell::OptimizationLevel;
 /// passing against a pipeline production had stopped using. `mem2reg` is not
 /// incidental company: RS4GC tracks `addrspace(1)` **SSA values**, not memory,
 /// so a root alloca that survives promotion is a root the collector never sees.
-pub(crate) const STATEPOINT_REWRITE_PASSES: &str = "function(mem2reg),rewrite-statepoints-for-gc";
+// SCCP—not InstCombine—is before RS4GC deliberately (#8065). Native C-API construction
+// folds constants as instructions are built, while whole-module text parsing
+// retains the equivalent instruction graph. If RS4GC sees those two shapes
+// before canonicalization, their live-root ordering can differ and reach both
+// machine code and the compact GC map. The ordinary optimization pipeline is
+// too late: statepoints and relocations have already been assigned by then.
+// The narrower SCCP preserves dynamic pointer round trips which InstCombine
+// can erase, so the positive live-root witness remains visible to RS4GC.
+pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
+    "function(mem2reg,sccp),rewrite-statepoints-for-gc";
 
 /// Test seam (#7502): parse `ll_text`, run [`STATEPOINT_REWRITE_PASSES`] for
 /// `effective_target`, and return the rewritten IR.
@@ -411,6 +420,78 @@ fn optimize_and_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn constant_fold_order_fixture(folded: bool) -> String {
+        let mut ir = String::from(
+            "declare i64 @may_collect()\n\ndefine i64 @f(i64 %d0, i64 %d1, i64 %d2, i64 %d3, i64 %d4, i64 %d5, i64 %d6, i64 %d7) gc \"statepoint-example\" {\nentry:\n",
+        );
+        for i in 0..8 {
+            ir.push_str(&format!("  %cslot{i} = alloca ptr addrspace(1)\n"));
+            if folded {
+                ir.push_str(&format!(
+                    "  store ptr addrspace(1) inttoptr (i64 9222246136947933185 to ptr addrspace(1)), ptr %cslot{i}\n"
+                ));
+            } else {
+                ir.push_str(&format!(
+                    "  %cb{i} = bitcast double 0x7FFC000000000001 to i64\n  %cp{i} = inttoptr i64 %cb{i} to ptr addrspace(1)\n  store ptr addrspace(1) %cp{i}, ptr %cslot{i}\n"
+                ));
+            }
+        }
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %dslot{i} = alloca ptr addrspace(1)\n  %dp{i} = inttoptr i64 %d{i} to ptr addrspace(1)\n  store ptr addrspace(1) %dp{i}, ptr %dslot{i}\n"
+            ));
+        }
+        ir.push_str("  %sp = call i64 @may_collect()\n");
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %after{i} = load ptr addrspace(1), ptr %dslot{i}\n  %bits{i} = ptrtoint ptr addrspace(1) %after{i} to i64\n"
+            ));
+        }
+        ir.push_str("  %x1 = xor i64 %bits0, %bits1\n");
+        for i in 2..8 {
+            ir.push_str(&format!("  %x{i} = xor i64 %x{}, %bits{i}\n", i - 1));
+        }
+        ir.push_str("  ret i64 %x7\n}\n");
+        ir
+    }
+
+    #[test]
+    fn rs4gc_canonicalizes_construction_time_folds_before_root_liveness() {
+        let target = crate::codegen::default_target_triple();
+        let text_ir = constant_fold_order_fixture(false);
+        let folded_ir = constant_fold_order_fixture(true);
+
+        for (label, ir) in [("text", &text_ir), ("folded", &folded_ir)] {
+            let rewritten = statepoint_rewritten_ir(ir, &target, label)
+                .unwrap_or_else(|e| panic!("{label} fixture must run RS4GC: {e:#}"));
+            assert!(
+                !rewritten.contains("%cb0 = bitcast"),
+                "{label} fixture reached RS4GC before construction-time folds converged:\n{rewritten}"
+            );
+            assert!(
+                rewritten.contains("\"gc-live\"(ptr addrspace(1)"),
+                "{label} fixture lost every dynamic root:\n{rewritten}"
+            );
+            assert!(
+                rewritten.contains("gc.relocate"),
+                "{label} fixture did not relocate a dynamic root:\n{rewritten}"
+            );
+        }
+
+        let emit = |ir: &str, name: &str| {
+            let context = Context::create();
+            let module = parse_ir_text(&context, ir, name).expect("fixture parses");
+            optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()])
+                .expect("fixture emits assembly")
+        };
+        let text = emit(&text_ir, "constant_fold_text");
+        let folded = emit(&folded_ir, "constant_fold_native");
+        assert_eq!(
+            text, folded,
+            "construction-time constant folding must converge before RS4GC assigns root liveness"
+        );
+    }
 
     /// Layer-2 readiness (#7174, engine-plan layer 0 -> 2): the in-process
     /// pipeline can schedule `RewriteStatepointsForGC` at the pinned LLVM —

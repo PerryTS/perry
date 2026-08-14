@@ -576,33 +576,90 @@ fn debug_dump(module: &Module<'_>, module_prefix: &str) {
 mod tests {
     use super::*;
     use crate::module::LlModule;
-    use crate::types::{I32, I64, PTR, VOID};
+    use crate::types::{I1, I32, I64, PTR, VOID};
 
     fn precise_root_fixture(extra_plain_function: bool) -> LlModule {
         let mut module = LlModule::new(crate::codegen::default_target_triple());
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
         module.declare_function("js_map_alloc", I64, &[I32]);
+        module.declare_function("may_collect", I64, &[]);
 
         let function = module.define_function("native_root_diff_fixture", I64, vec![]);
         function.enable_shadow_frame(0);
-        let root_index = function
-            .reserve_shadow_slot()
-            .expect("native root fixture reserves one precise-root slot");
-        let root = function.alloca_entry(I64);
-        function.entry_allocas_push_store(I64, "0", &root);
-        function.entry_setup_call_void(
-            "js_shadow_slot_bind",
-            &[(I32, &root_index.to_string()), (PTR, &root)],
-        );
+        let mut constant_roots = Vec::new();
+        let mut dynamic_roots = Vec::new();
+        for roots in [&mut constant_roots, &mut dynamic_roots] {
+            for _ in 0..8 {
+                let root_index = function
+                    .reserve_shadow_slot()
+                    .expect("native root fixture reserves a precise-root slot");
+                let root = function.alloca_entry(I64);
+                function.entry_allocas_push_store(I64, "0", &root);
+                function.entry_setup_call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &root_index.to_string()), (PTR, &root)],
+                );
+                roots.push(root);
+            }
+        }
         let entry = function.create_block("entry");
-        let value = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
-        entry.store(I64, &value, &root);
-        entry.ret(I64, &value);
+        // The C-API builder folds this select while whole-module textual IR
+        // retains it until SCCP. Both shapes must converge BEFORE
+        // RS4GC decides which SSA roots cross the safepoint (#8065).
+        for root in &constant_roots {
+            let constant = entry.select(
+                I1,
+                "false",
+                I64,
+                "9222246136947933188",
+                "9222246136947933185",
+            );
+            entry.store(I64, &constant, root);
+        }
+        for root in &dynamic_roots {
+            let dynamic = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
+            entry.store(I64, &dynamic, root);
+        }
+        let _safepoint = entry.call(I64, "may_collect", &[]);
+        // Both values stay live across may_collect. The dynamic one is the
+        // positive witness: pre-RS4GC canonicalization must not erase it.
+        let mut observed = entry.load(I64, &dynamic_roots[0]);
+        for root in constant_roots.iter().chain(dynamic_roots.iter().skip(1)) {
+            let value = entry.load(I64, root);
+            observed = entry.xor(I64, &observed, &value);
+        }
+        entry.ret(I64, &observed);
         if extra_plain_function {
             let plain = module.define_function("native_root_diff_plain", VOID, vec![]);
             plain.create_block("entry").ret_void();
         }
         module
+    }
+
+    fn assert_dynamic_root_survives_rs4gc(module: &LlModule, label: &str) {
+        let target = crate::codegen::default_target_triple();
+        let text_ir = module.to_ir();
+        let context = Context::create();
+        let native_ir = build_native_module(&context, module)
+            .expect("native root witness constructs")
+            .print_to_string()
+            .to_string();
+        for (arm, ir) in [("text", text_ir), ("native", native_ir)] {
+            let rewritten = crate::inprocess::statepoint_rewritten_ir(
+                &ir,
+                &target,
+                &format!("{label}_{arm}_root_witness"),
+            )
+            .unwrap_or_else(|e| panic!("{arm} root witness must run RS4GC: {e:#}"));
+            assert!(
+                rewritten.contains("\"gc-live\"(ptr addrspace(1)"),
+                "{arm} arm lost the positive dynamic root before RS4GC:\n{rewritten}"
+            );
+            assert!(
+                rewritten.contains("gc.relocate"),
+                "{arm} arm did not relocate the live dynamic root:\n{rewritten}"
+            );
+        }
     }
 
     #[test]
@@ -619,6 +676,7 @@ mod tests {
             !text_ir.contains("call void @js_shadow_slot_bind"),
             "native-root lowering must consume the shadow-stack bind:\n{text_ir}"
         );
+        assert_dynamic_root_survives_rs4gc(&module, "direct");
 
         let text = crate::linker::compile_ll_to_object(&text_ir, None)
             .expect("trusted text arm emits an object");
@@ -635,6 +693,7 @@ mod tests {
     fn split_native_construction_lowers_precise_roots_before_rs4gc() {
         let _native = crate::codegen::helpers::NativeRootsPin::native();
         let text_module = precise_root_fixture(true);
+        assert_dynamic_root_survives_rs4gc(&text_module, "split");
         let units = text_module.render_codegen_units(2);
         assert_eq!(units.len(), 2, "fixture must exercise two real units");
         let text = crate::linker::compile_units_to_object(&units, None)
