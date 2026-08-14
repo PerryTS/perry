@@ -56,3 +56,10 @@ get repeated):
 | `PERRY_GC_INTERP_SAFEPOINTS` | cooperative GC safepoints at every `eval_expr` / `exec_stmt` |
 | `PERRY_GC_POISON_FROMSPACE` | poison retired from-space in place, changing no layout |
 | `PERRY_GC_TENURING_SURVIVALS` | pin the promotion age past the adaptive threshold |
+
+The pin-latch abort now also prints **which copying-minor walk** handed it
+the header (`copying walk phase: <scanner name | remembered_set |
+worklist_drain | mutable_root_slots>`). On this corpus the latch fires on
+an *incoherent* header (INTERNED on a Map, a 2 GiB nursery size) — i.e. a
+stale slot, not a real pin — and the previous report named only the
+garbage. No new knob.

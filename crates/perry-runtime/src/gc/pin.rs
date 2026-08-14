@@ -72,9 +72,44 @@
 //! `Atomics.waitAsync`, and the AppKit text reads. Programs that use them get
 //! today's behaviour; compute- and JSON-shaped programs get the walk removed.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED};
+
+/// Which copying-minor walk is currently handing addresses to `move_young`.
+///
+/// The pin-latch abort used to print only the garbage header. On #7803/#7990
+/// that header is *incoherent* (INTERNED on a Map, a 2 GiB nursery size), so
+/// the interesting fact is which walk followed the stale slot. Set around
+/// each mark/rewrite walk in `copying.rs`; read by
+/// [`pinned_young_move_report`].
+crate::perry_thread_local! {
+    static COPYING_WALK_PHASE: Cell<Option<&'static str>> =
+        const { Cell::new(None) };
+}
+
+/// RAII label for the walk that is about to call into `move_young`.
+pub(super) struct CopyingWalkPhaseGuard {
+    prev: Option<&'static str>,
+}
+
+impl CopyingWalkPhaseGuard {
+    pub(super) fn enter(name: &'static str) -> Self {
+        let prev = COPYING_WALK_PHASE.with(|c| c.replace(Some(name)));
+        Self { prev }
+    }
+}
+
+impl Drop for CopyingWalkPhaseGuard {
+    fn drop(&mut self) {
+        COPYING_WALK_PHASE.with(|c| c.set(self.prev));
+    }
+}
+
+fn copying_walk_phase() -> Option<&'static str> {
+    COPYING_WALK_PHASE.with(|c| c.get())
+}
 
 /// Has any object in a space the copying minor relocates ever been pinned?
 ///
@@ -335,6 +370,10 @@ pub(super) fn pinned_young_move_report(
             );
         }
     }
+    out.push_str(&format!(
+        "  copying walk phase: {}\n",
+        copying_walk_phase().unwrap_or("(unset — not inside a named walk)")
+    ));
     if flags & super::types::GC_FLAG_TENURED != 0 {
         out.push_str(
             "  note: GC_FLAG_TENURED next to a young space is NOT an anomaly. The \

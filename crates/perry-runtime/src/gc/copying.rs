@@ -1471,6 +1471,7 @@ pub(super) fn run_copied_minor_attempt(
     let native_stack_walk = if untraced {
         Default::default()
     } else {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("mutable_root_slots");
         visit_mutable_root_slots(|slot| unsafe {
             let bits = slot.read();
             if let Some(trace) = trace.as_mut() {
@@ -1535,6 +1536,7 @@ pub(super) fn run_copied_minor_attempt(
             };
             let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
+            let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
             let (_, nanos) = super::scanner_profile::record_scanner(|| {
                 (entry.scanner)(&mut visitor);
             });
@@ -1557,6 +1559,7 @@ pub(super) fn run_copied_minor_attempt(
     // cycle — a missing-edge bug one collection later.
     let snapshot = remembered_dirty_snapshot();
     if !untraced {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
         let remembered_stats = scan_remembered_dirty_slots_copying(
             &snapshot,
             |slot, header, external, stats| unsafe {
@@ -1587,6 +1590,7 @@ pub(super) fn run_copied_minor_attempt(
     }
 
     unsafe {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
         collector.drain();
     }
     {
@@ -1611,6 +1615,7 @@ pub(super) fn run_copied_minor_attempt(
             };
             let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
+            let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
             let (_, nanos) = super::scanner_profile::record_scanner(|| {
                 (entry.scanner)(&mut visitor);
             });

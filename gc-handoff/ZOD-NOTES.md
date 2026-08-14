@@ -1805,3 +1805,36 @@ and the later measurements cannot both be describing the same binary
 under the same knobs; one of them used a suppressor (`--debug-symbols`,
 quarantine, auto-optimizer stripping diagnostics) or a stale archive.
 Not re-litigated here — the subject is still live on this tree.
+
+## 35. RATE=0.1 + ALLOC_KB=0: seed 1 passes, seeds 2 and 3 abort on a stale header
+
+The corrected experiment from §34, same `/tmp/zod` (KEEP_SYMBOLS, no `-g`),
+quarantine off:
+
+| seed | result | safepoints | scheduled_collections | note |
+|---|---|---|---|---|
+| 1 | **pass** | 63941 | 6335 | `polls_paced=0`, `moved_objects=852795` — candidate set is the pinned one |
+| 2 | **abort 134** | 58281 | 5637 | pin-latch, incoherent Map header |
+| 3 | **abort 134** | 21547 | 2159 | pin-latch, incoherent native_pod_view header |
+
+Seed 2 header: `obj_type=8 (map) size=2147418795 flags=0x1e (ARENA|PINNED|SHAPE_SHARED|INTERNED)`.
+INTERNED is written in exactly one place and only on strings. `size` is 2 GiB.
+
+Seed 3 header: `obj_type=16 (native_pod_view) size=2147419055 flags=0x47 (MARKED|ARENA|PINNED|HAS_SURVIVED)`.
+`size` is outside `8..=1048576`.
+
+The latch's own coherence verdict names this: **the copier followed a slot
+that was not rooted across a collection** — not a real pin, not #7990's
+original "pin site outside pin_object". Two seeds, two different garbage
+types, same class. This is #7803 and #7990 as one defect, caught in the
+act rather than as a late TypeError.
+
+Seed 1 passing on the same binary and knobs is the other half: the seed
+now actually selects, and at least one selected subset does not hit the
+window.
+
+Confirmation reruns of seeds 2 and 3 are in flight (this box at load
+100+). If either fails again at a comparable safepoint count, that is
+the deterministic reproducer. The latch does not yet name the walk that
+handed it the slot; `CopyingWalkPhaseGuard` is the one-line addition so
+the next abort prints `copying walk phase: <scanner|remembered_set|worklist_drain>`.
