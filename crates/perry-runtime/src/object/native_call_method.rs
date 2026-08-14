@@ -1433,8 +1433,18 @@ pub unsafe extern "C" fn js_native_call_method(
                     f64::from_bits(object().to_bits()),
                 );
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
-                let result =
-                    crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+                // #7803: `clone_closure_rebind_this` above ALLOCATES, so the
+                // caller's raw `args_ptr` buffer holds pre-move addresses from
+                // here on. `arg_handles` is what the collector rewrites; the
+                // buffer is not. Same reasoning as #7528's receiver fix, which
+                // introduced `refreshed_args` and reached ten sites but not
+                // this one.
+                let call_args = refreshed_args();
+                let result = crate::closure::js_native_call_value(
+                    f64::from_bits(bound),
+                    call_args.as_ptr(),
+                    call_args.len(),
+                );
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
@@ -1479,10 +1489,15 @@ pub unsafe extern "C" fn js_native_call_method(
                             object(),
                         );
                         IMPLICIT_THIS.with(|c| c.set(object().to_bits()));
+                        // #7803: two collection points above this line — the
+                        // getter is USER CODE (`js_closure_call0`) and the
+                        // rebind allocates — so the caller's raw buffer is
+                        // stale. Re-read the rooted arguments.
+                        let call_args = refreshed_args();
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
-                            args_ptr,
-                            args_len,
+                            call_args.as_ptr(),
+                            call_args.len(),
                         );
                         IMPLICIT_THIS.with(|c| c.set(prev_getter_this));
                         return result;

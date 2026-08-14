@@ -1258,3 +1258,52 @@ and CLAUDE.md's rule of thumb applies in reverse here: this bug is intermittent,
 which argues for a register rather than a table — but a table reached only from
 the interpreted path would also present intermittently, because the path itself
 is only taken 96 times.
+
+## 25. At the boundary: `js_native_call_method` hands some callees a STALE argument buffer
+
+§23 said to look at the boundary rather than at `dyn_eval`'s own locals. Doing
+that found a defect of exactly the right shape, in the frame that is literally
+on the failing stack (`js_native_call_method`, frame 7 of §15).
+
+#7528 established the rule for this function and stated it well:
+
+> `object_handle` roots the receiver, but a value READ OUT of a root and held
+> in a local is not rooted — the collector rewrites the SLOT, not the copy.
+> This function then runs ~1160 more lines across a dozen probes that allocate.
+
+Its fix was `refreshed_args()` — re-read the rooted arguments at the point of
+use. **It reaches ten sites. The function has many more dispatch arms, and
+several of them pass the caller's raw `args_ptr` instead.** That buffer is the
+CALLER's memory; `arg_handles` is what the collector rewrites. Nobody rewrites
+the buffer.
+
+Two arms verified to have a collection point between entry and the dispatch:
+
+```rust
+// ~1424, dynamic prop on a closure receiver
+let bound = clone_closure_rebind_this(dyn_val.to_bits(), object());  // ALLOCATES
+js_native_call_value(f64::from_bits(bound), args_ptr, args_len);     // ← stale buffer
+
+// ~1476, accessor getter
+let method_fn = js_closure_call0(getter);                 // runs USER CODE
+let bound = clone_closure_rebind_this(method_fn.to_bits(), object());  // ALLOCATES
+js_native_call_value(f64::from_bits(bound), args_ptr, args_len);       // ← stale buffer
+```
+
+Both now use `refreshed_args()`.
+
+**Why this fits #7803's symptom exactly.** zod's generated fastpass calls
+`shape[k]._zod.run({ value: input[k], issues: [] }, ctx)` — the first argument
+is a freshly allocated object literal, the youngest possible object, the one
+most likely to be moved by the next minor. If the tower collects between entry
+and dispatch, the callee is handed the pre-move address of that literal:
+`result` comes back wrong, and the caller reads `.issues` on it. That is the
+message, on the argument that literally contains `issues: []`.
+
+And `_zod` is an ACCESSOR on zod's schema objects, which is the second arm.
+
+**Not yet proven.** The rate A/B has not run — this section records a defect
+found and fixed, not a cause established. The remaining raw-`args_ptr` arms
+(the JS-handle dispatcher at ~1496 and several others) were left alone: they
+need the same per-arm "can anything above me collect?" argument, and guessing
+uniformly would be the audit-by-eye that §21 already showed is unreliable.
