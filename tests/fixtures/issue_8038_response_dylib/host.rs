@@ -109,6 +109,14 @@ fn main() -> Result<(), String> {
         }
         unsafe { run_microtasks() };
     }
+    // The final drain may be the one that settles the Promise. Observe it
+    // while the possibly relocated Promise is still rooted before deciding
+    // that the bounded pump timed out.
+    if state == 0 {
+        let rooted_bits = unsafe { temp_root_get(root) };
+        let promise_pointer = (rooted_bits & POINTER_MASK) as *mut c_void;
+        state = unsafe { promise_state(promise_pointer) };
+    }
     unsafe { temp_root_truncate(root) };
 
     match state {
