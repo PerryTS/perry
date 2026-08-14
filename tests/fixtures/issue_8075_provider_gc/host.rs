@@ -134,7 +134,7 @@ fn validate_frame(api: RuntimeApi, handler: Handler, invocation: usize) -> Resul
     let frame = unsafe { std::slice::from_raw_parts(data, length) };
     if frame.len() != 15 + EXPECTED_BODY.len() {
         return Err(format!(
-            "invocation {invocation}: frame length {}, expected {}",
+            "invocation {invocation}: frame length {}, expected {}; frame={frame:?}",
             frame.len(),
             15 + EXPECTED_BODY.len()
         ));
