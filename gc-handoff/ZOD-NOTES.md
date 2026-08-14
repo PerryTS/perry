@@ -1743,3 +1743,65 @@ verified to have a collection point before the dispatch (§25) and fixing them
 did not close #7803 (6/16). The remaining 26 are a real, enumerated,
 compiler-checkable defect population on the exact frame in the failing stack —
 which is worth fixing whether or not it is this bug.
+
+## 34. The prescribed RATE=1 unpaced seed search cannot distinguish seeds
+
+`schedule.rs:79-81` states it, and `schedule_hit` implements it:
+
+```
+`1` means every handled safepoint — the maximum-pressure endpoint, where
+the seed stops mattering because every ordinal is selected whatever it
+hashes to.
+```
+
+```rust
+if threshold == THRESHOLD_ALWAYS { return true; }   // rate >= 1
+```
+
+`PERRY_GC_SCHEDULE_ALLOC_KB=0` makes every loop poll a handled safepoint
+(`polls_paced=0`, 63,941 candidates). Combined with `RATE=1`, **every seed
+runs the identical schedule**: collect at all 63,941. Seed 1 already passed
+that schedule twice (§31). A 1–40 sweep under those two knobs is four to
+forty copies of the same experiment.
+
+This session started that sweep (seeds 1–4 in parallel) before reading the
+decision function. Seeds 2–4 were killed at T+35 min; seed 1 was left
+running as a check that `/tmp/zod` still matches §31. Those 35 minutes are
+not a rate measurement.
+
+### The experiment that actually uses the seed
+
+The seed is the hash input. It only selects a *subset* of candidates when
+`RATE < 1`. Pair that with `ALLOC_KB=0` so the candidate set stays the one
+quantity that does not drift:
+
+```
+PERRY_GC_SCHEDULE_SEED=$s
+PERRY_GC_SCHEDULE_RATE=0.1          # NOT 1 — seed must select
+PERRY_GC_SCHEDULE_ALLOC_KB=0        # candidate set = loop_polls
+PERRY_GC_PROTECT_FROMSPACE=0
+PERRY_UNCAUGHT_BACKTRACE=1
+```
+
+Rate 0.1 against 63,941 candidates is ~6,400 forced collections — the same
+*count* as the paced RATE=1 config that fails ~40% of the time (~6,840),
+but a *stable, seed-determined subset* rather than an allocation-feedback
+subset that drifts 1–4%. Cost should be much closer to a paced run than to
+the RATE=1 unpaced hour, because the expensive part is the collection, not
+the poll entry.
+
+If some seed under this config fails twice, that is the deterministic
+reproducer §31 was aiming at. If none of 1–40 fail, the failure needs the
+paced clustering (collect soon after an allocation) rather than a random
+10% of polls — which is the brief's own fallback, now reached for a
+stated reason rather than after a day of identical runs.
+
+### Also noted, not pursued yet
+
+`#7803` was closed on 2026-08-13 citing #8011's 26/26 quarantine-off
+passes. This branch is based on `410dadd45` (#8021, which is that close's
+own follow-up) and still fails at ~30–50% under paced RATE=1. The close
+and the later measurements cannot both be describing the same binary
+under the same knobs; one of them used a suppressor (`--debug-symbols`,
+quarantine, auto-optimizer stripping diagnostics) or a stale archive.
+Not re-litigated here — the subject is still live on this tree.

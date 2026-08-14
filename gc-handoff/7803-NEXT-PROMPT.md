@@ -175,22 +175,30 @@ enabled one of these by accident:
 
 Everything else is cheap once this exists, and expensive while it does not.
 
+**Do not sweep `RATE=1 ALLOC_KB=0`.** At rate 1 the seed is inert
+(`schedule_hit` returns true for every ordinal — `schedule.rs:79-81`,
+§34). Combined with `ALLOC_KB=0` every seed is the same 63,941-collection
+run, and seed 1 already passed that twice. Use a rate *below* 1 so the
+seed actually selects, and keep `ALLOC_KB=0` so the candidate set does
+not drift:
+
 ```bash
 # unattended; parallelise across seeds, but keep total load under ~10
+# RATE=0.1 ≈ 6,400 collections, same *count* as the paced RATE=1 config
+# that fails ~40%, but a stable seed-determined subset.
 for s in $(seq 1 40); do
-  PERRY_GC_SCHEDULE_SEED=$s PERRY_GC_SCHEDULE_RATE=1 \
+  PERRY_GC_SCHEDULE_SEED=$s PERRY_GC_SCHEDULE_RATE=0.1 \
   PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=0 \
   PERRY_UNCAUGHT_BACKTRACE=1 timeout 5400 /tmp/zod >o.$s 2>e.$s
   echo "seed $s exit=$?"
 done
 ```
-Seed 1 is known to PASS under the pinned config. When a seed fails, **run it
-twice more** to confirm it is deterministic; the whole point is a reproducer you
-can A/B against.
+When a seed fails, **run it twice more** to confirm it is deterministic;
+the whole point is a reproducer you can A/B against.
 
 If a wide sweep finds nothing, that is itself a result: the failure needs the
-*paced* feedback loop, and Step 1 becomes "find a paced seed that fails 3/3",
-which is weaker but still usable.
+*paced* feedback loop (collect soon after an allocation), and Step 1 becomes
+"find a paced seed that fails 3/3", which is weaker but still usable.
 
 ### Step 2 — catch it in the act
 
