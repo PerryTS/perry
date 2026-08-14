@@ -1575,21 +1575,6 @@ pub(super) fn run_copied_minor_attempt(
             trace.remembered_set = remembered_stats;
         }
     }
-    if !collector.skip_remembering {
-        let promoted_sticky =
-            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
-        promoted_sticky.restore();
-        collector.sticky.extend(promoted_sticky);
-    }
-    if gc_verify_evacuation_enabled() {
-        let phase_start = trace_phase_start(trace);
-        let old_young_edge_verifier = verify_old_to_young_edges_covered();
-        trace_phase_record(trace, "old_young_edge_verify", phase_start);
-        if let Some(trace) = trace.as_mut() {
-            trace.old_young_edge_verifier = old_young_edge_verifier;
-        }
-    }
-
     unsafe {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
         collector.drain();
@@ -1624,6 +1609,44 @@ pub(super) fn run_copied_minor_attempt(
             super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
+    }
+    // #7803 THE FIX: rebuild the promoted-object remembered set AFTER the last
+    // phase that can move an object, not before the drain.
+    //
+    // This block used to sit above `collector.drain()`. At that point
+    // `moved_headers` holds only the objects the ROOT walks and the
+    // remembered-set scan moved; everything the DRAIN promotes — i.e. every
+    // transitively-reachable object, which is most of the heap — is appended
+    // after the rebuild has already run. A parent promoted to Old mid-drain
+    // whose child stays young therefore had NO remembered-set entry: the
+    // collector's own drain rewrote its slots (the mutator barrier never
+    // fires for collector writes, so its page was never dirty), the next
+    // minor moved the child again without tracing the parent, and the
+    // parent's slot kept the previous survivor-space address. zod's schema
+    // metadata — built once at module init, promoted after 2 survivals,
+    // never written again — is exactly that shape, and the whole-heap
+    // from-space scan caught it at scheduled collection #2 of every seeded
+    // run: `owner space=Old +120 bare -> Survivor1 MISSING-REWRITE
+    // [ever_dirty=false]`, i.e. `never_dirty` — a slot no barrier ever saw.
+    //
+    // Down here `moved_headers` is complete and every slot has been
+    // rewritten to its final address, so the young-pointer classification
+    // the rebuild performs is exact rather than a from-space
+    // over-approximation. Headers still carry GC_FLAG_MARKED (clear_marks
+    // runs later), which the per-object gate requires.
+    if !collector.skip_remembering {
+        let promoted_sticky =
+            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
+        promoted_sticky.restore();
+        collector.sticky.extend(promoted_sticky);
+    }
+    if gc_verify_evacuation_enabled() {
+        let phase_start = trace_phase_start(trace);
+        let old_young_edge_verifier = verify_old_to_young_edges_covered();
+        trace_phase_record(trace, "old_young_edge_verify", phase_start);
+        if let Some(trace) = trace.as_mut() {
+            trace.old_young_edge_verifier = old_young_edge_verifier;
+        }
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
