@@ -62,6 +62,7 @@ scope and are **not** silently reported as zero:
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -364,6 +365,11 @@ ALLOC_BUCKET_FLOORS: dict[str, dict[tuple[str, str, str], int]] = {
         ("ptr-shape", "constructor argument", "rule 1 (provenance)"): 1,
         ("ptr-shape", "object literal property value", "rule 1 (provenance)"): 1,
         ("ptr-shape", "returned expression operand", "rule 1 (provenance)"): 1,
+        (
+            "ptr-shape",
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ): 2,
         (
             "ptr-shape",
             "return",
@@ -1411,6 +1417,14 @@ def self_test(_args: argparse.Namespace) -> int:
         ("constructor argument", "rule 1 (provenance)"),
         ("object literal property value", "rule 1 (provenance)"),
         ("returned expression operand", "rule 1 (provenance)"),
+        (
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ),
+        (
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ),
         ("return", "rule 1 (provenance) — already served by return-shape"),
     )
     bucket_report = {
@@ -1444,9 +1458,9 @@ def self_test(_args: argparse.Namespace) -> int:
         ],
     }
     buckets = census_from_report(bucket_report)
-    assert buckets["alloc_buckets"] == {
-        alloc_bucket_key("ptr-shape", c, r): 1 for c, r in bucket_rows
-    }, buckets["alloc_buckets"]
+    assert buckets["alloc_buckets"] == dict(
+        Counter(alloc_bucket_key("ptr-shape", c, r) for c, r in bucket_rows)
+    ), buckets["alloc_buckets"]
 
     # Named, not `next(iter(...))`: #7170 R1 added a second fixture to the
     # table, and an implicit "first entry" would have silently retargeted every
@@ -1496,6 +1510,11 @@ def self_test(_args: argparse.Namespace) -> int:
             "returned expression operand",
             "rule 1 (provenance)",
         ): 1,
+        alloc_bucket_key(
+            "ptr-shape",
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ): 2,
         alloc_bucket_key(
             "ptr-shape",
             "return",

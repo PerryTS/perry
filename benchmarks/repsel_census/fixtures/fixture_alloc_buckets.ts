@@ -78,15 +78,15 @@ const boxed = new Boxed(new Point(1, 2));
 // with the line above.
 const nested = { inner: { a: 1, b: 2 }, k: 3 };
 
-// Bucket 4 — a returned expression OPERAND. What this function returns is the
-// conditional, not either allocation, so #7107's return-shape fact covers
-// neither and `pickPoint` gets no fact at all (`producer_return_class` admits
-// only a bare `Expr::New` or a proven local as a return). Before the #7176
-// review both arms inherited the `return` label from `Stmt::Return` and were
-// counted as return positions — which is what over-stated the `return` bucket
-// published on #7170 as R1's ceiling.
+// Buckets 4 and 5 — returned expression OPERANDS on opposite sides of the R2
+// boundary. The allocation in the conditional's condition is evaluated but
+// can never become the returned value, so it remains an unserved rule-1 wall.
+// The two fresh, agreeing result arms do feed the return-shape fact and must be
+// reported as served. All three retain the operand position rather than being
+// mislabeled as direct returns, which is the #7176 distinction this fixture
+// originally introduced.
 export function pickPoint(flag: boolean): Point {
-  return flag ? new Point(5, 6) : new Point(7, 8);
+  return (flag && new Point(0, 0)) ? new Point(5, 6) : new Point(7, 8);
 }
 
 const p = makePoint(3);
