@@ -34,3 +34,7 @@ Release-sweep tier 1 now mirrors that CI contract instead of running
 the normal workspace pass and invokes its release tests separately with
 `RUST_TEST_THREADS=1`, preventing shared test-state races from masquerading as
 release regressions.
+
+The native GC root-dominance corpus also reads the production statepoint pass
+constant independently of rustfmt's one-line or wrapped layout, preserving the
+single-source drift check when the Rust declaration is reformatted.
