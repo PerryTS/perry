@@ -685,6 +685,48 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
 }
 
+/// Resolve a receiver a plain-array helper was handed but that is really a
+/// registered %TypedArray%, so the helper can delegate to its element-typed
+/// `js_typed_array_*` twin.
+///
+/// **Ask this BEFORE `clean_arr_ptr`, never after.** Codegen routes
+/// statically-typed typed-array receivers through the generic `js_array_*`
+/// helpers on purpose (#3148 / #654 — perry-codegen `is_array_expr` answers
+/// `true` for `Int32Array` &co.) on the contract that each helper
+/// re-dispatches on `lookup_typed_array_kind`. But `clean_arr_ptr` *rejects*
+/// those receivers, and must: since #7574 it returns null for every tracked
+/// non-`GC_TYPE_ARRAY` object, because a `TypedArrayHeader`'s raw per-kind
+/// storage is not boxed-f64 `ArrayHeader` slots. Since the 2026-07-09
+/// typed-array audit gave every typed array a real `GC_TYPE_TYPED_ARRAY`
+/// header, that rejection fires for all of them — so a delegation written
+/// after the clean is unreachable code, and its helper silently returns the
+/// receiver unmutated. That is exactly how `fill`/`fill_range`/`reverse`/
+/// `copyWithin` became no-ops with no error and no diagnostic (#2879).
+///
+/// Strips the NaN-box tag itself (callers may hold a `POINTER_TAG`-boxed
+/// value) and never dereferences the address: the side-table probe is the
+/// whole test, which also keeps the header-less legacy shapes safe.
+#[inline]
+pub(crate) fn typed_array_receiver(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0 {
+        return None;
+    }
+    crate::typedarray::lookup_typed_array_kind(addr)
+        .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+}
+
+/// The de-NaN-boxed address of an `Array.prototype` receiver, for side-table
+/// probes only. Says nothing about what lives there — never dereference it
+/// without one of the registry answers (`typed_array_receiver`,
+/// `buffer::is_registered_buffer`) or a `clean_arr_ptr` round trip.
+#[inline]
+pub(crate) fn array_receiver_addr(arr: *mut ArrayHeader) -> usize {
+    crate::typedarray::strip_nanbox(arr as u64)
+}
+
 /// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
 /// expected. immer's array drafts are Proxies typed (statically) as plain
 /// arrays, so `draft.push(x)` / `draft.length` reach the native array helpers

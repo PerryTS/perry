@@ -286,25 +286,49 @@ pub extern "C" fn js_array_copy_within(
     has_end: i32,
     end: f64,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        return arr;
-    }
-    // #3148: TypedArray receiver — copy over element-typed storage. The typed
-    // impl treats an undefined `end` as "to length", so pass TAG_UNDEFINED
-    // when no end argument was provided.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    // #3148/#2879: TypedArray receiver — copy over element-typed storage. The
+    // typed impl treats an undefined `end` as "to length", so pass
+    // TAG_UNDEFINED when no end argument was provided. Asked BEFORE
+    // `clean_arr_ptr_mut` for the reason `typed_array_receiver` documents — as
+    // a post-clean branch this was unreachable, so `ta.copyWithin(…)` was a
+    // silent no-op for BOTH a statically-typed receiver (codegen's
+    // `lower_array_method` arm) and an `any`-typed one (whose HIR
+    // `Expr::ArrayCopyWithin` fold lands on this same helper).
+    if let Some(ta) = typed_array_receiver(arr) {
         let end_value = if has_end != 0 {
             end
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        return crate::typedarray::js_typed_array_copy_within(
-            arr as *mut crate::typedarray::TypedArrayHeader,
+        return crate::typedarray::js_typed_array_copy_within(ta, target, start, end_value)
+            as *mut ArrayHeader;
+    }
+    // #2879: the Buffer/`Uint8Array` shape lands here too — its elements are
+    // single bytes in a `BufferHeader`, so the buffer dispatcher owns the copy
+    // (`object/buffer_dispatch.rs`'s `copyWithin` arm). Reached whenever the
+    // receiver's static type is unknown, because the HIR `copyWithin` fold
+    // (`local_array_methods.rs`) declines only for a *known* typed array and
+    // otherwise lowers straight to this helper.
+    let addr = array_receiver_addr(arr);
+    if crate::buffer::is_registered_buffer(addr) {
+        let args = [
             target,
             start,
-            end_value,
-        ) as *mut ArrayHeader;
+            if has_end != 0 {
+                end
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            },
+        ];
+        let len = if has_end != 0 { 3 } else { 2 };
+        unsafe {
+            crate::object::dispatch_buffer_method(addr, "copyWithin", args.as_ptr(), len);
+        }
+        return arr;
+    }
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return arr;
     }
     // Spec order (ECMA-262 §23.1.3.4): ToIntegerOrInfinity(target), then
     // (start), then (end). Each coerces via ToNumber → fires `valueOf` /

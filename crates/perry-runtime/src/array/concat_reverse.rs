@@ -210,15 +210,14 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         crate::array::js_array_reverse_value(recv);
         return arr;
     }
+    // #3148/#2879: TypedArray receiver — reverse over element-typed storage.
+    // Pre-clean for the reason `typed_array_receiver` documents.
+    if let Some(ta) = typed_array_receiver(arr) {
+        return crate::typedarray::js_typed_array_reverse(ta) as *mut ArrayHeader;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
-    }
-    // #3148: TypedArray receiver — reverse over element-typed storage.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_reverse(
-            arr as *mut crate::typedarray::TypedArrayHeader,
-        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as usize;
@@ -362,20 +361,19 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
     // other, so a later `s += x` corrupts them all. Demote once to shared (no-op
     // for SSO / non-string; mirrors `js_array_push_f64`, #5548).
     crate::string::js_string_addref_if_heap_string(value);
+    // #3148/#2879: TypedArray receiver — fill the whole array, element-typed.
+    // Asked BEFORE `clean_arr_ptr_mut`, which rejects a `TypedArrayHeader`
+    // outright (see `typed_array_receiver`); as a post-clean branch this was
+    // unreachable and `ta.fill(v)` silently did nothing. Only the 1-/0-arg
+    // form reaches here — codegen sends 2-/3-arg fills to
+    // `js_array_fill_range`, which passes the real range on.
+    if let Some(ta) = typed_array_receiver(arr) {
+        return crate::typedarray::js_typed_array_fill(ta, value, 0, 0.0, 0, 0.0)
+            as *mut ArrayHeader;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
-    }
-    // #3148: TypedArray receiver — fill the whole array, element-typed.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_fill(
-            arr as *mut crate::typedarray::TypedArrayHeader,
-            value,
-            0,
-            0.0,
-            0,
-            0.0,
-        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as usize;
@@ -406,20 +404,15 @@ pub extern "C" fn js_array_fill_range(
     // #5552: demote a uniquely-owned source string once before it fills the
     // range (no-op for SSO / non-string). See `js_array_fill`.
     crate::string::js_string_addref_if_heap_string(value);
+    // #3148/#2879: TypedArray receiver — fill [start, end) over element-typed
+    // storage. Pre-clean for the reason `typed_array_receiver` documents.
+    if let Some(ta) = typed_array_receiver(arr) {
+        return crate::typedarray::js_typed_array_fill(ta, value, 1, start, 1, end)
+            as *mut ArrayHeader;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
-    }
-    // #3148: TypedArray receiver — fill [start, end) over element-typed storage.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_fill(
-            arr as *mut crate::typedarray::TypedArrayHeader,
-            value,
-            1,
-            start,
-            1,
-            end,
-        ) as *mut ArrayHeader;
     }
     // ECMA-262 §23.1.3.6: ToIntegerOrInfinity(start) then (end) run BEFORE the
     // length==0 early-out, and each fires `valueOf` / `Symbol.toPrimitive`
