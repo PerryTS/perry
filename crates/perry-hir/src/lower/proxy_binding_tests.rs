@@ -155,7 +155,7 @@ fn parameters_loop_heads_and_destructured_bindings_are_not_proxified() {
 /// declarator sits.
 #[test]
 fn a_proxy_declared_in_a_class_method_or_arrow_body_is_registered() {
-    let module = lower(
+    let class_module = lower(
         r#"
         class Holder {
           run(): number {
@@ -164,17 +164,26 @@ fn a_proxy_declared_in_a_class_method_or_arrow_body_is_registered() {
             return m.v;
           }
         }
+        console.log(new Holder().run());
+        "#,
+    );
+    assert!(
+        format!("{class_module:?}").contains("ProxyGet"),
+        "a proxy declared in a class method must reach the proxy path"
+    );
+
+    let arrow_module = lower(
+        r#"
         const inArrow = (): number => {
           const r: any = new Proxy({ v: 1 }, { get: () => 8 });
           return r.v;
         };
-        console.log(new Holder().run(), inArrow());
+        console.log(inArrow());
         "#,
     );
-    let whole = format!("{module:?}");
     assert!(
-        whole.contains("ProxyGet"),
-        "a proxy declared in a class method / arrow body must reach the proxy path"
+        format!("{arrow_module:?}").contains("ProxyGet"),
+        "a proxy declared in an arrow body must reach the proxy path"
     );
 }
 
