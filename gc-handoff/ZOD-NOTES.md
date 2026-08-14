@@ -1302,8 +1302,12 @@ message, on the argument that literally contains `issues: []`.
 
 And `_zod` is an ACCESSOR on zod's schema objects, which is the second arm.
 
-**Not yet proven.** The rate A/B has not run — this section records a defect
-found and fixed, not a cause established. The remaining raw-`args_ptr` arms
+**MEASURED, and it does NOT close #7803.** `/tmp/zod-argfix`, same conditions:
+seeds 1, 2, 3, 5 pass — and **seed 4 fails** with `value is not a function` at
+safepoint 765. One failure is enough; a fix would need a clean sweep. So this
+section records a real defect found and fixed, and a cause REFUTED. (The rate
+over the full 16 is still running and only affects how *much* it helped, not
+whether it closed it.) The remaining raw-`args_ptr` arms
 (the JS-handle dispatcher at ~1496 and several others) were left alone: they
 need the same per-arm "can anything above me collect?" argument, and guessing
 uniformly would be the audit-by-eye that §21 already showed is unreliable.
@@ -1319,7 +1323,7 @@ Everything below is committed on `fix/7803-zod-gc-rooting` (10 commits).
 | diagnostics | `PERRY_UNCAUGHT_BACKTRACE`, `PERRY_KEEP_SYMBOLS` | §11, §13 — the pair that made §14's localization possible at all |
 | codegen | callee rooted across argument evaluation, 3 arms | **66 → 3** hazards, §18/§22 |
 | runtime | `dyn_eval` cooperative safepoints | `loop_polls` 24,029 → 93,210, §21 |
-| runtime | argument buffer refreshed in 2 dispatch arms | §25 — fits the symptom precisely; A/B pending |
+| runtime | argument buffer refreshed in 2 dispatch arms | §25 — fits the symptom precisely, and does NOT close the bug (seed 4 still fails) |
 | CI | the fourth corpus × lowering cell, gated at 3 | §9, §22 — verified end to end |
 
 ### Blocked on host load, not on work
@@ -1332,15 +1336,13 @@ between this branch and a PR:
    three call arms, which change the lowering of every `new`, spread call and
    closure-typed-local call in the language. Partial run: 30/554, 0 failures,
    stopped when the suite slowed from 25-tests-in-3-minutes to 30-in-19.
-2. **The rate A/B for §25's argument-buffer fix** — `/tmp/zod-argfix`, 16
-   seeds, against the 3/8–8/16 baseline. Started; one seed per ~20 minutes at
-   this load. Output lands in
-   `scratchpad/zod/sweep-argfix/` and the tally in the task log.
+2. ~~The rate A/B for §25's fix~~ — **answered**: seed 4 fails, so it does not
+   close the bug. The remaining seeds only refine the rate.
 
 Neither is a judgement call. Both are "run this on a machine that isn't at
 load 60".
 
-### If §25 turns out to be the cause
+### The §25 follow-up stands regardless of it not being the cause
 
 The follow-up is not "fix the other arms one at a time". `js_native_call_method`
 has one rule — *no value read out of a root may be used below a collection
@@ -1352,10 +1354,49 @@ and as the pre-`RootedGroup` codegen. The architectural fix is to make the raw
 buffer unreachable from the dispatch arms — hand them a type that can only
 yield refreshed values — so the losing spelling stops compiling.
 
-### If it is not
+### Where the cause still hides
 
 The remaining surface, in order: the other raw-`args_ptr` arms (~1496 and
 below), `dyn_eval/bridge.rs`, and any runtime cache the interpreted-dispatch
 path populates. §23's A/B says the interpreter's own frames are not obviously
 the holder, and §21's audit says its `root_push` discipline is sound, so the
 boundary remains the place to look.
+
+## 27. Scorecard: four fixes, four times the bug survived
+
+| # | fix | static effect | effect on #7803 |
+|---|---|---|---|
+| §18 | callee rooted, `new_dynamic.rs` ×2 + `call_spread.rs` | 66 → 26 | none (5/16) |
+| §22 | callee rooted, `early_branches.rs` | 26 → 3 | none (8/16) |
+| §21 | `dyn_eval` cooperative safepoints | — | rate *fell* 6/8 → 2/8, bug survives |
+| §25 | argument buffer refreshed, 2 dispatch arms | — | none (seed 4 fails) |
+
+Four separate rooting defects, all real, all in the right family, none of them
+this bug. That is worth stating as its own finding: **the zod corpus under a
+rate-1 unprotected schedule is not a one-defect workload.** Each fix was
+justified on its own evidence and each left the failure standing.
+
+The discipline that made this readable is the one to keep: every fix got its
+own A/B against the SAME binary pair, and every null result was written down at
+full strength instead of being folded into the next attempt's baseline. The
+alternative — landing four fixes and re-measuring once at the end — would have
+produced a single ambiguous number and no way to attribute it.
+
+What is now known about the cause, positively:
+
+* it needs the `new Function` / interpreted path (§20, 0/16 without it);
+* it is not in `dyn_eval`'s own `root_push` discipline (§21 audit) and not made
+  worse by collecting there (§23);
+* it survives every callee- and argument-rooting fix in the compiled tower and
+  in the three call lowering arms (§27, this table);
+* it is suppressed by `--debug-symbols` (§13) and by the from-space quarantine
+  (§16), which are both *layout* interventions rather than rooting ones.
+
+That last line is the one I would pull on next. Two independent interventions
+that change memory LAYOUT (not rooting) both make it vanish, while four
+interventions that change ROOTING leave it untouched. That pattern fits a stale
+raw pointer held somewhere the collector never rewrites — a runtime-side cache
+keyed on an address, rather than a value on anyone's stack. CLAUDE.md names
+that class and says the static checker cannot see it; the registry to audit is
+`gc_register_mutable_root_scanner`'s ~123 entries, and the ones reached only
+from the interpreted-dispatch path are the short list.
