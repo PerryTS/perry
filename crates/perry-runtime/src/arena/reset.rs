@@ -35,6 +35,50 @@ pub fn arena_reset_all_blocks_to_zero() {
     });
 }
 
+/// Is layout-neutral from-space poisoning on? Parsed BY VALUE (#7993).
+fn poison_fromspace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_POISON_FROMSPACE").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
+/// Scribble every live byte of a retiring region with the quarantine's poison
+/// word, IN PLACE — no detach, no hold, no `mprotect`, so the blocks recycle
+/// into Eden exactly as they would have.
+///
+/// Only `[0, offset)` is touched: beyond the bump pointer there was never an
+/// object, and writing there would dirty pages the allocator has not faulted
+/// in yet, which would be a layout change of its own.
+fn poison_region_in_place(arena: &mut Arena) {
+    for block in arena.blocks.iter_mut() {
+        if block.data.is_null() || block.offset == 0 {
+            continue;
+        }
+        // SAFETY: `[data, data+offset)` is this block's allocated span, owned
+        // by the arena and dead at this point in the flip.
+        unsafe {
+            let words = block.offset / 8;
+            let p = block.data as *mut u64;
+            for i in 0..words {
+                p.add(i)
+                    .write(crate::arena::quarantine::QUARANTINE_POISON_WORD);
+            }
+            let tail = block.offset % 8;
+            let base = block.data as *mut u8;
+            for i in 0..tail {
+                base.add(words * 8 + i).write(
+                    (crate::arena::quarantine::QUARANTINE_POISON_WORD >> (8 * (i % 8))) as u8,
+                );
+            }
+        }
+    }
+}
+
 fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
@@ -124,11 +168,42 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     if protect_fromspace_enabled() {
         return copying_quarantine_from_spaces_and_flip();
     }
+    // #7803: LAYOUT-NEUTRAL from-space poisoning, behind
+    // `PERRY_GC_POISON_FROMSPACE=1`.
+    //
+    // Note what this function does NOT do: `reset_region_to_zero` resets
+    // `block.offset`, it does not zero the bytes. Retired from-space therefore
+    // keeps the dead objects intact until new allocations bump over them, and
+    // THAT is why every existing instrument suppresses #7803:
+    //
+    //   unprotected  pages recycle into Eden, new objects overwrite the dead
+    //                ones, and a stale pointer reads A DIFFERENT OBJECT ->
+    //                property miss -> `undefined`. The failure.
+    //   quarantined  pages are held out of Eden, nothing overwrites them, a
+    //                stale pointer reads its own dead object, still intact,
+    //                and the program is CORRECT. The suppression.
+    //
+    // So the quarantine does not fail to catch the bug by bad luck; it hides
+    // it by construction, and `--debug-symbols` hides it for the same family
+    // of reasons (a different layout reuses different bytes). Both of the
+    // interventions that make #7803 vanish are LAYOUT interventions, while
+    // four separate rooting fixes left it untouched.
+    //
+    // This mode changes no layout at all — same pages, same order, same
+    // addresses, recycled at the same moment — and only scribbles the retired
+    // bytes first. A stale read then finds the poison word rather than a
+    // plausible object, which turns "wrong answer, cycles later, somewhere
+    // else" into a value that names itself at the point of use
+    // (`obj_type == QUARANTINE_POISON_OBJ_TYPE`).
+    let poison = poison_fromspace_enabled();
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
+        if poison {
+            poison_region_in_place(arena);
+        }
         let (blocks, bytes) = reset_region_to_zero(arena);
         reset_blocks += blocks;
         reusable_bytes = reusable_bytes.saturating_add(bytes);
@@ -146,6 +221,12 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     });
 
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    if poison {
+        with_survivor_arena_mut(active, |a| {
+            poison_region_in_place(a);
+            (0usize, 0usize)
+        });
+    }
     let (blocks, bytes) = with_survivor_arena_mut(active, reset_region_to_zero);
     reset_blocks += blocks;
     reusable_bytes = reusable_bytes.saturating_add(bytes);
