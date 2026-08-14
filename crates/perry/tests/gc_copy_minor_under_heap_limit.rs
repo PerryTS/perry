@@ -33,6 +33,29 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+// `Command` inherits the test runner's environment. Several of these knobs
+// affect generated code as well as runtime collector policy, so clear the
+// established override family from BOTH subprocesses before applying this
+// test's intended heap-limit arm.
+const GC_ENV_OVERRIDES: &[&str] = &[
+    "PERRY_GEN_GC",
+    "PERRY_GC_SCAVENGE",
+    "PERRY_GC_SCAVENGE_NURSERY_MB",
+    "PERRY_GC_MOVING_SAFEPOINT",
+    "PERRY_GC_MOVING_LOOP_POLLS",
+    "PERRY_GC_FORCE_EVACUATE",
+    "PERRY_CONSERVATIVE_STACK_SCAN",
+    "PERRY_WRITE_BARRIERS",
+    "PERRY_GC_INCREMENTAL",
+    "PERRY_GC_HEAP_LIMIT",
+];
+
+fn remove_gc_env_overrides(command: &mut Command) {
+    for key in GC_ENV_OVERRIDES {
+        command.env_remove(key);
+    }
+}
+
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
@@ -122,15 +145,16 @@ console.log("checksum:", checksum);
     )
     .expect("write entry");
 
-    let compile = Command::new(perry_bin())
+    let mut compile_command = Command::new(perry_bin());
+    compile_command
         .current_dir(dir.path())
         .arg("compile")
         .arg(&entry)
         .arg("-o")
         .arg(&output)
-        .arg("--no-cache")
-        .output()
-        .expect("run perry compile");
+        .arg("--no-cache");
+    remove_gc_env_overrides(&mut compile_command);
+    let compile = compile_command.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -138,8 +162,10 @@ console.log("checksum:", checksum);
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new(&output)
-        .current_dir(dir.path())
+    let mut run_command = Command::new(&output);
+    run_command.current_dir(dir.path());
+    remove_gc_env_overrides(&mut run_command);
+    let run = run_command
         // 8 MB is the pressure setting `scripts/gc_repsel_matrix.sh` uses, and
         // the one on which the copying minor was measured to never run.
         .env("PERRY_GC_HEAP_LIMIT", "8")
