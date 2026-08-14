@@ -44,7 +44,7 @@ name: TLS Budget
 #      run proves it was live: `PERRY_TLS_HOT_STATS=1` reporting
 #      `direct_tsd=1` (else `hot()` is itself calling `_tlv_get_addr` and the
 #      mechanism is inert) and `claimed` above a floor no allocation
-#      microbenchmark clears. Its `--self-test` drives all seven rejections
+#      microbenchmark clears. Its `--self-test` drives every rejection
 #      and runs on every PR, compiler-free, in the first job below.
 #
 # The one-time sabotage proof -- one hot declaration reverted to a raw
@@ -104,6 +104,8 @@ jobs:
           persist-credentials: false
       - name: Self-test the budget verdict logic
         run: python3 scripts/tls_budget_check.py --self-test
+      - name: Self-test the pre-attach liveness check
+        run: bash scripts/tls_budget_gate.sh --self-test
       - name: Self-test the thread-local policy checker
         run: python3 scripts/check_thread_locals.py --self-test
       - name: Enforce the thread-local policy ratchet
