@@ -266,11 +266,12 @@ fn unknown_function_fallback_is_module_scoped() {
 }
 
 #[test]
-fn dylib_closures_use_shared_runtime_shadow_frames() {
-    // Even a native-roots pin cannot make a dylib safe: the runtime's shipped
-    // map readers discover metadata only in the process's main image, while a
-    // plugin is loaded later by dlopen. The root analysis must instead lower
-    // to the provider-owned shadow stack.
+fn dylib_closures_keep_native_roots() {
+    // #8081: the runtime rebuilds its stack-map index at module init and
+    // discovers compact GC maps in every loaded image, so a dlopen'ed app
+    // dylib keeps the same native-root lowering as an executable. Demoting
+    // dylibs to shadow frames would leave the provider gate exercising a
+    // lowering production never ships.
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let mut module = empty_module();
     module.init.push(Stmt::Let {
@@ -311,15 +312,11 @@ fn dylib_closures_use_shared_runtime_shadow_frames() {
         .find(|body| body.starts_with("double @perry_closure_") && body.contains("__1("))
         .unwrap_or_else(|| panic!("missing closure body in dylib IR:\n{ir}"));
     assert!(
-        closure.contains("call ptr @js_shadow_frame_enter(i32 "),
-        "dylib closure must enter the shared runtime's shadow frame:\n{closure}"
+        closure.contains("gc \"statepoint-example\""),
+        "dylib closure must keep the native statepoint lowering:\n{closure}"
     );
     assert!(
-        closure.contains("call void @js_shadow_slot_bind("),
-        "the live local must bind into that shadow frame:\n{closure}"
-    );
-    assert!(
-        !closure.contains("gc \"statepoint-example\""),
-        "dylib roots must not use undiscoverable main-image stack maps:\n{closure}"
+        !closure.contains("call ptr @js_shadow_frame_enter(i32 "),
+        "dylib roots must not be demoted to the shadow stack:\n{closure}"
     );
 }
