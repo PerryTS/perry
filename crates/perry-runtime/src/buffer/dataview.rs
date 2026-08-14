@@ -151,6 +151,18 @@ fn to_number(value: f64) -> f64 {
 
 /// Read `width` bytes starting at `offset` from a DataView's backing storage.
 /// Throws `RangeError` (`ERR_OUT_OF_BOUNDS`) when the range escapes the view.
+///
+/// Resolves through the view registry rather than reading the DataView's own
+/// inline bytes: `js_data_view_new` seeds that storage with a *snapshot* of the
+/// backing taken at construction, and only writes routed through the registry
+/// (`js_buffer_set`, `js_buffer_write`, a sibling DataView's `set*`, …) refresh
+/// it. A typed array aliasing the same `ArrayBuffer` writes its elements
+/// straight into the backing store (`typedarray::data_ptr_mut` — see
+/// `typedarray_view::view_backing_data_ptr`), so nothing refreshes the
+/// snapshot and every `get*` returned pre-write bytes. `read_buffer_byte` has
+/// resolved the backing for `Uint8Array`/`Buffer` views since #1205 for exactly
+/// this reason — which is why a `Uint8Array` writer appeared to work while a
+/// `Uint16Array`/`Uint32Array`/`Float64Array` writer silently did not.
 unsafe fn read_bytes<const N: usize>(buf: *const BufferHeader, offset: i64) -> [u8; N] {
     if buf.is_null() || offset < 0 {
         throw_dataview_oob();
@@ -159,7 +171,7 @@ unsafe fn read_bytes<const N: usize>(buf: *const BufferHeader, offset: i64) -> [
     if offset + (N as i64) > len {
         throw_dataview_oob();
     }
-    let base = buffer_data(buf).add(offset as usize);
+    let base = super::view::resolve_data_ptr(buf).add(offset as usize);
     let mut out = [0u8; N];
     ptr::copy_nonoverlapping(base, out.as_mut_ptr(), N);
     out
