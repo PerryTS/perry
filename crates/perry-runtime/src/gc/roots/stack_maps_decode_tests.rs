@@ -128,6 +128,206 @@ mod tests {
     }
 
     #[test]
+    fn an_older_initializer_finishing_last_cannot_replace_a_newer_snapshot() {
+        use std::sync::{mpsc, Arc};
+
+        fn index_for(function: u64) -> StackMapIndex {
+            let mut records = Vec::new();
+            let mut roots = Vec::new();
+            append_gc_map_section(&mut records, &mut roots, &simple(function, 0x20, -8))
+                .expect("valid test map");
+            records.sort_unstable_by_key(|record| record.pc);
+            index_records(records, roots)
+        }
+
+        fn force_reversed_publication(store: Arc<StackMapIndexStore>, expected_generation: u64) {
+            let (older_snapshotted, wait_for_older) = mpsc::channel();
+            let (release_older, older_may_finish) = mpsc::channel();
+            let older_store = Arc::clone(&store);
+            let older = std::thread::spawn(move || {
+                older_store.rebuild_with(|| {
+                    let stale = index_for(0x1000);
+                    older_snapshotted.send(()).expect("announce older snapshot");
+                    older_may_finish.recv().expect("release older snapshot");
+                    stale
+                });
+            });
+
+            wait_for_older
+                .recv()
+                .expect("older initializer took its snapshot");
+            let newer_store = Arc::clone(&store);
+            let newer = std::thread::spawn(move || {
+                newer_store.rebuild_with(|| index_for(0x2000));
+            });
+            newer.join().expect("newer initializer completed");
+            release_older.send(()).expect("resume older initializer");
+            older.join().expect("older initializer completed last");
+
+            let published = store.read();
+            assert_eq!(published.generation, expected_generation);
+            assert_eq!(published.index.records.len(), 1);
+            assert_eq!(published.index.records[0].pc, 0x2020);
+        }
+
+        // Cover both races from the review: the newer initializer wins the
+        // OnceLock installation while the older one is stalled, and two
+        // replacements finish in reverse order after an index already exists.
+        force_reversed_publication(Arc::new(StackMapIndexStore::new()), 2);
+        let seeded = Arc::new(StackMapIndexStore::new());
+        seeded.rebuild_with(|| index_for(0x0800));
+        force_reversed_publication(seeded, 3);
+    }
+
+    #[test]
+    fn reading_an_uninitialized_store_does_not_inspect_loaded_images() {
+        let store = StackMapIndexStore::new();
+        let published = store.read();
+
+        assert_eq!(published.generation, 0);
+        assert!(published.index.records.is_empty());
+        assert_eq!(
+            store
+                .next_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "root scanning must not start a loader snapshot"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovers_a_map_from_a_later_loaded_shared_object() {
+        use std::ffi::CString;
+        use std::fmt::Write as _;
+        use std::os::unix::ffi::OsStrExt;
+        use std::process::Command;
+
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let map = simple(0x8075_0000, 0x20, -8);
+        let unique = format!(
+            "perry-stack-map-dylib-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        let temp = TempDir(std::env::temp_dir().join(unique));
+        std::fs::create_dir(&temp.0).expect("create temporary dylib directory");
+        let source = temp.0.join("map.c");
+        let library = temp.0.join("libmap.so");
+        let mut bytes = String::new();
+        for (index, byte) in map.iter().enumerate() {
+            if index != 0 {
+                bytes.push(',');
+            }
+            write!(bytes, "0x{byte:02x}").expect("format map byte");
+        }
+        std::fs::write(
+            &source,
+            format!(
+                "__attribute__((used, section(\".perry_gcmap\")))\n\
+                 const unsigned char perry_test_map[] = {{{bytes}}};\n\
+                 int perry_test_anchor(void) {{ return 8075; }}\n"
+            ),
+        )
+        .expect("write dylib source");
+        let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+        let output = Command::new(compiler)
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&library)
+            .arg(&source)
+            .output()
+            .expect("run C compiler");
+        assert!(
+            output.status.success(),
+            "C compiler failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let path = CString::new(library.as_os_str().as_bytes()).expect("NUL-free dylib path");
+        let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        assert!(!handle.is_null(), "dlopen failed");
+
+        // The old Linux loader inspected /proc/self/exe alone, so this exact
+        // map was invisible even though the generated frame was live in the
+        // process. Discovering and decoding it pins both the dl_iterate_phdr
+        // image walk and the per-image load-bias calculation.
+        let sections = loaded_stack_map_sections().expect("inspect every loaded image");
+        assert!(
+            sections.iter().any(|section| section.starts_with(&map)),
+            "the later-loaded shared object's GC map was not discovered"
+        );
+        let index = build_stack_map_index();
+        assert!(
+            index.records.iter().any(|record| record.pc == 0x8075_0020),
+            "the later-loaded shared object's GC map was not indexed"
+        );
+        drop(index);
+        drop(sections);
+        unsafe { libc::dlclose(handle) };
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_an_unreadable_loaded_shared_object() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::process::Command;
+
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = format!(
+            "perry-unreadable-dylib-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        let temp = TempDir(std::env::temp_dir().join(unique));
+        std::fs::create_dir(&temp.0).expect("create temporary dylib directory");
+        let source = temp.0.join("unreadable.c");
+        let library = temp.0.join("libunreadable.so");
+        std::fs::write(
+            &source,
+            "int perry_unreadable_anchor(void) { return 8075; }\n",
+        )
+        .expect("write dylib source");
+        let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+        let output = Command::new(compiler)
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&library)
+            .arg(&source)
+            .output()
+            .expect("run C compiler");
+        assert!(
+            output.status.success(),
+            "C compiler failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let path = CString::new(library.as_os_str().as_bytes()).expect("NUL-free dylib path");
+        let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        assert!(!handle.is_null(), "dlopen failed");
+        std::fs::remove_file(&library).expect("unlink loaded dylib");
+
+        let error = loaded_stack_map_sections().expect_err("unreadable image must fail closed");
+        assert!(
+            error.contains("libunreadable.so"),
+            "diagnostic did not identify the unreadable image: {error}"
+        );
+
+        unsafe { libc::dlclose(handle) };
+    }
+
+    #[test]
     fn repeated_live_sets_share_one_copy() {
         // Three safepoints, the last two repeating the first's live set: the
         // whole point of the format, and the reason the in-memory index does

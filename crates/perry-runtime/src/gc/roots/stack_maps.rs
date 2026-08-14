@@ -27,7 +27,8 @@ use crate::gc::telemetry::RootSourcesTraceStats;
 // the Itanium/pthread declarations, which do not exist there.
 #[cfg(not(target_os = "windows"))]
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 /// Magic and version of the compact map the compiler emits
 /// (`perry-codegen/src/gc_map.rs`). LLVM's own stack-map section is rewritten
@@ -101,7 +102,83 @@ impl StackMapIndex {
     }
 }
 
-static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
+/// All maps visible to this runtime provider.
+///
+/// A provider can outlive any one app image, and hosts may `dlopen` another
+/// app after the first call to `js_gc_init`. Keep the index replaceable so
+/// each module initialization can take a fresh loader snapshot. Root scans
+/// only take the read side; rebuilding and ELF/Mach-O parsing therefore stay
+/// outside the collector's allocation-free critical section.
+#[derive(Debug)]
+struct PublishedStackMapIndex {
+    generation: u64,
+    index: StackMapIndex,
+}
+
+struct StackMapIndexStore {
+    next_generation: AtomicU64,
+    published: OnceLock<RwLock<PublishedStackMapIndex>>,
+}
+
+impl StackMapIndexStore {
+    const fn new() -> Self {
+        Self {
+            next_generation: AtomicU64::new(0),
+            published: OnceLock::new(),
+        }
+    }
+
+    fn rebuild(&self) {
+        self.rebuild_with(build_stack_map_index);
+    }
+
+    fn rebuild_with(&self, build: impl FnOnce() -> StackMapIndex) {
+        // Reserve before taking the loader snapshot. Module initialization
+        // starts only after that module has been loaded, so generation order
+        // is also the minimum loader recency each rebuild must preserve.
+        let generation = self
+            .next_generation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                generation.checked_add(1)
+            })
+            .unwrap_or_else(|_| panic!("perry: stack-map rebuild generation overflow"))
+            + 1;
+        let mut candidate = Some(PublishedStackMapIndex {
+            generation,
+            index: build(),
+        });
+        let maps = self.published.get_or_init(|| {
+            RwLock::new(
+                candidate
+                    .take()
+                    .expect("perry: initial stack-map candidate missing"),
+            )
+        });
+        let Some(candidate) = candidate else {
+            return;
+        };
+        let mut current = maps
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if candidate.generation > current.generation {
+            *current = candidate;
+        }
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, PublishedStackMapIndex> {
+        self.published
+            .get_or_init(|| {
+                RwLock::new(PublishedStackMapIndex {
+                    generation: 0,
+                    index: StackMapIndex::default(),
+                })
+            })
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
 
 // The two register numbers the compact format's short base tags stand for.
 // These are aarch64's by definition of the FORMAT, on every architecture — see
@@ -244,51 +321,58 @@ pub(in crate::gc) fn record_native_stack_walk_source(
 }
 
 pub(in crate::gc) fn initialize() {
-    let _ = stack_maps();
+    STACK_MAPS.rebuild();
 }
 
 /// Whether this image carries any native stack-map records — i.e. whether
 /// precise frame roots depend on mapped PCs at all. Consumed by the
 /// `PERRY_GC_SAFEPOINT_ONLY` contract assert.
 pub(in crate::gc) fn native_maps_active() -> bool {
-    !stack_maps().records.is_empty()
+    !stack_maps().index.records.is_empty()
 }
 
-fn stack_maps() -> &'static StackMapIndex {
-    STACK_MAPS.get_or_init(|| {
-        // No section at all is the ordinary shadow-stack build: there are no
-        // native frame roots to find, and an empty index is the right answer.
-        let sections = loaded_stack_map_sections();
-        if sections.is_empty() {
-            return StackMapIndex::default();
+fn stack_maps() -> RwLockReadGuard<'static, PublishedStackMapIndex> {
+    STACK_MAPS.read()
+}
+
+fn build_stack_map_index() -> StackMapIndex {
+    // No section at all is the ordinary shadow-stack build: there are no
+    // native frame roots to find, and an empty index is the right answer.
+    let sections = loaded_stack_map_sections().unwrap_or_else(|error| {
+        panic!(
+            "perry: could not inspect every loaded image for native GC roots: {error}; \
+             refusing to publish an incomplete stack-map index"
+        )
+    });
+    if sections.is_empty() {
+        return StackMapIndex::default();
+    }
+    // A section that exists but does not decode is a different thing
+    // entirely, and it must never degrade to "no roots". The two failure
+    // shapes are indistinguishable downstream — both yield an empty index
+    // — but their consequences are not: with statepoints as the only root
+    // mechanism, an empty index means the collector frees live objects and
+    // corrupts the heap with no diagnostic at all. That is CLAUDE.md's
+    // fourth gate-failure mode (the gate runs, its subject never did), so
+    // fail loudly instead. In practice this can only mean a binary whose
+    // compiler and runtime disagree about the map format.
+    let mut records = Vec::new();
+    let mut roots = Vec::new();
+    for section in sections {
+        if append_gc_map_section(&mut records, &mut roots, section).is_none() {
+            panic!(
+                "perry: a GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
+                 present but could not be decoded — expected format {:?} v{}. This binary's \
+                 compiler and runtime disagree about the map layout; continuing would run \
+                 the collector with missing roots and corrupt the heap silently.",
+                section.len(),
+                std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
+                GC_MAP_VERSION,
+            );
         }
-        // A section that exists but does not decode is a different thing
-        // entirely, and it must never degrade to "no roots". The two failure
-        // shapes are indistinguishable downstream — both yield an empty index
-        // — but their consequences are not: with statepoints as the only root
-        // mechanism, an empty index means the collector frees live objects and
-        // corrupts the heap with no diagnostic at all. That is CLAUDE.md's
-        // fourth gate-failure mode (the gate runs, its subject never did), so
-        // fail loudly instead. In practice this can only mean a binary whose
-        // compiler and runtime disagree about the map format.
-        let mut records = Vec::new();
-        let mut roots = Vec::new();
-        for section in sections {
-            if append_gc_map_section(&mut records, &mut roots, section).is_none() {
-                panic!(
-                    "perry: a GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
-                     present but could not be decoded — expected format {:?} v{}. This binary's \
-                     compiler and runtime disagree about the map layout; continuing would run \
-                     the collector with missing roots and corrupt the heap silently.",
-                    section.len(),
-                    std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
-                    GC_MAP_VERSION,
-                );
-            }
-        }
-        records.sort_unstable_by_key(|record| record.pc);
-        index_records(records, roots)
-    })
+    }
+    records.sort_unstable_by_key(|record| record.pc);
+    index_records(records, roots)
 }
 
 fn append_gc_map_section(
@@ -666,7 +750,8 @@ impl StackMapIndex {
 pub(super) fn visit_stack_map_root_slots(
     visit: &mut impl FnMut(MutableRootSlot),
 ) -> NativeStackWalkStats {
-    let index = stack_maps();
+    let published = stack_maps();
+    let index = &published.index;
     if index.records.is_empty() {
         return NativeStackWalkStats::default();
     }
@@ -899,7 +984,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 /// function addresses as `u64` and this code does `usize` arithmetic on them.
 /// The compiler refuses that target for the same reason.
 #[cfg(target_vendor = "apple")]
-fn loaded_stack_map_sections() -> Vec<&'static [u8]> {
+fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
     use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide, _dyld_image_count};
 
     const LC_SEGMENT_64: u32 = 0x19;
@@ -1007,33 +1092,140 @@ fn loaded_stack_map_sections() -> Vec<&'static [u8]> {
             }
         }
     }
-    sections
+    Ok(sections)
 }
 
-#[cfg(not(target_vendor = "apple"))]
-fn loaded_stack_map_sections() -> Vec<&'static [u8]> {
-    loaded_stack_map_section().into_iter().collect()
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
+    Ok(loaded_stack_map_section().into_iter().collect())
 }
 
-/// ELF (#7173): the `.perry_gcmap` section of the main executable.
+/// ELF (#7173, #8075): the `.perry_gcmap` sections of every loaded image.
 ///
 /// Linker-provided `__start_`/`__stop_` symbols would need weak linkage
 /// (unstable in Rust) or `-rdynamic` (not guaranteed), so instead: read
-/// `/proc/self/exe`'s section headers for `.perry_gcmap` (sh_addr,
-/// sh_size) and add the main object's load bias from the first
-/// `dl_iterate_phdr` callback. Runtime-verified gates for this path are
-/// pending a Linux host — tracked in #7173; the parser, index, matching,
-/// and verify machinery above are platform-independent already.
+/// each `dl_iterate_phdr` image's ELF section headers for `.perry_gcmap`
+/// (`sh_addr`, `sh_size`) and add that image's `dlpi_addr` load bias. The
+/// executable has an empty `dlpi_name`, for which `/proc/self/exe` is the
+/// stable path. Reading only that first image is unsound when the runtime is
+/// a provider and generated code lives in an app dylib: its live native roots
+/// disappear from the collector exactly when a full collection evacuates.
 #[cfg(target_os = "linux")]
-fn loaded_stack_map_section() -> Option<&'static [u8]> {
-    let bytes = std::fs::read("/proc/self/exe").ok()?;
-    let (addr, size) = elf_section_vaddr(&bytes, b".perry_gcmap")?;
-    let bias = main_object_load_bias()?;
-    let start = bias.checked_add(addr)?;
-    if start == 0 || size == 0 {
-        return None;
+fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[repr(C)]
+    struct DlPhdrInfo {
+        dlpi_addr: usize,
+        dlpi_name: *const std::os::raw::c_char,
+        dlpi_phdr: *const ElfProgramHeader,
+        dlpi_phnum: u16,
     }
-    Some(unsafe { std::slice::from_raw_parts(start as *const u8, size) })
+    #[repr(C)]
+    struct ElfProgramHeader {
+        p_type: u32,
+        _p_flags: u32,
+        _p_offset: u64,
+        p_vaddr: u64,
+        _p_paddr: u64,
+        _p_filesz: u64,
+        p_memsz: u64,
+        _p_align: u64,
+    }
+    struct SectionScan {
+        sections: Vec<&'static [u8]>,
+        unreadable_images: Vec<String>,
+    }
+    #[allow(clashing_extern_declarations)]
+    unsafe extern "C" {
+        fn dl_iterate_phdr(
+            callback: unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) -> i32,
+            data: *mut c_void,
+        ) -> i32;
+    }
+    unsafe extern "C" fn collect(info: *mut DlPhdrInfo, _size: usize, data: *mut c_void) -> i32 {
+        let Some(info) = info.as_ref() else {
+            return 0;
+        };
+        let image_name = if info.dlpi_name.is_null() {
+            &[][..]
+        } else {
+            CStr::from_ptr(info.dlpi_name).to_bytes()
+        };
+        // The kernel-provided vDSO has no backing file. It cannot contain
+        // Perry-generated code, so it is the sole unreadable-image exception.
+        if image_name == b"linux-vdso.so.1" || image_name == b"linux-gate.so.1" {
+            return 0;
+        }
+        let path = if image_name.is_empty() {
+            Path::new("/proc/self/exe")
+        } else {
+            Path::new(std::ffi::OsStr::from_bytes(image_name))
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let scan = &mut *data.cast::<SectionScan>();
+                scan.unreadable_images
+                    .push(format!("{} ({error})", path.display()));
+                return 0;
+            }
+        };
+        let Some((addr, size)) = elf_section_vaddr(&bytes, b".perry_gcmap") else {
+            return 0;
+        };
+        let Some(start) = info.dlpi_addr.checked_add(addr) else {
+            return 0;
+        };
+        let Some(section_end) = addr.checked_add(size) else {
+            return 0;
+        };
+        const PT_LOAD: u32 = 1;
+        let mapped = !info.dlpi_phdr.is_null()
+            && std::slice::from_raw_parts(info.dlpi_phdr, usize::from(info.dlpi_phnum))
+                .iter()
+                .filter(|header| header.p_type == PT_LOAD)
+                .any(|header| {
+                    let Ok(segment_start) = usize::try_from(header.p_vaddr) else {
+                        return false;
+                    };
+                    let Some(segment_end) = usize::try_from(header.p_memsz)
+                        .ok()
+                        .and_then(|size| segment_start.checked_add(size))
+                    else {
+                        return false;
+                    };
+                    addr >= segment_start && section_end <= segment_end
+                });
+        // The on-disk path can be replaced after dlopen. Validate its claimed
+        // address against the loader's actual PT_LOAD ranges before turning
+        // it into a slice, so a stale or hostile section table cannot make GC
+        // initialization read outside the mapped image.
+        if mapped && start != 0 && size != 0 {
+            let scan = &mut *data.cast::<SectionScan>();
+            scan.sections
+                .push(std::slice::from_raw_parts(start as *const u8, size));
+        }
+        0
+    }
+
+    let mut scan = SectionScan {
+        sections: Vec::new(),
+        unreadable_images: Vec::new(),
+    };
+    unsafe {
+        dl_iterate_phdr(collect, (&mut scan as *mut SectionScan).cast::<c_void>());
+    }
+    if scan.unreadable_images.is_empty() {
+        Ok(scan.sections)
+    } else {
+        Err(format!(
+            "unreadable loaded ELF image(s): {}",
+            scan.unreadable_images.join(", ")
+        ))
+    }
 }
 
 /// Minimal ELF64 section-header walk: returns (sh_addr, sh_size) for the
@@ -1056,42 +1248,18 @@ fn elf_section_vaddr(bytes: &[u8], name: &[u8]) -> Option<(usize, usize)> {
         let candidate = bytes.get(name_pos..name_pos.checked_add(name.len())?)?;
         let terminator = bytes.get(name_pos + name.len()).copied().unwrap_or(1);
         if candidate == name && terminator == 0 {
+            // Only an SHF_ALLOC section has a runtime virtual address. Refuse
+            // a file-only namesake before constructing a slice from sh_addr.
+            const SHF_ALLOC: u64 = 0x2;
+            if read_u64(bytes, hdr.checked_add(0x08)?)? & SHF_ALLOC == 0 {
+                return None;
+            }
             let addr = read_u64(bytes, hdr.checked_add(0x10)?)? as usize;
             let size = read_u64(bytes, hdr.checked_add(0x20)?)? as usize;
             return Some((addr, size));
         }
     }
     None
-}
-
-/// Load bias of the main object: `dlpi_addr` of the first `dl_iterate_phdr`
-/// callback (the executable itself on glibc and musl).
-#[cfg(target_os = "linux")]
-fn main_object_load_bias() -> Option<usize> {
-    #[repr(C)]
-    struct DlPhdrInfo {
-        dlpi_addr: usize,
-        dlpi_name: *const std::os::raw::c_char,
-        // remaining fields unused
-    }
-    #[allow(clashing_extern_declarations)]
-    unsafe extern "C" {
-        fn dl_iterate_phdr(
-            callback: unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) -> i32,
-            data: *mut c_void,
-        ) -> i32;
-    }
-    unsafe extern "C" fn first(info: *mut DlPhdrInfo, _size: usize, data: *mut c_void) -> i32 {
-        unsafe {
-            *data.cast::<usize>() = (*info).dlpi_addr;
-        }
-        1 // stop after the first (main) object
-    }
-    let mut bias = usize::MAX;
-    unsafe {
-        dl_iterate_phdr(first, (&mut bias as *mut usize).cast::<c_void>());
-    }
-    (bias != usize::MAX).then_some(bias)
 }
 
 /// Windows/PE: the `.pgcmap` section of the running image.
