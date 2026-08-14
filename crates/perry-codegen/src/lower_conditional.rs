@@ -84,7 +84,7 @@ pub(crate) fn lower_conditional(
     let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
     let saved_guarded_proof = branch_proofs
         .as_ref()
-        .and_then(|(id, _, _)| ctx.proven_local_types.get(id).cloned());
+        .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
     let cond = lower_expr(ctx, condition)?;
     let cond_bool = lower_truthy(ctx, &cond, condition);
 

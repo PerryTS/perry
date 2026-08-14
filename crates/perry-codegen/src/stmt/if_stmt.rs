@@ -163,7 +163,7 @@ pub(crate) fn lower_if(
     let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
     let saved_guarded_proof = branch_proofs
         .as_ref()
-        .and_then(|(id, _, _)| ctx.proven_local_types.get(id).cloned());
+        .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
 
     let i1 = lower_if_condition_i1(ctx, condition)?;
     let alias_entry_snapshot = NativeArenaOwnerAliasSnapshot::capture(ctx);

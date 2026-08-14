@@ -1812,6 +1812,21 @@ impl<'a> FnCtx<'a> {
         self.local_types.get(id)
     }
 
+    /// Snapshot a binding's runtime-derived proof so a branch-scoped narrowing
+    /// can be undone EXACTLY.
+    ///
+    /// This is restore bookkeeping, not evidence: the value is only ever
+    /// written back into `proven_local_types`, never consumed as a type fact,
+    /// so it deliberately does not go through `stable_local_type_proof`. That
+    /// accessor answers `None` for a reassigned binding, which as a *snapshot*
+    /// would silently DROP the entry on restore instead of restoring it — a
+    /// narrowing that outlives its branch, which is the wrong-code shape this
+    /// module exists to prevent. Inventoried by
+    /// `scripts/local_binding_type_audit.py` like the other two accessors.
+    pub(crate) fn snapshot_guarded_proof(&self, id: &u32) -> Option<HirType> {
+        self.proven_local_types.get(id).cloned()
+    }
+
     pub(crate) fn has_imported_extern_binding(&self, name: &str) -> bool {
         self.imported_vars.contains(name)
             || self.import_function_prefixes.contains_key(name)
