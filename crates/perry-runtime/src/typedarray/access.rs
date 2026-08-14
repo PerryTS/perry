@@ -24,12 +24,28 @@ pub extern "C" fn js_typed_array_length(ta: *const TypedArrayHeader) -> i32 {
 }
 
 /// `ta[i]` — returns plain f64 numeric value (NOT NaN-boxed).
+///
+/// #8100: codegen emits this for a local whose DECLARED type is a typed array
+/// even after the binding was reassigned (`is_width_tracked_typed_array_
+/// receiver` keeps the hint on purpose — see its #7494 comment — and pays for
+/// that with the promise that this helper re-validates the receiver's actual
+/// GC kind). `clean_ta_ptr` does not validate anything but the magnitude, so
+/// a plain array landing here was read AS a `TypedArrayHeader` and every
+/// element came back `0`. Classify first, then dispatch: a non-typed-array
+/// receiver takes the ordinary `[[Get]]`, exactly as if the static hint had
+/// never existed.
 #[no_mangle]
 pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) -> f64 {
-    let ta = clean_ta_ptr(ta);
-    if ta.is_null() {
-        return 0.0;
-    }
+    let ta = match classify_element_read_receiver(ta as u64) {
+        ElementReadReceiver::TypedArray(addr) => addr as *const TypedArrayHeader,
+        ElementReadReceiver::Ordinary(receiver) => {
+            return crate::value::js_dyn_index_get(receiver, f64::from(index))
+        }
+        // Was `0.0`. `undefined` is the ECMAScript answer and the one node
+        // prints: `let P: Int32Array = new Int32Array(1); P = 42 as any; P[0]`
+        // is `undefined`, not `0`.
+        ElementReadReceiver::Absent => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
     unsafe {
         if crate::native_arena::is_native_typed_view(ta) {
             crate::native_arena::validate_view_alive(

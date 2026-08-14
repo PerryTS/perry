@@ -655,7 +655,20 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
                 key,
             );
         }
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+        // #8100: the variable-key twin of the `js_typed_array_get` bug. Codegen
+        // emits this helper for a reassigned local whose DECLARED type is a
+        // typed array, so the receiver is routinely a plain array/object; the
+        // pre-#8100 arm answered `undefined` for all of them. Classify the raw
+        // address and take the ordinary `[[Get]]` when it is not a typed
+        // array. No recursion: `js_dyn_index_get` re-enters this function only
+        // when `lookup_typed_array_kind` succeeds, which is precisely the case
+        // `classify_element_read_receiver` keeps on the typed path.
+        return match crate::typedarray::classify_element_read_receiver(owner_bits as u64) {
+            crate::typedarray::ElementReadReceiver::Ordinary(receiver) => {
+                crate::value::js_dyn_index_get(receiver, key)
+            }
+            _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+        };
     };
     // A Symbol key is never an integer-indexed element — read it from the symbol
     // side table, exactly as the ordinary `obj[sym]` path does. Without this a
