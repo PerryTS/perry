@@ -395,6 +395,7 @@ fn build_clang_compile_plan(
     ll_fn_count: usize,
     max_fn_bytes: Option<usize>,
     debug_symbols: bool,
+    compact_gc_map: bool,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -435,7 +436,6 @@ fn build_clang_compile_plan(
     // the statepoint backends emit a stack map, so only they pay for it, and
     // the cost is small: `-S` takes the same time as `-c` (codegen is the
     // cost, printing text is free) and assembling is ~0.02s per module.
-    let compact_gc_map = crate::codegen::helpers::native_stack_roots_enabled();
     let asm_path = compact_gc_map.then(|| PathBuf::from(format!("{}.s", obj_path.display())));
 
     let mut clang_args = vec![
@@ -542,8 +542,8 @@ pub(crate) fn rs4gc_funclet_refusal(ll_text: &str) -> Option<String> {
     })
 }
 
-fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
-    if !crate::codegen::helpers::rs4gc_enabled() {
+fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<String>> {
+    if !native_roots {
         return Ok(None);
     }
     if let Some(refusal) = rs4gc_funclet_refusal(ll_text) {
@@ -629,13 +629,23 @@ fn which_in_path(name: &str) -> Option<PathBuf> {
 }
 
 pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Result<Vec<u8>> {
-    let rs4gc_ll = maybe_rs4gc_preprocess(ll_text)?;
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
+    compile_ll_to_object_with_native_roots(ll_text, target_triple, native_roots)
+}
+
+fn compile_ll_to_object_with_native_roots(
+    ll_text: &str,
+    target_triple: Option<&str>,
+    native_roots: bool,
+) -> Result<Vec<u8>> {
+    let rs4gc_ll = maybe_rs4gc_preprocess(ll_text, native_roots)?;
     let ll_text: &str = rs4gc_ll.as_deref().unwrap_or(ll_text);
     compile_ll_to_object_in(
         &env::temp_dir(),
         ll_text,
         target_triple,
         TempFilePolicy::from_env(),
+        native_roots,
     )
 }
 
@@ -671,6 +681,7 @@ pub(crate) fn native_plan_args(
     est_ll_bytes: usize,
     ll_fn_count: usize,
     max_fn_bytes: usize,
+    native_roots: bool,
 ) -> (String, Vec<String>) {
     let plan = build_clang_compile_plan(
         PathBuf::from("(in-process)"),
@@ -681,6 +692,7 @@ pub(crate) fn native_plan_args(
         ll_fn_count,
         Some(max_fn_bytes),
         env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+        native_roots,
     );
     (plan.effective_target, plan.clang_args)
 }
@@ -784,6 +796,7 @@ fn compile_ll_inprocess_in(
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (paths, _pid, _nonce) = llvm_temp_paths(tmp_dir, ll_text);
     // Same decision inputs as the clang path — opt level (#4880 fallback
@@ -798,6 +811,7 @@ fn compile_ll_inprocess_in(
         count_ll_functions(ll_text),
         None,
         policy.debug_symbols,
+        native_roots,
     );
     // #7131 parity: the module identifier is the content-addressed basename,
     // the only name that can reach the object bytes.
@@ -824,6 +838,7 @@ fn compile_ll_inprocess_in(
         &plan.effective_target,
         &plan.clang_args,
         &module_name,
+        native_roots,
     ) {
         // The statepoint backends ask for `-S`, because #7314's compact-map
         // rewriter rewrites `.llvm_stackmaps` at ASSEMBLY time — that is where
@@ -910,6 +925,7 @@ fn compile_ll_inprocess_in(
     _ll_text: &str,
     _target_triple: Option<&str>,
     _policy: TempFilePolicy,
+    _native_roots: bool,
 ) -> Result<Vec<u8>> {
     // Fail loudly rather than silently falling back: an A/B arm that asked
     // for the in-process backend must never be served the text path.
@@ -927,9 +943,10 @@ fn compile_ll_to_object_in(
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     if inprocess_requested() {
-        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy);
+        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy, native_roots);
     }
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
@@ -979,6 +996,7 @@ fn compile_ll_to_object_in(
         count_ll_functions(ll_text),
         None,
         policy.debug_symbols,
+        native_roots,
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -1133,10 +1151,19 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         })
         .min(units.len());
 
+    // The root backend is a per-module decision stored on the producer thread.
+    // Unit workers must receive it explicitly: fresh threads start with the
+    // thread-local target/override cells unset and would otherwise silently
+    // compile precise-root IR without RS4GC or a compact map (#8070).
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     let mut compiled: Vec<Option<Result<Vec<u8>>>> = (0..units.len()).map(|_| None).collect();
     if jobs <= 1 {
         for (i, unit) in units.iter().enumerate() {
-            compiled[i] = Some(compile_ll_to_object(unit, target_triple));
+            compiled[i] = Some(compile_ll_to_object_with_native_roots(
+                unit,
+                target_triple,
+                native_roots,
+            ));
         }
     } else {
         let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>>>>> = (0..units.len())
@@ -1150,7 +1177,11 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
                     if i >= units.len() {
                         break;
                     }
-                    let out = compile_ll_to_object(&units[i], target_triple);
+                    let out = compile_ll_to_object_with_native_roots(
+                        &units[i],
+                        target_triple,
+                        native_roots,
+                    );
                     *slots[i].lock().expect("codegen-unit slot poisoned") = Some(out);
                 });
             }

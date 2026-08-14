@@ -181,13 +181,14 @@ pub fn compile_ll_to_object_inprocess(
     effective_target: &str,
     clang_style_args: &[String],
     module_name: &str,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     // Same guard as the external `opt` path (`linker::rs4gc_funclet_refusal`):
     // rewrite-statepoints-for-gc crashes on WinEH funclet pads, and here the
     // pass runs inside THIS process — the crash would take the compiler down
     // with it, not just a child.
-    if crate::codegen::helpers::rs4gc_enabled() {
+    if native_roots {
         if let Some(refusal) = crate::linker::rs4gc_funclet_refusal(ll_text) {
             return Err(anyhow!(refusal));
         }
@@ -202,6 +203,7 @@ pub fn compile_ll_to_object_inprocess(
         explicit_cpu.as_deref(),
         &mllvm,
         emit_asm,
+        native_roots,
     )
 }
 
@@ -310,6 +312,7 @@ pub(crate) fn optimize_and_emit_module(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
     clang_style_args: &[String],
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
@@ -320,6 +323,7 @@ pub(crate) fn optimize_and_emit_module(
         explicit_cpu.as_deref(),
         &mllvm,
         emit_asm,
+        native_roots,
     )
 }
 
@@ -331,6 +335,7 @@ fn optimize_and_emit(
     explicit_cpu: Option<&str>,
     mllvm: &[String],
     emit_asm: bool,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     global_init(mllvm);
     announce();
@@ -398,7 +403,7 @@ fn optimize_and_emit(
     // backend that can root an `invoke`, and since #7302 every call inside a
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
-    if crate::codegen::helpers::rs4gc_enabled() {
+    if native_roots {
         module
             .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
             .map_err(|e| {
@@ -511,7 +516,7 @@ mod tests {
         let emit = |ir: &str, name: &str| {
             let context = Context::create();
             let module = parse_ir_text(&context, ir, name).expect("fixture parses");
-            optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()])
+            optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], true)
                 .expect("fixture emits assembly")
         };
         let text = emit(&text_ir, "constant_fold_text");
@@ -536,7 +541,7 @@ mod tests {
             let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
             (
                 rewritten,
-                optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()])
+                optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], false)
                     .expect("rewritten fixture emits assembly"),
             )
         };

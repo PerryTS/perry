@@ -497,6 +497,7 @@ pub(crate) fn assembly_for(ir: &str, target: &str) -> String {
         &module,
         target,
         &["-O0".to_string(), "-S".to_string()],
+        true,
     )
     .unwrap_or_else(|e| panic!("assembly emission failed for {target}: {e:#}"));
     String::from_utf8(bytes).expect("assembler text should be UTF-8")

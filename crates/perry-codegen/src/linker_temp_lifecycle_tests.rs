@@ -121,7 +121,7 @@ fn successful_compile_leaves_nothing_behind() {
     };
 
     for nth in 0..3 {
-        let bytes = compile_ll_to_object_in(&root, &test_ir(nth), None, CLEAN)
+        let bytes = compile_ll_to_object_in(&root, &test_ir(nth), None, CLEAN, false)
             .unwrap_or_else(|e| panic!("compile {nth} failed: {e:#}"));
         assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
         assert_eq!(
@@ -162,7 +162,7 @@ fn concurrent_compiles_of_identical_ir_both_succeed_and_leave_nothing() {
             .map(|_| {
                 let root = root.clone();
                 let ir = ir.clone();
-                s.spawn(move || compile_ll_to_object_in(&root, &ir, None, CLEAN))
+                s.spawn(move || compile_ll_to_object_in(&root, &ir, None, CLEAN, false))
             })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
@@ -196,7 +196,7 @@ fn failed_compile_keeps_the_ll_for_diagnosis() {
         return;
     };
 
-    let err = compile_ll_to_object_in(&root, "this is not LLVM IR\n", None, CLEAN)
+    let err = compile_ll_to_object_in(&root, "this is not LLVM IR\n", None, CLEAN, false)
         .expect_err("clang must reject non-IR input");
     let message = format!("{err:#}");
     assert!(
@@ -251,7 +251,7 @@ fn keep_ir_retains_the_whole_scratch_dir() {
         keep: true,
         debug_symbols: false,
     };
-    compile_ll_to_object_in(&root, &test_ir(7), None, policy).expect("compile failed");
+    compile_ll_to_object_in(&root, &test_ir(7), None, policy, false).expect("compile failed");
 
     let left = entries(&root);
     assert_eq!(left.len(), 1, "expected one kept scratch dir: {left:?}");
@@ -283,7 +283,7 @@ fn debug_symbols_do_not_change_the_temp_file_lifetime() {
         debug_symbols: true,
     };
     for nth in 0..2 {
-        compile_ll_to_object_in(&root, &test_ir(9 + nth), None, policy)
+        compile_ll_to_object_in(&root, &test_ir(9 + nth), None, policy, false)
             .unwrap_or_else(|e| panic!("-g compile {nth} failed: {e:#}"));
         assert_eq!(
             entries(&root),

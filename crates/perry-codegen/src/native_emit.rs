@@ -305,6 +305,10 @@ pub fn compile_module_units_native(
         Ok("1" | "all")
     ) || std::env::var("PERRY_CODEGEN_UNIT_TIMINGS").is_ok();
     let unit_total = parts.len();
+    // Root lowering was selected while the module was produced. Preserve that
+    // exact backend choice across the worker boundary instead of re-reading
+    // fresh thread-local defaults in each LLVM thread (#8070).
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     if show_progress {
         eprintln!(
             "[perry] codegen: {module_prefix}: freezing {unit_total} codegen units for worker threads"
@@ -331,10 +335,15 @@ pub fn compile_module_units_native(
             unit.estimated_bytes,
             unit.function_count,
             unit.max_function_bytes,
+            native_roots,
         );
-        let unit_bytes =
-            crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)
-                .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
+        let unit_bytes = crate::inprocess::optimize_and_emit_module(
+            &module,
+            &effective_target,
+            &args,
+            native_roots,
+        )
+        .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
         let obj = crate::linker::finish_native_emission(unit_bytes, &effective_target, &args)
             .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
         log::debug!(
@@ -508,7 +517,7 @@ pub fn compile_module_units_diff(
 /// The plan argv for a natively-built module. Same decision code as the text
 /// path (`build_clang_compile_plan`), with the byte-size input taken from the
 /// render-free size estimate the codegen-unit balancer already uses.
-fn plan_for(llmod: &LlModule, target: Option<&str>) -> (String, Vec<String>) {
+fn plan_for(llmod: &LlModule, target: Option<&str>, native_roots: bool) -> (String, Vec<String>) {
     let funcs = llmod.deduped_function_refs();
     let est_bytes: usize = funcs.iter().map(|f| f.estimated_ir_bytes()).sum();
     let max_fn_bytes = funcs
@@ -516,7 +525,7 @@ fn plan_for(llmod: &LlModule, target: Option<&str>) -> (String, Vec<String>) {
         .map(|f| f.estimated_ir_bytes())
         .max()
         .unwrap_or(0);
-    crate::linker::native_plan_args(target, est_bytes, funcs.len(), max_fn_bytes)
+    crate::linker::native_plan_args(target, est_bytes, funcs.len(), max_fn_bytes, native_roots)
 }
 
 pub fn compile_module_native(
@@ -527,13 +536,19 @@ pub fn compile_module_native(
     let context = Context::create();
     let module = build_native_module(&context, llmod)?;
     debug_dump(&module, module_prefix);
-    let (effective_target, args) = plan_for(llmod, target);
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
+    let (effective_target, args) = plan_for(llmod, target, native_roots);
     // #7982: under the statepoint backends the plan asks for `-S`, so this
     // returns assembler TEXT. It must go through the compact-map rewrite and
     // the assembler before it can be called an object — the textual path has
     // always done this, the native path silently did not, and the link died
     // with `ld: unknown file type`.
-    let bytes = crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)?;
+    let bytes = crate::inprocess::optimize_and_emit_module(
+        &module,
+        &effective_target,
+        &args,
+        native_roots,
+    )?;
     crate::linker::finish_native_emission(bytes, &effective_target, &args)
 }
 
@@ -662,6 +677,26 @@ mod tests {
         }
     }
 
+    fn assert_compact_gc_map(object: &[u8], label: &str) {
+        let section_name: &[u8] = if cfg!(target_os = "macos") {
+            b"__perry_gcmap"
+        } else if cfg!(target_os = "windows") {
+            b".pgcmap"
+        } else {
+            b".perry_gcmap"
+        };
+        assert!(
+            object
+                .windows(section_name.len())
+                .any(|window| window == section_name),
+            "{label} object has no compact GC-map section"
+        );
+        assert!(
+            object.windows(4).any(|window| window == b"PGCM"),
+            "{label} compact GC-map section has no map payload"
+        );
+    }
+
     #[test]
     fn native_construction_lowers_precise_roots_before_rs4gc() {
         let _native = crate::codegen::helpers::NativeRootsPin::native();
@@ -696,8 +731,21 @@ mod tests {
         assert_dynamic_root_survives_rs4gc(&text_module, "split");
         let units = text_module.render_codegen_units(2);
         assert_eq!(units.len(), 2, "fixture must exercise two real units");
-        let text = crate::linker::compile_units_to_object(&units, None)
-            .expect("trusted text units emit and partial-link");
+        // Compile the trusted units sequentially on this pinned producer
+        // thread. Going through compile_units_to_object here made the control
+        // machine-dependent: on a high-core host it spawned workers too, both
+        // arms lost the same thread-local decision, and byte equality passed
+        // while BOTH objects omitted the map (#8070).
+        let text_objects = units
+            .iter()
+            .map(|unit| {
+                crate::linker::compile_ll_to_object(unit, None)
+                    .expect("trusted text unit emits an object")
+            })
+            .collect::<Vec<_>>();
+        let text = crate::linker::merge_unit_objects(&text_objects)
+            .expect("trusted text units partial-link");
+        assert_compact_gc_map(&text, "trusted text");
 
         let mut native_module = precise_root_fixture(true);
         let native = compile_module_units_native(
@@ -707,6 +755,7 @@ mod tests {
             "split_native_root_diff_fixture",
         )
         .expect("direct native units emit and partial-link");
+        assert_compact_gc_map(&native, "split native");
         assert_eq!(
             native, text,
             "split native units must freeze finalized precise-root IR, not \
@@ -763,15 +812,20 @@ pub fn compile_module_diff(
     let text = llmod.to_ir();
     let ctx_text = Context::create();
     let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_native_module")?;
-    let (effective_target, args) = plan_for(llmod, target);
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
+    let (effective_target, args) = plan_for(llmod, target, native_roots);
 
     let ctx_native = Context::create();
     let native = build_native_module(&ctx_native, llmod);
     match native {
         Err(e) => {
             eprintln!("perry: [ir-diff] native construction FAILED (text arm still used): {e:#}");
-            let bytes =
-                crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)?;
+            let bytes = crate::inprocess::optimize_and_emit_module(
+                &m_text,
+                &effective_target,
+                &args,
+                native_roots,
+            )?;
             crate::linker::finish_native_emission(bytes, &effective_target, &args)
         }
         Ok(m_native) => {
@@ -787,10 +841,18 @@ pub fn compile_module_diff(
             } else {
                 (String::new(), String::new())
             };
-            let bytes_native =
-                crate::inprocess::optimize_and_emit_module(&m_native, &effective_target, &args)?;
-            let bytes_text =
-                crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)?;
+            let bytes_native = crate::inprocess::optimize_and_emit_module(
+                &m_native,
+                &effective_target,
+                &args,
+                native_roots,
+            )?;
+            let bytes_text = crate::inprocess::optimize_and_emit_module(
+                &m_text,
+                &effective_target,
+                &args,
+                native_roots,
+            )?;
             if bytes_text == bytes_native {
                 eprintln!(
                     "perry: [ir-diff] OK — native and text arms emit byte-identical objects \
