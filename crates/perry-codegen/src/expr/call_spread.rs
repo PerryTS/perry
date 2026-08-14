@@ -63,7 +63,14 @@ fn call_arg_expr(a: &CallArg) -> &Expr {
 /// `finish` runs BELOW the last collection point and ABOVE the release, so the
 /// register it receives is the only one that ever escapes — the same split
 /// [`rooting::with_rooted_accumulator`] imposes everywhere else.
-fn bundle_args_rooted<'f, R>(
+///
+/// `pub(crate)` since #7803: `NewDynamicSpread` and the dynamic
+/// `super.m(...spread)` arm carried their own copies of this loop with the
+/// accumulator in a bare register, and `Doc.compile`'s `new F(...args, src)`
+/// is how that copy corrupted the heap — `js_array_push_f64` through the
+/// pre-move accumulator writes a NaN-boxed string over whatever the recycled
+/// from-space bytes now hold. One rooted implementation, no private copies.
+pub(crate) fn bundle_args_rooted<'f, R>(
     ctx: &mut FnCtx<'f>,
     args: &[CallArg],
     spread_only: bool,

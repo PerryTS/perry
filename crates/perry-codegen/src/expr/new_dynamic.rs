@@ -12,7 +12,7 @@ use crate::lower_call::lower_new;
 use crate::lower_conditional::lower_conditional;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::MaterializationReason;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I64, PTR};
 
 use super::{
     downgrade_buffer_aliases_in_expr, lower_expr, lower_js_args_array, nanbox_pointer_inline,
@@ -82,39 +82,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
+            // #7803 — THE zod corpus corruption. This arm used to thread the
+            // accumulator through the bundling loop as a bare i64 register:
+            // every regular argument's lowering and every spread part's
+            // `js_array_like_to_array` can run a moving minor, after which
+            // `js_array_push_f64`/`js_array_concat` wrote through the
+            // accumulator's PRE-MOVE address — into from-space pages the same
+            // cycle had already recycled into Eden. The element being written
+            // is typically a NaN-boxed string (tag 0x7FFF), and every garbage
+            // header the #7803 pin-latch ever recorded is the high half of one
+            // (sizes 0x7FFF02AB / 0x7FFF03AF / 0x7FFF03FF / 0x7FFF0543).
+            // zod's `Doc.compile` — `new F(...args, lines.join("\n"))`, run at
+            // the end of every `generateFastpass` — is the corridor that hit
+            // it. `bundle_args_rooted` re-reads the accumulator from its temp
+            // root below each collection point, same as the CallSpread arms.
+            //
+            // The CALLEE has the §18/#7803 defect too: this spread arm was not
+            // among the three `8842a0be4` fixed. A root and not a reload — JS
+            // resolves the callee before the arguments.
+            let mut callee_group = crate::rooting::open_rooted_group(1);
             let func_double = lower_expr(ctx, callee)?;
-            let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-            for a in args {
-                match a {
-                    CallArg::Expr(e) => {
-                        let v = lower_expr(ctx, e)?;
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &acc_handle), (DOUBLE, &v)],
-                        );
-                    }
-                    CallArg::Spread(e) => {
-                        let part_box = lower_expr(ctx, e)?;
-                        let part_handle =
-                            ctx.block()
-                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_concat",
-                            &[(I64, &acc_handle), (I64, &part_handle)],
-                        );
-                    }
-                }
-            }
-            let args_box = nanbox_pointer_inline(ctx.block(), &acc_handle);
-            // #5253: locate the not-a-constructor throw the apply path can raise.
-            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-            let result = ctx.block().call(
-                DOUBLE,
-                "js_new_function_construct_apply",
-                &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
-            );
+            let callee_root = callee_group.adopt(ctx, callee, &func_double, true);
+            let result = crate::expr::call_spread::bundle_args_rooted(
+                ctx,
+                args,
+                false,
+                |ctx, current| {
+                    let args_box = nanbox_pointer_inline(ctx.block(), current);
+                    // #5253: locate the not-a-constructor throw the apply path
+                    // can raise.
+                    crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                    // Below every collection point in the bundling: the slot is
+                    // a mutable root an evacuating cycle rewrites in place.
+                    let func_double = callee_group.reread(ctx, callee_root)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_new_function_construct_apply",
+                        &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
+                    ))
+                },
+            )?;
+            callee_group.release(ctx);
             // Write-back: when the callee is a statically-known user class,
             // propagate constructor mutations (e.g. `++called`) back to the
             // outer captured locals. The runtime construction path stores
