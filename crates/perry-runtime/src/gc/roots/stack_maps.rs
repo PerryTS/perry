@@ -1340,10 +1340,7 @@ fn loaded_stack_map_section() -> Option<&'static [u8]> {
 mod unwind {
     use super::*;
 
-    #[repr(C)]
-    struct UnwindContext {
-        _private: [u8; 0],
-    }
+    type UnwindContext = crate::eh::UnwindContext;
 
     unsafe extern "C" {
         fn _Unwind_Backtrace(
@@ -1724,8 +1721,8 @@ mod fp_chain {
     #[cfg(target_vendor = "apple")]
     fn stack_top() -> usize {
         unsafe extern "C" {
-            fn pthread_self() -> usize;
-            fn pthread_get_stackaddr_np(thread: usize) -> *mut c_void;
+            fn pthread_self() -> *mut c_void;
+            fn pthread_get_stackaddr_np(thread: *mut c_void) -> *mut c_void;
         }
         unsafe { pthread_get_stackaddr_np(pthread_self()) as usize }
     }

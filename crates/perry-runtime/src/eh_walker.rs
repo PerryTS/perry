@@ -918,17 +918,18 @@ mod tests {
     /// Collect frame PCs via the SYSTEM unwinder (_Unwind_Backtrace) —
     /// the oracle the owned walk must match.
     fn system_pcs(max: usize) -> Vec<u64> {
+        use crate::eh::UnwindContext;
         use core::ffi::{c_int, c_void};
         unsafe extern "C" {
             fn _Unwind_Backtrace(
-                trace: extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+                trace: unsafe extern "C" fn(*mut UnwindContext, *mut c_void) -> c_int,
                 arg: *mut c_void,
             ) -> c_int;
-            fn _Unwind_GetIP(ctx: *mut c_void) -> u64;
+            fn _Unwind_GetIP(ctx: *mut UnwindContext) -> usize;
         }
-        extern "C" fn cb(ctx: *mut c_void, arg: *mut c_void) -> c_int {
+        unsafe extern "C" fn cb(ctx: *mut UnwindContext, arg: *mut c_void) -> c_int {
             let v = unsafe { &mut *(arg as *mut Vec<u64>) };
-            unsafe { v.push(_Unwind_GetIP(ctx)) };
+            unsafe { v.push(_Unwind_GetIP(ctx) as u64) };
             0
         }
         let mut v: Vec<u64> = Vec::with_capacity(max);

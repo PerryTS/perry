@@ -134,18 +134,63 @@ jobs:
           # failing `cargo test --no-run` IS the regression this job exists to
           # catch, so its exit status must abort the step under any shell.
           set -euo pipefail
-          args=""
-          while read -r pkg; do
-            [ -n "$pkg" ] || continue
-            args="$args -p $pkg"
-          done <<< "$PKGS"
-
           # `--message-format=json` so the count below comes from cargo rather
           # than being inferred from exit status. The counting lives in the
           # script (`--count-linked`) so this file carries no inline Python —
           # a heredoc at column 0 silently breaks the YAML block scalar.
-          # shellcheck disable=SC2086
-          cargo test --release --no-run --message-format=json $args > /tmp/ext-link.json
+          #
+          # First check each package independently. This catches undeclared
+          # feature dependencies (for example Argon2 relying on another package
+          # to enable rand_core/getrandom) without paying for a full release
+          # link per package.
+          default_args=()
+          fetch_args=()
+          ws_args=()
+          while read -r pkg; do
+            [ -n "$pkg" ] || continue
+            echo "Checking ${pkg}'s independent feature graph..."
+            cargo check --release -p "$pkg"
+            case "$pkg" in
+              perry-ext-fetch)
+                fetch_args+=(-p "$pkg")
+                ;;
+              perry-ext-fastify|perry-ext-ws)
+                ws_args+=(-p "$pkg")
+                ;;
+              *)
+                default_args+=(-p "$pkg")
+                ;;
+            esac
+          done <<< "$PKGS"
+
+          # Release-link packages in three feature-compatible groups. A single
+          # all-package command lets perry-ext-fetch's
+          # `external-fetch-symbols` and the WS providers' corresponding mode
+          # leak into unrelated test binaries, which then expect provider
+          # symbols they correctly do not link. Three groups preserve the real
+          # feature boundary while compiling the expensive runtime only a few
+          # times, keeping the gate inside its measured 120-minute backstop.
+          : > /tmp/ext-link.json
+          run_link_group() {
+            local group="$1"
+            shift
+            [ "$#" -gt 0 ] || return 0
+            local group_json="/tmp/ext-link-${group}.json"
+            echo "Linking ${group} feature group..."
+            set +e
+            cargo test --release --no-run --message-format=json "$@" > "$group_json"
+            local cargo_status=$?
+            set -e
+            cat "$group_json" >> /tmp/ext-link.json
+            if [ "$cargo_status" -ne 0 ]; then
+              jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' \
+                "$group_json" >&2
+              exit "$cargo_status"
+            fi
+          }
+          run_link_group default "${default_args[@]}"
+          run_link_group fetch "${fetch_args[@]}"
+          run_link_group ws "${ws_args[@]}"
 
           linked="$(python3 scripts/ci_ext_link_scope.py --count-linked /tmp/ext-link.json)"
           echo "linked test binaries: $linked"

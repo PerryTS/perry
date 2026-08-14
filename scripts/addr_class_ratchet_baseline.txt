@@ -26,7 +26,7 @@ handle-floor | crates/perry-runtime/src/array/alloc.rs | 2
 handle-floor | crates/perry-runtime/src/array/concat_reverse.rs | 1
 handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 4
 handle-floor | crates/perry-runtime/src/array/generic.rs | 4
-handle-floor | crates/perry-runtime/src/array/header.rs | 6
+handle-floor | crates/perry-runtime/src/array/header.rs | 3
 handle-floor | crates/perry-runtime/src/array/indexing.rs | 4
 handle-floor | crates/perry-runtime/src/array/iter_methods.rs | 2
 handle-floor | crates/perry-runtime/src/array/iter_object.rs | 1
@@ -270,7 +270,7 @@ lone-valid-obj-ptr | crates/perry-runtime/src/util_call_sites.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_inherits.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_style_text.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string.rs | 1
 
 # #7272: `crates/perry-ext-*` entered this gate's scope. These ten sites are

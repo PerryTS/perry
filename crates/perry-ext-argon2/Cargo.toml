@@ -14,6 +14,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

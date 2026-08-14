@@ -1293,6 +1293,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22
 
+      - name: Set up ARM64 MSVC environment
+        # The native ARM64 runner has the Windows SDK installed, but its
+        # PowerShell environment does not include the SDK's ARM64 library
+        # directories. Populate LIB / INCLUDE / PATH so the final PE link can
+        # resolve system import libraries such as user32.lib.
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
@@ -1318,7 +1327,12 @@ jobs:
             --target windows-aarch64 `
             --no-auto-optimize `
             -o target/windows-arm64-smoke.exe
-          $output = target/windows-arm64-smoke.exe
+          # In expression position PowerShell treats a relative path as a
+          # command name and does not search the working directory. Invoke the
+          # freshly linked binary explicitly so the ARM64 gate tests the
+          # artifact instead of failing in shell dispatch.
+          $smoke = (Resolve-Path 'target/windows-arm64-smoke.exe').Path
+          $output = & $smoke
           if ($output.Trim() -ne 'ok') {
             throw "unexpected ARM64 smoke output: '$output'"
           }

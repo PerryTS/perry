@@ -886,6 +886,7 @@ thread_local! {
 /// across a collection: an unchanged value means block persistence force-marked
 /// nothing, so an object left unmarked by that collection was genuinely
 /// unreachable rather than merely a neighbour of something reachable.
+#[cfg(test)]
 pub(crate) fn block_persist_force_mark_count() -> u64 {
     BLOCK_PERSIST_FORCE_MARKS.with(std::cell::Cell::get)
 }

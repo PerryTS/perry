@@ -174,16 +174,15 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
 
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        object_meta_ensure(obj);
-
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| object_meta_ensure(obj));
         let meta = (*obj).meta;
         if (*meta).spill != 0 {
             return;
         }
 
-        let spill = crate::array::js_array_alloc_with_length_exact(field_count);
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let (spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            crate::array::js_array_alloc_with_length_exact(field_count)
+        });
         let meta = (*obj).meta;
         if (*meta).spill == 0 {
             (*meta).spill = spill as u64;
@@ -279,8 +278,9 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             // `js_array_set` can never trigger array growth/forwarding —
             // `meta.spill` always points at the live block (GC rewrites it
             // as a child edge on evacuation).
-            let new_spill = crate::array::js_array_alloc_with_length(new_cap);
-            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let (new_spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+                crate::array::js_array_alloc_with_length(new_cap)
+            });
             let meta = (*obj).meta;
             let old = (*meta).spill as *const crate::array::ArrayHeader;
             if !old.is_null() {

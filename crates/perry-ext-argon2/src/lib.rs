@@ -4,12 +4,13 @@
 //! perry-ffi v0.5.1's async surface — same recipe as bcrypt.
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use perry_ffi::{
     alloc_string, read_string, spawn_blocking, JsPromise, JsString, Promise, StringHeader,
 };
+use rand_core::OsRng;
 
 /// `argon2.hash(password) -> Promise<string>` — Argon2id with
 /// default parameters.

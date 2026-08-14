@@ -1463,14 +1463,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                         // Guarded raw-f64 slots are pointer-free by typed
                                         // shape descriptor; non-number writes miss the
                                         // guard and use the boxed setter fallback.
-                                        // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
-                                        // slots contain numbers only.
                                         let blk = ctx.block();
                                         let numeric_value =
                                             canonicalize_raw_f64_numeric_store_value(
                                                 blk,
                                                 &val_double,
                                             );
+                                        // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
+                                        // slots contain numbers only.
                                         blk.store(DOUBLE, &numeric_value, &field_ptr);
                                         Some(numeric_value)
                                     } else {

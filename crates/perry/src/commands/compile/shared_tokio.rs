@@ -127,27 +127,26 @@ pub(crate) fn archive_member_names(path: &Path) -> std::io::Result<Vec<String>> 
             .parse()
             .unwrap_or(0);
         let mut consumed: u64 = 0;
-        let mut name = raw_name.clone();
-        if let Some(len_str) = raw_name.strip_prefix("#1/") {
+        let name = if let Some(len_str) = raw_name.strip_prefix("#1/") {
             // BSD extended name (what Apple's `ar` and rustc emit on macOS):
             // the real name is the first `len` bytes of the payload.
             let len: usize = len_str.trim().parse().unwrap_or(0);
             let mut buf = vec![0u8; len.min(size as usize)];
             file.read_exact(&mut buf)?;
             consumed += buf.len() as u64;
-            name = String::from_utf8_lossy(&buf)
+            String::from_utf8_lossy(&buf)
                 .trim_end_matches('\0')
-                .to_string();
+                .to_string()
         } else if raw_name == "//" {
             // GNU long-name string table. Read it; its entries resolve the
             // `/<offset>` names below.
             gnu_strtab = vec![0u8; size as usize];
             file.read_exact(&mut gnu_strtab)?;
             consumed += size;
-            name = String::new();
+            String::new()
         } else if let Some(off_str) = raw_name.strip_prefix('/') {
             if let Ok(off) = off_str.trim().parse::<usize>() {
-                name = gnu_strtab
+                gnu_strtab
                     .get(off..)
                     .map(|rest| {
                         let end = rest
@@ -156,14 +155,14 @@ pub(crate) fn archive_member_names(path: &Path) -> std::io::Result<Vec<String>> 
                             .unwrap_or(rest.len());
                         String::from_utf8_lossy(&rest[..end]).to_string()
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_default()
             } else {
                 // `/` alone is the symbol table — not a real member name.
-                name = String::new();
+                String::new()
             }
         } else {
-            name = raw_name.trim_end_matches('/').to_string();
-        }
+            raw_name.trim_end_matches('/').to_string()
+        };
         if !name.is_empty() {
             names.push(name);
         }

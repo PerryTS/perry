@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# #8075: exercise native stack-map roots when Perry's runtime and stdlib are
-# process-wide providers and generated code lives only in a later-loaded app
-# image. The fixture deliberately mirrors the reporter's host boundary: the
-# app is a two-module, app-only dylib; full pressure is requested only after a
-# completed invocation; and one dedicated Perry thread serializes both direct
-# and concurrently queued callers.
+# #8075/#8038: exercise native stack-map roots and streamed Response state when
+# Perry's runtime and stdlib are process-wide providers and generated code
+# lives only in a later-loaded app image. The fixtures deliberately mirror the
+# reporter's host boundary: each app is a two-module, app-only dylib; the GC
+# fixture requests full pressure only after a completed invocation; and the
+# Response fixture roots its exported Promise while sync, async, subclassed,
+# and rejected streams are drained under normal and forced/verified GC.
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 fixture="$repo_root/tests/fixtures/issue_8075_provider_gc"
@@ -170,3 +171,74 @@ else
     "$runtime_library" "$stdlib_library" "$app" \
     "$temporary_symbol" "$retained_symbol"
 fi
+
+# #8038's executable parity fixture is also its app-only provider fixture. The
+# environment guard suppresses its ordinary top-level invocation; the native
+# host calls the exported async wrapper, roots the returned Promise in the
+# provider runtime, and pumps it until fulfillment. Comparing stdout to the
+# Node oracle proves that both chunks and EOF were observed, response/Headers/
+# body identities remained stable, cookies survived, and stream errors rejected
+# instead of hanging. Run once normally and once with moving-GC verification.
+response_app="$provider_dir/issue-8038-response.$library_extension"
+env \
+  PATH="$app_link_dir:$PATH" \
+  PERRY_ISSUE_8075_REAL_CC="$real_cc" \
+  PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \
+  PERRY_ISSUE_8075_STDLIB_LIBRARY="$stdlib_library" \
+  PERRY_RS4GC=1 \
+  PERRY_RUNTIME_DIR="$target_dir/$profile" \
+  "$perry" compile \
+    --no-codegen --no-auto-optimize --march generic \
+    --output-type dylib -o "$response_app" \
+    "$repo_root/test-files/test_issue_8038_cross_module_response_stream.ts"
+
+if [[ "$host_os" == Darwin ]]; then
+  response_symbols=$(nm -gU "$response_app" | awk 'NF >= 3 { symbol=$3; sub(/^_/, "", symbol); print symbol }')
+else
+  response_symbols=$(nm -D --defined-only "$response_app" | awk 'NF >= 3 { print $3 }')
+fi
+response_entry=$(awk '/^__perry_wrap_perry_fn_.*__runIssue8038$/ { print; count++ } END { if (count != 1) exit 1 }' <<<"$response_symbols")
+
+response_host="$scratch/issue-8038-response-host"
+rustc --edition 2021 -O \
+  "$repo_root/tests/fixtures/issue_8038_response_dylib/host.rs" \
+  -o "$response_host"
+
+run_response_fixture() {
+  local mode=$1
+  local output="$scratch/issue-8038-$mode.out"
+  local stderr="$scratch/issue-8038-$mode.err"
+  shift
+  if [[ "$host_os" == Darwin ]]; then
+    if ! env DYLD_LIBRARY_PATH="$provider_dir" \
+      PERRY_ISSUE_8038_LIBRARY_HOST=1 "$@" \
+      "$response_host" "$runtime_library" "$stdlib_library" \
+      "$response_app" "$response_entry" >"$output" 2>"$stderr"; then
+      cat "$stderr" >&2
+      return 1
+    fi
+  else
+    if ! env LD_LIBRARY_PATH="$provider_dir" \
+      PERRY_ISSUE_8038_LIBRARY_HOST=1 "$@" \
+      "$response_host" "$runtime_library" "$stdlib_library" \
+      "$response_app" "$response_entry" >"$output" 2>"$stderr"; then
+      cat "$stderr" >&2
+      return 1
+    fi
+  fi
+  diff -u \
+    "$repo_root/test-parity/expected/test_issue_8038_cross_module_response_stream.txt" \
+    "$output"
+  if [[ "$mode" == forced ]]; then
+    python3 "$repo_root/scripts/gc_evacuation_liveness_assert.py" \
+      "$stderr" --probe "#8038 provider-dylib Response"
+  fi
+}
+
+run_response_fixture normal
+run_response_fixture forced \
+  PERRY_GC_DIAG=1 \
+  PERRY_GC_FORCE_EVACUATE=1 \
+  PERRY_GC_VERIFY_EVACUATION=1 \
+  PERRY_GC_SCHEDULE_SEED=8038 \
+  PERRY_GC_SCHEDULE_RATE=1

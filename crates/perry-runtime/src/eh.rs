@@ -66,7 +66,7 @@ extern "C" {
     fn _Unwind_SetIP(ctx: *mut UnwindContext, value: usize);
     fn _Unwind_GetCFA(ctx: *mut UnwindContext) -> usize;
     fn _Unwind_Backtrace(
-        trace: extern "C" fn(*mut UnwindContext, *mut core::ffi::c_void) -> UnwindReasonCode,
+        trace: unsafe extern "C" fn(*mut UnwindContext, *mut core::ffi::c_void) -> UnwindReasonCode,
         arg: *mut core::ffi::c_void,
     ) -> UnwindReasonCode;
 }
@@ -113,7 +113,10 @@ fn selfcheck_frame_a() -> usize {
 
 #[inline(never)]
 fn selfcheck_frame_b() -> usize {
-    extern "C" fn count(_ctx: *mut UnwindContext, arg: *mut core::ffi::c_void) -> UnwindReasonCode {
+    unsafe extern "C" fn count(
+        _ctx: *mut UnwindContext,
+        arg: *mut core::ffi::c_void,
+    ) -> UnwindReasonCode {
         unsafe { *(arg as *mut usize) += 1 };
         // _URC_NO_REASON: the ONLY value that lets _Unwind_Backtrace keep
         // walking — any other reason code stops the trace after one frame.
