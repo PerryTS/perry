@@ -1307,3 +1307,55 @@ found and fixed, not a cause established. The remaining raw-`args_ptr` arms
 (the JS-handle dispatcher at ~1496 and several others) were left alone: they
 need the same per-arm "can anything above me collect?" argument, and guessing
 uniformly would be the audit-by-eye that §21 already showed is unreliable.
+
+## 26. Where this session ends, and the two things blocked on a quiet host
+
+Everything below is committed on `fix/7803-zod-gc-rooting` (10 commits).
+
+### Landed
+
+| | what | evidence |
+|---|---|---|
+| diagnostics | `PERRY_UNCAUGHT_BACKTRACE`, `PERRY_KEEP_SYMBOLS` | §11, §13 — the pair that made §14's localization possible at all |
+| codegen | callee rooted across argument evaluation, 3 arms | **66 → 3** hazards, §18/§22 |
+| runtime | `dyn_eval` cooperative safepoints | `loop_polls` 24,029 → 93,210, §21 |
+| runtime | argument buffer refreshed in 2 dispatch arms | §25 — fits the symptom precisely; A/B pending |
+| CI | the fourth corpus × lowering cell, gated at 3 | §9, §22 — verified end to end |
+
+### Blocked on host load, not on work
+
+The box sat at load **40–74** with 47–49 sibling worktrees building for the
+last several hours. Two verifications need a quiet host and are the only thing
+between this branch and a PR:
+
+1. **`./scripts/run_gap_tests.sh` + `cargo test -p perry-codegen`** for the
+   three call arms, which change the lowering of every `new`, spread call and
+   closure-typed-local call in the language. Partial run: 30/554, 0 failures,
+   stopped when the suite slowed from 25-tests-in-3-minutes to 30-in-19.
+2. **The rate A/B for §25's argument-buffer fix** — `/tmp/zod-argfix`, 16
+   seeds, against the 3/8–8/16 baseline. Started; one seed per ~20 minutes at
+   this load. Output lands in
+   `scratchpad/zod/sweep-argfix/` and the tally in the task log.
+
+Neither is a judgement call. Both are "run this on a machine that isn't at
+load 60".
+
+### If §25 turns out to be the cause
+
+The follow-up is not "fix the other arms one at a time". `js_native_call_method`
+has one rule — *no value read out of a root may be used below a collection
+point* — and enforces it by two different means in the same function: ten sites
+call `refreshed_args()`, the rest pass the caller's raw buffer, and nothing
+distinguishes them but an author's per-arm judgement. That is the same
+"invariant maintained by audit" shape as `dyn_eval`'s `root_push` discipline
+and as the pre-`RootedGroup` codegen. The architectural fix is to make the raw
+buffer unreachable from the dispatch arms — hand them a type that can only
+yield refreshed values — so the losing spelling stops compiling.
+
+### If it is not
+
+The remaining surface, in order: the other raw-`args_ptr` arms (~1496 and
+below), `dyn_eval/bridge.rs`, and any runtime cache the interpreted-dispatch
+path populates. §23's A/B says the interpreter's own frames are not obviously
+the holder, and §21's audit says its `root_push` discipline is sound, so the
+boundary remains the place to look.
