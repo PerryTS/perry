@@ -1954,3 +1954,104 @@ the static list as current.
 4. Sabotage the root, abort returns. Land a checker budget that can
    only go down, plus a seed-3 schedule cell that asserts
    `copying_minors > 0`.
+
+## 37. NAMED: the spread-new bundle wrote through a moved accumulator — `Doc.compile`, `Expr::NewDynamicSpread`
+
+Session 4 (2026-08-14, fresh binary at `6ae8e5016`+fix). §36's prescription
+("root 138's rootread→js_closure_call1") turned out to be STALE EVIDENCE — on
+freshly emitted IR that finding is GONE, closed by main's native-root alloca
+lowering (#8062/#8071): the `generateFastpass` callee is stored to and
+re-read from a tracked `addrspace(1)` alloca below the `def.shape` pget
+diamond. The bug still reproduced. What was actually left, per the re-run
+checker (`--statepoints --moving-only` on the re-emitted corpus, 81 modules,
+40/40 planted violations caught):
+
+```
+Doc.compile   [unrooted]  alloc → across js_array_like_to_array → js_array_concat
+schemas 185   [unrooted]  rootread → across pget diamond → js_rel_ge      (read-only sink)
+util 121      [unrooted]  alloc → across number_coerce/pad_fill → get_string_pointer (read-only sink)
+```
+
+### The mechanism, with the forensics that pin it
+
+`Expr::NewDynamicSpread` (`new F(...args, src)` — `Doc.compile`'s closing
+expression, run at the end of EVERY `generateFastpass`) bundled its arguments
+with the accumulator in a bare i64 register:
+
+```
+acc = js_array_alloc(0)                  // raw register
+for arg: lower_expr(arg)                 // can collect
+         js_array_like_to_array(part)    // allocates, can run a MOVING minor
+         acc = js_array_concat(acc, …)   // ← writes through acc's PRE-MOVE address
+         acc = js_array_push_f64(acc, v) // ← same
+js_new_function_construct_apply(func_double, acc)   // callee ALSO unrooted
+```
+
+A scheduled minor inside the window moves the accumulator, retires its pages
+to from-space and recycles them into Eden **within the same cycle**; the next
+push/concat then writes a NaN-boxed element through the stale pointer — over
+whatever live young object now occupies those bytes. The element is a string
+(`lines.join("\n")`, `Doc` content lines), and **every garbage header this
+bug ever produced is the high half of a NaN-boxed string**:
+
+| size at latch | hex | run's heap base |
+|---|---|---|
+| 2147418795 | 0x7FFF_02AB | (§35 seed 2) |
+| 2147419055 | 0x7FFF_03AF | (§35 seed 3) |
+| 2147419135 | 0x7FFF_03FF | header 0x3ff2… ✓ |
+| 2147418856 | 0x7FFF_02E8 | header 0x2e85… ✓ |
+| 2147419192 | 0x7FFF_0438 | header 0x438e… ✓ |
+
+0x7FFF = STRING_TAG; the low bits are the top of the 48-bit pointer and
+track each run's ASLR heap base exactly. The "PINNED map/native_pod_view"
+objects the latch reported were never objects at all.
+
+This explains every property the bug ever showed: needs the `new Function`
+path (jitless 0/16 — no `generateFastpass`, no `Doc.compile`); victim frame
+varies (the latch names whoever holds a pointer INTO the sprayed
+neighborhood, not the culprit); `--debug-symbols`/quarantine suppress
+(different reuse timing/none); four runtime-side rooting fixes changed
+nothing (the write is emitted by codegen); intermittent per run at a FIXED
+schedule ordinal (the window is schedule-determined — seed 2 aborts at
+safepoints=58281 scheduled_collections=5637 on two different binaries and
+every failing run of this one — only the reuse layout varies).
+
+### The frame-namer (landed `6ae8e5016`) corroborates
+
+The pin-latch abort now prints the owning frame of the visited native slot.
+Seed 2 abort on the pre-fix binary:
+
+```
+native root slot: owner=perry_closure_…core_schemas_ts__138
+                  reg=31 offset=40   (SP+40)
+ip = fn+0xF64 → the instruction after `bl _js_closure_call2`
+```
+
+138 suspended at `fastpass(payload, ctx)`; a tracked slot in its bundle
+points at an object whose header was sprayed while the JIT corridor ran
+beneath that call. The victim, exactly where the mechanism predicts.
+
+### The fix (`af4a26762`)
+
+`NewDynamicSpread` and the dynamic `super.m(...spread)` arm (an identical
+private copy) now route through `call_spread::bundle_args_rooted` — the
+rooted-accumulator bundling the CallSpread arms have used since #7664 — with
+the callee in a `RootedGroup`, re-read below the bundle. `bundle_args_rooted`
+went `pub(crate)` so no private copies of that loop can exist.
+
+Tests (`expr/call_spread_rooting_tests.rs`): IR-ordering assertions — the
+accumulator each fold reads and the callee the dispatch reads must be defined
+BELOW the last collection point of the bundle, with liveness asserted by
+callee name. **Sabotage-verified**: with the two lowering files reverted the
+two new tests FAIL; with the fix they pass.
+
+### Scoreboard for the acceptance bar
+
+1. Named cause: the spread-new accumulator (and callee) in
+   `Expr::NewDynamicSpread`, lost across the bundle's collection points;
+   the value written through it is what corrupted headers. ✓
+2. Deterministic-window reproducer: seed 2, RATE=0.1, ALLOC_KB=0 —
+   abort always at ordinal 58281 (2/3 detection per run, layout lottery);
+   flip measured on the fix binary (see below). —
+3. Sabotage: compile-time flip demonstrated (tests red on reverted arm);
+   dynamic sabotage arm = the pre-fix binary itself (aborting). ✓
