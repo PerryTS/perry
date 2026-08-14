@@ -604,6 +604,15 @@ records the commit, host, load average at capture, toolchain versions, and
 SHA-256 of the `perry` binary and both runtime archives, so a re-pin is
 auditable after the fact.
 
+When only a subset of deterministic cells is accepted, do not replace the
+whole artifact and silently move rows that stayed inside their bands. Copy only
+the proven cell distributions from the exact measurement and add an
+`accepted_deterministic_deltas` receipt. Each row in that receipt records its
+old and accepted median plus the causal merged commit(s); the checker treats a
+missing cause, duplicate row, malformed input hash, or receipt/pin disagreement
+as a fatal artifact defect. The receipt is provenance, not an allowance:
+`evaluate` never reads it when deciding whether a future measurement regressed.
+
 ## Adding a probe
 
 Adding or removing a probe changes the baseline's probe set, and the checker

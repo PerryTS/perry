@@ -490,6 +490,63 @@ class ArtifactValidationTests(unittest.TestCase):
         for key in ("perry", "libperry_runtime.a", "libperry_stdlib.a"):
             self.assertRegex(binaries[key]["sha256"], r"^[0-9a-f]{64}$")
 
+    def test_selective_refresh_names_every_accepted_cell_and_cause(self):
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        receipt = artifact["accepted_deterministic_deltas"]
+        expected = {
+            ("02_survivor_promotion", "copied_objects"),
+            ("03_cross_gen_writes", "copied_objects"),
+            ("03_cross_gen_writes", "copied_bytes"),
+            ("03_cross_gen_writes", "freed_bytes"),
+            ("04_dead_after_deep_stack", "copied_objects"),
+            ("04_dead_after_deep_stack", "freed_bytes"),
+            ("05_closure_capture", "copied_objects"),
+            ("05_closure_capture", "freed_bytes"),
+            ("06_string_retention", "freed_bytes"),
+            ("08_map_set_sidetables", "copied_objects"),
+            ("08_map_set_sidetables", "copied_bytes"),
+            ("08_map_set_sidetables", "freed_bytes"),
+            ("12_large_live_set", "copied_objects"),
+            ("12_large_live_set", "promoted_bytes"),
+            ("12_large_live_set", "freed_bytes"),
+            ("13_large_eden_survivors", "heap_used_bytes"),
+            ("13_large_eden_survivors", "freed_bytes"),
+            ("14_grow_then_churn", "copied_objects"),
+            ("14_grow_then_churn", "copied_bytes"),
+            ("14_grow_then_churn", "promoted_bytes"),
+            ("14_grow_then_churn", "freed_bytes"),
+        }
+        actual = {(cell["probe"], cell["metric"]) for cell in receipt["cells"]}
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            {cause["pull_request"] for cause in receipt["causes"].values()},
+            {7928, 7960, 7961},
+        )
+
+    def test_selective_refresh_receipt_cannot_disagree_with_the_pin(self):
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        tampered = copy.deepcopy(artifact)
+        tampered["accepted_deterministic_deltas"]["cells"][0]["accepted_median"] += 1
+        with self.assertRaisesRegex(RatchetError, "does not match pinned median"):
+            validate_artifact(tampered)
+
+    def test_selective_refresh_does_not_allow_a_future_unexplained_delta(self):
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        current = copy.deepcopy(artifact)
+        current["kind"] = "gc-ratchet-measurement"
+        probe = "02_survivor_promotion"
+        metric = "copied_objects"
+        pinned = artifact["probes"][probe]["metrics"][metric]["median"]
+        tolerance = tolerances_from_json(artifact["tolerances"])["shared_ci"][metric]
+        breach = pinned + tolerance.allowance(pinned) + 1
+        current["probes"][probe]["metrics"][metric] = distribution([breach, breach])
+
+        _, failures = evaluate(artifact, current, profile="shared_ci")
+        self.assertTrue(
+            any(probe in failure and metric in failure for failure in _hard(failures)),
+            "accepted provenance must explain the pin, never suppress future drift",
+        )
+
     def test_pinned_artifact_probes_all_ran_a_collection(self):
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
         for name, entry in artifact["probes"].items():
