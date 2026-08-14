@@ -1254,15 +1254,19 @@ pub fn run_with_parse_cache(
                 // `class_ids["Number"]` (the export alias) — a miss — and
                 // `S.Number` falls back to the global `Number`, losing all
                 // inherited statics (effect's `S.Number.ast` → undefined →
-                // Schema decode crash). Scoped to classes: renamed var/func
-                // exports route through wrapper-symbol emission that keys on the
-                // export name, and feeding the origin name there breaks linking.
-                if local != exported
-                    && hir_module
-                        .classes
-                        .iter()
-                        .any(|c| c.name == *local && c.is_exported)
-                {
+                // Schema decode crash). Declared functions need the same origin
+                // mapping when a public alias collides with another local body
+                // (`Record3 as Record` beside an unrelated local `Record`).
+                // Variable/closure exports remain on the public getter ABI.
+                let is_renamed_class = hir_module
+                    .classes
+                    .iter()
+                    .any(|c| c.name == *local && c.is_exported);
+                let is_renamed_declared_function = hir_module
+                    .functions
+                    .iter()
+                    .any(|f| f.name == *local && f.is_exported);
+                if local != exported && (is_renamed_class || is_renamed_declared_function) {
                     all_module_export_origin_names
                         .entry(path_str.clone())
                         .or_default()
@@ -5175,8 +5179,13 @@ pub fn run_with_parse_cache(
     // `libperry_wasm_host.a not found` until a human ran
     // `cargo build --release -p perry-wasm-host`. Build it on demand here so
     // both the symbol-stub scan below and the final link resolve it. Cargo's
-    // freshness check makes this a no-op when it is already current; programs
-    // that do not use wasm skip the check entirely.
+    // freshness check makes this a no-op when it is already current. For a
+    // program with no detected wasm use, still pass an already-installed host
+    // archive through to the final linker. Static archive extraction adds no
+    // code unless the selected prebuilt runtime was itself compiled with
+    // `perry-runtime/wasm-host`; in that case its always-present wasm entry
+    // points carry host references even though this particular source did not
+    // mention `WebAssembly.*`.
     let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
     let wasm_host_lib_resolved = if use_wasm_host {
         // Prefer a Cargo freshness check when workspace source is available.
@@ -5188,7 +5197,7 @@ pub fn run_with_parse_cache(
         build_wasm_host_library(target.as_deref(), format, verbose)
             .or_else(|| find_wasm_host_library(target.as_deref()))
     } else {
-        None
+        find_wasm_host_library(target.as_deref())
     };
 
     // Auto-mode: pick the smallest matching (features, panic) profile
@@ -6241,25 +6250,23 @@ pub fn run_with_parse_cache(
     // a hard error when codegen detected `WebAssembly.*` usage, otherwise the
     // flag-only case silently degrades to None (the user will hit a link
     // error on first use, with the symbol name as the breadcrumb).
-    let wasm_host_lib = if use_wasm_host {
-        match wasm_host_lib_resolved {
-            Some(lib) => {
+    let wasm_host_lib = match wasm_host_lib_resolved {
+        Some(lib) => {
+            if use_wasm_host {
                 if let OutputFormat::Text = format {
                     println!("Using wasmi WebAssembly host runtime");
                 }
-                Some(lib)
             }
-            None => {
-                if ctx.needs_wasm_runtime {
-                    return Err(anyhow!(
-                        "WebAssembly.* used but libperry_wasm_host.a not found. Build it with: cargo build --release -p perry-wasm-host"
-                    ));
-                }
-                None
-            }
+            Some(lib)
         }
-    } else {
-        None
+        None => {
+            if ctx.needs_wasm_runtime {
+                return Err(anyhow!(
+                    "WebAssembly.* used but libperry_wasm_host.a not found. Build it with: cargo build --release -p perry-wasm-host"
+                ));
+            }
+            None
+        }
     };
 
     // #7629 — refuse a link whose wrapper archives bundle a different tokio

@@ -200,12 +200,34 @@ fn compile_plan_size_optimizes_oversized_many_function_module() {
         None,
         huge,
         many_funcs,
-        None,
+        Some(64 * 1024),
         false,
     );
     assert!(plan.clang_args.contains(&"-Os".to_string()));
     assert!(!plan.clang_args.contains(&"-O3".to_string()));
     assert!(!plan.clang_args.contains(&"-O0".to_string()));
+}
+
+#[test]
+fn compile_plan_keeps_o0_when_one_function_is_large_but_average_is_small() {
+    // OpenCode's meriyah chunk contains hundreds of functions, so its average
+    // is only ~64 KB/function, but one generated parser function still makes
+    // LLVM -Os super-linear. Native construction supplies the real maximum,
+    // which must override the otherwise-safe many-function average.
+    let huge = ll_o0_threshold_bytes() + 1;
+    let many_funcs = huge / 1024;
+    let plan = build_clang_compile_plan(
+        PathBuf::from("clang"),
+        PathBuf::from("/tmp/input.ll"),
+        PathBuf::from("/tmp/output.o"),
+        None,
+        huge,
+        many_funcs,
+        Some(ll_o0_max_function_bytes() + 1),
+        false,
+    );
+    assert!(plan.clang_args.contains(&"-O0".to_string()));
+    assert!(!plan.clang_args.contains(&"-Os".to_string()));
 }
 
 #[test]

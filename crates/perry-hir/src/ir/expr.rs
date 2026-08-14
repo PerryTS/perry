@@ -532,7 +532,7 @@ pub enum Expr {
     /// machinery — and writes the per-evaluation static fields as the
     /// object's OWN properties (`named_statics` via
     /// `js_object_set_field_by_name`, `symbol_statics` via
-    /// `js_object_set_symbol_property`). The class value is the object
+    /// `js_object_set_property_key`). The class value is the object
     /// POINTER, so `make(a) !== make(b)` (distinct heap allocations) and
     /// each carries its own `static ast`. Because it is a normal traced
     /// heap object it is collectible — no leak. The static-field

@@ -221,14 +221,15 @@ const NON_COLLECTING: &[&str] = &[
 ];
 
 /// Guard against a pathological function turning this pass into the compile's
-/// bottleneck: the reachability walk is O(blocks) per slot load, so the product
-/// is what matters. Above the cap the function keeps today's IR — the pass is
+/// bottleneck: the reachability/rewrite scan is O(instructions) per reloadable
+/// value, so their product is what matters. Above the cap the function keeps
+/// today's IR — the pass is
 /// an improvement, not a correctness precondition, so declining is safe.
 ///
 /// Sized from the corpora: the largest function in the dependency-scale corpus
 /// (`zod`'s parse core) is ~1400 blocks with ~90 slot loads, an order of
 /// magnitude under this.
-const MAX_BLOCK_LOAD_PRODUCT: usize = 8_000_000;
+const MAX_INSTRUCTION_VALUE_PRODUCT: usize = 8_000_000;
 
 /// How long a derivation may get before the pass declines to re-materialise it.
 ///
@@ -512,7 +513,8 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
             break;
         }
     }
-    if blocks.len().saturating_mul(values.len()) > MAX_BLOCK_LOAD_PRODUCT {
+    let instruction_count = facts.iter().map(Vec::len).sum::<usize>();
+    if instruction_count.saturating_mul(values.len()) > MAX_INSTRUCTION_VALUE_PRODUCT {
         return 0;
     }
 

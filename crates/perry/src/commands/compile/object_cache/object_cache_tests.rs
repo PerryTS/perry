@@ -614,6 +614,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_INLINE_CTOR",
         "PERRY_STRING_INIT_CHUNK_SIZE",
         "PERRY_LL_O0_THRESHOLD_BYTES",
+        "PERRY_LL_O0_MAX_FUNCTION_BYTES",
         "PERRY_LL_SIZE_OPT",
         "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
         "PERRY_ENTRY_SYMBOL",

@@ -104,3 +104,53 @@ fn initialized_export_var_still_exports() {
     assert!(is_named_export(&module, "initialized"));
     assert!(module.exported_objects.contains(&"initialized".to_string()));
 }
+
+#[test]
+fn renamed_exports_register_both_public_and_local_bindings_for_any_initializer() {
+    let module = lower_result(
+        r#"
+        var $SamplingFilter = Object.freeze({ Nearest: 1 });
+        var Tm = [...["js"], "ts"];
+        export { $SamplingFilter as SamplingFilter, Tm as languages };
+        "#,
+    );
+
+    for name in ["$SamplingFilter", "SamplingFilter", "Tm", "languages"] {
+        assert!(
+            module.exported_objects.contains(&name.to_string()),
+            "renamed value export must register {name:?} regardless of initializer shape: {:?}",
+            module.exported_objects
+        );
+    }
+}
+
+#[test]
+fn renamed_function_value_export_retains_original_function_id() {
+    let module = lower_result(
+        r#"
+        function resolveAt(key) {
+            return value => value[key];
+        }
+        const resolveAt2 = resolveAt;
+        export { resolveAt2 as resolveAt };
+        "#,
+    );
+
+    let original = module
+        .functions
+        .iter()
+        .find(|func| func.name == "resolveAt")
+        .expect("original resolveAt function must be lowered");
+    assert!(
+        module
+            .exported_functions
+            .iter()
+            .any(|(name, id)| name == "resolveAt" && *id == original.id),
+        "renamed function-value export must map its public name to the original body: {:?}",
+        module.exported_functions
+    );
+    assert!(
+        original.is_exported,
+        "the aliased function body must be available to cross-module codegen"
+    );
+}

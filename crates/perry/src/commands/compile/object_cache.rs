@@ -907,6 +907,12 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
     h.field(
+        "env_ll_o0_max_function_bytes",
+        env_var("PERRY_LL_O0_MAX_FUNCTION_BYTES")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
         "env_ll_size_opt",
         env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
     );

@@ -419,14 +419,35 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
 /// correct for any mix of numbers and heap references.
 #[no_mangle]
 pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut ArrayHeader {
-    let arr = js_array_alloc_literal(n);
     if values.is_null() || n == 0 {
-        return arr;
+        return js_array_alloc_literal(n);
     }
+
+    // #5391 follow-up: `values` points at a compiler-emitted ordinary stack
+    // buffer, not a GC shadow-stack region. The destination allocation below
+    // may collect and evacuate any heap values in that buffer before we copy
+    // them. This was visible as an old array whose third element still pointed
+    // at a from-space closure when a large bundled MIME table eventually
+    // triggered the next loop-poll collection. Root every input first and copy
+    // the refreshed values after allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut value_handles: Vec<crate::gc::RuntimeHandle<'_>> = Vec::with_capacity(n as usize);
+    for i in 0..n as usize {
+        value_handles.push(scope.root_nanbox_f64(unsafe { *values.add(i) }));
+    }
+
+    #[cfg(test)]
+    ARRAY_FROM_VALUES_FORCE_GC.with(|armed| {
+        if armed.replace(false) {
+            let _ = crate::gc::gc_collect_minor();
+        }
+    });
+
+    let arr = js_array_alloc_literal(n);
     let parent = arr as u64;
     let elems = unsafe { (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
-    for i in 0..n as usize {
-        let v = unsafe { *values.add(i) };
+    for (i, handle) in value_handles.iter().enumerate() {
+        let v = handle.get_nanbox_f64();
         let slot = unsafe { elems.add(i) };
         // A uniquely-owned string element now aliases this slot — demote it to
         // shared so a later `s += x` allocates fresh instead of mutating the
@@ -442,6 +463,16 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
         crate::gc::js_write_barrier_slot(parent, slot as u64, vbits);
     }
     arr
+}
+
+#[cfg(test)]
+thread_local! {
+    static ARRAY_FROM_VALUES_FORCE_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_array_from_values_gc() {
+    ARRAY_FROM_VALUES_FORCE_GC.with(|armed| armed.set(true));
 }
 
 /// Issue #179 Phase 2: if `arr` points at a `LazyArrayHeader`

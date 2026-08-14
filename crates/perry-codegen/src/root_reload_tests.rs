@@ -71,6 +71,37 @@ fn the_planted_hazard_is_rewritten_to_a_reload() {
 }
 
 #[test]
+fn pathological_instruction_value_product_is_declined() {
+    let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
+    let b = f.create_block("entry");
+    let slot = b.alloca(DOUBLE);
+    b.store(DOUBLE, "%arg", &slot);
+    b.call_void(
+        "js_shadow_slot_bind",
+        &[(crate::types::I32, "0"), (PTR, &slot)],
+    );
+    let stale = b.load(DOUBLE, &slot);
+
+    // 3,001 reloadable values times just over 3,000 instructions exceeds the
+    // analysis cap. This is the minified-bundle shape that used to spend many
+    // minutes repeatedly walking one enormous generated function.
+    for _ in 0..3_000 {
+        b.load(DOUBLE, &slot);
+    }
+    b.call(DOUBLE, "js_object_alloc", &[]);
+    let r = b.call(
+        DOUBLE,
+        "js_object_assign_one",
+        &[(DOUBLE, &stale), (DOUBLE, "0.0")],
+    );
+    b.ret(DOUBLE, &r);
+
+    let before = body(&f);
+    assert_eq!(apply_to_function(&mut f), 0);
+    assert_eq!(body(&f), before, "declining the pass must preserve the IR");
+}
+
+#[test]
 fn a_non_collecting_window_is_left_byte_for_byte_alone() {
     // The ONLY difference from the planted case is which helper sits in the
     // window. `js_write_barrier` cannot allocate, so nothing can move and

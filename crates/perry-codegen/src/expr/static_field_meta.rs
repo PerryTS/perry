@@ -611,7 +611,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
                         ctx.block().call(
                             DOUBLE,
-                            "js_object_set_symbol_property",
+                            // Despite the HIR field's historical `symbol_statics`
+                            // name, it contains every computed static key. In
+                            // particular, `static [TypeId] = TypeId` has a string
+                            // key when `TypeId` is a string constant. Use the
+                            // general PropertyKey setter so both string and Symbol
+                            // computed statics are preserved on fresh class objects.
+                            "js_object_set_property_key",
                             &[
                                 (DOUBLE, &obj_box),
                                 (DOUBLE, &values[0]),

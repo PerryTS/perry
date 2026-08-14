@@ -905,7 +905,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                 let _ = wf.create_block("entry");
                 let blk = wf.block_mut(0).unwrap();
-                let target = scoped_fn_name(module_prefix, &f.name);
+                let target = func_names
+                    .get(&f.id)
+                    .cloned()
+                    .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                 let call_args: Vec<(LlvmType, String)> =
                     (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                 let call_args_ref: Vec<(LlvmType, &str)> =
@@ -1086,6 +1089,31 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 }
             }
 
+            // Sub-bug C: the module namespace initializer reads a renamed
+            // export through its LOCAL getter name. Bundled code commonly
+            // hides generated locals behind public names, for example
+            // `var $SamplingFilter; export { $SamplingFilter as
+            // SamplingFilter }` or `var Tm; export { Tm as languages }`.
+            // The producer already has the public zero-argument getter (or
+            // undefined stub), but the initializer calls
+            // `perry_fn_<src>__<local>`. Emit a local-name forwarding getter
+            // for non-function aliases so that call has a definition.
+            if local != exported && !func_by_local_name.contains_key(local.as_str()) {
+                let local_target = format!("perry_fn_{}__{}", module_prefix, sanitize(local));
+                let exported_target = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+                if local_target != exported_target
+                    && !llmod.has_function(&local_target)
+                    && llmod.has_function(&exported_target)
+                    && emitted_aliases.insert(local_target.clone())
+                {
+                    let getter = llmod.define_function(&local_target, DOUBLE, vec![]);
+                    let _ = getter.create_block("entry");
+                    let blk = getter.block_mut(0).unwrap();
+                    let value = blk.call(DOUBLE, &exported_target, &[]);
+                    blk.ret(DOUBLE, &value);
+                }
+            }
+
             // Sub-bug B: emit no-op wrapper for `local==exported` named
             // exports where local isn't a HIR function and no wrapper
             // is yet defined. Catches `import * as z; export { z };`
@@ -1136,7 +1164,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                         let _ = wf.create_block("entry");
                         let blk = wf.block_mut(0).unwrap();
-                        let target = scoped_fn_name(module_prefix, &f.name);
+                        let target = func_names
+                            .get(&f.id)
+                            .cloned()
+                            .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                         let call_args: Vec<(LlvmType, String)> =
                             (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                         let call_args_ref: Vec<(LlvmType, &str)> =

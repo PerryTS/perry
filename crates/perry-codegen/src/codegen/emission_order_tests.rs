@@ -60,7 +60,7 @@
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{Class, Export, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 /// Enough entries that an accidentally-sorted hash order is not a plausible
 /// explanation for a green run.
@@ -159,6 +159,43 @@ fn empty_module(name: &str) -> Module {
 fn ir(module: &Module) -> String {
     String::from_utf8(compile_module(module, ir_opts()).expect("codegen should succeed"))
         .expect("LLVM IR should be UTF-8")
+}
+
+#[test]
+fn renamed_non_function_exports_define_their_local_namespace_getters() {
+    let mut module = empty_module("renamed_export.ts");
+    module.exports.extend([
+        Export::Named {
+            local: "$SamplingFilter".to_string(),
+            exported: "SamplingFilter".to_string(),
+        },
+        Export::Named {
+            local: "Tm".to_string(),
+            exported: "languages".to_string(),
+        },
+    ]);
+
+    let text = ir(&module);
+    for (local_symbol, public_symbol) in [
+        (
+            "perry_fn_renamed_export_ts___SamplingFilter",
+            "perry_fn_renamed_export_ts__SamplingFilter",
+        ),
+        (
+            "perry_fn_renamed_export_ts__Tm",
+            "perry_fn_renamed_export_ts__languages",
+        ),
+    ] {
+        let marker = format!("define double @{local_symbol}()");
+        let start = text
+            .find(&marker)
+            .unwrap_or_else(|| panic!("missing local getter {local_symbol}\n{text}"));
+        let body = &text[start..text[start..].find("\n}").map_or(text.len(), |n| start + n)];
+        assert!(
+            body.contains(&format!("call double @{public_symbol}()")),
+            "local getter {local_symbol} must forward to {public_symbol}:\n{body}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

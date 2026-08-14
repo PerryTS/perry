@@ -42,6 +42,8 @@ pub use self::alloc::{
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
     js_array_from_arraylike_holey_value, js_array_from_f64,
 };
+#[cfg(test)]
+pub(crate) use self::alloc::{js_array_from_values, test_force_array_from_values_gc};
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_generic,
     js_array_fill_range, js_array_reverse, js_array_reverse_value,

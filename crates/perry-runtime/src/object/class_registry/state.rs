@@ -191,6 +191,26 @@ pub(crate) fn class_has_own_dynamic_prop(class_id: u32, name: &str) -> bool {
     })
 }
 
+/// Presence-only lookup for a static data property on a class or any class in
+/// its `extends` chain. Unlike reading the value, this never invokes a static
+/// getter and is therefore suitable for `name in Constructor`.
+pub(crate) fn class_has_dynamic_prop_in_chain(mut class_id: u32, name: &str) -> bool {
+    let mut depth = 0usize;
+    while class_id != 0 && depth < 64 {
+        if class_has_own_dynamic_prop(class_id, name) {
+            return true;
+        }
+        match super::get_parent_class_id(class_id) {
+            Some(parent) if parent != 0 && parent != class_id => {
+                class_id = parent;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {
@@ -852,5 +872,19 @@ mod class_dynamic_prop_store_tests {
         // is non-empty for the whole process), still updates the value.
         class_dynamic_prop_root_store(cid, "k", 3.0);
         assert_eq!(stored(cid, "k"), Some(3.0));
+    }
+
+    #[test]
+    fn inherited_presence_walks_the_class_parent_chain() {
+        let parent = 0x7c01_0010;
+        let child = 0x7c01_0011;
+        class_dynamic_prop_root_store(parent, "~effect/Schema/Schema", 41.0);
+        super::register_class(child, parent);
+
+        assert!(class_has_dynamic_prop_in_chain(
+            child,
+            "~effect/Schema/Schema"
+        ));
+        assert!(!class_has_own_dynamic_prop(child, "~effect/Schema/Schema"));
     }
 }

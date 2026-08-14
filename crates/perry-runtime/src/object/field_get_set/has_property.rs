@@ -360,10 +360,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     .and_then(|b| std::str::from_utf8(b).ok())
                 {
                     let present = matches!(name, "prototype" | "name" | "length")
+                        || super::super::class_registry::class_has_dynamic_prop_in_chain(
+                            class_id, name,
+                        )
                         || (!super::super::class_registry::class_is_key_deleted(class_id, name)
-                            && (super::super::class_registry::class_has_own_dynamic_prop(
-                                class_id, name,
-                            ) || super::super::class_registry::lookup_static_method_in_chain(
+                            && (super::super::class_registry::lookup_static_method_in_chain(
                                 class_id, name,
                             )
                             .is_some()
@@ -967,6 +968,19 @@ unsafe fn object_string_key_has_property(
         if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
             if b.first() == Some(&b'#') {
                 return nanbox_false;
+            }
+            // Capture-carrying class expressions are heap class objects. Their
+            // computed string statics live in the template class-id table, not
+            // in the object's `keys_array`, so the ordinary walk below cannot
+            // see them. Check presence across the class chain without reading
+            // a value or invoking a getter.
+            if crate::object::is_class_object_ptr(obj_ptr as *const u8) {
+                if let Ok(name) = std::str::from_utf8(b) {
+                    if super::super::class_registry::class_has_dynamic_prop_in_chain(class_id, name)
+                    {
+                        return nanbox_true;
+                    }
+                }
             }
         }
         // Native-module namespaces (console, fs, …) expose VIRTUAL keys —

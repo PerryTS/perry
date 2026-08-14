@@ -390,6 +390,33 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         }
     }
 
+    // Class constructors are represented as INT32-tagged ClassRefs rather
+    // than heap pointers.  Consequently they never reach either recording
+    // path below.  `Object.setPrototypeOf(class C {}, proto)` is observable
+    // through constructor static-property lookup and `Object.getPrototypeOf`;
+    // Effect's Schema.Class factory relies on exactly this shape before a
+    // generated class is used as another class's dynamic superclass.
+    //
+    // Keep `.prototype` ClassRefs on their existing instance-prototype path:
+    // this side table describes the constructor's own [[Prototype]], not
+    // `C.prototype`'s [[Prototype]].
+    if let Some(class_id) = super::super::class_ref_id(obj_value) {
+        if super::super::class_prototype_ref_id(obj_value).is_none()
+            && (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+        {
+            let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as usize;
+            if proto_ptr != 0 && crate::closure::is_closure_ptr(proto_ptr) {
+                super::super::class_registry::class_parent_closure_root_store(class_id, proto_ptr);
+            } else if proto_ptr != 0 && is_valid_obj_ptr(proto_ptr as *const u8) {
+                super::super::class_registry::class_prototype_object_root_store(
+                    class_id,
+                    proto_ptr as *mut super::super::ObjectHeader,
+                );
+            }
+        }
+        return obj_value;
+    }
+
     // #36 / #321: when the target is a closure (a plain function value) and the
     // proto is an object, record the (closure → proto) link in the closure
     // static-prototype side-table. effect's `Context.Tag(id)` returns a

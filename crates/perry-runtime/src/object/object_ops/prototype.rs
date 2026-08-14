@@ -323,6 +323,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
+        // A constructor ClassRef may have had its own [[Prototype]] replaced
+        // with `Object.setPrototypeOf`.  This is distinct from the tagged
+        // `C.prototype` value, whose chain is handled below.  Prefer the
+        // explicit object/function edge over the compiled `extends` edge,
+        // matching OrdinaryGetPrototypeOf.
+        if super::super::class_prototype_ref_id(obj_value).is_none() {
+            let explicit = super::super::class_registry::class_prototype_object(class_id);
+            if !explicit.is_null() {
+                return crate::value::js_nanbox_pointer(explicit as i64);
+            }
+            if let Some(parent_closure) =
+                super::super::class_registry::class_parent_closure(class_id)
+            {
+                return crate::value::js_nanbox_pointer(parent_closure as i64);
+            }
+        }
         if let Some(parent_id) = get_parent_class_id(class_id) {
             if parent_id != 0 {
                 let parent_bits = 0x7FFE_0000_0000_0000u64 | (parent_id as u64);

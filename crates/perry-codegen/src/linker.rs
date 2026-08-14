@@ -350,6 +350,23 @@ fn ll_size_opt_max_fn_bytes() -> usize {
         .unwrap_or(DEFAULT_LL_SIZE_OPT_MAX_FN_BYTES)
 }
 
+/// A single generated function above this size makes LLVM's `-O1+` family
+/// unsafe even when hundreds of small siblings keep the unit-wide average
+/// low. OpenCode's 169 KB meriyah parser bundle expands into ~44 MiB of IR;
+/// at the old 6 MiB per-function cutoff one `-Os` unit consumed 68 GiB of
+/// private memory and crashed after 25+ minutes, while all three units finish
+/// at `-O0` in under four seconds each. Keep this separate from the 6 MiB
+/// *unit* threshold so ordinary 1--6 MiB modules still receive `-O3`.
+/// Tunable via `PERRY_LL_O0_MAX_FUNCTION_BYTES`.
+const DEFAULT_LL_O0_MAX_FUNCTION_BYTES: usize = 1024 * 1024;
+
+fn ll_o0_max_function_bytes() -> usize {
+    std::env::var("PERRY_LL_O0_MAX_FUNCTION_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LL_O0_MAX_FUNCTION_BYTES)
+}
+
 /// Decide the clang opt flag for an oversized unit: `-Os` when the unit is many
 /// ordinary functions (size-optimize, big `__text` win), `-O0` when it is a
 /// pathological few-giant-function monolith (`#4880`). `ll_fn_count` is the
@@ -366,9 +383,9 @@ fn oversized_opt_flag(
     }
     // Native construction knows each function's render-free size. Do not let
     // hundreds of small functions dilute one pathological generated function's
-    // average: that sent a 20+ MiB body through -Os in the Claude bundle and
-    // spent minutes in LLVM where the same body finishes in seconds at -O0.
-    if max_fn_bytes.is_some_and(|bytes| bytes > ll_o0_threshold_bytes()) {
+    // average: that sent generated parser bodies through -Os in Claude and
+    // OpenCode, spending minutes and tens of GiB where -O0 finishes in seconds.
+    if max_fn_bytes.is_some_and(|bytes| bytes > ll_o0_max_function_bytes()) {
         return "-O0";
     }
     let avg_fn_bytes = ll_byte_size / ll_fn_count.max(1);
@@ -417,7 +434,8 @@ fn build_clang_compile_plan(
             "perry: module IR is {:.1} MB (> {:.1} MB), {} functions \
              (~{:.0} KB/fn); compiling at {} instead of -O3 so LLVM's -O1+ \
              pipeline doesn't blow up on oversized functions (#4880). Override \
-             with PERRY_LL_O0_THRESHOLD_BYTES / PERRY_LL_SIZE_OPT.",
+             with PERRY_LL_O0_THRESHOLD_BYTES / PERRY_LL_O0_MAX_FUNCTION_BYTES / \
+             PERRY_LL_SIZE_OPT.",
             ll_byte_size as f64 / (1024.0 * 1024.0),
             o0_threshold as f64 / (1024.0 * 1024.0),
             ll_fn_count,

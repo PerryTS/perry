@@ -997,8 +997,15 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
                 let prev_this = crate::object::js_implicit_this_set(receiver);
+                // Static accessors compile through the same prologue as static
+                // methods (`js_static_this_resolve`). Preserve the actual
+                // receiver here too: a factory-created class is a heap class
+                // object carrying per-evaluation statics and capture values,
+                // not the shared INT32 template class ref.
+                crate::object::static_this_arm_if_unarmed(receiver);
                 let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                 let result = f();
+                crate::object::static_this_disarm();
                 crate::object::js_implicit_this_set(prev_this);
                 return Some(result);
             }
@@ -1034,8 +1041,10 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
             if let Some(&(_, setter)) = accessors.get(name) {
                 if setter != 0 {
                     let prev_this = crate::object::js_implicit_this_set(receiver);
+                    crate::object::static_this_arm_if_unarmed(receiver);
                     let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
                     let _ = f(value);
+                    crate::object::static_this_disarm();
                     crate::object::js_implicit_this_set(prev_this);
                 }
                 return true;

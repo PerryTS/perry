@@ -310,6 +310,13 @@ pub(crate) fn build_and_run_link(
         } else {
             cmd.arg("/OPT:ICF");
         }
+        // Match the non-Windows `PERRY_LINK_MAP` diagnostic above. MSVC
+        // link.exe and lld-link both accept `/MAP:<path>`; previously the env
+        // knob was silently ignored on Windows, forcing runtime-address hunts
+        // to relink by hand.
+        if let Some(map) = std::env::var_os("PERRY_LINK_MAP") {
+            cmd.arg(format!("/MAP:{}", map.to_string_lossy()));
+        }
     }
 
     // Link libraries - stdlib bundles perry-runtime; runtime provides base FFI symbols.

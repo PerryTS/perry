@@ -468,6 +468,18 @@ pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> 
             break;
         }
         visited[depth] = cid;
+
+        // Static Symbol fields declared by a normal class live in
+        // CLASS_STATIC_SYMBOLS, not on its materialized prototype object.
+        // Check that table at every point in the `extends` chain.  Without
+        // this, string-keyed statics inherited correctly while symbol-keyed
+        // brands did not: Effect's `class Child extends SchemaClass(...)`
+        // could read `Child.ast`, but `TypeId in Child` and `Child[TypeId]`
+        // both missed the parent's `static [TypeId]` field.
+        if let Some(value_bits) = crate::symbol::class_static_symbol_lookup(cid, sym_f64) {
+            return Some(f64::from_bits(value_bits));
+        }
+
         let proto_obj = class_prototype_object(cid);
         let mut next_cid: u32 = 0;
         if !proto_obj.is_null() {

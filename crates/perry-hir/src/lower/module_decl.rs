@@ -1554,6 +1554,7 @@ pub(crate) fn lower_module_decl(
                         // (`const _await = core.deferredAwait`) — without this branch
                         // the renamed export `_await as await` produces no backing
                         // global / getter at all and `_perry_fn_<mod>__await` link-fails.
+                        let mut aliased_func_id = None;
                         for stmt in &module.init {
                             if let Stmt::Let {
                                 name,
@@ -1562,7 +1563,23 @@ pub(crate) fn lower_module_decl(
                             } = stmt
                             {
                                 if name == &local {
-                                    let is_exportable = matches!(
+                                    // A separately-declared function alias keeps the
+                                    // original function's FuncId:
+                                    //
+                                    //   function resolveAt(key) { ... }
+                                    //   const resolveAt2 = resolveAt;
+                                    //   export { resolveAt2 as resolveAt };
+                                    //
+                                    // Treating this solely as an exported object emits a
+                                    // zero-argument value getter under the public name. That
+                                    // getter then steals the canonical function symbol from
+                                    // the original body and recursively reads the alias global.
+                                    // Record the public-name-to-body relationship just like
+                                    // `export const alias = declaredFunction` does above.
+                                    if let Expr::FuncRef(func_id) = init_expr {
+                                        aliased_func_id = Some(*func_id);
+                                    }
+                                    let _previously_recognized_export_shape = matches!(
                                         init_expr,
                                         Expr::Closure { .. }
                                             | Expr::Object(_)
@@ -1647,7 +1664,13 @@ pub(crate) fn lower_module_decl(
                                             // `NativeMethodCall` via lookup_native_module.
                                             | Expr::NativeMethodCall { .. }
                                     );
-                                    if is_exportable {
+                                    // A named export of a module `let` is a runtime value
+                                    // regardless of its initializer shape. The whitelist
+                                    // above is retained as documentation of the historical
+                                    // cases, but must not gate global/getter emission: new
+                                    // lowering variants (for example Object.freeze) otherwise
+                                    // become `undefined` when read through a namespace.
+                                    {
                                         module.exported_objects.push(exported.clone());
                                         // Ensure the LOCAL name also surfaces as
                                         // exported — that's what gates the global
@@ -1664,6 +1687,20 @@ pub(crate) fn lower_module_decl(
                                     }
                                     break;
                                 }
+                            }
+                        }
+                        if let Some(func_id) = aliased_func_id {
+                            if !module
+                                .exported_functions
+                                .iter()
+                                .any(|(name, id)| name == &exported && *id == func_id)
+                            {
+                                module.exported_functions.push((exported.clone(), func_id));
+                            }
+                            if let Some(func) =
+                                module.functions.iter_mut().find(|func| func.id == func_id)
+                            {
+                                func.is_exported = true;
                             }
                         }
                     }

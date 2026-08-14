@@ -1,4 +1,4 @@
-use crate::types::{LocalId, Type};
+use crate::types::{FuncId, LocalId, Type};
 
 use crate::ir::*;
 use crate::lower::LoweringContext;
@@ -14,6 +14,7 @@ pub fn synthesize_class_captures(
     methods: &mut Vec<Function>,
     getters: &mut Vec<(String, Function)>,
     setters: &mut Vec<(String, Function)>,
+    static_accessor_fn_ids: &[FuncId],
     computed_members: &mut Vec<ClassComputedMember>,
     constructor: &mut Option<Function>,
     static_methods: &mut Vec<Function>,
@@ -299,11 +300,17 @@ pub fn synthesize_class_captures(
         let id_map = rewrite_method_body(ctx, &mut m.body);
         append_self_sites(&mut m.body, &id_map);
     }
-    for (_, g) in getters.iter_mut() {
+    for (_, g) in getters
+        .iter_mut()
+        .filter(|(_, function)| !static_accessor_fn_ids.contains(&function.id))
+    {
         let id_map = rewrite_method_body(ctx, &mut g.body);
         append_self_sites(&mut g.body, &id_map);
     }
-    for (_, s) in setters.iter_mut() {
+    for (_, s) in setters
+        .iter_mut()
+        .filter(|(_, function)| !static_accessor_fn_ids.contains(&function.id))
+    {
         let id_map = rewrite_method_body(ctx, &mut s.body);
         append_self_sites(&mut s.body, &id_map);
     }
@@ -349,6 +356,46 @@ pub fn synthesize_class_captures(
         prologue.append(&mut sm.body);
         sm.body = prologue;
         append_self_sites(&mut sm.body, &id_map);
+    }
+
+    // Static accessors live in the ordinary getters/setters vectors and are
+    // distinguished by `static_accessor_fn_ids`. They need the same
+    // receiver-aware class snapshot as static methods. Treating them as
+    // instance accessors made the rebind probe `this.__perry_cap_*`; fresh
+    // class-expression objects keep their captures in `__perry_ctor_caps`, so
+    // a factory-local binding was read back as `undefined` and invoking it
+    // threw `TypeError: value is not a function`.
+    for (_, accessor) in getters
+        .iter_mut()
+        .chain(setters.iter_mut())
+        .filter(|(_, function)| static_accessor_fn_ids.contains(&function.id))
+    {
+        let mut id_map: std::collections::HashMap<LocalId, LocalId> =
+            std::collections::HashMap::new();
+        let mut prologue: Vec<Stmt> = Vec::new();
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
+            let new_id = ctx.fresh_local();
+            id_map.insert(outer_id, new_id);
+            prologue.push(Stmt::Let {
+                id: new_id,
+                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
+                ty: captured_outer_types
+                    .get(&outer_id)
+                    .cloned()
+                    .unwrap_or(Type::Any),
+                mutable: true,
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                    fallback: None,
+                    prefer_fallback: false,
+                }),
+            });
+        }
+        crate::analysis::remap_local_ids_in_stmts(&mut accessor.body, &id_map);
+        prologue.append(&mut accessor.body);
+        accessor.body = prologue;
+        append_self_sites(&mut accessor.body, &id_map);
     }
 
     // 2c. STATIC computed methods (`static [k]() {}`, and the static methods

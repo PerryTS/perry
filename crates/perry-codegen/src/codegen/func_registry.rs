@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use perry_hir::Module as HirModule;
+use perry_hir::{Export, Module as HirModule};
 
 // Collector and boxing-analysis walkers live in dedicated modules.
 
@@ -42,17 +42,35 @@ pub(crate) fn build_func_registry(hir: &HirModule, module_prefix: &str) -> FuncR
     // referenced cross-module by their canonical `scoped_fn_name` and are unique
     // per module, so they reserve that name first and never get suffixed.
     let mut used_fn_symbols: HashMap<String, u32> = HashMap::new();
-    for f in &hir.functions {
-        if hir.exported_functions.iter().any(|(exp, _)| exp == &f.name) {
+    // Every public named export reserves its ABI symbol, including exported
+    // runtime values/closures that are served by a module-global getter.
+    // Otherwise an unrelated local function with the public name can claim
+    // the symbol before either a forwarding alias or value getter is emitted:
+    //
+    //   function optionalKey(ast) { ... }       // private AST helper
+    //   const optionalKey2 = lambda(...);        // public Schema wrapper
+    //   export { optionalKey2 as optionalKey };
+    //
+    // Reserving only `exported_functions` covered direct FuncRef aliases but
+    // missed the closure-valued second shape (OpenCode/Effect Schema).
+    for export in &hir.exports {
+        if let Export::Named { exported, .. } = export {
             used_fn_symbols
-                .entry(scoped_fn_name(module_prefix, &f.name))
+                .entry(scoped_fn_name(module_prefix, exported))
                 .or_insert(1);
         }
     }
     for f in &hir.functions {
         let base = scoped_fn_name(module_prefix, &f.name);
-        let is_exported = hir.exported_functions.iter().any(|(exp, _)| exp == &f.name);
-        let sym = if is_exported {
+        // A function owns its canonical local-name symbol only when that exact
+        // public name maps to this exact FuncId. Name-only matching is wrong
+        // for renamed exports and made a different local function overwrite
+        // the export target (OpenCode/Effect: `resolveAt2 as resolveAt`).
+        let owns_canonical_export = hir
+            .exported_functions
+            .iter()
+            .any(|(exp, func_id)| exp == &f.name && *func_id == f.id);
+        let sym = if owns_canonical_export {
             base
         } else {
             let n = used_fn_symbols.entry(base.clone()).or_insert(0);

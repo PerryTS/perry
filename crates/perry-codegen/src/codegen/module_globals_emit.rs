@@ -197,10 +197,34 @@ pub(crate) fn emit_module_globals(
     // so method calls in other functions fall through to the generic
     // dispatch instead of the class method registry.
     let mut module_global_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
-    // Collect exported variable names so we can create external
-    // globals + getter functions for cross-module access.
-    let exported_var_names: std::collections::HashSet<String> =
-        hir.exported_objects.iter().cloned().collect();
+    // Collect the LOCAL bindings of exported variables so we can create
+    // external globals + getter functions for cross-module access.
+    //
+    // `exported_objects` intentionally contains both sides of a renamed
+    // value export: `export { Prototype2 as Prototype }` records
+    // `Prototype2` for storage and `Prototype` so the compile driver can
+    // classify the public import as a variable. Treating that flat list as
+    // local bindings is ambiguous when this module also declares an unrelated
+    // local named `Prototype`: codegen globalized that local and claimed the
+    // public `perry_fn_*__Prototype` getter before it reached `Prototype2`, so
+    // importers received the unrelated value. Derive storage ownership from
+    // `Export::Named.local`; the alias getter emitted below still uses
+    // `Export::Named.exported`, preserving the public ABI.
+    let exported_object_names: std::collections::HashSet<&str> =
+        hir.exported_objects.iter().map(String::as_str).collect();
+    let exported_var_names: std::collections::HashSet<String> = hir
+        .exports
+        .iter()
+        .filter_map(|export| match export {
+            perry_hir::Export::Named { local, exported }
+                if exported_object_names.contains(local.as_str())
+                    || exported_object_names.contains(exported.as_str()) =>
+            {
+                Some(local.clone())
+            }
+            _ => None,
+        })
+        .collect();
     // #6649: module-level array-destructuring declarations (`var [Prime, Size]
     // = [BigInt(...), BigInt(...)]` — TypeBox's FNV-1a table in the pi bundle)
     // lower their leaf `Stmt::Let`s inside the iterator-protocol `Stmt::Try`
@@ -301,14 +325,25 @@ pub(crate) fn emit_module_globals(
                 // emitting a getter here on top would be a redef and is
                 // semantically wrong (it'd return the closure value instead
                 // of invoking it).
-                let is_function_alias = hir.exported_functions.iter().any(|(exp, _)| exp == name);
+                let is_function_alias = hir.exported_functions.iter().any(|(exp, _)| exp == name)
+                    || hir.exports.iter().any(|export| match export {
+                        perry_hir::Export::Named { local, exported } if local == name => hir
+                            .exported_functions
+                            .iter()
+                            .any(|(function_export, _)| function_export == exported),
+                        _ => false,
+                    });
                 if is_exported && !is_also_function && !is_function_alias {
-                    let fn_name = format!("perry_fn_{}__{}", module_prefix, sanitize(name),);
-                    let getter = llmod.define_function(&fn_name, DOUBLE, vec![]);
-                    let _ = getter.create_block("entry");
-                    let blk = getter.block_mut(0).unwrap();
-                    let val = blk.load(DOUBLE, &format!("@{}", global_name));
-                    blk.ret(DOUBLE, &val);
+                    let public_names: std::collections::BTreeSet<&str> = hir
+                        .exports
+                        .iter()
+                        .filter_map(|export| match export {
+                            perry_hir::Export::Named { local, exported } if local == name => {
+                                Some(exported.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect();
 
                     // #460: also emit a duplicate getter under any renamed
                     // export targeting this local. `export { _await as await }`
@@ -319,21 +354,17 @@ pub(crate) fn emit_module_globals(
                     // returns; callers that invoke it as a function get the
                     // closure handle (matching status quo for non-renamed
                     // `export const f = aFunctionRef` exports).
-                    for export in &hir.exports {
-                        if let perry_hir::Export::Named { local, exported } = export {
-                            if local == name && exported != name {
-                                let alias_fn =
-                                    format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
-                                if alias_fn == fn_name {
-                                    continue;
-                                }
-                                let g = llmod.define_function(&alias_fn, DOUBLE, vec![]);
-                                let _ = g.create_block("entry");
-                                let b = g.block_mut(0).unwrap();
-                                let v = b.load(DOUBLE, &format!("@{}", global_name));
-                                b.ret(DOUBLE, &v);
-                            }
+                    for public_name in public_names {
+                        let getter_name =
+                            format!("perry_fn_{}__{}", module_prefix, sanitize(public_name));
+                        if llmod.has_function(&getter_name) {
+                            continue;
                         }
+                        let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
+                        let _ = getter.create_block("entry");
+                        let blk = getter.block_mut(0).unwrap();
+                        let val = blk.load(DOUBLE, &format!("@{}", global_name));
+                        blk.ret(DOUBLE, &val);
                     }
                 }
             }

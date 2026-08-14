@@ -311,6 +311,47 @@ pub(crate) fn static_method_registry_key(method_name: &str) -> String {
     format!("__perry_static__{}", method_name)
 }
 
+/// Build the callable constructor table for names that are actually foreign
+/// in this module. `CompileOptions::imported_classes` is intentionally wider
+/// than the module's lexical imports: namespace imports and conservative
+/// dispatch augmentation can add class metadata whose bare name is shadowed
+/// by a local class. Letting that metadata enter `imported_class_ctors` makes
+/// a synthesized `super()` on the local class call the unrelated foreign
+/// constructor (for example, Effect's local `Node` calling tree-sitter's
+/// `Node(internal, { ... })`). Keep constructor lookup consistent with
+/// `class_table` / `class_ids`, where local declarations and their aliases
+/// already take precedence.
+fn build_imported_class_ctors(
+    hir: &HirModule,
+    imported_classes: &[ImportedClass],
+) -> HashMap<String, ImportedCtor> {
+    let mut local_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for class in &hir.classes {
+        local_names.insert(class.name.as_str());
+        local_names.extend(class.aliases.iter().map(String::as_str));
+    }
+
+    let mut ctors = HashMap::new();
+    for class in imported_classes {
+        let effective_name = class.local_alias.as_deref().unwrap_or(&class.name);
+        if local_names.contains(effective_name) {
+            continue;
+        }
+        // Match `class_table`'s first-writer-wins behavior when multiple
+        // imported classes contend for the same effective alias.
+        ctors
+            .entry(effective_name.to_string())
+            .or_insert_with(|| ImportedCtor {
+                symbol: format!("{}__{}_constructor", class.source_prefix, class.name),
+                param_count: class.constructor_param_count,
+                has_own_constructor: class.has_own_constructor,
+                has_instance_fields: class.has_instance_fields,
+                has_rest: class.constructor_has_rest,
+            });
+    }
+    ctors
+}
+
 /// Compile a Perry HIR module to an object file via LLVM IR.
 ///
 /// CRITICAL (#686): `hir` MUST be `&HirModule` (shared reference), never
@@ -1812,24 +1853,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         class_keys_globals: class_keys_globals_map,
         class_field_counts: class_field_counts_map,
         class_init_chains: class_init_chains_map,
-        imported_class_ctors: opts
-            .imported_classes
-            .iter()
-            .map(|ic| {
-                let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
-                let ctor_name = format!("{}__{}_constructor", ic.source_prefix, ic.name);
-                (
-                    effective_name.to_string(),
-                    ImportedCtor {
-                        symbol: ctor_name,
-                        param_count: ic.constructor_param_count,
-                        has_own_constructor: ic.has_own_constructor,
-                        has_instance_fields: ic.has_instance_fields,
-                        has_rest: ic.constructor_has_rest,
-                    },
-                )
-            })
-            .collect(),
+        imported_class_ctors: build_imported_class_ctors(hir, &opts.imported_classes),
         // Per-module i18n lowering context. Built from `opts.i18n_table`
         // when i18n is configured; `None` otherwise. The
         // `Expr::I18nString` lowering pulls the right translation row at
