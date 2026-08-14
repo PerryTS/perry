@@ -1865,21 +1865,21 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
     // tests exactly that, so an instance still carrying its allocation-time
     // `parent_class_id` (never in the ShapeId range) is left alone.
     let predecessor = shapes::object_shape_descriptor(obj);
-    if (*obj).keys_array != keys_array {
-        shapes::clear_object_shape_stamp(obj);
-    }
-    // #6893: the object's typed-shape layout descriptor is keyed by its
-    // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer
-    // change is a shape change (add/delete key), so the exact typed layout no
-    // longer applies to THIS object. Pre-#6893 the per-object store-validation
-    // (`layout_note_slot`, keyed by the object address) caught this implicitly
-    // during the field shuffle; the shared descriptor lookup now misses on the
-    // NEW keys_array, so that trigger is lost — invalidate explicitly here.
-    // Gated: `mark_object_dynamic_shape_unknown` early-returns for objects that
-    // carry no typed layout, so plain/growing objects and initial construction
-    // (INTACT not yet set) pay nothing.
-    if (*obj).keys_array != keys_array {
+    let keys_changed = (*obj).keys_array != keys_array;
+    if keys_changed {
+        // #6893: the object's typed-shape layout descriptor is keyed by its
+        // keys_array (shared per shape via SHAPE_LAYOUTS). A pointer change
+        // makes that exact typed layout inapplicable. This is gated internally
+        // so plain/growing objects and initial construction pay nothing.
+        //
+        // Invalidate while the predecessor stamp is still authoritative.
+        // `layout_mark_unknown` reports the representation change through
+        // typed feedback, whose defensive shape lookup self-heals an
+        // unstamped object. Clearing first therefore let that re-entrant
+        // lookup publish an Ordinary descriptor for a class object; the
+        // structural synchronization below then inherited the wrong kind.
         mark_object_dynamic_shape_unknown(obj);
+        shapes::clear_object_shape_stamp(obj);
     }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;

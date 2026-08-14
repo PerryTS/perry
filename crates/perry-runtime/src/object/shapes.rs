@@ -545,7 +545,12 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
         }
     }
 
-    let lineage = shape_descriptor_by_id(old_id).or(predecessor);
+    // A caller-supplied predecessor was captured before it temporarily
+    // cleared the stamp to mutate structural facts, so it is the semantic
+    // authority for this transition. A re-entrant observer can defensively
+    // self-heal the zero stamp in that window; never let that interim
+    // descriptor replace the saved class/semantic lineage.
+    let lineage = predecessor.or_else(|| shape_descriptor_by_id(old_id));
     let semantic_generation = lineage
         .map(|descriptor| descriptor.semantic_generation)
         .unwrap_or(0);

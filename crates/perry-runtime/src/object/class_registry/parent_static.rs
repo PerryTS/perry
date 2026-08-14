@@ -1732,6 +1732,46 @@ mod shape_authority_tests_8067 {
     }
 
     #[test]
+    fn saved_class_lineage_beats_an_interim_shape_self_heal() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const CID: u32 = 0x8068;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 1));
+            super::js_object_mark_class(obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as i64);
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let predecessor = crate::object::shapes::object_shape_descriptor(obj)
+                .expect("marked class descriptor");
+            assert_eq!(
+                predecessor.object_kind,
+                crate::object::shapes::ShapeObjectKind::Class
+            );
+
+            // Model a re-entrant shape observer in the narrow mutation window:
+            // the structural mutator has saved its predecessor and cleared the
+            // stamp, then typed feedback defensively self-heals the object.
+            assert!(crate::object::shapes::clear_object_shape_stamp(obj));
+            let interim = crate::typed_feedback::test_object_shape_token(obj as usize);
+            assert_eq!(
+                crate::object::shapes::shape_descriptor_by_id(interim as u32)
+                    .expect("interim descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Ordinary,
+                "test premise: a lineage-free self-heal is ordinary"
+            );
+
+            crate::object::shapes::synchronize_object_shape_descriptor_from(obj, Some(predecessor));
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .expect("restored descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Class,
+                "the mutator's saved semantic lineage must outrank an interim self-heal"
+            );
+        }
+    }
+
+    #[test]
     fn class_kind_survives_static_field_installation_and_deletion() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
@@ -1794,6 +1834,31 @@ mod shape_authority_tests_8067 {
                     .object_kind,
                 crate::object::shapes::ShapeObjectKind::Class,
                 "class kind must never share storage with GC layout flags"
+            );
+
+            // The pointer-bearing write above leaves a typed/side-mask layout.
+            // Growing the keys array from that state invalidates typed
+            // feedback. The invalidation asks for the receiver's shape, so a
+            // keys transition must keep the old class stamp visible until the
+            // invalidation finishes and must prefer its saved predecessor over
+            // any defensive self-heal in the temporary cleared-stamp window.
+            let after_pointer_key = key(&scope, "afterPointerStatic");
+            crate::object::js_object_set_field_by_name(
+                obj_handle.get_raw_mut_ptr(),
+                after_pointer_key.get_raw_const_ptr(),
+                7.0,
+            );
+            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            assert!(
+                super::is_class_object_ptr(obj.cast()),
+                "typed-layout invalidation erased class descriptor lineage: {:?}",
+                crate::object::shapes::object_shape_descriptor(obj)
+            );
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .expect("post-invalidation class descriptor")
+                    .object_kind,
+                crate::object::shapes::ShapeObjectKind::Class
             );
 
             // Deletion installs a cloned keys array, which clears the current
