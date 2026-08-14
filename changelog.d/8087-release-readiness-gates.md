@@ -26,3 +26,9 @@ real-tree audits; targeted moving-GC, unwind, timer, class, compile-cache, and
 publish-config tests; workflow lint; the RustSec audit; and the Windows command
 path through actionlint. The repository's gated release sweep and PR checks
 provide the remaining platform-hosted coverage.
+
+Release-sweep tier 1 now mirrors that CI contract instead of running
+`perry-runtime` inside a parallel workspace test: it excludes the runtime from
+the normal workspace pass and invokes its release tests separately with
+`RUST_TEST_THREADS=1`, preventing shared test-state races from masquerading as
+release regressions.
