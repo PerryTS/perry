@@ -1833,8 +1833,15 @@ Seed 1 passing on the same binary and knobs is the other half: the seed
 now actually selects, and at least one selected subset does not hit the
 window.
 
-Confirmation reruns of seeds 2 and 3 are in flight (this box at load
-100+). If either fails again at a comparable safepoint count, that is
-the deterministic reproducer. The latch does not yet name the walk that
-handed it the slot; `CopyingWalkPhaseGuard` is the one-line addition so
-the next abort prints `copying walk phase: <scanner|remembered_set|worklist_drain>`.
+Seed 3 confirmation (same binary, same knobs): **abort 134 again**.
+Different garbage (now a Map, size 2147419459) and a different safepoint
+(52836 / 5319 collections, against 21547 / 2159 on the first hit). So
+seed 3 is a **reliable fail (2/2)** but not a fixed-ordinal replay — the
+schedule is pinned, the moment a stale slot lands on bytes that look
+pinned is not. That is still the A/B this session lacked: seed 1 passes,
+seed 3 fails, same binary.
+
+A third seed-3 run is in flight, as is seed 2's first confirmation.
+`CopyingWalkPhaseGuard` is committed so the next abort (after a rebuild)
+prints `copying walk phase: <scanner|remembered_set|worklist_drain>`.
+The latch still does not name the slot; the phase is the next cut.
