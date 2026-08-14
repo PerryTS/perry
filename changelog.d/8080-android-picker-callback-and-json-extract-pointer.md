@@ -1,5 +1,5 @@
-Fixed two Android defects that made `perry-ui-android` unbuildable and left
-`Picker` inert.
+Fixed two Android defects that made `perry-ui-android` unbuildable and stopped
+`Picker` from reporting selection changes.
 
 `crates/perry-ui-android/src/json.rs` still called the `is_raw_pointer` helper
 that #7448 deleted, so the crate failed to compile for any Android target
