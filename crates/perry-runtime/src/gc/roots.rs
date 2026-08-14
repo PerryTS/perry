@@ -272,6 +272,7 @@ pub(super) fn gc_register_mutable_root_scanner_named_with_source(
     });
 }
 
+#[cfg(test)]
 pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
     scanner: MutableRootScanner,
     budgeted_scanner: BudgetedMutableRootScanner,

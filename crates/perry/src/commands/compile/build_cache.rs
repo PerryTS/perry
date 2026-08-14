@@ -110,6 +110,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
 /// would thrash the cache rather than protect it. Anything not listed here must
 /// be a build-cache input; `codegen_env_vars_are_build_cache_inputs` enforces
 /// that, so a new compile-time gate cannot repeat #7161's omission silently.
+#[cfg(test)]
 const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // Diagnostics: emit an extra file / extra stderr, same object bytes.
     "PERRY_SAVE_LL",

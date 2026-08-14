@@ -31,6 +31,8 @@ behind every helper, and classifies each `static` it writes to:
 
   * `thread_local!`                 -> safe by construction
   * `per_test_global!`         -> per-thread in test builds, safe
+  * `RealmAtomicI64` / `RealmAtomicU64` -> immutable handle to a
+    `perry_thread_local!` backing slot, safe
   * a bare `static`                 -> HAZARD
 
 A hazard fails the build unless it is named in ALLOWLIST below with the issue
@@ -194,6 +196,13 @@ def declaration_kind(sources: dict, ident: str, prefer=None):
             # the fix. Same for the global allocator.
             if re.fullmatch(r"(std::sync::)?(Mutex|RwLock)\s*<\s*\(\s*\)\s*>", declared):
                 return "lock", path
+            # These wrappers hold no mutable process-global value: their only
+            # field is a `&'static HotKey<Atomic*>`, and every load/store goes
+            # through that `perry_thread_local!` backing slot. Treating the
+            # immutable handle as the data falsely reports a cross-test sink
+            # while ignoring the realm-local slot that actually owns it.
+            if re.fullmatch(r"RealmAtomic(?:I64|U64)", declared):
+                return "thread_local", path
             if "#[global_allocator]" in text[max(0, found.start() - 80) : found.start()]:
                 return "allocator", path
             return "static", path
@@ -310,6 +319,7 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::demo::test_clear_bare();
     crate::demo::test_clear_tls();
     crate::demo::test_clear_paren();
+    crate::demo::test_clear_realm_atomic();
 }
 """
 
@@ -320,6 +330,7 @@ per_test_global! {
 per_test_global!(static PAREN_TABLE: Mutex<u64> = Mutex::new(0));
 static PURE_LOCK: Mutex<()> = Mutex::new(());
 static BARE_TABLE: Mutex<u64> = Mutex::new(0);
+static REALM_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&REALM_CACHE_SLOT);
 thread_local! {
     static TLS_TABLE: RefCell<u64> = RefCell::new(0);
 }
@@ -327,6 +338,7 @@ pub(crate) fn test_clear_partitioned() { *PARTITIONED_TABLE.lock().unwrap() = 0;
 pub(crate) fn test_clear_bare() { *BARE_TABLE.lock().unwrap() = 0; }
 pub(crate) fn test_clear_tls() { TLS_TABLE.with(|t| *t.borrow_mut() = 0); }
 pub(crate) fn test_clear_paren() { *PAREN_TABLE.lock().unwrap() = 0; let _g = PURE_LOCK.lock(); }
+pub(crate) fn test_clear_realm_atomic() { REALM_CACHE.with_slot(|slot| slot.store(0)); }
 """
 
 
@@ -374,7 +386,15 @@ def self_test() -> int:
     if any("PURE_LOCK" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
         failures.append("a Mutex<()> serializer was reported as a hazard")
 
-    # 3d. THE FLOOR: a matcher that stops matching must not read as clean.
+    # 3d. RealmAtomic wrappers are immutable handles whose mutable value lives
+    # in a perry_thread_local! HotKey. The wrapper itself is not a shared sink.
+    kind, _ = declaration_kind(fake, "REALM_CACHE")
+    if kind != "thread_local":
+        failures.append("REALM_CACHE classified as %r, not 'thread_local'" % (kind,))
+    if any("REALM_CACHE" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
+        failures.append("a RealmAtomic thread-local proxy was reported as a hazard")
+
+    # 3e. THE FLOOR: a matcher that stops matching must not read as clean.
     floored = audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink, floor=99)
     if not any("below the floor" in v for v in floored):
         failures.append("the classified-statics floor did not fire: %r" % (floored,))
@@ -410,7 +430,7 @@ def self_test() -> int:
 
     for failure in failures:
         print("SELF-TEST FAIL: %s" % failure, file=sys.stderr)
-    print("self-test: 15 checks, %d failures" % len(failures))
+    print("self-test: 17 checks, %d failures" % len(failures))
     return 1 if failures else 0
 
 

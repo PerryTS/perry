@@ -198,19 +198,6 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
     chrono_parse_rfc3339(s).map(|t| t as i64)
 }
 
-pub fn should_skip_check() -> bool {
-    if std::env::var("PERRY_NO_UPDATE_CHECK").is_ok_and(|v| v == "1" || v == "true") {
-        return true;
-    }
-    if std::env::var("CI").is_ok_and(|v| v == "true" || v == "1") {
-        return true;
-    }
-    if !std::io::stderr().is_terminal() {
-        return true;
-    }
-    false
-}
-
 pub fn is_cache_stale() -> bool {
     is_cache_stale_with(CACHE_MAX_AGE)
 }

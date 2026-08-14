@@ -1253,7 +1253,8 @@ pub unsafe fn alloc_lazy_array(
     // which can trigger, but the only live thing we hold across it is
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = crate::json_tape_store::allocate(tape_entries);
-    let raw = alloc_lazy_header_bytes();
+    let (raw, blob_str) =
+        blob_handle.across_const::<crate::StringHeader, _>(alloc_lazy_header_bytes);
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
     (*hdr).magic = LAZY_ARRAY_MAGIC;
@@ -1262,7 +1263,7 @@ pub unsafe fn alloc_lazy_array(
     // GC_STORE_AUDIT(POINTER_FREE): side-allocated tape bytes, not a heap edge —
     // no barrier, and deliberately absent from the LazyArray rewrite descriptor.
     (*hdr).tape = tape_ptr;
-    (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
+    (*hdr).blob_str = blob_str;
     (*hdr).materialized = std::ptr::null_mut();
     (*hdr).materialized_elements = std::ptr::null_mut();
     (*hdr).materialized_bitmap = std::ptr::null_mut();
