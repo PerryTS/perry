@@ -42,6 +42,8 @@ unsafe fn finish_frame(frame: BuildFrame) -> Option<JSValue> {
             }
             let field_count = u32::try_from(keys.len()).ok()?;
             let object = crate::object::js_object_alloc(0, 0);
+            // #8098: a tape-materialized record is `JSON.parse` output too.
+            crate::object::mark_object_plain_ordinary(object);
             crate::object::reserve_object_spill(object as usize, field_count);
             for (key, value) in keys.into_iter().zip(values) {
                 crate::object::js_object_set_field_by_name(

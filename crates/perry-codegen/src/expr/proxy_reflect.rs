@@ -50,6 +50,15 @@ use super::{
 /// encoded by the authoritative ShapeId and therefore owns no header flag.
 const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1907;
 
+/// #8098: `GcHeader::_reserved` bit 9 — the runtime birth-marked this
+/// class-less receiver an ORDINARY plain object (`JSON.parse` output), so it is
+/// eligible for the write PIC exactly like a class instance. MUST equal
+/// `perry_runtime::gc::OBJ_FLAG_PLAIN_ORDINARY`; the runtime pins the value in
+/// `proxy::tests::plain_ordinary_object_flag_matches_the_emitted_write_pic_literal`.
+/// It is deliberately NOT in `WRITE_PIC_BLOCKING_FLAGS` — this bit ADMITS a
+/// receiver, the blocking mask REJECTS one.
+const PLAIN_ORDINARY_OBJ_FLAG: u16 = 0x200;
+
 /// The NaN-boxed `undefined` literal, for an absent optional operand.
 fn undefined_literal() -> String {
     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
@@ -550,8 +559,17 @@ fn lower_put_value_static_write_ic(
     let class_addr = ctx.block().add(I64, &safe_target, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
-    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+    // #8098: a class-less receiver qualifies when the runtime birth-marked it
+    // an ordinary plain object. `reserved` is already loaded above for the
+    // blocking-flag test, so this costs one `and` + `icmp` + `or`, computed
+    // once here and reused by all four ways (this block dominates them).
+    let plain_ordinary_bits = ctx
+        .block()
+        .and(I16, &reserved, &PLAIN_ORDINARY_OBJ_FLAG.to_string());
+    let plain_ordinary = ctx.block().icmp_ne(I16, &plain_ordinary_bits, "0");
+    let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
 
     // The write PIC uses the same single ShapeId token domain as the read PIC.
     let shape_id_addr = ctx.block().add(I64, &safe_target, "8");
@@ -574,7 +592,7 @@ fn lower_put_value_static_write_ic(
     let mut hit = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit = ctx.block().and(I1, &hit, &not_forwarded);
     hit = ctx.block().and(I1, &hit, &flags_clear);
-    hit = ctx.block().and(I1, &hit, &class_nonzero);
+    hit = ctx.block().and(I1, &hit, &receiver_kind_ok);
     hit = ctx.block().and(I1, &hit, &not_native_module);
     hit = ctx.block().and(I1, &hit, &token_match);
     hit = ctx.block().and(I1, &hit, &token_nonzero);
@@ -598,7 +616,7 @@ fn lower_put_value_static_write_ic(
     let mut hit2 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit2 = ctx.block().and(I1, &hit2, &not_forwarded);
     hit2 = ctx.block().and(I1, &hit2, &flags_clear);
-    hit2 = ctx.block().and(I1, &hit2, &class_nonzero);
+    hit2 = ctx.block().and(I1, &hit2, &receiver_kind_ok);
     hit2 = ctx.block().and(I1, &hit2, &not_native_module);
     hit2 = ctx.block().and(I1, &hit2, &token2_match);
     hit2 = ctx.block().and(I1, &hit2, &token_nonzero);
@@ -618,7 +636,7 @@ fn lower_put_value_static_write_ic(
     let mut hit3 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit3 = ctx.block().and(I1, &hit3, &not_forwarded);
     hit3 = ctx.block().and(I1, &hit3, &flags_clear);
-    hit3 = ctx.block().and(I1, &hit3, &class_nonzero);
+    hit3 = ctx.block().and(I1, &hit3, &receiver_kind_ok);
     hit3 = ctx.block().and(I1, &hit3, &not_native_module);
     hit3 = ctx.block().and(I1, &hit3, &token3_match);
     hit3 = ctx.block().and(I1, &hit3, &token_nonzero);
@@ -638,7 +656,7 @@ fn lower_put_value_static_write_ic(
     let mut hit4 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit4 = ctx.block().and(I1, &hit4, &not_forwarded);
     hit4 = ctx.block().and(I1, &hit4, &flags_clear);
-    hit4 = ctx.block().and(I1, &hit4, &class_nonzero);
+    hit4 = ctx.block().and(I1, &hit4, &receiver_kind_ok);
     hit4 = ctx.block().and(I1, &hit4, &not_native_module);
     hit4 = ctx.block().and(I1, &hit4, &token4_match);
     hit4 = ctx.block().and(I1, &hit4, &token_nonzero);
@@ -867,8 +885,14 @@ fn lower_put_value_dyn_ic_inline(
     let class_addr = ctx.block().add(I64, &t_handle, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
-    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+    // #8098: see the static-key PIC above.
+    let plain_ordinary_bits = ctx
+        .block()
+        .and(I16, &reserved, &PLAIN_ORDINARY_OBJ_FLAG.to_string());
+    let plain_ordinary = ctx.block().icmp_ne(I16, &plain_ordinary_bits, "0");
+    let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
     let shape_id_addr = ctx.block().add(I64, &t_handle, "8");
     let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
     let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
@@ -885,7 +909,7 @@ fn lower_put_value_dyn_ic_inline(
     let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
     ok = ctx.block().and(I1, &ok, &flags_clear);
-    ok = ctx.block().and(I1, &ok, &class_nonzero);
+    ok = ctx.block().and(I1, &ok, &receiver_kind_ok);
     ok = ctx.block().and(I1, &ok, &not_native_module);
     ok = ctx.block().and(I1, &ok, &token_match);
     ok = ctx.block().and(I1, &ok, &token_nonzero);

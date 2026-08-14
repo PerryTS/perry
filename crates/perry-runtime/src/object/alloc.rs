@@ -73,6 +73,32 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
+/// #8098: mark `obj` as an ORDINARY plain object — class-less, but with no
+/// per-object `[[Set]]` semantics of its own, so the object-write fast paths
+/// may treat it exactly like a class instance.
+///
+/// The mark is deliberately OPT-IN and set at BIRTH. `class_id == 0` is not a
+/// sufficient condition: a `URL` instance, `Object.prototype`, a module
+/// namespace, and a native-module receiver are all class-less, and the write
+/// guards used to exclude the whole class-less population wholesale rather than
+/// reason about them (`proxy/put_value.rs`, and the same three exclusions in
+/// `field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`). Only a
+/// birth site that has established its receiver is ordinary calls this; every
+/// other class-less receiver keeps taking the full `[[Set]]` walk.
+///
+/// The bit lives in `GcHeader::_reserved`, which survives evacuation
+/// (`gc/copying.rs` and `gc/oldgen.rs` carry the word across), is preserved by
+/// the survival-age (`0x0038`) and layout-state (`0xC000`) updates, and is
+/// already loaded by the generated write PIC for its blocking-flag test.
+#[inline]
+pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
+    if obj.is_null() {
+        return;
+    }
+    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*gc)._reserved |= crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+}
+
 /// `Object(value)` plain-call coercion (#3149, ECMAScript §20.1.1.1 / ToObject).
 ///
 /// Takes and returns a NaN-boxed JSValue (`f64`):

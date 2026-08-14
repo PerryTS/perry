@@ -2257,12 +2257,36 @@ mod tests {
 
         unsafe {
             let original = (*first).class_id;
+            let first_header =
+                (first as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let original_flags = (*first_header)._reserved;
             (*first).class_id = 0;
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 0,
-                "class-id-zero objects cannot establish a stable raw layout identity"
+                "an UNMARKED class-id-zero object has no established ordinary-receiver \
+                 identity and must use ordinary [[Set]]"
             );
+            // #8098: the SAME receiver, birth-marked ORDINARY by the runtime —
+            // which is what `JSON.parse` output carries — is eligible. The mark
+            // is the only thing that differs between these two assertions, so
+            // the pair discriminates "the guard reads the mark" from "the guard
+            // stopped caring about class-id zero".
+            (*first_header)._reserved = original_flags | crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            assert_eq!(
+                object_array_numeric_write_guard(array_box, &[c, d], 2),
+                (4u64 << 16) | 3,
+                "a marked ordinary plain object publishes the same raw slots as a \
+                 class instance of the same shape"
+            );
+            // A native-module receiver stays out no matter what it is marked.
+            (*first).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
+            assert_eq!(
+                object_array_numeric_write_guard(array_box, &[c, d], 2),
+                0,
+                "a native-module receiver must reject even when marked ordinary"
+            );
+            (*first_header)._reserved = original_flags;
             (*first).class_id = original;
         }
 
@@ -2288,6 +2312,184 @@ mod tests {
             object_array_numeric_write_guard(boxed_object(narrow_array.cast()), &[e], 1),
             0,
             "a key beyond the four-slot physical allocation must reject"
+        );
+    }
+
+    /// #8098: the write PIC's generated hit path re-tests the ordinary-plain
+    /// mark as a raw `_reserved` bit literal, so the runtime constant and the
+    /// literal `perry-codegen/src/expr/proxy_reflect.rs` emits
+    /// (`PLAIN_ORDINARY_OBJ_FLAG`) are one ABI. A silent divergence would make
+    /// every generated guard test the wrong bit — either admitting a receiver
+    /// the runtime never cleared, or never hitting at all. Pin the value here.
+    #[test]
+    fn plain_ordinary_object_flag_matches_the_emitted_write_pic_literal() {
+        assert_eq!(
+            crate::gc::OBJ_FLAG_PLAIN_ORDINARY,
+            0x200,
+            "perry-codegen emits 0x200 for this bit"
+        );
+        // It ADMITS a receiver, so it must not appear in the mask that REJECTS
+        // one (`WRITE_PIC_BLOCKING_FLAGS = 0x1907`) — a collision would make
+        // every marked object permanently ineligible.
+        assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1907, 0);
+        // Bit 9 is shared with the array-only arguments-object flag, disjoint
+        // by `obj_type`; and it must not collide with any object-meaningful
+        // flag or with the survival-age / layout-state fields the GC owns.
+        for other in [
+            crate::gc::OBJ_FLAG_FROZEN,
+            crate::gc::OBJ_FLAG_SEALED,
+            crate::gc::OBJ_FLAG_NO_EXTEND,
+            crate::gc::OBJ_FLAG_NULL_PROTO,
+            crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
+            crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
+            crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
+            0x0038, // GC_COPY_SURVIVAL_AGE_MASK
+            0xC000, // GC_LAYOUT_STATE_MASK
+        ] {
+            assert_eq!(
+                crate::gc::OBJ_FLAG_PLAIN_ORDINARY & other,
+                0,
+                "the ordinary-plain mark must own its own bit"
+            );
+        }
+    }
+
+    /// #8098 end-to-end: real `JSON.parse` output must reach the whole-loop
+    /// numeric write clone.
+    ///
+    /// This drives the shipped parser rather than hand-building a class-less
+    /// object, because the property under test is that the PARSER marks what it
+    /// allocates — a guard relaxation with no marking site would leave the
+    /// matrix's `receiver_class_id_zero` cell exactly where it was.
+    ///
+    /// The 13-byte object payload is deliberately below the tape's 1 KB floor
+    /// and has an object root, so `js_json_parse` takes the eager
+    /// `DirectParser` (`json/parse_api.rs`) — no lazy tape stands between this
+    /// probe and the objects it inspects (#7635).
+    #[test]
+    fn json_parse_receivers_are_admitted_to_the_whole_loop_write_clone() {
+        let src = br#"{"x":0,"y":0}"#;
+        let mut receivers = Vec::new();
+        for _ in 0..4 {
+            let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
+            let value = unsafe { crate::json::js_json_parse(text) };
+            assert!(value.is_pointer(), "JSON.parse must yield an object");
+            receivers.push(f64::from_bits(value.bits()));
+        }
+        let array = crate::array::js_array_from_f64(receivers.as_ptr(), receivers.len() as u32);
+        let array_box = boxed_object(array.cast());
+
+        let objects: Vec<*mut crate::ObjectHeader> = receivers
+            .iter()
+            .map(|v| (v.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader)
+            .collect();
+        unsafe {
+            assert_eq!(
+                (*objects[0]).class_id,
+                0,
+                "the premise: parsed receivers carry no class id"
+            );
+            assert_ne!(
+                crate::object::shapes::object_shape_stamp(objects[0]),
+                0,
+                "the premise: #8067/#8086 birth-stamps them with a real ShapeId"
+            );
+            for object in &objects[1..] {
+                assert_eq!(
+                    crate::object::shapes::object_shape_stamp(*object),
+                    crate::object::shapes::object_shape_stamp(objects[0]),
+                    "repeated parses share one keys array, hence one ShapeId"
+                );
+            }
+        }
+
+        let key_ptr = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+        let key_y = f64::from_bits(crate::value::STRING_TAG | (key_ptr as u64 & POINTER_MASK));
+        assert_eq!(
+            object_array_numeric_write_guard(array_box, &[key_y], 4),
+            2,
+            "the whole-loop clone must publish slot 1 for a parsed receiver prefix"
+        );
+
+        // The discriminating quantity: clear the ordinary mark on ONE receiver
+        // and nothing else. Same objects, same ShapeId, same keys, same slots —
+        // if the guard still accepted, it would not be reading the mark.
+        unsafe {
+            let header =
+                (objects[2] as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let saved = (*header)._reserved;
+            assert_ne!(
+                saved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY,
+                0,
+                "the parser must mark what it allocates"
+            );
+            (*header)._reserved = saved & !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            assert_eq!(
+                object_array_numeric_write_guard(array_box, &[key_y], 4),
+                0,
+                "one unmarked receiver in the prefix must send the whole nest to \
+                 ordinary [[Set]]"
+            );
+            (*header)._reserved = saved;
+            assert_eq!(
+                object_array_numeric_write_guard(array_box, &[key_y], 4),
+                2,
+                "restoring the mark restores eligibility"
+            );
+        }
+    }
+
+    /// #8098: the same admission on the per-site static write PIC, which is the
+    /// path scattered `record.field = …` writes take (the whole-loop clone only
+    /// covers a constant-counted nest). A miss that refuses to prime leaves the
+    /// site on the runtime path forever.
+    #[test]
+    fn json_parse_receivers_prime_the_static_write_pic() {
+        let src = br#"{"n":1}"#;
+        let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
+        let value = unsafe { crate::json::js_json_parse(text) };
+        assert!(value.is_pointer());
+        let target = f64::from_bits(value.bits());
+        let object = (value.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+
+        let key_ptr = crate::string::js_string_from_bytes(b"n".as_ptr(), 1);
+        let key_ptr = crate::string::js_string_intern(key_ptr, fnv1a(b"n"));
+
+        let mut cache = [0i64; 2];
+        let stored = put_value::js_put_value_set_ic_miss(target, key_ptr, 7.0, 0, &mut cache);
+        assert_eq!(stored, 7.0);
+        let expected_token = unsafe {
+            crate::object::shapes::PIC_ID_TOKEN_BIT
+                | crate::object::shapes::object_shape_id(object) as u64
+        };
+        assert_eq!(
+            cache[0] as u64, expected_token,
+            "a parsed receiver must prime the way with its own ShapeId token"
+        );
+        assert_eq!(cache[1], 0, "`n` is the receiver's first own slot");
+
+        // Discriminating half: an otherwise identical parsed receiver with the
+        // ordinary mark cleared must NOT prime.
+        let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
+        let value = unsafe { crate::json::js_json_parse(text) };
+        let unmarked = (value.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        unsafe {
+            let header =
+                (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            (*header)._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+        }
+        let mut cache2 = [0i64; 2];
+        let stored = put_value::js_put_value_set_ic_miss(
+            f64::from_bits(value.bits()),
+            key_ptr,
+            9.0,
+            0,
+            &mut cache2,
+        );
+        assert_eq!(stored, 9.0, "the write itself still succeeds");
+        assert_eq!(
+            cache2[0], 0,
+            "an unmarked class-less receiver must stay on the miss path"
         );
     }
 

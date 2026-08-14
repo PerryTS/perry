@@ -1108,6 +1108,24 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
 pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
+/// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
+/// no class, but it also carries none of the per-object `[[Set]]` semantics a
+/// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…
+/// slots are live views whose setters rebuild `href`, `Object.prototype` is the
+/// realm intrinsic, and native-module receivers dispatch. Only a runtime birth
+/// site that has established the receiver is ordinary may set this; it is what
+/// admits `JSON.parse` output to the object-write fast paths, whose generated
+/// hit paths re-test this exact bit on every store, so a ShapeId shared with an
+/// unmarked population can never carry one population's cached slot into
+/// another's.
+///
+/// Bit 9 — only meaningful for `GC_TYPE_OBJECT`, disjoint from the array-only
+/// `GC_ARRAY_ARGUMENTS_OBJECT` by `obj_type` (its sole reader goes through
+/// `array::header::array_gc_header`, which refuses any header that is not
+/// `GC_TYPE_ARRAY`), the same sharing bits 11 and 12 already use. The value
+/// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
+/// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
+pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
 /// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a
