@@ -1605,6 +1605,30 @@ Test the promotion boundary directly rather than the schedule:
    built to catch — and both have been unusable so far only because the
    failure was too rare to catch in the act.
 
-Determinism of the unpaced config is being re-checked (a second seed-1 run,
-comparing `safepoints`/`moved_objects` exactly); if it replays, every A/B in
-this note becomes one run per arm instead of forty.
+### The unpaced config REPLAYS — this is the experimental control the session lacked
+
+Two seed-1 runs, same binary:
+
+| counter | run A | run B |
+|---|---|---|
+| `safepoints` | 63941 | **63941** |
+| `scheduled_collections` | 63941 | **63941** |
+| `copying_minors` | 63941 | **63941** |
+| `polls_paced` | 0 | **0** |
+| `moved_objects` | 892,662 | 892,062 (0.07% apart) |
+
+The schedule — *which* safepoints collect — is now **exactly** reproducible,
+against ~4% drift in the paced config (§1). Only `moved_objects` still wobbles,
+by 0.07%, which is a couple of objects' survival differing rather than a
+different schedule.
+
+That changes the economics of every experiment in this note. §30's arithmetic
+said attributing a rate shift needed ~40 runs per arm because the schedule
+itself moved between arms; with the schedule pinned, an intervention that
+changes the outcome at a fixed seed has changed something real, and one run per
+arm can say so. **Use `PERRY_GC_SCHEDULE_ALLOC_KB=0` for every A/B from here
+on**, and treat the paced config as a rate-survey tool only.
+
+Cost: ~9.4× the collections, so budget 30–60 minutes per run on a quiet box.
+Worth it — the paced config's cheapness was false economy, since its results
+needed forty runs to mean anything.
