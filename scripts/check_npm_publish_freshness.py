@@ -64,6 +64,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -181,8 +182,12 @@ def npm_package_names(npm_dir: Path = NPM_DIR) -> set[str]:
     names = set()
     for tmpl in sorted(npm_dir.glob("*/package.json.tmpl")):
         m = re.search(r'"name"\s*:\s*"([^"]+)"', tmpl.read_text())
-        if m:
-            names.add(m.group(1))
+        if not m:
+            raise SystemExit(
+                f"{tmpl} declares no literal `name` -- the freshness gate cannot "
+                "tell which package it publishes, so it would stop covering it"
+            )
+        names.add(m.group(1))
     return names
 
 
@@ -279,7 +284,10 @@ class Verdict:
 
 
 def _parse_ts(value: str) -> _dt.datetime:
-    return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"timestamp has no UTC offset: {value!r}")
+    return parsed.astimezone(_dt.timezone.utc)
 
 
 def evaluate_package(
@@ -490,33 +498,33 @@ def sync_issue(repo: str, verdicts: Sequence[Verdict], repo_version: str) -> Non
                 "--repo",
                 repo,
                 "--state",
-                "open",
+                "all",
                 "--search",
                 f'"{ISSUE_MARKER}" in:title',
                 "--json",
-                "number,title",
+                "number,title,state",
                 "--limit",
                 "10",
             ]
         )
     )
-    existing = next((i["number"] for i in found if ISSUE_MARKER in i["title"]), None)
+    existing = next((i for i in found if ISSUE_MARKER in i["title"]), None)
     stale = [v for v in verdicts if v.stale]
 
     if not stale:
-        if existing is not None:
+        if existing is not None and existing["state"] == "OPEN":
             _gh(
                 [
                     "issue",
                     "close",
-                    str(existing),
+                    str(existing["number"]),
                     "--repo",
                     repo,
                     "--comment",
                     "npm is serving a current build again; closing automatically.",
                 ]
             )
-            print(f"closed sticky issue #{existing} (registry is current)")
+            print(f"closed sticky issue #{existing['number']} (registry is current)")
         return
 
     title = f"{ISSUE_MARKER}: {len(stale)} package(s) behind `{repo_version}`"
@@ -525,8 +533,22 @@ def sync_issue(repo: str, verdicts: Sequence[Verdict], repo_version: str) -> Non
         url = _gh(["issue", "create", "--repo", repo, "--title", title, "--body", body]).strip()
         print(f"opened sticky issue {url}")
     else:
-        _gh(["issue", "edit", str(existing), "--repo", repo, "--title", title, "--body", body])
-        print(f"updated sticky issue #{existing}")
+        if existing["state"] != "OPEN":
+            _gh(["issue", "reopen", str(existing["number"]), "--repo", repo])
+        _gh(
+            [
+                "issue",
+                "edit",
+                str(existing["number"]),
+                "--repo",
+                repo,
+                "--title",
+                title,
+                "--body",
+                body,
+            ]
+        )
+        print(f"updated sticky issue #{existing['number']}")
 
 
 # --------------------------------------------------------------------------- self-test
@@ -609,6 +631,18 @@ def self_test() -> int:
             pack("0.5.1400", 1, omit_time=True),
             True,
             "no `time` entry",
+        ),
+        (
+            "a timezone-naive publish timestamp is rejected cleanly",
+            {
+                **pack("0.5.1400", 1),
+                "time": {
+                    "modified": stamp(1),
+                    "0.5.1400": "2026-08-12T12:00:00",
+                },
+            },
+            True,
+            "no UTC offset",
         ),
         (
             "a prerelease on `latest` is not silently ordered",
@@ -694,6 +728,20 @@ def self_test() -> int:
     if coverage_problems({"a", "b"}, {"a", "b"}):
         failures.append("coverage_problems flagged an exactly-matching set")
 
+    # A nameless template must fail closed. Silently skipping it would let the
+    # set of published packages grow while the manifest check still passed.
+    with tempfile.TemporaryDirectory() as tmp:
+        package_dir = Path(tmp) / "nameless"
+        package_dir.mkdir()
+        (package_dir / "package.json.tmpl").write_text('{"version": "0.0.0"}\n')
+        try:
+            npm_package_names(Path(tmp))
+        except SystemExit as exc:
+            if "declares no literal `name`" not in str(exc):
+                failures.append(f"nameless template produced the wrong failure: {exc}")
+        else:
+            failures.append("nameless package.json.tmpl was silently skipped")
+
     # The shipped manifest must actually cover the shipped packages, and parse.
     real = load_packages()
     real_problems = coverage_problems(npm_package_names(), {p.name for p in real})
@@ -709,6 +757,37 @@ def self_test() -> int:
         failures.append("exit code was 0 despite a stale package")
     if _exit_code([evaluate_package(budget, repo_version, pack("0.5.1510", 90), now)]) != 0:
         failures.append("exit code was non-zero for an up-to-date package")
+
+    # A later stale episode must reopen the same closed sticky issue, not create
+    # a new issue every release cycle while claiming to maintain one forever.
+    issue_calls: list[list[str]] = []
+
+    def fake_gh(args: list[str]) -> str:
+        issue_calls.append(args)
+        if args[:2] == ["issue", "list"]:
+            return json.dumps(
+                [
+                    {
+                        "number": 7491,
+                        "title": f"{ISSUE_MARKER}: prior episode",
+                        "state": "CLOSED",
+                    }
+                ]
+            )
+        return ""
+
+    original_gh = globals()["_gh"]
+    globals()["_gh"] = fake_gh
+    try:
+        sync_issue("PerryTS/perry", stale_verdicts, repo_version)
+    finally:
+        globals()["_gh"] = original_gh
+    issue_verbs = [args[1] for args in issue_calls if args and args[0] == "issue"]
+    if issue_verbs != ["list", "reopen", "edit"]:
+        failures.append(
+            "closed sticky issue was not reused; expected list/reopen/edit, got "
+            f"{issue_verbs}"
+        )
 
     if failures:
         print("SELF-TEST FAILED:", file=sys.stderr)

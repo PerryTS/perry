@@ -1,34 +1,13 @@
 name: npm publish freshness
 
-# Alerts when what npm serves as `latest` has fallen behind `main`.
-#
-# THE FAILURE THIS EXISTS FOR (#7491): a user compiling with the npm build hit
-# `unresolved external symbol js_ext_http_client_request_is_handle` at link time. The
-# fix had been on `main` for weeks; the version npm was serving was A MONTH OLD. Every
-# gate in this repo was green the whole time and all of them were right -- they measure
-# `main`, and `main` is not what `npm install @perryts/perry` gives you. Nothing
-# compared the two, so the only detector was a user reading the versions tab.
-#
-# DELIBERATELY NOT A REQUIRED CONTEXT. Whether a release has been cut is not something
-# a PR author can fix, and blocking every PR on the maintainer's publishing state would
-# get this muted within a week -- which is how gates die. It fails loudly on the
-# Actions page and files a single sticky issue instead. Same reasoning as
-# `gate-freshness.yml`, which watches the gates this one is a sibling of.
-#
-# It is registered in scripts/gate_freshness.json, so if this cron itself stops firing,
-# the freshness sweep says so. A detector nobody watches is the thing it was built to
-# prevent.
+# Alerts when the packages npm serves as `latest` fall behind `main` (#7491).
+# This is deliberately advisory: release cadence is maintainer state, not a PR
+# author's responsibility. A scheduled/main-dispatch run maintains one sticky
+# issue, while pull requests exercise only the offline checker with read access.
 
 on:
   schedule:
-    # Daily. The tightest budget in scripts/npm_publish_freshness.json is 14 days, so
-    # this samples it 14 times over; the point of running daily anyway is that the
-    # sticky issue should appear the morning after the budget lapses, not a week later.
-    # Off the top of the hour -- GitHub's scheduler is most contended at :00.
     - cron: "20 7 * * *"
-  # Validate the checker itself when it (or the set of published packages) changes.
-  # Self-test and the offline manifest check only -- see the step guards. A PR must
-  # never go red merely because `main` is overdue for a release.
   pull_request:
     paths:
       - scripts/check_npm_publish_freshness.py
@@ -41,44 +20,58 @@ permissions:
   contents: read
 
 concurrency:
-  # #7966: keyed on `github.run_id` for every non-PR event. GitHub keeps at most one
-  # PENDING run per group and cancels the rest with `jobs: 0` regardless of
-  # `cancel-in-progress`, so a group that is CONSTANT across scheduled runs lets only
-  # the first one ever execute. PR runs keep the shared per-ref group and still
-  # supersede themselves. Enforced for every workflow by scripts/gc_gate_wiring_check.py.
   group: npm-publish-freshness-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  npm-publish-freshness:
+  # PR-controlled code runs only here, with no issue-writing token and no live
+  # registry verdict that could fail because main is overdue for a release.
+  validate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
-      # Maintaining the single sticky alert issue.
-      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # Structural failure first, and unconditionally: prove the detector can still
-      # say no before trusting a green verdict from it. This plants the #7491 shape, a
-      # `time.modified` that is fresh while the published version is 40 days old, a
-      # partial publish that is inside every budget, and an unreachable registry --
-      # then asserts the verdict for each.
       - name: Self-test — prove the checker can fail
         run: python3 scripts/check_npm_publish_freshness.py --self-test
-
-      # Offline, so it runs on PRs too: a platform package added under npm/ must be
-      # added to the manifest in the same PR, or the gate would keep passing while
-      # covering less than it used to.
       - name: Manifest covers every package published from npm/
         run: python3 scripts/check_npm_publish_freshness.py --check-manifest
 
-      # The gate. Not on pull_request: see the header.
-      - name: Compare the registry against this tree
-        if: github.event_name != 'pull_request'
+  # A feature-branch dispatch must never update the repository-wide sticky
+  # issue using that branch's version or package manifest.
+  reject-nonmain-dispatch:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Require a main-branch dispatch
+        run: |
+          echo "::error::npm freshness may be dispatched only from main (got $GITHUB_REF)"
+          exit 1
+
+  npm-publish-freshness:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Self-test — prove the checker can fail
+        run: python3 scripts/check_npm_publish_freshness.py --self-test
+      - name: Manifest covers every package published from npm/
+        run: python3 scripts/check_npm_publish_freshness.py --check-manifest
+      - name: Compare the registry against main
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/check_npm_publish_freshness.py
