@@ -200,6 +200,23 @@ If a wide sweep finds nothing, that is itself a result: the failure needs the
 *paced* feedback loop (collect soon after an allocation), and Step 1 becomes
 "find a paced seed that fails 3/3", which is weaker but still usable.
 
+### Step 1b (done 2026-08-14) — seed 3, native stack map, Doc.write
+
+Do not redo the RATE=1 unpaced sweep. The working reproducer is:
+
+```
+PERRY_GC_SCHEDULE_SEED=3 PERRY_GC_SCHEDULE_RATE=0.1 \
+PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=0 \
+  /tmp/zod          # KEEP_SYMBOLS, no -g
+```
+
+3/3 abort 134 on an incoherent header. Seed 1 is the passing control.
+The latch names `copying walk phase: mutable_root_slots/native_stack`.
+The mutator backtrace is `Doc.write` ← `generateFastpass` (schemas 135)
+← `$ZodObjectJIT.parse` (schemas 138) ← `_safeParse` ← `parseLoop`.
+See ZOD-NOTES §36. Next work is the 138 `rootread→js_closure_call1`
+hazard and 135's values live across `doc.write`.
+
 ### Step 2 — catch it in the act
 
 With a deterministic failing seed, the instrument shelf becomes usable for the

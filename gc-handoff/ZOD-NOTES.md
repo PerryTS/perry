@@ -1897,3 +1897,60 @@ frame the collector already treats as a root. That is why `--debug-symbols`
 suppresses (different register allocation / stack maps) and why four
 runtime-side rooting fixes did not. The latch now also dumps a mutator
 backtrace so the next abort names the function.
+
+## 36. Named: the slot is a native stack map, the safepoint is `Doc.write`, the caller is `generateFastpass`
+
+`/tmp/zod-bt` (KEEP_SYMBOLS, walk-phase + backtrace), seed 3, RATE=0.1,
+ALLOC_KB=0, quarantine off. Abort 134, `safepoints=52836`.
+
+```
+copying walk phase: mutable_root_slots/native_stack
+  12  js_gc_loop_safepoint_armed
+  13  perry_method_…core_doc_ts__Doc__write
+  18  perry_closure_…core_schemas_ts__135     generateFastpass
+  19  perry_closure_…core_schemas_ts__138     $ZodObjectJIT inst._zod.parse
+  23  perry_closure_…core_schemas_ts__115
+  27  perry_closure_…core_parse_ts__9         _safeParse (the §14 victim)
+  32  parseLoop$spec_i32
+```
+
+Source, from `js_register_function_source` in the IR:
+
+* **138** is `$ZodObjectJIT`'s `inst._zod.parse` (`schemas.ts` ~2015) —
+  `if (!fastpass) fastpass = generateFastpass(def.shape); payload = fastpass(…)`.
+* **135** is `generateFastpass` itself — `new Doc(…)`, then a loop of
+  `doc.write(...)` to assemble the fastpass source.
+* **Doc.write** is the loop that `split`s the line, `map`s indent, and
+  `push`es onto `this.content`. The loop poll is here.
+
+The failure is **during schema JIT compilation**, not during
+`result.issues`. parse.ts:65 is still the victim: a later `_safeParse`
+reads `.issues` on whatever the broken construction left behind. That is
+why jitless (no `generateFastpass`, no `Doc.write`) is 0/16.
+
+Static twin, same IR that named 138: the checker still reports
+
+```
+schemas_ts__138 [unrooted]
+  source (rootread) → sink js_closure_call1
+  across js_closure_get_capture_bits, js_object_get_field_by_name_f64,
+         js_object_get_field_ic_miss, js_typed_feedback_object_get_field_by_name_f64
+```
+
+That is the *same* 138 hazard §15 put on a failing stack and that the
+callee-across-arguments fix never touched (different arm: a value read
+out of a root, held across allocating property-gets, then called).
+`Doc.compile` still has the third residual (`js_array_concat` across
+`js_array_like_to_array`). IR dated 2026-08-13; re-emit before treating
+the static list as current.
+
+### What "fixed" means from here
+
+1. Emit fresh IR (`gc_root_dominance_dep_native_corpus.sh`) and confirm
+   138's `unrooted:rootread→js_closure_call1` is still there.
+2. Root that value (and anything 135 holds across `doc.write`) with
+   `RootedGroup`, same as the three call arms.
+3. Seed 3 RATE=0.1 ALLOC_KB=0 flips abort→pass on the same binary pair.
+4. Sabotage the root, abort returns. Land a checker budget that can
+   only go down, plus a seed-3 schedule cell that asserts
+   `copying_minors > 0`.

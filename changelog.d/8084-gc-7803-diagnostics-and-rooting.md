@@ -58,8 +58,10 @@ get repeated):
 | `PERRY_GC_TENURING_SURVIVALS` | pin the promotion age past the adaptive threshold |
 
 The pin-latch abort now also prints **which copying-minor walk** handed it
-the header (`copying walk phase: <scanner name | remembered_set |
-worklist_drain | mutable_root_slots>`). On this corpus the latch fires on
-an *incoherent* header (INTERNED on a Map, a 2 GiB nursery size) — i.e. a
-stale slot, not a real pin — and the previous report named only the
-garbage. No new knob.
+the header (`copying walk phase: <scanner | remembered_set | worklist_drain
+| mutable_root_slots/{shadow,native,global}>`) and a mutator backtrace.
+On this corpus the latch fires on an *incoherent* header (INTERNED on a
+Map, a 2 GiB nursery size) — a stale slot, not a real pin. Seed 3 under
+`RATE=0.1 ALLOC_KB=0` is a 3/3 abort; the slot is a native stack-map
+root in `Doc.write` / `generateFastpass` / `$ZodObjectJIT.parse`.
+No new knob.
