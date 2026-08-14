@@ -219,3 +219,143 @@ fn classify_element_read_receiver_rejects_garbage_bits() {
         ElementReadReceiver::Absent
     ));
 }
+
+// --------------------------------------------------------------------------
+// #8111: the `Uint8Array`-specialized twin of the same defect.
+//
+// `js_uint8array_get` / `js_uint8array_index_get_value` / `js_uint8array_set`
+// are a SEPARATE emission path: codegen picks them from
+// `is_uint8array_receiver` (`perry-codegen/src/expr/index_{get,set}.rs`),
+// which keys on `receiver_class_name` rather than the `local_type_hint`
+// predicate #8100 is about — but it fires for a reassigned `Uint8Array` local
+// just the same. Each helper had a three-way shape (registered typed array of
+// the right kind / registered buffer / fall off the end) and TWO of those
+// arms answered for a receiver that is perfectly readable:
+//
+//   * the trailing arm — a plain array or object — answered `0` /
+//     `undefined` / dropped the store;
+//   * the wrong-KIND arm — a registered typed array that is not
+//     `Uint8Array` / `Uint8ClampedArray` — did the same, although
+//     `js_typed_array_get` / `js_typed_array_set` are kind-generic and node
+//     reads and writes the real element there.
+//
+// The store half matters most: `Q[0] = 5` left no trace at all.
+//
+// Each test asserts the RECOVERED VALUE, never merely "did not panic". The
+// pre-fix code answers `0` / `undefined` / no-op for every one of them, so
+// none can pass against the old body.
+// --------------------------------------------------------------------------
+
+use crate::typedarray::access::{
+    js_uint8array_get, js_uint8array_index_get_value, js_uint8array_set,
+};
+
+/// A plain array handed to a `Uint8Array`-specialized helper, exactly as
+/// codegen emits it (`unbox_to_i64` masks the NaN-box tag off).
+fn as_u8(arr: *mut ArrayHeader) -> *const TypedArrayHeader {
+    as_typed(arr)
+}
+
+/// A registered typed array with the NaN-box tag masked off, the shape every
+/// one of these helpers is actually handed.
+fn as_recv(ta: *mut TypedArrayHeader) -> *const TypedArrayHeader {
+    ((ta as u64) & POINTER_MASK) as *const TypedArrayHeader
+}
+
+#[test]
+fn js_uint8array_index_get_value_reads_a_plain_array_receiver() {
+    let _serialized = crate::array::test_serialize();
+    let arr = plain_array(&[9.0, 10.0]);
+    assert_eq!(js_uint8array_index_get_value(as_u8(arr), 0), 9.0);
+    assert_eq!(js_uint8array_index_get_value(as_u8(arr), 1), 10.0);
+    // Out of range is `undefined`, the IntegerIndexedExotic answer node
+    // prints — not the `0` byte sentinel.
+    assert!(is_undefined(js_uint8array_index_get_value(as_u8(arr), 2)));
+}
+
+#[test]
+fn js_uint8array_set_stores_into_a_plain_array_receiver() {
+    let _serialized = crate::array::test_serialize();
+    let arr = plain_array(&[9.0, 10.0]);
+    js_uint8array_set(as_u8(arr) as *mut TypedArrayHeader, 0, 5);
+    assert_eq!(
+        js_uint8array_index_get_value(as_u8(arr), 0),
+        5.0,
+        "the store must land in the plain array — it was silently dropped"
+    );
+    // And it is visible through the ordinary array accessor too, i.e. it is a
+    // real `[[Set]]` and not a shadow write somewhere else.
+    assert_eq!(crate::array::js_array_get_element(arr as i64, 0), 5.0);
+    assert_eq!(crate::array::js_array_get_element(arr as i64, 1), 10.0);
+}
+
+#[test]
+fn js_uint8array_get_reads_a_plain_array_receiver_as_a_byte() {
+    let _serialized = crate::array::test_serialize();
+    let arr = plain_array(&[9.0, 10.0]);
+    assert_eq!(js_uint8array_get(as_u8(arr), 0), 9);
+    assert_eq!(js_uint8array_get(as_u8(arr), 1), 10);
+    // This accessor's ABI is a byte-typed i32, so out of range stays the `0`
+    // sentinel (#6088) rather than becoming `undefined`.
+    assert_eq!(js_uint8array_get(as_u8(arr), 2), 0);
+}
+
+#[test]
+fn uint8_helpers_read_and_write_a_wrong_kind_typed_array() {
+    let _serialized = crate::array::test_serialize();
+    // A real Int32Array behind a `Uint8Array` static hint. `js_typed_array_
+    // {get,set}` are kind-generic, so there is nothing unsafe about serving
+    // it — the old `!matches!(kind, UINT8 | UINT8_CLAMPED)` arm just answered
+    // `undefined` and dropped the store. node reads and writes the element.
+    let ta = typed(KIND_INT32, &[11.0, 12.0]);
+    let recv = as_recv(ta);
+
+    assert_eq!(js_uint8array_index_get_value(recv, 1), 12.0);
+    js_uint8array_set(recv as *mut TypedArrayHeader, 0, 77);
+    assert_eq!(js_uint8array_index_get_value(recv, 0), 77.0);
+    // Through the kind-correct accessor as well: the lane really holds 77.
+    assert_eq!(js_typed_array_get(ta, 0), 77.0);
+}
+
+#[test]
+fn js_uint8array_index_get_value_is_undefined_for_a_non_pointer_receiver() {
+    let _serialized = crate::array::test_serialize();
+    // `Q = 42 as any` — codegen masks the tag off, so the helper sees a small
+    // integer. Nothing indexable: `undefined`, and a store is dropped.
+    let bogus = 42u64 as *const TypedArrayHeader;
+    assert!(is_undefined(js_uint8array_index_get_value(bogus, 0)));
+    assert_eq!(js_uint8array_get(bogus, 0), 0);
+    js_uint8array_set(bogus as *mut TypedArrayHeader, 0, 5);
+}
+
+// --------------------------------------------------------------------------
+// Controls: the receivers these helpers were WRITTEN for must be untouched.
+// --------------------------------------------------------------------------
+
+#[test]
+fn uint8_helpers_still_serve_a_real_uint8_array() {
+    let _serialized = crate::array::test_serialize();
+    let ta = typed(KIND_UINT8, &[3.0, 4.0]);
+    let recv = as_recv(ta);
+
+    assert_eq!(js_uint8array_index_get_value(recv, 0), 3.0);
+    assert_eq!(js_uint8array_get(recv, 1), 4);
+    js_uint8array_set(recv as *mut TypedArrayHeader, 1, 250);
+    assert_eq!(js_uint8array_index_get_value(recv, 1), 250.0);
+    // A Uint8Array lane is 1 byte: 300 wraps to 44. If the store had been
+    // diverted to a plain-array `[[Set]]` it would read back 300.
+    js_uint8array_set(recv as *mut TypedArrayHeader, 0, 300);
+    assert_eq!(js_uint8array_index_get_value(recv, 0), 44.0);
+    assert!(is_undefined(js_uint8array_index_get_value(recv, 2)));
+}
+
+#[test]
+fn uint8_helpers_still_serve_a_uint8_clamped_array() {
+    let _serialized = crate::array::test_serialize();
+    let ta = typed(KIND_UINT8_CLAMPED, &[1.0, 2.0]);
+    let recv = as_recv(ta);
+    // Clamped, not wrapped: 300 -> 255. The kind-specific store is still the
+    // one running.
+    js_uint8array_set(recv as *mut TypedArrayHeader, 0, 300);
+    assert_eq!(js_uint8array_index_get_value(recv, 0), 255.0);
+}
