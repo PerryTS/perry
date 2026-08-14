@@ -8,8 +8,11 @@ from-space. Every rooting bug fixed in the #7341 quarantine sweep had rooting
 ALREADY; what was missing was ordering the re-read against the collection point.
 
 `RuntimeHandle::across_{mut,const,nanbox}` expresses that ordering in one call
-and never binds the pre-call address. Each bare `get_raw_*_ptr` is a site where
-that ordering is a review question instead of a shape.
+and never binds the pre-call address. `with_{mut,const}_ptr` covers the other
+legitimate shape: passing the current pointer directly to a non-allocating
+operation or to an entry point that establishes its own root before it can
+allocate. Each bare `get_raw_*_ptr` is a site where those contracts are a
+review question instead of a shape.
 
 This is a DEBT COUNTER, not a soundness proof. Rust has no effect system to mark
 "this call may allocate", so no signature can reject holding a stale copy. Not
@@ -42,7 +45,7 @@ SRC = ROOT / "crates" / "perry-runtime" / "src"
 BASELINE = ROOT / "scripts" / "raw_handle_debt_baseline.txt"
 PAT = re.compile(r"\.get_raw_(?:mut|const)_ptr\b")
 
-# The accessors and the `across_*` combinators are DEFINED here and call each
+# The accessors and scoped-pointer combinators are DEFINED here and call each
 # other; counting this file would make the ratchet count its own implementation
 # and rise every time a combinator is added. Exclude it.
 EXCLUDE = {"crates/perry-runtime/src/gc/roots/runtime_handles.rs"}
@@ -89,7 +92,8 @@ def check_per_module(per_file):
         if path not in ceilings:
             bad.append(
                 f"{path}: {n} bare read(s) in a module with no ceiling. New code must "
-                f"use RuntimeHandle::across_{{mut,const,nanbox}}; see #7341."
+                f"use RuntimeHandle::across_{{mut,const,nanbox}} or "
+                f"with_{{mut,const}}_ptr; see #7341."
             )
         elif n > ceilings[path]:
             bad.append(f"{path}: {n} bare reads exceeds its ceiling of {ceilings[path]}")
@@ -133,7 +137,8 @@ def compare_across_base(base_total, base_ceilings, head_total, head_ceilings):
         bad.append(
             f"baseline raised {base_total} -> {head_total} relative to the merge "
             f"base. The ratchet only goes down; convert the new sites to "
-            f"RuntimeHandle::across_{{mut,const,nanbox}} instead of recording them."
+            f"RuntimeHandle::across_{{mut,const,nanbox}} / "
+            f"with_{{mut,const}}_ptr instead of recording them."
         )
     for path, ceiling in sorted(head_ceilings.items()):
         was = base_ceilings.get(path, 0)
@@ -208,6 +213,8 @@ def self_test():
     must_not_match = [
         "let (found, obj) = h.across_mut::<ObjectHeader, _>(|| f());",
         "h.across_const::<ObjectHeader, _>(|| g())",
+        "h.with_mut_ptr::<ObjectHeader, _>(|obj| consume(obj))",
+        "h.with_const_ptr::<StringHeader, _>(|key| lookup(key))",
         "h.get_nanbox_f64()",
     ]
     for line in must_match:
@@ -303,7 +310,7 @@ def main():
         prev = int(BASELINE.read_text().split()[0]) if BASELINE.exists() else None
         if prev is not None and total > prev:
             print(f"refusing to raise the baseline: {prev} -> {total}")
-            print("the ratchet only goes down; convert sites to across_* instead")
+            print("the ratchet only goes down; convert sites to across_*/with_* instead")
             return 1
         BASELINE.write_text(f"{total}\n")
         # Rewrite the per-module ceilings too, preserving the header. Entries
@@ -337,17 +344,18 @@ def main():
         print(f"::error::per-module raw-handle rules: {len(module_violations)} violation(s)")
         for b in module_violations:
             print(f"  {b}")
-        print("Use RuntimeHandle::across_{mut,const,nanbox} -- it runs the")
-        print("allocating call and returns the post-collection address, so the")
-        print("stale pointer is never bound. See #7341 and the header of")
-        print("scripts/raw_handle_debt_files.txt.")
+        print("Use RuntimeHandle::across_{mut,const,nanbox} for a post-call")
+        print("reload, or with_{mut,const}_ptr for a scoped argument to a")
+        print("non-allocating operation / self-rooting runtime entry point.")
+        print("See #7341 and scripts/raw_handle_debt_files.txt.")
         return 1
 
     if total > prev:
         print(f"::error::raw-handle debt rose {prev} -> {total}")
-        print("Use RuntimeHandle::across_{mut,const,nanbox} -- it runs the")
-        print("allocating call and returns the post-collection address, so the")
-        print("stale pointer is never bound. See #7341.")
+        print("Use RuntimeHandle::across_{mut,const,nanbox} for a post-call")
+        print("reload, or with_{mut,const}_ptr for a scoped argument to a")
+        print("non-allocating operation / self-rooting runtime entry point.")
+        print("See #7341.")
         for path, n in sorted(per_file.items(), key=lambda kv: -kv[1])[:10]:
             print(f"  {n:4d}  {path}")
         return 1

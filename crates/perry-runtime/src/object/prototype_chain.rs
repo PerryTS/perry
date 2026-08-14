@@ -202,7 +202,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
             // ShapeId transition below.
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
-            let meta = crate::object::object_meta_ensure(obj);
+            let (meta, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+                crate::object::object_meta_ensure(obj)
+            });
             (*meta).prototype = proto_bits;
             if instance_override {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;
@@ -216,7 +218,6 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
                 proto_bits,
             );
             if instance_override {
-                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
                 crate::object::shapes::transition_object_shape_semantics(obj);
             }
             return;

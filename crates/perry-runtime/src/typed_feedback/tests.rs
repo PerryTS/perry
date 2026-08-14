@@ -1696,6 +1696,7 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
     unsafe {
         // These are ABI mirrors retained until the later header-shrink issue.
         // An authoritative guard must not consult either one.
+        // GC_STORE_AUDIT(POINTER_FREE): test sabotage removes the compatibility edge by storing null.
         (*obj).keys_array = std::ptr::null_mut();
         (*obj).field_count = 0;
     }
@@ -1709,7 +1710,13 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
         0,
     );
     unsafe {
+        // GC_STORE_AUDIT(BARRIERED): restoring the saved compatibility edge is followed by the ordinary object-slot barrier.
         (*obj).keys_array = original_keys;
+        crate::gc::runtime_write_barrier_slot(
+            obj as usize,
+            &(*obj).keys_array as *const _ as usize,
+            original_keys as u64,
+        );
         (*obj).field_count = original_field_count;
     }
 

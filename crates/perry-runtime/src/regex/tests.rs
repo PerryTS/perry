@@ -11,10 +11,9 @@ fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("x"));
     let flags = scope.root_string_ptr(make_string("g"));
-    let re = js_regexp_new(
-        pattern.get_raw_mut_ptr::<StringHeader>(),
-        flags.get_raw_mut_ptr::<StringHeader>(),
-    );
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
         .expect("RegExp must be a GC allocation");
     assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
@@ -28,10 +27,9 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("finalize"));
     let flags = scope.root_string_ptr(make_string("g"));
-    let re = js_regexp_new(
-        pattern.get_raw_mut_ptr::<StringHeader>(),
-        flags.get_raw_mut_ptr::<StringHeader>(),
-    );
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
     let addr = re as usize;
     assert!(test_regex_pointer_entry_exists(addr));
     assert!(test_regex_source_entry_exists(addr));

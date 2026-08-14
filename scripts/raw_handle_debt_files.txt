@@ -6,8 +6,11 @@
 # three directions are closed:
 #
 #   1. A file NOT listed here must have ZERO bare reads. New code is therefore
-#      clean by construction -- `RuntimeHandle::across_{mut,const,nanbox}` is
-#      the only way in, which is what "non-optional" means for #7341's
+#      clean by construction. `RuntimeHandle::across_{mut,const,nanbox}` pairs
+#      an allocating call with its post-call reload; `with_{mut,const}_ptr`
+#      scopes an argument passed to a non-allocating operation or a runtime
+#      entry point that establishes its own root before allocation. Those are
+#      the only ways in, which is what "non-optional" means for #7341's
 #      discipline (engine plan layer 3).
 #   2. A listed file must not EXCEED its ceiling.
 #   3. A listed file that reaches ZERO must be DELETED from this list. An entry

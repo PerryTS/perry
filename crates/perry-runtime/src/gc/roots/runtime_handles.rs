@@ -204,6 +204,27 @@ impl<'scope> RuntimeHandle<'scope> {
         })
     }
 
+    /// Pass the handle's current mutable pointer to `f` without exposing a
+    /// bare handle read at the call site.
+    ///
+    /// This is the argument-position companion to [`Self::across_mut`]. Use it
+    /// when a rooted pointer must be handed directly to a non-allocating
+    /// operation or to a runtime entry point that establishes its own root
+    /// before it can allocate. The callback must not retain the pointer: this
+    /// method scopes the raw value, but it cannot keep that value current if a
+    /// collection moves the allocation while `f` is running. Use
+    /// [`Self::across_mut`] when the caller needs a post-collection address.
+    #[inline]
+    pub fn with_mut_ptr<T, R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
+        f(self.get_raw_mut_ptr::<T>())
+    }
+
+    /// `with_mut_ptr` for a `*const` argument. See its safety contract.
+    #[inline]
+    pub fn with_const_ptr<T, R>(&self, f: impl FnOnce(*const T) -> R) -> R {
+        f(self.get_raw_const_ptr::<T>())
+    }
+
     /// Run `f` — which may allocate, and therefore may MOVE the object this
     /// handle roots — and return its result together with the object's
     /// **post-collection** address.

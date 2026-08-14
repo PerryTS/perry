@@ -1738,8 +1738,11 @@ mod shape_authority_tests_8067 {
             const CID: u32 = 0x8068;
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 1));
-            super::js_object_mark_class(obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as i64);
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    super::js_object_mark_class(obj as i64)
+                })
+            });
             let predecessor = crate::object::shapes::object_shape_descriptor(obj)
                 .expect("marked class descriptor");
             assert_eq!(
@@ -1751,7 +1754,9 @@ mod shape_authority_tests_8067 {
             // the structural mutator has saved its predecessor and cleared the
             // stamp, then typed feedback defensively self-heals the object.
             assert!(crate::object::shapes::clear_object_shape_stamp(obj));
-            let interim = crate::typed_feedback::test_object_shape_token(obj as usize);
+            let (interim, obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                crate::typed_feedback::test_object_shape_token(obj as usize)
+            });
             assert_eq!(
                 crate::object::shapes::shape_descriptor_by_id(interim as u32)
                     .expect("interim descriptor")
@@ -1778,12 +1783,17 @@ mod shape_authority_tests_8067 {
             const CID: u32 = 0x8067;
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 8));
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
-            let before = crate::object::shapes::object_shape_id(obj);
-            assert!(crate::object::object_is_regular(obj));
+            let before = obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                let before = crate::object::shapes::object_shape_id(obj);
+                assert!(crate::object::object_is_regular(obj));
+                before
+            });
 
-            super::js_object_mark_class(obj as i64);
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    super::js_object_mark_class(obj as i64)
+                })
+            });
             let after = crate::object::shapes::object_shape_id(obj);
             assert_ne!(before, after, "becoming a class object is semantic");
             assert_eq!(
@@ -1803,12 +1813,13 @@ mod shape_authority_tests_8067 {
             // GcHeader::_reserved, where the old class marker collided with
             // GC_LAYOUT_ALL_POINTERS. Shape kind must be unaffected.
             let numeric_key = key(&scope, "numericStatic");
-            crate::object::js_object_set_field_by_name(
-                obj_handle.get_raw_mut_ptr(),
-                numeric_key.get_raw_const_ptr(),
-                42.0,
-            );
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    numeric_key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                        crate::object::js_object_set_field_by_name(obj, key, 42.0)
+                    })
+                })
+            });
             assert!(
                 super::is_class_object_ptr(obj.cast()),
                 "numeric static write changed class descriptor: {:?}",
@@ -1820,12 +1831,17 @@ mod shape_authority_tests_8067 {
             // opposite GC layout state and used to erase the aliased bit.
             let pointer_key = key(&scope, "pointerStatic");
             let payload = key(&scope, "rootedStaticValue");
-            crate::object::js_object_set_field_by_name(
-                obj_handle.get_raw_mut_ptr(),
-                pointer_key.get_raw_const_ptr(),
-                f64::from_bits(crate::value::JSValue::string_ptr(payload.get_raw_mut_ptr()).bits()),
-            );
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    pointer_key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                        payload.with_mut_ptr::<crate::StringHeader, _>(|payload| {
+                            let value =
+                                f64::from_bits(crate::value::JSValue::string_ptr(payload).bits());
+                            crate::object::js_object_set_field_by_name(obj, key, value)
+                        })
+                    })
+                })
+            });
             assert!(super::is_class_object_ptr(obj.cast()));
             assert!(!crate::object::object_is_regular(obj));
             assert_eq!(
@@ -1843,12 +1859,13 @@ mod shape_authority_tests_8067 {
             // invalidation finishes and must prefer its saved predecessor over
             // any defensive self-heal in the temporary cleared-stamp window.
             let after_pointer_key = key(&scope, "afterPointerStatic");
-            crate::object::js_object_set_field_by_name(
-                obj_handle.get_raw_mut_ptr(),
-                after_pointer_key.get_raw_const_ptr(),
-                7.0,
-            );
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    after_pointer_key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                        crate::object::js_object_set_field_by_name(obj, key, 7.0)
+                    })
+                })
+            });
             assert!(
                 super::is_class_object_ptr(obj.cast()),
                 "typed-layout invalidation erased class descriptor lineage: {:?}",
@@ -1864,14 +1881,14 @@ mod shape_authority_tests_8067 {
             // Deletion installs a cloned keys array, which clears the current
             // stamp. The replacement descriptor must inherit class kind from
             // the predecessor captured before that clear.
-            assert_eq!(
-                crate::object::js_object_delete_field(
-                    obj_handle.get_raw_mut_ptr(),
-                    numeric_key.get_raw_const_ptr(),
-                ),
-                1
-            );
-            let obj = obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let (deleted, obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
+                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                    numeric_key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                        crate::object::js_object_delete_field(obj, key)
+                    })
+                })
+            });
+            assert_eq!(deleted, 1);
             assert!(
                 super::is_class_object_ptr(obj.cast()),
                 "deleting a static field erased class descriptor lineage: {:?}",
