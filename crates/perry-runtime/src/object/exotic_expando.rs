@@ -65,8 +65,8 @@ pub(crate) enum ExoticKind {
 }
 
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
-/// `None` for everything else (including the small-handle band). One
-/// `GcHeader` read; the RegExp set probe only runs for `GC_TYPE_OBJECT`.
+/// `None` for everything else (including the small-handle band). Every arm is
+/// selected directly by its authoritative `GcHeader` kind.
 pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
     match gc.obj_type {
@@ -76,9 +76,7 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_PROMISE => Some(ExoticKind::Promise),
         crate::gc::GC_TYPE_MAP => Some(ExoticKind::Map),
         crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
-        crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {
-            Some(ExoticKind::RegExp)
-        }
+        crate::gc::GC_TYPE_REGEXP => Some(ExoticKind::RegExp),
         _ => None,
     }
 }

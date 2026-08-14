@@ -61,7 +61,11 @@ pub const GC_TYPE_TEMPORAL: u8 = 18;
 /// its owner's header slot, so ordinary tracing gives it exactly the
 /// owner's lifetime; movable, and holds one traced NaN-box slot.
 pub const GC_TYPE_OBJECT_META: u8 = 19;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_OBJECT_META;
+/// Native `RegExpHeader`. RegExp used to share `GC_TYPE_OBJECT`, forcing every
+/// ObjectHeader consumer to inspect unrelated payload words for a magic value.
+/// A distinct GC kind is the authoritative, header-external discriminator.
+pub const GC_TYPE_REGEXP: u8 = 20;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEXP;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -153,6 +157,7 @@ pub(crate) enum GcRewriteDescriptorKind {
     Leaf,
     Array,
     Object,
+    RegExp,
     Closure,
     Promise,
     Error,
@@ -171,6 +176,7 @@ pub(crate) enum GcLayoutSlotKind {
     None,
     ArrayElements,
     ObjectFields,
+    RegExpFields,
     ClosureCaptures,
     /// #6812: ObjectMeta records carry two live edges — the custom
     /// `[[Prototype]]` value and the raw spill-buffer pointer. Before the
@@ -650,6 +656,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_REGEXP,
+        "regexp",
+        GcAllocationPolicy::ArenaOrMalloc,
+        true,
+        GcRewriteDescriptorKind::RegExp,
+        GcLayoutSlotKind::RegExpFields,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 #[inline]
@@ -873,6 +894,11 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("object rewrite descriptor must expose object field slots");
             }
         }
+        GcRewriteDescriptorKind::RegExp => {
+            if info.layout_slot_kind != GcLayoutSlotKind::RegExpFields {
+                return Err("regexp rewrite descriptor must expose regexp fields");
+            }
+        }
         GcRewriteDescriptorKind::Closure => {
             if info.layout_slot_kind != GcLayoutSlotKind::ClosureCaptures {
                 return Err("closure rewrite descriptor must expose closure capture slots");
@@ -1044,6 +1070,13 @@ pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
 // path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
 // `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+/// Heap class-expression value (`class C {}`), as distinct from an ordinary
+/// instance carrying the same `GC_TYPE_OBJECT` allocation tag. This is the
+/// authoritative replacement for `ObjectHeader::object_type ==
+/// OBJECT_TYPE_CLASS`; the legacy payload word remains an ABI mirror until
+/// #8047 removes it. Bit 13 is preserved by survival-age and layout-state
+/// updates and is otherwise unused for `GC_TYPE_OBJECT`.
+pub const OBJ_FLAG_CLASS_OBJECT: u16 = 0x2000;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached

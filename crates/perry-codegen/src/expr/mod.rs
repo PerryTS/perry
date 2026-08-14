@@ -1648,8 +1648,8 @@ pub(crate) struct ElementShapeLoopFact {
     /// SSA name of the elements base pointer (`arr_handle + 8`), derived in
     /// the preheader AFTER the guard call, so it cannot be a pre-move address.
     pub elements_base: String,
-    /// SSA name of the hoisted `@perry_class_keys_<class>` load.
-    pub expected_keys: String,
+    /// SSA name of the hoisted canonical ShapeId load.
+    pub expected_shape_id: String,
     /// Slow clone's preheader label. The per-element residual check (see
     /// `expr::element_shape_guard`) branches here on a miss; the slow clone
     /// re-executes the current iteration, which is safe because the matcher

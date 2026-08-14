@@ -15,39 +15,44 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
 ) {
     let mut child_slots = gc_child_slots(header);
-    // Capture the authoritative pre-visit facts. A copying visit can rewrite
-    // `keys_array`, and a sibling may already have rewritten the shared
-    // descriptor, so the descriptor helper accepts exactly the old OR new
-    // pointer — never an unrelated pointer that merely shares an id.
+    // Capture the authoritative descriptor facts. `gc_child_slots` has already
+    // copied the descriptor's keys edge into the compatibility header scratch
+    // slot; a copying visit can rewrite that slot, after which the descriptor
+    // table is updated below.
     let object_shape_facts = if (*header).obj_type == GC_TYPE_OBJECT {
         let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
-        if crate::regex::regex_header_has_magic(obj as *const crate::regex::RegExpHeader) {
-            None
+        let descriptor = crate::object::shapes::object_shape_descriptor(obj);
+        let old_keys = descriptor
+            .map(|facts| facts.keys as usize as *mut crate::array::ArrayHeader)
+            .unwrap_or((*obj).keys_array);
+        let live_inline_slot_count = descriptor
+            .map(|facts| facts.live_inline_slot_count)
+            .unwrap_or((*obj).field_count);
+        if old_keys.is_null() {
+            Some((obj, 0, 0, live_inline_slot_count))
+        } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)
+            .is_some_and(|keys_header| (*keys_header.as_ptr()).obj_type == GC_TYPE_ARRAY)
+        {
+            // A forwarded tracked array still carries GC_TYPE_ARRAY in
+            // its from-space header. The length helper follows that stub,
+            // so a sibling whose shared keys edge was already rewritten
+            // can still validate against the descriptor's new pointer.
+            Some((
+                obj,
+                old_keys as u64,
+                descriptor
+                    .map(|facts| facts.logical_key_count)
+                    .unwrap_or_else(|| {
+                        crate::array::keys_array_len_capped_to_capacity(old_keys) as u32
+                    }),
+                live_inline_slot_count,
+            ))
         } else {
-            let old_keys = (*obj).keys_array;
-            let live_inline_slot_count = (*obj).field_count;
-            if old_keys.is_null() {
-                Some((obj, 0, 0, live_inline_slot_count))
-            } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)
-                .is_some_and(|keys_header| (*keys_header.as_ptr()).obj_type == GC_TYPE_ARRAY)
-            {
-                // A forwarded tracked array still carries GC_TYPE_ARRAY in
-                // its from-space header. The length helper follows that stub,
-                // so a sibling whose shared keys edge was already rewritten
-                // can still validate against the descriptor's new pointer.
-                Some((
-                    obj,
-                    old_keys as u64,
-                    crate::array::keys_array_len_capped_to_capacity(old_keys) as u32,
-                    live_inline_slot_count,
-                ))
-            } else {
-                // Do not dereference corrupt/unmapped header words merely
-                // because their sibling word happens to look like a ShapeId.
-                // The authoritative header edge below is still enumerated;
-                // only redundant descriptor synchronization is skipped.
-                None
-            }
+            // Do not dereference corrupt/unmapped header words merely because
+            // their sibling word happens to look like a ShapeId. The
+            // authoritative header edge below is still enumerated; only
+            // redundant descriptor synchronization is skipped.
+            None
         }
     } else {
         None
@@ -61,8 +66,8 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     // work may retain enumerated slot addresses across budgeted resumptions,
     // during which descriptor insertion can reallocate the table. A deferred
     // visitor leaves old==new here; the metadata forwarding pass repairs it
-    // after copying. RegExp aliases GC_TYPE_OBJECT with a different native
-    // header and was excluded while capturing the facts above.
+    // after copying. RegExp uses its dedicated GC slot kind and never enters
+    // the ObjectHeader branch above.
     if let Some((obj, old_keys, logical_key_count, live_inline_slot_count)) = object_shape_facts {
         let new_keys = (*obj).keys_array as u64;
         // Mark, verify, and deferred dirty scans leave the header edge
@@ -175,6 +180,9 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                     visit(fixed_slot(slot));
                 },
             );
+        }
+        GcRewriteDescriptorKind::RegExp => {
+            visit_gc_layout_slot_descriptors(header, &mut visit);
         }
         GcRewriteDescriptorKind::Closure => {
             visit_gc_layout_slot_descriptors(header, &mut visit);

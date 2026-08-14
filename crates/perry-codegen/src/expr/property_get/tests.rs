@@ -123,32 +123,27 @@ fn no_call_location_without_debug_symbols() {
     );
 }
 
-/// #6080a: the inline PIC hit predicate must gate raw keys-POINTER tokens on
-/// the GC epoch — `cache[2] == @PERRY_IC_EPOCH` — because the `@perry_ic_N`
-/// globals are invisible to every GC scanner, so a primed keys-array address
-/// that GC frees/moves can be recycled under a different shape and falsely
-/// pointer-match. This asserts the emitted IR still carries the guard: the
-/// per-site epoch-slot load (gep index 2) and the live-epoch load from the
-/// runtime-exported global. Deleting either from `lower_generic_property_get`
-/// turns this red.
+/// #8067: property-read PIC identity is the authoritative ShapeId only. The
+/// former keys-pointer epoch word is reserved scratch and must not participate
+/// in the emitted hit predicate.
 #[test]
-fn generic_property_get_hit_path_is_epoch_gated() {
+fn generic_property_get_hit_path_is_shape_id_only() {
     let ir = emit(false, None);
     assert!(
         ir.contains("@perry_ic_"),
         "test premise: the generic read reaches the inline monomorphic PIC:\n{ir}"
     );
     assert!(
-        ir.contains("load i64, ptr @PERRY_IC_EPOCH"),
-        "hit path must load the live read-PIC epoch (@PERRY_IC_EPOCH):\n{ir}"
+        ir.contains("4611686018427387904"),
+        "hit path must form a discriminated ShapeId token:\n{ir}"
     );
-    // The per-site primed-epoch slot: a gep to index 2 of some @perry_ic_N
-    // global (the site number depends on how many IC sites precede this one).
     assert!(
-        ir.lines().any(|l| {
-            l.contains("getelementptr i64, ptr @perry_ic_") && l.trim_end().ends_with(", i64 2")
-        }),
-        "hit path must load the per-site primed-epoch slot (cache[2]):\n{ir}"
+        !ir.contains("@PERRY_IC_EPOCH")
+            && !ir.lines().any(|line| {
+                line.contains("getelementptr i64, ptr @perry_ic_")
+                    && line.trim_end().ends_with(", i64 2")
+            }),
+        "the removed pointer-token epoch must not appear in emitted IR:\n{ir}"
     );
 }
 
@@ -283,8 +278,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
 /// the dominance follows.
 ///
 /// Assert the *consequences*, not the block names alone: a re-derivation would
-/// show up as a second `@PERRY_IC_EPOCH` load and as the small-handle sentinel
-/// `select`, and both must be gone.
+/// show up as duplicate header loads or the small-handle sentinel `select`.
 #[test]
 fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     let ir = emit(false, None);
@@ -305,12 +299,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         "the two receiver-validation failures need their own landing block, \
          otherwise pic.miss is not dominated by pic.token:\n{ir}"
     );
-    let epoch_loads = main.matches("load i64, ptr @PERRY_IC_EPOCH").count();
-    assert_eq!(
-        epoch_loads, 1,
-        "one generic read must load @PERRY_IC_EPOCH exactly once; a second \
-         load means the way block re-derived the epoch predicate:\n{ir}"
-    );
+    assert!(!main.contains("@PERRY_IC_EPOCH"));
     assert!(
         !main.contains("ptrtoint ptr @perry_ic_"),
         "the small-handle sentinel select only existed because an invalid \
@@ -330,28 +319,22 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     }
 }
 
-/// #7907: the cached-slot bound is `slot < FLOOR || slot < field_count`, not
-/// `slot < max(field_count, FLOOR)`.
-///
-/// Identical predicate; the point is that the `max` had to be materialised, and
-/// the `csel` that did it sat on the dependency chain out of the `field_count`
-/// load — the single hottest instruction in `interp.ts`'s `evalNode`. If
-/// someone "simplifies" this back to a `max`, nothing else in the suite
-/// notices.
+/// #8067: an exact ShapeId match proves the cached slot's descriptor facts, so
+/// the hit path must not reload the compatibility `field_count` mirror merely
+/// to re-prove the slot bound.
 #[test]
-fn cached_slot_bound_is_a_disjunction_not_a_materialised_max() {
+fn cached_slot_bound_comes_from_the_shape_descriptor_match() {
     let floor = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
     let ir = emit(false, None);
     assert!(
-        ir.lines()
-            .any(|l| l.contains("icmp ult i64 ") && l.ends_with(&format!(", {floor}"))),
-        "test premise: the emitted bound compares a slot against \
-         INLINE_SLOT_FLOOR ({floor}):\n{ir}"
+        ir.contains("4611686018427387904") && ir.contains("@perry_ic_"),
+        "test premise: the emitted read uses a ShapeId PIC:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!(", i64 {floor}, i64 %")),
-        "a `select …, i64 {floor}, i64 %fc` is the materialised max this \
-         deliberately does not emit:\n{ir}"
+        !ir.lines()
+            .any(|line| line.contains("icmp ult i64 ") && line.ends_with(&format!(", {floor}")))
+            && !ir.contains(&format!(", i64 {floor}, i64 %")),
+        "the ShapeId hit path must not materialize a header slot bound:\n{ir}"
     );
 }
 
@@ -505,7 +488,7 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     // string-handle `ptrtoint` as the receiver-tag test before it was fixed).
     let func = ir
         .split("\ndefine ")
-        .find(|f| f.contains("pic.hit.load"))
+        .find(|f| f.contains("\npic.hit.") && f.contains("@perry_ic_"))
         .unwrap_or_else(|| panic!("no function contains a PIC hit load:\n{ir}"))
         .to_string();
 
@@ -531,7 +514,9 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     }
     let load_label = blocks
         .iter()
-        .find(|(l, _)| l.starts_with("pic.hit.load"))
+        .find(|(l, body)| {
+            l.starts_with("pic.hit") && body.iter().any(|line| line.contains("load double"))
+        })
         .map(|(l, _)| l.clone())
         .unwrap_or_else(|| panic!("no `pic.hit.load` block:\n{func}"));
 
@@ -598,8 +583,8 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         at = pred_label.clone();
     }
     assert!(
-        conds.len() >= 5,
-        "expected at least five guard branches between the PIC entry and the \
+        conds.len() >= 3,
+        "expected at least three guard branches between the PIC entry and the \
          inline slot load, found {}: {conds:?}\n{func}",
         conds.len()
     );
@@ -636,9 +621,8 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         ("32765", "the POINTER/STRING receiver-tag test"),
         ("1048575", "the small-handle (native registry id) test"),
         ("icmp eq i8", "the GcHeader obj_type == GC_TYPE_OBJECT test"),
-        ("1129268819", "the CLOSURE_MAGIC test"),
         ("2048", "the OBJ_FLAG_HAS_DESCRIPTORS test"),
-        ("@PERRY_IC_EPOCH", "the read-PIC epoch gate"),
+        ("4611686018427387904", "the discriminated ShapeId token"),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
         assert!(

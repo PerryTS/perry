@@ -80,7 +80,7 @@
 //! established at that recycled address next.
 //!
 //! Both follow the crate's convention for invalidation counters (`AtomicU64`
-//! starting at 1, `PROP_PLAN_EPOCH` / `PERRY_IC_EPOCH`), not a per-thread
+//! starting at 1, such as `PROP_PLAN_EPOCH`), not a per-thread
 //! `Cell`: the class registry a generation bump answers to is process-wide.
 //!
 //! ## Verified length: the structural half of the invalidation matrix
@@ -232,12 +232,11 @@ pub(crate) fn invalidate_all_element_shapes() {
 /// The class id an element must have to keep the invariant, or `None` if the
 /// value cannot participate at all.
 ///
-/// Strict on purpose. `POINTER_TAG` alone is not enough: `RegExpHeader` is
-/// also tagged `GC_TYPE_OBJECT` (see the aliasing caution on `ObjectMeta`),
-/// and reading `class_id` off a non-`ObjectHeader` payload yields garbage
-/// that would then be *compared equal* across two unrelated arrays.
-/// Requiring `object_type == OBJECT_TYPE_REGULAR` and a nonzero class id
-/// keeps every accepted value a genuine shaped instance.
+/// Strict on purpose. `POINTER_TAG` alone is not enough: every native heap
+/// cell uses it, and reading `class_id` off a non-`ObjectHeader` payload yields
+/// garbage that could compare equal across unrelated arrays. Requiring the
+/// authoritative object kind/marker and a nonzero class id keeps every
+/// accepted value a genuine shaped instance.
 #[inline]
 pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
     if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
@@ -256,7 +255,7 @@ pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        if !crate::object::object_is_regular(obj) {
             return None;
         }
         let class_id = (*obj).class_id;

@@ -38,7 +38,7 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
-        || (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        || !crate::object::object_is_regular(obj)
         || (*obj).class_id == NATIVE_MODULE_CLASS_ID
         || crate::array::object_prototype_addr_matches(obj_addr)
         // URL's visible fields are live views over one backing URL. An own
@@ -196,9 +196,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         {
             return 0;
         }
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
-            || (*obj).class_id == NATIVE_MODULE_CLASS_ID
-        {
+        if !crate::object::object_is_regular(obj) || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             return 0;
         }
 

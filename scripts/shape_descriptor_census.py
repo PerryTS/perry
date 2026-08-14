@@ -190,6 +190,18 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
         "crates/perry-runtime/src/gc/layout_slot_visit.rs",
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs",
+        "crates/perry-runtime/src/typed_feedback/guards.rs",
+        "crates/perry-runtime/src/object/native_call_method.rs",
+        "crates/perry-runtime/src/object/exotic_expando.rs",
+        "crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs",
+        "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
+        "crates/perry-runtime/src/proxy/put_value.rs",
+        "crates/perry-runtime/src/gc/types.rs",
+        "crates/perry-runtime/src/regex.rs",
+        "crates/perry-codegen/src/expr/class_field_inline_guard.rs",
+        "crates/perry-codegen/src/expr/element_shape_guard.rs",
+        "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs",
+        "crates/perry-codegen/src/expr/proxy_reflect.rs",
     )
     missing = [path for path in authority_paths if path not in sources]
     if missing:
@@ -204,11 +216,46 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     transition_tail = clean[
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs"
     ]
+    typed_guards = clean["crates/perry-runtime/src/typed_feedback/guards.rs"]
+    native_call_method = clean[
+        "crates/perry-runtime/src/object/native_call_method.rs"
+    ]
+    exotic_expando = clean["crates/perry-runtime/src/object/exotic_expando.rs"]
+    get_field_tail = clean[
+        "crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs"
+    ]
+    ic_miss = clean["crates/perry-runtime/src/object/field_get_set/ic_miss.rs"]
+    put_value = clean["crates/perry-runtime/src/proxy/put_value.rs"]
+    gc_types = clean["crates/perry-runtime/src/gc/types.rs"]
+    regex_runtime = clean["crates/perry-runtime/src/regex.rs"]
+    class_guard = clean[
+        "crates/perry-codegen/src/expr/class_field_inline_guard.rs"
+    ]
+    element_guard = clean[
+        "crates/perry-codegen/src/expr/element_shape_guard.rs"
+    ]
+    generic_pic = clean[
+        "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
+    ]
+    write_pics = clean["crates/perry-codegen/src/expr/proxy_reflect.rs"]
+    # Emitted ObjectHeader offsets and fail-closed constants are represented as
+    # Rust string literals, so inspect raw function bodies for these checks.
+    raw_class_guard = sources[
+        "crates/perry-codegen/src/expr/class_field_inline_guard.rs"
+    ]
+    raw_element_guard = sources[
+        "crates/perry-codegen/src/expr/element_shape_guard.rs"
+    ]
+    raw_generic_pic = sources[
+        "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
+    ]
+    raw_write_pics = sources["crates/perry-codegen/src/expr/proxy_reflect.rs"]
 
     for pattern, label in (
         (r"descriptors\s*:\s*HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
+        (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
         (r"\bfn\s+shape_descriptor_by_id\b", "by-id lookup"),
         (r"\bfn\s+debug_assert_object_shape_parity\b", "parity assertion"),
         (r"\bfn\s+synchronize_live_object_shape_descriptor_after_header_visit\b", "live-object descriptor mirror"),
@@ -218,9 +265,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
 
     allocator = function_body(shapes, "alloc_shape_id_from")
     require_code(allocator, r"\bcompare_exchange_weak\s*\(", "exhaustion park")
-    if re.search(r"\bfetch_add\s*\(|\bprocess\s*::\s*(?:abort|exit)\s*\(", allocator):
-        raise CensusError("ShapeId exhaustion is wrapping or unrecoverable")
-    require_code(shapes, r"\.unwrap_or\s*\(\s*0\s*\)", "recoverable exhaustion fallback")
+    if re.search(r"\bfetch_add\s*\(", allocator):
+        raise CensusError("ShapeId allocator wraps instead of parking")
+    require_code(shapes, r"\bfn\s+shape_id_exhausted_abort\b", "exhaustion fail-stop")
+    public_ensure = function_body(shapes, "shape_id_for_keys_ensure")
+    require_code(
+        public_ensure,
+        r"unwrap_or_else\s*\([^)]*shape_id_exhausted_abort",
+        "no exhausted-id pointer fallback",
+    )
 
     scanner = function_body(shapes, "scan_shape_table_rekey_mut")
     require_code(scanner, r"\bvisit_metadata_usize_slot\s*\(", "weak metadata rewrite")
@@ -250,7 +303,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "descriptor fact capture exact array type",
     )
 
-    ensure = function_body(shapes, "shape_descriptor_ensure")
+    ensure = function_body(shapes, "shape_descriptor_ensure_with_generation")
     assert_before(
         ensure,
         "inner.descriptors.insert",
@@ -292,6 +345,112 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "runtime_store_jsvalue_slot",
         "transition-cache count before value",
     )
+
+    # Runtime guard contracts may consume ShapeId/descriptor facts, never the
+    # compatibility ObjectHeader mirrors or a keys-pointer token.
+    for name in (
+        "method_direct_call_contract",
+        "class_field_get_contract",
+        "class_field_fast_contract",
+        "class_field_set_contract",
+    ):
+        body = function_body(typed_guards, name)
+        if re.search(r"expected_keys|\(\s*\*\s*obj\s*\)\s*\.\s*(?:keys_array|field_count|object_type)\b", body):
+            raise CensusError(f"{name} reintroduced a legacy header guard fact")
+        require_code(
+            body,
+            r"object_shape(?:_(?:id|descriptor))?\s*\(",
+            f"{name} ShapeId authority",
+        )
+
+    for name in ("class_vtable_fast_guard", "js_native_call_method"):
+        body = function_body(native_call_method, name)
+        if re.search(
+            r"\(\s*\*\s*obj\s*\)\s*\.\s*(?:keys_array|field_count|object_type)\b|js_array_length\s*\(\s*keys\s*\)",
+            body,
+        ):
+            raise CensusError(f"{name} reintroduced a legacy method guard fact")
+        require_code(
+            body,
+            r"object_shape_descriptor\s*\(",
+            f"{name} ShapeId descriptor authority",
+        )
+        require_code(
+            body,
+            r"logical_key_count\b",
+            f"{name} exact logical key count",
+        )
+
+    # RegExp identity lives in the GcHeader kind. No ObjectHeader payload word
+    # or registry/magic conjunction may decide these ordinary-object forks.
+    for name in ("object_is_regular", "object_is_shaped"):
+        body = function_body(object_mod, name)
+        require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
+        if re.search(r"regex_header_has_magic|object_type", body):
+            raise CensusError(f"{name} reintroduced an old payload discriminator")
+    regexp_alloc = function_body(regex_runtime, "js_regexp_new")
+    require_code(
+        regexp_alloc,
+        r"gc_malloc\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
+        "RegExp dedicated GC birth kind",
+    )
+    expando_kind = function_body(exotic_expando, "exotic_expando_kind")
+    require_code(
+        expando_kind,
+        r"crate::gc::GC_TYPE_REGEXP\s*=>\s*Some\s*\(\s*ExoticKind::RegExp",
+        "RegExp expando dedicated kind",
+    )
+    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail")
+    require_code(
+        regexp_get,
+        r"gc_type\s*==\s*crate::gc::GC_TYPE_REGEXP",
+        "RegExp property dispatch dedicated kind",
+    )
+    if re.search(
+        r"GC_TYPE_OBJECT[^{};]*is_regex_pointer|is_regex_pointer[^{};]*GC_TYPE_OBJECT",
+        expando_kind + regexp_get,
+    ):
+        raise CensusError("RegExp dispatch reintroduced the former object-kind probe")
+
+    read_miss = function_body(ic_miss, "js_object_get_field_ic_miss")
+    for body, label in (
+        (read_miss, "read PIC miss"),
+        (function_body(put_value, "js_put_value_set_ic_miss"), "static write PIC miss"),
+        (function_body(put_value, "dyn_ic_try_store"), "dynamic write PIC hit"),
+        (function_body(put_value, "js_put_value_set_dyn_ic_miss"), "dynamic write PIC miss"),
+    ):
+        if re.search(r"else\s*\{\s*(?:keys|\(\s*\*\s*obj\s*\)\.keys_array)\s+as\s+u64", body):
+            raise CensusError(f"{label} reintroduced a keys-pointer token")
+
+    # Emitted guards must not read the three payload offsets #8047 will remove.
+    for source, names in (
+        (raw_class_guard, (
+            "emit_class_field_loop_preheader_check",
+            "emit_proven_shape_recheck",
+            "emit_class_field_inline_precheck",
+        )),
+        (raw_element_guard, ("emit_element_shape_field_load",)),
+    ):
+        for name in names:
+            body = function_body(source, name)
+            if re.search(r"expected_keys|add\s*\([^\n]*\"(?:0|12|16)\"", body):
+                raise CensusError(f"{name} emits a removed ObjectHeader fact")
+
+    generic_body = function_body(raw_generic_pic, "lower_generic_property_get")
+    if re.search(r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"(?:12|16)\"", generic_body):
+        raise CensusError("generic read PIC emits a removed ObjectHeader fact")
+    require_code(
+        generic_body,
+        r"select\s*\(\s*I1\s*,\s*&is_stamp\s*,\s*I64\s*,\s*&id_token\s*,\s*\"0\"\s*\)",
+        "generic read PIC invalid-id fail-closed token",
+    )
+    for name in ("lower_put_value_static_write_ic", "lower_put_value_dyn_ic_inline"):
+        body = function_body(raw_write_pics, name)
+        if re.search(r"add\s*\(\s*I64\s*,\s*&(safe_target|t_handle)\s*,\s*\"(?:12|16)\"", body):
+            raise CensusError(f"{name} emits a removed ObjectHeader fact")
+
+    require_code(gc_types, r"GC_TYPE_REGEXP\s*:\s*u8", "RegExp external discriminator")
+    require_code(gc_types, r"OBJ_FLAG_CLASS_OBJECT\s*:\s*u16", "class-object external marker")
 
 
 def swap_once(source: str, left: str, right: str) -> str:
@@ -371,7 +530,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
     inverted_body = swap_once(
         publication_body,
-        "shape_descriptor_ensure(keys, key_count, (*obj).field_count)",
+        "shape_descriptor_ensure_with_generation(",
         "(*obj).parent_class_id = id",
     )
     inverted_publication[path] = inverted_publication[path].replace(
@@ -401,6 +560,18 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "descriptor retirement without keys index",
         lambda: assert_authority_surfaces(unscoped_retirement),
+    )
+
+    legacy_ir = dict(sources)
+    path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
+    legacy_ir[path] = legacy_ir[path].replace(
+        'add(I64, &obj_handle, "8")',
+        'add(I64, &obj_handle, "16")',
+        1,
+    )
+    expect_rejected(
+        "legacy keys-header offset in emitted PIC",
+        lambda: assert_authority_surfaces(legacy_ir),
     )
 
     stale_summary = json.loads(json.dumps(baseline))

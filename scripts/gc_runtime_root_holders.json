@@ -81,12 +81,6 @@
       "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it \u2014 #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
-      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
-      "name": "PERRY_IC_EPOCH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Inline-cache invalidation epoch. Epoch invalidation is the third rooting strategy this tree uses (see object/prop_plan.rs) \u2014 the cache is discarded on bump rather than scanned."
-    },
-    {
       "file": "crates/perry-runtime/src/process.rs",
       "name": "MODULE_LOADER_NEXT_RESOLVE",
       "verdict": "covered_elsewhere",

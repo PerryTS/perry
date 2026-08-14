@@ -132,7 +132,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     // completion runs, and (template cid, key) plans recorded
                     // by instances sharing the cid would falsely certify it.
                     // See the matching gates at the plan record sites.
-                    if (*o).object_type == crate::error::OBJECT_TYPE_REGULAR
+                    if crate::object::object_is_regular(o)
                         && class_id != 0
                         && class_id != NATIVE_MODULE_CLASS_ID
                         && !super::prototype_chain::object_has_prototype_override(raw)

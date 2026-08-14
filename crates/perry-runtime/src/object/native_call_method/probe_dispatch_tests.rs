@@ -157,8 +157,8 @@ fn exotic_receivers_are_still_excluded() {
     );
 }
 
-/// RegExp is the one exotic kind that genuinely IS a `GC_TYPE_OBJECT`
-/// allocation, so it is the reason the GC_TYPE_OBJECT arm still probes.
+/// RegExp has its own GC kind, so it must be rejected without entering the
+/// ordinary-object arm or consulting an `ObjectHeader` payload word.
 #[cfg(feature = "regex-engine")]
 #[test]
 fn regexp_receiver_is_still_excluded() {
@@ -168,8 +168,8 @@ fn regexp_receiver_is_still_excluded() {
     assert!(re != 0, "test premise: RegExp allocated");
     assert!(
         classify(re).is_none(),
-        "a RegExp is a GC_TYPE_OBJECT allocation and must still be excluded by \
-         the regex probe the GC_TYPE_OBJECT arm keeps"
+        "a RegExp has GC_TYPE_REGEXP and must be excluded before ordinary-object \
+         header reads"
     );
 }
 
@@ -252,7 +252,7 @@ fn the_magic_screen_covers_every_symbol_and_no_ordinary_object() {
         let excluded_without_the_screen = match obj_type {
             crate::gc::GC_TYPE_SET => crate::set::is_registered_set(sym),
             crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(sym),
-            crate::gc::GC_TYPE_OBJECT => crate::regex::is_regex_pointer(sym as *const u8),
+            crate::gc::GC_TYPE_REGEXP => crate::regex::is_regex_pointer(sym as *const u8),
             _ => false,
         };
         assert!(

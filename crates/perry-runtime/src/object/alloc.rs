@@ -159,6 +159,7 @@ pub extern "C" fn js_object_alloc_with_parent(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
 
         ptr
     }
@@ -187,6 +188,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
     }
 
     ptr
@@ -221,6 +223,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
     }
 
     ptr
@@ -314,14 +317,17 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
 ) -> *mut ObjectHeader {
     let ptr =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
-    if !keys_array.is_null() {
-        unsafe {
-            let id = crate::object::shapes::shape_id_for_keys_ensure(
-                keys_array as *const ArrayHeader,
-                (*keys_array).length,
-            );
-            crate::object::shapes::birth_stamp_object_shape(ptr, id);
-        }
+    unsafe {
+        let key_count = if keys_array.is_null() {
+            0
+        } else {
+            (*keys_array).length
+        };
+        let id = crate::object::shapes::shape_id_for_keys_ensure(
+            keys_array as *const ArrayHeader,
+            key_count,
+        );
+        crate::object::shapes::birth_stamp_object_shape(ptr, id);
     }
     ptr
 }
@@ -332,8 +338,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
 /// initialization. Installing it after the existing allocator returns keeps
 /// every allocation/rooting/layout invariant above in one implementation,
 /// while making a fresh class instance immediately usable by ShapeId guards.
-/// A zero/exhausted id preserves the allocation-time parent word; the retained
-/// pointer/count guards remain the fail-closed source of truth.
+/// ShapeId exhaustion fail-stops during module initialization; no newborn can
+/// be published with a pointer/count fallback identity.
 #[no_mangle]
 pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     class_id: u32,
@@ -1572,15 +1578,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     };
     let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
 
-    // #7341: a RegExp source must be skipped here, and the exotic guard above
-    // cannot do it. That guard classifies by GC type, and a RegExp is literally
-    // `gc_malloc(GC_TYPE_OBJECT)` (see `regex.rs`) — so unlike Map/Set/Date it
-    // passes `== GC_TYPE_OBJECT` and falls into the plain-object arm, where
-    // `(*src).keys_array` reads a `RegExpHeader` at `ObjectHeader`'s field
-    // offset. That is a type confusion: the slot it lands on is not a keys
-    // array, and `js_array_length` then reads a GcHeader at `garbage - 8`.
-    // Under from-space quarantine that address is a retired protected page and
-    // the process dies; unprotected it silently walks unrelated memory.
+    // #7341: a RegExp source has no ObjectHeader keys array and must not enter
+    // the plain-object copy arm. Its dedicated GC kind makes that decision
+    // without reading any native payload word.
     //
     // Per CopyDataProperties a RegExp exposes no own enumerable string keys
     // through this path (`source`/`flags`/`lastIndex` are prototype accessors
@@ -1588,10 +1588,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // `Object.assign({}, /x/g)` is `{}`. Any own expandos a user attached live
     // in the exotic-expando side table, which this raw walk never read anyway.
     //
-    // `is_regex_pointer` is the bounds-checked magic probe, safe on arbitrary
-    // payloads. Repro: `Object.assign({}, /x/g)` under
+    // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
-    if crate::regex::is_regex_pointer(src_raw as *const u8) {
+    if source_obj_type == crate::gc::GC_TYPE_REGEXP {
         return target_f64;
     }
 

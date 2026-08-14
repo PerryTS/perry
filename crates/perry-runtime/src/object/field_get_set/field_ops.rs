@@ -193,20 +193,16 @@ pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
         return 0;
     }
     let addr = obj as usize;
-    // Built-in headers (Set / Map / Regex) live in their own per-type
+    // Built-in headers (Set / Map) live in their own per-type
     // registries — they're never user class instances. Reject them first.
     //
     // The reason given here used to be that Set/Map headers are `std::alloc`'d
     // with no `GcHeader` at `obj - 8`. That stopped being true when
     // `js_set_alloc` / `js_map_alloc` moved to
     // `arena_alloc_gc(_, _, GC_TYPE_SET|GC_TYPE_MAP)` — both DO carry a header,
-    // and the `GC_TYPE_OBJECT` test below already rejects them on it. Regex
-    // pointers are the remaining header-less case, which is why the registry
-    // order is kept.
-    if crate::set::is_registered_set(addr)
-        || crate::map::is_registered_map(addr)
-        || crate::regex::is_regex_pointer(obj as *const u8)
-    {
+    // and the GC-kind test below already rejects them on it. RegExp likewise
+    // has a dedicated kind, so it needs no payload or registry discriminator.
+    if crate::set::is_registered_set(addr) || crate::map::is_registered_map(addr) {
         return 0;
     }
     unsafe {

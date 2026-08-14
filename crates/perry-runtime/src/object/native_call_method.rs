@@ -60,9 +60,9 @@ pub(super) use typed_array::dispatch_typed_array_method;
 ///
 /// * the value is a NaN-boxed pointer to a real heap object above the handle
 ///   band (excludes every small-handle registry receiver, and every primitive);
-/// * its GC type is `GC_TYPE_OBJECT` and its `object_type` is
-///   `OBJECT_TYPE_REGULAR` (excludes errors, arrays, maps, buffers, regexes,
-///   closures — each of which the tower routes elsewhere);
+/// * its GC type is `GC_TYPE_OBJECT` and its GcHeader carries no class-object
+///   marker (excludes errors, arrays, maps, buffers, regexes, closures, and
+///   class values — each of which the tower routes elsewhere);
 /// * `class_id` matches the cache key;
 /// * `meta` is null, so the object carries no `Object.setPrototypeOf` override,
 ///   no per-key descriptor state, and no exotic-kind tag — this is *stricter*
@@ -85,9 +85,9 @@ pub(super) use typed_array::dispatch_typed_array_method;
 /// * NaN-boxed pointer above the handle band — excludes every small-handle
 ///   registry receiver (timers, sockets, zlib streams, TextDecoder, …) and
 ///   every primitive;
-/// * `GC_TYPE_OBJECT` + `OBJECT_TYPE_REGULAR` — excludes arrays, strings,
-///   errors, maps, sets, regexes, closures, each of which the tower routes to
-///   its own dispatcher;
+/// * `GC_TYPE_OBJECT` without the class-object marker — excludes arrays,
+///   strings, errors, maps, sets, regexes, closures, and class values, each of
+///   which the tower routes to its own dispatcher;
 /// * not a registered `Buffer` and not a typed array — the two address-keyed
 ///   probes the tower runs ahead of the class walk that a `GC_TYPE_OBJECT`
 ///   receiver could in principle also answer. Both are latched (#7755), so in
@@ -128,7 +128,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // so a `Some` here means both of those answer authoritatively from the meta
     // slot rather than falling back to a conservative `true`.
     let obj = super::prototype_chain::meta_capable_object(obj_addr)?;
-    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+    if !crate::object::object_is_regular(obj) {
         return None;
     }
     // Null `meta` on a meta-capable object is what rules out BOTH a per-instance
@@ -147,8 +147,10 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     }
 
     // Own fields shadow vtable methods — same scan, same comparison, as the
-    // tower's field lookup.
-    let keys = (*obj).keys_array;
+    // tower's field lookup. ShapeId supplies both the moving root and its exact
+    // logical length; the ObjectHeader mirrors are compatibility scratch only.
+    let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
+    let keys = descriptor.keys as usize as *mut ArrayHeader;
     if !keys.is_null() {
         let keys_ptr = keys as usize;
         // Band predicate, not a bare floor (#7531/#7709): the 0x10000 floor this
@@ -158,7 +160,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
         {
             return None;
         }
-        let key_count = crate::array::js_array_length(keys) as usize;
+        let key_count = descriptor.logical_key_count as usize;
         if key_count > 65536 {
             return None;
         }
@@ -183,10 +185,10 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
 /// [`class_vtable_fast_guard`] does not pin.
 ///
 /// * the `using` / `await using` disposal hooks read a SYMBOL-keyed own
-///   property (`obj[Symbol.dispose]`), which the guard's string-`keys_array`
-///   scan cannot see: two instances of one class can differ, so a resolution
-///   cached from an instance without the symbol would route a later instance
-///   with one straight past its custom disposer;
+///   property (`obj[Symbol.dispose]`), which the guard's descriptor-backed
+///   string-key scan cannot see: two instances of one class can differ, so a
+///   resolution cached from an instance without the symbol would route a later
+///   instance with one straight past its custom disposer;
 /// * the iterator helpers (`map`/`filter`/`take`/…) dispatch on whether the
 ///   receiver *is* an iterator.
 #[inline]
@@ -931,9 +933,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     //
     //   * `set::is_registered_set` ends in `obj_type == GC_TYPE_SET`;
     //   * `map::is_registered_map` ends in `obj_type == GC_TYPE_MAP`;
-    //   * `regex::is_regex_pointer` matches the header magic of a
-    //     `gc_malloc(_, GC_TYPE_OBJECT)` allocation, and the sole
-    //     `REGEX_POINTERS` insert (`js_regexp_new`) allocates exactly that;
+    //   * RegExp has the dedicated `GC_TYPE_REGEXP` kind;
     //   * a `Symbol` of any storage carries `SYMBOL_MAGIC` in its first word.
     //
     // The one kind the header cannot speak for is the `Box`-leaked symbol
@@ -953,7 +953,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let excluded = match obj_type {
         crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
         crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
-        crate::gc::GC_TYPE_OBJECT => crate::regex::is_regex_pointer(ptr as *const u8),
+        crate::gc::GC_TYPE_REGEXP => true,
         _ => false,
     };
     if excluded {
@@ -1780,8 +1780,6 @@ pub unsafe extern "C" fn js_native_call_method(
         }
 
         if gc_type != crate::gc::GC_TYPE_OBJECT {
-            // Only accept object_type == 1 (OBJECT_TYPE_REGULAR)
-            let object_type = (*obj).object_type;
             // Closes #645: when a method falls through every dispatcher
             // and returns NULL_OBJECT_BYTES (e.g. drizzle's
             // `this.client.prepare(...)` where `this.client` resolved to
@@ -1805,13 +1803,15 @@ pub unsafe extern "C" fn js_native_call_method(
                 let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                 return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
             }
-            if object_type != crate::error::OBJECT_TYPE_REGULAR {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
-            }
+            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
         }
 
-        let keys = (*obj).keys_array;
+        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
+            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+        };
+        let keys = descriptor.keys as usize as *mut ArrayHeader;
 
         if !keys.is_null() {
             // Validate keys_array pointer before dereferencing
@@ -1827,7 +1827,7 @@ pub unsafe extern "C" fn js_native_call_method(
             // GcHeader-based validation.
 
             // Search for the method in the object's fields
-            let key_count = crate::array::js_array_length(keys) as usize;
+            let key_count = descriptor.logical_key_count as usize;
             // Sanity check key_count
             if key_count > 65536 {
                 let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;

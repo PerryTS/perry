@@ -168,10 +168,7 @@ pub(super) fn set_field_by_name_object_tail(
             if !is_valid_obj_ptr(obj as *const u8) {
                 return;
             }
-            let object_type = (*obj).object_type;
-            if object_type != crate::error::OBJECT_TYPE_REGULAR {
-                return;
-            }
+            return;
         }
 
         if gc_type == crate::gc::GC_TYPE_CLOSURE {
@@ -270,7 +267,7 @@ pub(super) fn set_field_by_name_object_tail(
         let plan_eligible = !key.is_null()
             && obj_class_id != 0
             && obj_class_id != NATIVE_MODULE_CLASS_ID
-            && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+            && crate::object::object_is_regular(obj)
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0
             && !super::prototype_chain::object_has_prototype_override(obj as usize);
         let plan_fast = plan_eligible
@@ -444,7 +441,7 @@ pub(super) fn set_field_by_name_object_tail(
             if !plan_fast
                 && obj_class_id != 0
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
-                && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+                && crate::object::object_is_regular(obj)
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
             {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);

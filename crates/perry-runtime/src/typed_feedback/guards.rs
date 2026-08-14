@@ -11,9 +11,10 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
     }
     unsafe {
         let obj = object_addr as *const ObjectHeader;
-        let keys = (*obj).keys_array;
-        // #6804: `shape_addr` is an opaque token (see `object_shape`), not
-        // necessarily the keys address — the key scan below is the check.
+        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
+            return false;
+        };
+        let keys = descriptor.keys as usize as *const ArrayHeader;
         if keys.is_null() {
             return false;
         }
@@ -85,7 +86,7 @@ fn prototype_may_override_method(class_id: u32, method_name: &str, method_bytes:
 fn method_direct_call_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     method_name_ptr: *const i8,
     method_name_len: usize,
     expected_func_ptr: *const u8,
@@ -107,7 +108,7 @@ fn method_direct_call_contract(
     let name_hash = hash_bytes(method_bytes);
     if object_addr == 0
         || expected_class_id == 0
-        || expected_keys.is_null()
+        || !crate::object::shapes::is_shape_id(expected_shape_id)
         || expected_func_ptr.is_null()
     {
         return (shape_addr, class_id, gc_type, name_hash, false);
@@ -122,13 +123,13 @@ fn method_direct_call_contract(
             return (shape_addr, class_id, gc_type, name_hash, false);
         }
         let obj = object_addr as *const ObjectHeader;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        if !crate::object::object_is_regular(obj) {
             return (shape_addr, class_id, gc_type, name_hash, false);
         }
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (*obj).class_id != expected_class_id
-            || !std::ptr::eq((*obj).keys_array, expected_keys)
-            || shape_addr != expected_keys as usize
+            || crate::object::shapes::object_shape_id(obj) != expected_shape_id
+            || shape_addr != expected_shape_id as usize
         {
             return (shape_addr, class_id, gc_type, name_hash, false);
         }
@@ -261,13 +262,16 @@ fn class_field_raw_f64_layout_contract(
 fn class_field_get_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: bool,
 ) -> (usize, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+    if object_addr == 0
+        || expected_class_id == 0
+        || !crate::object::shapes::is_shape_id(expected_shape_id)
+    {
         return (0, 0, 0, false);
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
@@ -284,17 +288,21 @@ fn class_field_get_contract(
 
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
-        let shape_addr = (*obj).keys_array as usize;
+        let shape_id = crate::object::shapes::object_shape_id(obj);
+        let shape_addr = shape_id as usize;
+        let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+            return (shape_addr, class_id, gc_type, false);
+        };
         let key_name = match key_as_str(key) {
             Some(name) => name,
             None => return (shape_addr, class_id, gc_type, false),
         };
-        let expected_shape_addr = expected_keys as usize;
-        let valid = (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+        let keys = descriptor.keys as usize as *const ArrayHeader;
+        let valid = crate::object::object_is_regular(obj)
             && class_id == expected_class_id
-            && shape_addr == expected_shape_addr
-            && expected_field_index < (*obj).field_count
-            && plain_array_index_guard(expected_keys, expected_field_index, true)
+            && shape_id == expected_shape_id
+            && expected_field_index < descriptor.live_inline_slot_count
+            && plain_array_index_guard(keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && class_field_raw_f64_layout_contract(
                 object_addr,
@@ -310,12 +318,15 @@ fn class_field_get_contract(
 fn class_field_fast_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     expected_field_index: u32,
     require_raw_f64: bool,
 ) -> bool {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+    if object_addr == 0
+        || expected_class_id == 0
+        || !crate::object::shapes::is_shape_id(expected_shape_id)
+    {
         return false;
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
@@ -328,10 +339,11 @@ fn class_field_fast_contract(
             return false;
         }
         let obj = object_addr as *const ObjectHeader;
-        let shape_ok = (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+        let descriptor = crate::object::shapes::object_shape_descriptor(obj);
+        let shape_ok = crate::object::object_is_regular(obj)
             && (*obj).class_id == expected_class_id
-            && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
-            && expected_field_index < (*obj).field_count;
+            && crate::object::shapes::object_shape_id(obj) == expected_shape_id
+            && descriptor.is_some_and(|facts| expected_field_index < facts.live_inline_slot_count);
         let layout_ok = shape_ok
             && class_field_raw_f64_layout_contract(
                 object_addr,
@@ -394,7 +406,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: i32,
@@ -403,7 +415,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
         return class_field_fast_contract(
             receiver,
             expected_class_id,
-            expected_keys,
+            expected_shape_id,
             expected_field_index,
             require_raw_f64 != 0,
         ) as i32;
@@ -411,7 +423,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         key,
         expected_field_index,
         require_raw_f64 != 0,
@@ -442,7 +454,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
 fn class_field_set_fast_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     expected_field_index: u32,
     require_raw_f64: bool,
     value_bits: u64,
@@ -451,7 +463,7 @@ fn class_field_set_fast_contract(
     if !class_field_fast_contract(
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         expected_field_index,
         require_raw_f64,
     ) {
@@ -508,14 +520,17 @@ fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &
 fn class_field_set_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: bool,
     value_bits: u64,
 ) -> (usize, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+    if object_addr == 0
+        || expected_class_id == 0
+        || !crate::object::shapes::is_shape_id(expected_shape_id)
+    {
         return (0, 0, 0, false);
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
@@ -531,21 +546,31 @@ fn class_field_set_contract(
         }
         if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
             let obj = object_addr as *mut ObjectHeader;
-            return ((*obj).keys_array as usize, (*obj).class_id, gc_type, false);
+            return (
+                crate::object::shapes::object_shape_id(obj) as usize,
+                (*obj).class_id,
+                gc_type,
+                false,
+            );
         }
 
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
-        let shape_addr = (*obj).keys_array as usize;
+        let shape_id = crate::object::shapes::object_shape_id(obj);
+        let shape_addr = shape_id as usize;
+        let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+            return (shape_addr, class_id, gc_type, false);
+        };
         let key_name = match key_as_str(key) {
             Some(name) => name,
             None => return (shape_addr, class_id, gc_type, false),
         };
-        let expected_shape_addr = expected_keys as usize;
+        let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = class_id == expected_class_id
-            && shape_addr == expected_shape_addr
-            && expected_field_index < (*obj).field_count
-            && plain_array_index_guard(expected_keys, expected_field_index, true)
+            && crate::object::object_is_regular(obj)
+            && shape_id == expected_shape_id
+            && expected_field_index < descriptor.live_inline_slot_count
+            && plain_array_index_guard(keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && (!require_raw_f64
                 || (is_plain_number_bits(value_bits)
@@ -565,7 +590,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     value: f64,
@@ -576,7 +601,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
         return class_field_set_fast_contract(
             receiver,
             expected_class_id,
-            expected_keys,
+            expected_shape_id,
             expected_field_index,
             require_raw_f64 != 0,
             value_bits,
@@ -585,7 +610,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         key,
         expected_field_index,
         require_raw_f64 != 0,
@@ -687,7 +712,7 @@ pub extern "C" fn js_class_field_set_ic(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     value: f64,
@@ -697,7 +722,7 @@ pub extern "C" fn js_class_field_set_ic(
         site_id,
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         key,
         expected_field_index,
         value,
@@ -757,7 +782,7 @@ pub extern "C" fn js_class_field_get_ic(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: i32,
@@ -766,7 +791,7 @@ pub extern "C" fn js_class_field_get_ic(
         site_id,
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         key,
         expected_field_index,
         require_raw_f64,
@@ -949,7 +974,7 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
     method_name_ptr: *const i8,
     method_name_len: usize,
     expected_func_ptr: *const u8,
@@ -958,7 +983,7 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     let (shape_addr, class_id, gc_type, name_hash, contract_valid) = method_direct_call_contract(
         receiver,
         expected_class_id,
-        expected_keys,
+        expected_shape_id,
         method_name_ptr,
         method_name_len,
         expected_func_ptr,
@@ -987,14 +1012,14 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 }
 
 /// The class-id half of [`js_method_direct_shape_guard`], hoisted out so a
-/// call site can test MORE than one (class id, keys token) pair per probe.
+/// call site can test MORE than one (class id, ShapeId) pair per probe.
 ///
 /// Returns the receiver's `class_id` when every precondition the guard checks
-/// *other than* the class-id / keys comparison holds, and writes the
-/// receiver's `keys_array` pointer through `out_keys`. Returns 0 — never a
+/// *other than* the class-id / shape comparison holds, and writes the
+/// receiver's ShapeId through `out_shape_id`. Returns 0 — never a
 /// valid user class id — when any precondition fails, and then leaves
-/// `*out_keys` at 0 so a caller that skips the return check still cannot match
-/// a real keys token.
+/// output at 0 so a caller that skips the return check still cannot match a
+/// real ShapeId.
 ///
 /// This exists because the single-pair guard speculates the receiver's dynamic
 /// class is exactly the *declared* class of the expression. For a receiver
@@ -1005,9 +1030,12 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 /// the same information into a direct call. See
 /// `perry-codegen/src/lower_call/method_override.rs`.
 #[no_mangle]
-pub unsafe extern "C" fn js_method_direct_shape_class(receiver: f64, out_keys: *mut u64) -> u32 {
-    if !out_keys.is_null() {
-        *out_keys = 0;
+pub unsafe extern "C" fn js_method_direct_shape_class(
+    receiver: f64,
+    out_shape_id: *mut u32,
+) -> u32 {
+    if !out_shape_id.is_null() {
+        *out_shape_id = 0;
     }
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0 {
@@ -1024,15 +1052,19 @@ pub unsafe extern "C" fn js_method_direct_shape_class(receiver: f64, out_keys: *
         return 0;
     }
     let obj = object_addr as *const ObjectHeader;
-    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+    if !crate::object::object_is_regular(obj) {
         return 0;
     }
     let class_id = (*obj).class_id;
     if class_id == 0 {
         return 0;
     }
-    if !out_keys.is_null() {
-        *out_keys = (*obj).keys_array as u64;
+    let shape_id = crate::object::shapes::object_shape_id(obj);
+    if shape_id == 0 {
+        return 0;
+    }
+    if !out_shape_id.is_null() {
+        *out_shape_id = shape_id;
     }
     class_id
 }
@@ -1041,14 +1073,14 @@ pub unsafe extern "C" fn js_method_direct_shape_class(receiver: f64, out_keys: *
 pub unsafe extern "C" fn js_method_direct_shape_guard(
     receiver: f64,
     expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
+    expected_shape_id: u32,
 ) -> i32 {
-    if expected_class_id == 0 || expected_keys.is_null() {
+    if expected_class_id == 0 || !crate::object::shapes::is_shape_id(expected_shape_id) {
         return 0;
     }
-    let mut keys: u64 = 0;
-    let class_id = js_method_direct_shape_class(receiver, &mut keys);
-    (class_id == expected_class_id && keys == expected_keys as u64) as i32
+    let mut shape_id = 0;
+    let class_id = js_method_direct_shape_class(receiver, &mut shape_id);
+    (class_id == expected_class_id && shape_id == expected_shape_id) as i32
 }
 
 #[no_mangle]
@@ -1124,21 +1156,21 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
 mod keep_guard_symbols {
     use super::*;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
+#[used] static G0: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
+#[used] static G1: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G1D: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
+#[used] static G1D: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G1E: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
+#[used] static G1E: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
+#[used] static G2: unsafe extern "C" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G4: unsafe extern "C" fn(f64, u32, *const ArrayHeader) -> i32 = js_method_direct_shape_guard;
+#[used] static G4: unsafe extern "C" fn(f64, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static G4B: unsafe extern "C" fn(f64, *mut u64) -> u32 = js_method_direct_shape_class;
+#[used] static G4B: unsafe extern "C" fn(f64, *mut u32) -> u32 = js_method_direct_shape_class;
 }

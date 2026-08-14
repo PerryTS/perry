@@ -79,24 +79,18 @@ unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, 
     crate::gc::runtime_write_barrier_slot(spill as usize, slot as usize, vbits);
 }
 
-/// Only genuine shaped objects carry a meta record at the ObjectHeader
-/// offset. Exotic GC_TYPE_OBJECT aliases (RegExpHeader) and every other
-/// GC type (errors, maps, ...) have unrelated bytes there — the legacy
-/// side table was address-keyed and safe for ANY owner, so those owners
-/// keep it (in both modes) instead of deref'ing garbage. Classification
-/// via the canonical header probe, mirroring `gc_object_meta_slot`.
+/// Only genuine shaped objects carry a meta record at the ObjectHeader offset.
+/// Every other GC type (RegExp, errors, maps, ...) has unrelated bytes there —
+/// the legacy side table was address-keyed and safe for ANY owner, so those
+/// owners keep it instead of dereferencing garbage. Classification uses the
+/// canonical GcHeader kind, mirroring `gc_object_meta_slot`.
 #[inline]
 pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
     if obj_ptr == 0 {
         return false;
     }
     match crate::value::addr_class::try_read_gc_header(obj_ptr) {
-        Some(h) => {
-            h.obj_type == crate::gc::GC_TYPE_OBJECT
-                && !crate::regex::regex_header_has_magic(
-                    obj_ptr as *const crate::regex::RegExpHeader,
-                )
-        }
+        Some(h) => h.obj_type == crate::gc::GC_TYPE_OBJECT,
         None => false,
     }
 }

@@ -426,7 +426,17 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
+            let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+                return;
+            }
+            (*gc)._reserved |= crate::gc::OBJ_FLAG_CLASS_OBJECT;
+            // Compatibility mirror only; all semantic reads use the GcHeader
+            // bit above so #8047 can remove this payload word atomically.
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+            // Becoming a class object changes dispatch semantics even though
+            // the rooted keys and slot layout stay the same.
+            crate::object::shapes::transition_object_shape_semantics(obj as *mut ObjectHeader);
             // #6530: record cid → class object so `instance.constructor`
             // resolves to the SAME value the module scope/exports hold (see
             // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
@@ -463,7 +473,7 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-            && (*(ptr as *const ObjectHeader)).object_type == crate::error::OBJECT_TYPE_CLASS
+            && (*gc_header)._reserved & crate::gc::OBJ_FLAG_CLASS_OBJECT != 0
     }
 }
 
@@ -1709,4 +1719,27 @@ pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod shape_authority_tests_8067 {
+    #[test]
+    fn class_marker_is_gc_metadata_not_object_type_mirror() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0x8067, 8);
+            let before = crate::object::shapes::object_shape_id(obj);
+            assert!(crate::object::object_is_regular(obj));
+
+            super::js_object_mark_class(obj as i64);
+            let after = crate::object::shapes::object_shape_id(obj);
+            assert_ne!(before, after, "becoming a class object is semantic");
+
+            // Sabotage the compatibility mirror. Classification must remain
+            // driven by the GcHeader flag and the ShapeId transition above.
+            (*obj).object_type = crate::error::OBJECT_TYPE_REGULAR;
+            assert!(super::is_class_object_ptr(obj.cast()));
+            assert!(!crate::object::object_is_regular(obj));
+        }
+    }
 }

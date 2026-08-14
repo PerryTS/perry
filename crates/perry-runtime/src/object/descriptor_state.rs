@@ -426,6 +426,10 @@ pub(crate) fn note_descriptor_target(obj: usize) {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                 let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                let object = obj as *mut crate::object::ObjectHeader;
+                if crate::object::object_is_shaped(object) {
+                    crate::object::shapes::transition_object_shape_semantics(object);
+                }
             }
         }
     }
@@ -695,6 +699,12 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
         .property_descriptors
         .borrow_mut()
         .remove(&(obj, key.to_string()));
+    unsafe {
+        let object = obj as *mut crate::object::ObjectHeader;
+        if crate::object::object_is_shaped(object) {
+            crate::object::shapes::transition_object_shape_semantics(object);
+        }
+    }
 }
 
 /// Look up the accessor descriptor (get/set) for (obj, key).
@@ -881,6 +891,12 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
         .accessor_descriptors
         .borrow_mut()
         .remove(&(obj, key.to_string()));
+    unsafe {
+        let object = obj as *mut crate::object::ObjectHeader;
+        if crate::object::object_is_shaped(object) {
+            crate::object::shapes::transition_object_shape_semantics(object);
+        }
+    }
 }
 
 /// Install a built-in *reflection-only* accessor descriptor for (obj, key)

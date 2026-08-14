@@ -765,70 +765,17 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
             return (0, 0, gc_type);
         }
         let class_id = (*ptr).class_id;
-        // #6804: plain objects canonicalize the token on the stable
-        // ShapeId. Shape-cached literals are stamped at birth; anything
-        // else is stamped HERE on first observation (self-healing), so one
-        // logical shape can never split into a pre-stamp address token and
-        // a post-stamp id token within a site.
-        //
-        // ★ #6759 C3 rung 1 deliberately does NOT relax this `class_id == 0`
-        // gate, even though rung 1 gives class instances a shape word. This
-        // token is not a PIC token — it is compared against a CODEGEN-SUPPLIED
-        // KEYS POINTER (`@perry_class_keys_C`) by the typed_feedback guard
-        // family: `guards.rs::method_direct_call_contract` requires
-        // `shape_addr == expected_keys as usize`, and the class-field /
-        // element-shape contracts do the same. An id can never equal that
-        // pointer, so returning one here fails every such guard CLOSED —
-        // memory-safe, but it silently deletes the direct-method-call route
-        // and the class-field fast paths. (Both are pinned:
-        // `typed_feedback_method_direct_guard_passes_for_exact_registered_method`
-        // and `typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested`
-        // go red the moment this gate is dropped.)
-        //
-        // Switching those consumers from a keys pointer to a ShapeId is
-        // rung 3 — nine unvalidated consumers, its own review. The PIC-token
-        // half of the observable rung 1 wanted comes from `ic_miss.rs`, which
-        // primes what the emitted PIC actually computes; this function feeds
-        // observation and guards, which are a different population.
-        let shape = if class_id == 0 {
-            let stamp = crate::object::shapes::object_shape_stamp(ptr);
-            if stamp != 0 {
-                stamp as usize
-            } else if crate::regex::regex_header_has_magic(
-                addr as *const crate::regex::RegExpHeader,
-            ) {
-                // RegExpHeader aliases GC_TYPE_OBJECT with a different
-                // layout — never write through the ObjectHeader view; keep
-                // the legacy (equality-only) address token.
-                (*ptr).keys_array as usize
-            } else {
-                let keys = (*ptr).keys_array;
-                if let Some(keys_header) =
-                    crate::value::addr_class::try_read_gc_header(keys as usize)
-                {
-                    if keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
-                        || keys_header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
-                    {
-                        let id = crate::object::shapes::stamp_object_shape(
-                            ptr as *mut ObjectHeader,
-                            keys,
-                            (*keys).length,
-                        );
-                        if id != 0 {
-                            id as usize
-                        } else {
-                            keys as usize
-                        }
-                    } else {
-                        keys as usize
-                    }
-                } else {
-                    keys as usize
-                }
-            }
-        } else {
-            (*ptr).keys_array as usize
-        };
+        // #8067 rung 3: every genuine ObjectHeader uses one token domain.
+        // Runtime allocators birth-stamp objects; the synchronization call is
+        // a defensive self-heal for old/synthetic callers and never falls back
+        // to a keys pointer.
+        let mut shape = crate::object::shapes::object_shape_id(ptr);
+        if shape == 0 {
+            shape = crate::object::shapes::synchronize_object_shape_descriptor(
+                ptr as *mut ObjectHeader,
+            );
+        }
+        let shape = shape as usize;
         (shape, class_id, gc_type)
     }
 }
@@ -1720,15 +1667,17 @@ fn object_key_matches_field(
     }
     unsafe {
         let obj = object_addr as *mut ObjectHeader;
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
+            return false;
+        };
+        let alloc_limit = std::cmp::max(
+            descriptor.live_inline_slot_count,
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        );
         if field_index >= alloc_limit {
             return false;
         }
-        let keys = (*obj).keys_array;
-        // #6804: `shape_addr` is an opaque TOKEN (a stable ShapeId for
-        // stamped plain objects), not necessarily the keys address — the
-        // actual contract is carried by the key/slot validation below.
+        let keys = descriptor.keys as usize as *const ArrayHeader;
         if keys.is_null() {
             return false;
         }

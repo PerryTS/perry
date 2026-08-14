@@ -535,31 +535,20 @@ fn lower_put_value_static_write_ic(
     // Existing-own overwrite guards. Bit 12 is the per-object typed-layout
     // intact bit: the runtime miss downgrades it before priming this cache, so
     // same-shape siblings take one miss each before direct stores are allowed.
-    const BLOCKING_FLAGS: u16 = 0x1907; // frozen/sealed/noextend/TA-proto/descriptors/typed-intact
+    const BLOCKING_FLAGS: u16 = 0x3907; // plus class-object kind
     let reserved_addr = ctx.block().sub(I64, &safe_target, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
     let blocked = ctx.block().and(I16, &reserved, &BLOCKING_FLAGS.to_string());
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
 
-    let object_type_ptr = ctx.block().inttoptr(I64, &safe_target);
-    let object_type = ctx.block().load(I32, &object_type_ptr);
-    let regular = ctx.block().icmp_eq(I32, &object_type, "1");
     let class_addr = ctx.block().add(I64, &safe_target, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
     let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
 
-    let keys_addr = ctx.block().add(I64, &safe_target, "16");
-    let keys_ptr = ctx.block().inttoptr(I64, &keys_addr);
-    let keys = ctx.block().load(I64, &keys_ptr);
-
-    // Mirror the read PIC's #6804 discriminated shape token. Plain objects
-    // carrying a never-reused runtime ShapeId compare by that stable id,
-    // lifted above the pointer range with bit 62. Class instances and
-    // unstamped receivers compare by their shared keys pointer. The runtime
-    // miss publishes the same token representation.
+    // The write PIC uses the same single ShapeId token domain as the read PIC.
     let parent_class_addr = ctx.block().add(I64, &safe_target, "8");
     let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
     let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
@@ -569,7 +558,7 @@ fn lower_put_value_static_write_ic(
     let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
     let shape_token = ctx
         .block()
-        .select(I1, &has_shape_id, I64, &shape_id_token, &keys);
+        .select(I1, &has_shape_id, I64, &shape_id_token, "0");
     let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
     let cached_token = ctx.block().load(I64, &cached_token_ptr);
     let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
@@ -577,27 +566,13 @@ fn lower_put_value_static_write_ic(
 
     let cached_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let slot = ctx.block().load(I64, &cached_slot_ptr);
-    let field_count_addr = ctx.block().add(I64, &safe_target, "12");
-    let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
-    let field_count = ctx.block().load(I32, &field_count_ptr);
-    let field_count64 = ctx.block().zext(I32, &field_count, I64);
-    let below_floor = ctx
-        .block()
-        .icmp_ult(I64, &field_count64, INLINE_SLOT_FLOOR_LIT);
-    let inline_limit =
-        ctx.block()
-            .select(I1, &below_floor, I64, INLINE_SLOT_FLOOR_LIT, &field_count64);
-    let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
-
     let mut hit = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit = ctx.block().and(I1, &hit, &not_forwarded);
     hit = ctx.block().and(I1, &hit, &flags_clear);
-    hit = ctx.block().and(I1, &hit, &regular);
     hit = ctx.block().and(I1, &hit, &class_nonzero);
     hit = ctx.block().and(I1, &hit, &not_native_module);
     hit = ctx.block().and(I1, &hit, &token_match);
     hit = ctx.block().and(I1, &hit, &token_nonzero);
-    hit = ctx.block().and(I1, &hit, &slot_in_bounds);
 
     ctx.block().cond_br(&hit, &hit_label, &fallback_label);
 
@@ -616,16 +591,13 @@ fn lower_put_value_static_write_ic(
     let slot2 = ctx.block().load(I64, &cached2_slot_ptr);
     let token2_match = ctx.block().icmp_eq(I64, &shape_token, &cached2_token);
     let token2_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
-    let slot2_in_bounds = ctx.block().icmp_ult(I64, &slot2, &inline_limit);
     let mut hit2 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit2 = ctx.block().and(I1, &hit2, &not_forwarded);
     hit2 = ctx.block().and(I1, &hit2, &flags_clear);
-    hit2 = ctx.block().and(I1, &hit2, &regular);
     hit2 = ctx.block().and(I1, &hit2, &class_nonzero);
     hit2 = ctx.block().and(I1, &hit2, &not_native_module);
     hit2 = ctx.block().and(I1, &hit2, &token2_match);
     hit2 = ctx.block().and(I1, &hit2, &token2_nonzero);
-    hit2 = ctx.block().and(I1, &hit2, &slot2_in_bounds);
     ctx.block().cond_br(&hit2, &hit_label, &dispatch3_label);
 
     ctx.current_block = dispatch3_idx;
@@ -640,16 +612,13 @@ fn lower_put_value_static_write_ic(
     let slot3 = ctx.block().load(I64, &cached3_slot_ptr);
     let token3_match = ctx.block().icmp_eq(I64, &shape_token, &cached3_token);
     let token3_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
-    let slot3_in_bounds = ctx.block().icmp_ult(I64, &slot3, &inline_limit);
     let mut hit3 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit3 = ctx.block().and(I1, &hit3, &not_forwarded);
     hit3 = ctx.block().and(I1, &hit3, &flags_clear);
-    hit3 = ctx.block().and(I1, &hit3, &regular);
     hit3 = ctx.block().and(I1, &hit3, &class_nonzero);
     hit3 = ctx.block().and(I1, &hit3, &not_native_module);
     hit3 = ctx.block().and(I1, &hit3, &token3_match);
     hit3 = ctx.block().and(I1, &hit3, &token3_nonzero);
-    hit3 = ctx.block().and(I1, &hit3, &slot3_in_bounds);
     ctx.block().cond_br(&hit3, &hit_label, &dispatch4_label);
 
     ctx.current_block = dispatch4_idx;
@@ -664,16 +633,13 @@ fn lower_put_value_static_write_ic(
     let slot4 = ctx.block().load(I64, &cached4_slot_ptr);
     let token4_match = ctx.block().icmp_eq(I64, &shape_token, &cached4_token);
     let token4_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
-    let slot4_in_bounds = ctx.block().icmp_ult(I64, &slot4, &inline_limit);
     let mut hit4 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit4 = ctx.block().and(I1, &hit4, &not_forwarded);
     hit4 = ctx.block().and(I1, &hit4, &flags_clear);
-    hit4 = ctx.block().and(I1, &hit4, &regular);
     hit4 = ctx.block().and(I1, &hit4, &class_nonzero);
     hit4 = ctx.block().and(I1, &hit4, &not_native_module);
     hit4 = ctx.block().and(I1, &hit4, &token4_match);
     hit4 = ctx.block().and(I1, &hit4, &token4_nonzero);
-    hit4 = ctx.block().and(I1, &hit4, &slot4_in_bounds);
     ctx.block().cond_br(&hit4, &hit_label, &dispatch5_label);
 
     ctx.current_block = dispatch5_idx;
@@ -894,19 +860,13 @@ fn lower_put_value_dyn_ic_inline(
     let reserved_addr = ctx.block().sub(I64, &t_handle, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
-    let blocked = ctx.block().and(I16, &reserved, "6407"); // 0x1907
+    let blocked = ctx.block().and(I16, &reserved, "14599"); // 0x3907, including class objects
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
-    let object_type_ptr = ctx.block().inttoptr(I64, &t_handle);
-    let object_type = ctx.block().load(I32, &object_type_ptr);
-    let regular = ctx.block().icmp_eq(I32, &object_type, "1");
     let class_addr = ctx.block().add(I64, &t_handle, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
     let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
-    let keys_addr = ctx.block().add(I64, &t_handle, "16");
-    let keys_ptr = ctx.block().inttoptr(I64, &keys_addr);
-    let keys = ctx.block().load(I64, &keys_ptr);
     let parent_class_addr = ctx.block().add(I64, &t_handle, "8");
     let parent_class_ptr = ctx.block().inttoptr(I64, &parent_class_addr);
     let parent_class_id = ctx.block().load(I32, &parent_class_ptr);
@@ -916,14 +876,13 @@ fn lower_put_value_dyn_ic_inline(
     let shape_id_token = ctx.block().or(I64, &shape_id64, "4611686018427387904");
     let shape_token = ctx
         .block()
-        .select(I1, &has_shape_id, I64, &shape_id_token, &keys);
+        .select(I1, &has_shape_id, I64, &shape_id_token, "0");
     let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
     let cached_token = ctx.block().load(I64, &cached_token_ptr);
     let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
     let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
     ok = ctx.block().and(I1, &ok, &flags_clear);
-    ok = ctx.block().and(I1, &ok, &regular);
     ok = ctx.block().and(I1, &ok, &class_nonzero);
     ok = ctx.block().and(I1, &ok, &not_native_module);
     ok = ctx.block().and(I1, &ok, &token_match);
@@ -957,19 +916,7 @@ fn lower_put_value_dyn_ic_inline(
         I64,
         &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
     );
-    let field_count_addr = ctx.block().add(I64, &t_handle, "12");
-    let field_count_ptr = ctx.block().inttoptr(I64, &field_count_addr);
-    let field_count = ctx.block().load(I32, &field_count_ptr);
-    let field_count64 = ctx.block().zext(I32, &field_count, I64);
-    let below_floor = ctx
-        .block()
-        .icmp_ult(I64, &field_count64, INLINE_SLOT_FLOOR_LIT);
-    let inline_limit =
-        ctx.block()
-            .select(I1, &below_floor, I64, INLINE_SLOT_FLOOR_LIT, &field_count64);
-    let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &inline_limit);
-    ctx.block()
-        .cond_br(&slot_in_bounds, &store_label, &slow_label);
+    ctx.block().br(&store_label);
 
     ctx.current_block = store_idx;
     let header_words =
@@ -1009,7 +956,6 @@ fn lower_put_value_dyn_ic_inline(
 /// perry-runtime `object::INLINE_SLOT_FLOOR` (the runtime pads every object
 /// to at least this many physical slots; a codegen value larger than the
 /// runtime's would widen inline stores into unallocated memory).
-const INLINE_SLOT_FLOOR_LIT: &str = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
 
 fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {

@@ -409,7 +409,10 @@ fn test_immortal_scope_stores_trace_without_taking_a_side_table_entry() {
     let child = crate::object::js_object_alloc(0, 0);
     let child_header = unsafe { header_from_user_ptr(child as *const u8) };
     unsafe {
-        *(obj as *mut u8).add(8).cast::<u64>().add(1) = POINTER_TAG | (child as u64 & POINTER_MASK);
+        let fields = (obj as *mut u8)
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            .cast::<u64>();
+        *fields.add(1) = POINTER_TAG | (child as u64 & POINTER_MASK);
     }
     {
         let _immortal = ImmortalLayoutScope::new();

@@ -321,6 +321,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::OBJ_FLAG_CLASS_OBJECT
             // A generated hit cannot update/downgrade a typed layout without
             // calling the runtime. The miss store clears this bit; prime only
             // once that per-object downgrade is visible.
@@ -335,7 +336,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
 
         let obj = obj_addr as *mut crate::ObjectHeader;
         let class_id = (*obj).class_id;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        if !crate::object::object_is_regular(obj)
             || class_id == 0
             || class_id == crate::object::NATIVE_MODULE_CLASS_ID
         {
@@ -351,7 +352,10 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
 
-        let keys = (*obj).keys_array;
+        let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+            return result;
+        };
+        let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
         if keys.is_null() || (keys as u64) >> 48 != 0 {
             return result;
         }
@@ -359,15 +363,14 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         };
         if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
-                != crate::gc::GC_FLAG_SHAPE_SHARED
+            || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return result;
         }
 
         let mut own_idx = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize);
         if own_idx.is_none() {
-            let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+            let key_count = shape.logical_key_count as usize;
             if key_count > 4096 {
                 return result;
             }
@@ -387,18 +390,13 @@ pub extern "C" fn js_put_value_set_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit = shape.live_inline_slot_count as usize;
         if idx as usize >= alloc_limit {
             return result;
         }
 
-        let parent_class_id = (*obj).parent_class_id;
-        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
-            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
-        } else {
-            keys as u64
-        };
+        let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
+            | crate::object::shapes::object_shape_id(obj) as u64;
 
         // Publish the token last conceptually: a zero-initialized or stale
         // token cannot hit this slot until it matches this receiver's current
@@ -525,6 +523,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::OBJ_FLAG_CLASS_OBJECT
         | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -534,25 +533,19 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
     }
     let obj = obj_addr as *mut crate::ObjectHeader;
     let class_id = (*obj).class_id;
-    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+    if !crate::object::object_is_regular(obj)
         || class_id == 0
         || class_id == crate::object::NATIVE_MODULE_CLASS_ID
     {
         return None;
     }
-    let current_token = {
-        let parent_class_id = (*obj).parent_class_id;
-        if crate::object::shapes::is_shape_id(parent_class_id) {
-            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
-        } else {
-            (*obj).keys_array as u64
-        }
-    };
+    let current_token = crate::object::shapes::PIC_ID_TOKEN_BIT
+        | crate::object::shapes::object_shape_id(obj) as u64;
     if current_token != token {
         return None;
     }
-    let alloc_limit = std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
-    if slot >= alloc_limit {
+    let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+    if slot >= shape.live_inline_slot_count {
         return None;
     }
     crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
@@ -608,6 +601,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::OBJ_FLAG_CLASS_OBJECT
             | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -617,14 +611,17 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         }
         let obj = obj_addr as *mut crate::ObjectHeader;
         let class_id = (*obj).class_id;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        if !crate::object::object_is_regular(obj)
             || class_id == 0
             || class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || crate::array::object_prototype_addr_matches(obj_addr)
         {
             return result;
         }
-        let keys = (*obj).keys_array;
+        let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+            return result;
+        };
+        let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
         if keys.is_null() || (keys as u64) >> 48 != 0 {
             return result;
         }
@@ -632,8 +629,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             return result;
         };
         if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
-                != crate::gc::GC_FLAG_SHAPE_SHARED
+            || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return result;
         }
@@ -643,7 +639,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(key_bytes) = crate::string::js_string_key_bytes(key_jsval, &mut key_buf) else {
             return result;
         };
-        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        let key_count = shape.logical_key_count as usize;
         if key_count > 4096 {
             return result;
         }
@@ -661,17 +657,12 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        let alloc_limit = shape.live_inline_slot_count;
         if idx >= alloc_limit {
             return result;
         }
-        let parent_class_id = (*obj).parent_class_id;
-        let shape_token = if crate::object::shapes::is_shape_id(parent_class_id) {
-            crate::object::shapes::PIC_ID_TOKEN_BIT | parent_class_id as u64
-        } else {
-            keys as u64
-        };
+        let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
+            | crate::object::shapes::object_shape_id(obj) as u64;
         let c = &mut *cache;
         let key_bits = key.to_bits() as i64;
         // Preserve the empty-way sentinel invariant: never prime bits 0
@@ -807,13 +798,17 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::OBJ_FLAG_CLASS_OBJECT;
 
     unsafe fn validated_object(
         bits: u64,
     ) -> Option<(
         *mut crate::ObjectHeader,
+        u32,
         *mut crate::array::ArrayHeader,
+        u32,
+        u32,
         u16,
     )> {
         if (bits & !POINTER_MASK) != POINTER_TAG {
@@ -828,31 +823,39 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
             return None;
         }
         let obj = addr as *mut crate::ObjectHeader;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR
+        if !crate::object::object_is_regular(obj)
             || (*obj).class_id == 0
             || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
         {
             return None;
         }
-        let keys = (*obj).keys_array;
+        let shape_id = crate::object::shapes::object_shape_id(obj);
+        let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+        let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
         if keys.is_null() || (keys as u64) >> 48 != 0 {
             return None;
         }
         let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
         if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
-                != crate::gc::GC_FLAG_SHAPE_SHARED
+            || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
-        Some((obj, keys, gc._reserved))
+        Some((
+            obj,
+            shape_id,
+            keys,
+            shape.logical_key_count,
+            shape.live_inline_slot_count,
+            gc._reserved,
+        ))
     }
 
     unsafe fn find_slot(
         keys: *mut crate::array::ArrayHeader,
+        key_count: u32,
         key: *const crate::StringHeader,
     ) -> Option<u32> {
-        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
         if key_count > 4096 {
             return None;
         }
@@ -873,16 +876,17 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         trace_object_array_numeric_write_rejection("first receiver is a hole");
         return None;
     }
-    let (first, shared_keys, first_flags) = trace_object_array_numeric_write_stage(
-        unsafe { validated_object(first_bits) },
-        "first receiver is not an eligible regular shared-shape object",
-    )?;
+    let (first, shared_shape_id, shared_keys, shared_key_count, first_limit, first_flags) =
+        trace_object_array_numeric_write_stage(
+            unsafe { validated_object(first_bits) },
+            "first receiver is not an eligible regular shared-shape object",
+        )?;
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every
         // non-zero-encoded index fits comfortably in one 16-bit result lane.
         let slot = trace_object_array_numeric_write_stage(
-            unsafe { find_slot(shared_keys, decoded_keys[index]) },
+            unsafe { find_slot(shared_keys, shared_key_count, decoded_keys[index]) },
             "target key is absent from the shared shape",
         )?;
         slots[index] = trace_object_array_numeric_write_stage(
@@ -924,12 +928,6 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         slot < (*spill).length && slot < (*spill).capacity
     }
 
-    let first_limit = unsafe {
-        std::cmp::max(
-            (*first).field_count,
-            crate::object::INLINE_SLOT_FLOOR as u32,
-        )
-    };
     let mut lane_spill = [false; 4];
     for index in 0..keys.len() {
         let slot = u32::from(slots[index]);
@@ -972,18 +970,17 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
             trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
             return None;
         }
-        let (obj, object_keys, flags) = trace_object_array_numeric_write_stage(
-            unsafe { validated_object(bits) },
-            "receiver prefix contains an ineligible object",
-        )?;
-        if object_keys != shared_keys {
+        let (obj, object_shape_id, _object_keys, _object_key_count, limit, flags) =
+            trace_object_array_numeric_write_stage(
+                unsafe { validated_object(bits) },
+                "receiver prefix contains an ineligible object",
+            )?;
+        if object_shape_id != shared_shape_id {
             trace_object_array_numeric_write_rejection(
-                "receiver prefix does not share one keys array",
+                "receiver prefix does not share one ShapeId",
             );
             return None;
         }
-        let limit =
-            unsafe { std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) };
         for index in 0..keys.len() {
             let slot = u32::from(slots[index]);
             if lane_spill[index] {

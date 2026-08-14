@@ -131,7 +131,7 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     }
     // Wall 18: check the header-resident magic FIRST so identity survives a
     // duplicate-runtime thread-local split (see `RegExpHeader.magic`). A
-    // RegExp is a `gc_malloc(GC_TYPE_OBJECT)` allocation, so it always carries
+    // RegExp is a `gc_malloc(GC_TYPE_REGEXP)` allocation, so it always carries
     // a preceding GcHeader; only read the magic field when the GC header says
     // this is an object of sufficient size to actually contain it.
     if regex_header_has_magic(ptr as *const RegExpHeader) {
@@ -160,7 +160,7 @@ fn regex_pointers_contains(addr: usize) -> bool {
 }
 
 /// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding
-/// `GcHeader` exists, is a `GC_TYPE_OBJECT`, and the allocation is large enough
+/// `GcHeader` exists, is a `GC_TYPE_REGEXP`, and the allocation is large enough
 /// to hold a full `RegExpHeader` before dereferencing the `magic` field.
 /// Returns true iff the field equals [`REGEXP_MAGIC`]. Immune to which linked
 /// `perry-runtime` copy's thread-locals are live.
@@ -180,7 +180,7 @@ pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
         let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
             return false;
         };
-        if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if gc.obj_type != crate::gc::GC_TYPE_REGEXP {
             return false;
         }
         // `size` in the GcHeader covers the GcHeader + payload. Require enough
@@ -522,7 +522,7 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
 
 /// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
 /// Used by the console/`util.inspect` formatter to print regex literals
-/// as `/source/flags` instead of `{}` (they're GC_TYPE_OBJECT allocations
+/// as `/source/flags` instead of `{}` (they're GC_TYPE_REGEXP allocations
 /// with no enumerable string keys). Registry-gated so a generic object
 /// is never mis-read as a RegExpHeader.
 pub fn is_registered_regex(addr: usize) -> bool {
@@ -806,7 +806,7 @@ pub extern "C" fn js_regexp_new(
     // missing is that the value written had to survive the allocation first.
     let flags_root = scope.root_string_ptr(canonical_flags_ptr);
     unsafe {
-        let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_OBJECT);
+        let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_REGEXP);
         if raw.is_null() {
             // #5067 — catchable RangeError instead of aborting on OOM.
             crate::error::throw_allocation_failed();

@@ -75,6 +75,10 @@ fn class_instance(
     (obj, keys, key, receiver)
 }
 
+fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
+    unsafe { crate::object::shapes::object_shape_id(obj) }
+}
+
 unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
     crate::object::js_register_class_method(
         class_id as i64,
@@ -1249,19 +1253,19 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G0",
-            "static G0: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32",
+            "static G0: extern \"C\" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> i32",
             "js_typed_feedback_class_field_get_guard",
         ),
         (
             guards,
             "static G1",
-            "static G1: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32",
+            "static G1: extern \"C\" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) -> i32",
             "js_typed_feedback_class_field_set_guard",
         ),
         (
             guards,
             "static G2",
-            "static G2: unsafe extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32",
+            "static G2: unsafe extern \"C\" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32",
             "js_typed_feedback_method_direct_call_guard",
         ),
         (
@@ -1273,7 +1277,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G4",
-            "static G4: unsafe extern \"C\" fn(f64, u32, *const ArrayHeader) -> i32",
+            "static G4: unsafe extern \"C\" fn(f64, u32, u32) -> i32",
             "js_method_direct_shape_guard",
         ),
         (
@@ -1552,12 +1556,21 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
     register(31, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
     let class_id = 0x7EED_0031;
-    let (obj, keys, key, receiver) = class_instance(class_id, b"x");
+    let (obj, _, key, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(1.0f64.to_bits()));
     crate::object::js_object_freeze(receiver);
 
-    let guard =
-        js_typed_feedback_class_field_set_guard(31, receiver, class_id, keys, key, 0, 2.0, 0);
+    let guard = js_typed_feedback_class_field_set_guard(
+        31,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key,
+        0,
+        2.0,
+        0,
+    );
     assert_eq!(guard, 0);
     assert_eq!(
         crate::object::js_object_get_field(obj, 0).bits(),
@@ -1579,7 +1592,8 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
     register(32, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
     let class_id = 0x7EED_0032;
-    let (obj, keys, key, receiver) = class_instance(class_id, b"x");
+    let (obj, _, key, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(1.0f64.to_bits()));
     unsafe {
         crate::object::js_register_class_setter(
@@ -1590,8 +1604,16 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
         );
     }
 
-    let guard =
-        js_typed_feedback_class_field_set_guard(32, receiver, class_id, keys, key, 0, 7.0, 0);
+    let guard = js_typed_feedback_class_field_set_guard(
+        32,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key,
+        0,
+        7.0,
+        0,
+    );
     assert_eq!(guard, 0);
     js_typed_feedback_record_fallback_call(32);
     crate::object::js_object_set_field_by_name(obj, key, 7.0);
@@ -1622,18 +1644,33 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
     register(39, TypedFeedbackSiteKind::PropertyGet, "obj.x");
 
     let class_id = 0x7EED_0039;
-    let (obj, expected_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(5.0f64.to_bits()));
-    let first =
-        js_typed_feedback_class_field_get_guard(39, receiver, class_id, expected_keys, key_x, 0, 0);
+    let first = js_typed_feedback_class_field_get_guard(
+        39,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        0,
+    );
     assert_eq!(first, 1);
 
     let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
-    assert_ne!(unsafe { (*obj).keys_array }, expected_keys);
+    assert_ne!(unsafe { (*obj).keys_array }, original_keys);
 
-    let second =
-        js_typed_feedback_class_field_get_guard(39, receiver, class_id, expected_keys, key_x, 0, 0);
+    let second = js_typed_feedback_class_field_get_guard(
+        39,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        0,
+    );
     assert_eq!(second, 0);
     js_typed_feedback_record_fallback_call(39);
     let stored = crate::object::js_object_get_field_by_name_f64(obj, key_x);
@@ -1646,13 +1683,51 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
 }
 
 #[test]
+fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(8067, TypedFeedbackSiteKind::PropertyGet, "obj.x");
+
+    let class_id = 0x7EED_8067;
+    let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+    let original_field_count = unsafe { (*obj).field_count };
+
+    unsafe {
+        // These are ABI mirrors retained until the later header-shrink issue.
+        // An authoritative guard must not consult either one.
+        (*obj).keys_array = std::ptr::null_mut();
+        (*obj).field_count = 0;
+    }
+    let passed = js_typed_feedback_class_field_get_guard(
+        8067,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        0,
+    );
+    unsafe {
+        (*obj).keys_array = original_keys;
+        (*obj).field_count = original_field_count;
+    }
+
+    assert_eq!(passed, 1, "guard must consume ShapeDescriptor facts");
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 0);
+}
+
+#[test]
 fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(43, TypedFeedbackSiteKind::PropertyGet, "obj.x");
 
     let class_id = 0x7EED_0043;
-    let (obj, expected_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(5.0));
     let raw_mask = [0b1u64];
     crate::gc::js_gc_init_typed_shape_layout(
@@ -1665,8 +1740,15 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
     );
     crate::gc::test_reset_typed_raw_f64_descriptor_queries();
 
-    let first =
-        js_typed_feedback_class_field_get_guard(43, receiver, class_id, expected_keys, key_x, 0, 1);
+    let first = js_typed_feedback_class_field_get_guard(
+        43,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        1,
+    );
     assert_eq!(first, 1);
     assert_eq!(
         crate::gc::test_typed_raw_f64_descriptor_queries(),
@@ -1677,8 +1759,15 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::string_ptr(payload));
 
-    let second =
-        js_typed_feedback_class_field_get_guard(43, receiver, class_id, expected_keys, key_x, 0, 1);
+    let second = js_typed_feedback_class_field_get_guard(
+        43,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        1,
+    );
     assert_eq!(second, 0);
     assert_eq!(
         crate::gc::test_typed_raw_f64_descriptor_queries(),
@@ -1699,7 +1788,8 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
     register(44, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
     let class_id = 0x7EED_0044;
-    let (obj, expected_keys, key_x, receiver) = class_instance(class_id, b"x");
+    let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(1.0));
     let raw_mask = [0b1u64];
     crate::gc::js_gc_init_typed_shape_layout(
@@ -1716,7 +1806,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         44,
         receiver,
         class_id,
-        expected_keys,
+        expected_shape_id,
         key_x,
         0,
         2.0,
@@ -1735,7 +1825,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         44,
         receiver,
         class_id,
-        expected_keys,
+        expected_shape_id,
         key_x,
         0,
         payload_value,
@@ -1748,7 +1838,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         44,
         receiver,
         class_id,
-        expected_keys,
+        expected_shape_id,
         key_x,
         0,
         f64::from_bits(short.bits()),
@@ -1761,7 +1851,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         44,
         receiver,
         class_id,
-        expected_keys,
+        expected_shape_id,
         key_x,
         0,
         handle_value,
@@ -1836,7 +1926,8 @@ fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
     register(61, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
     let class_id = 0x7EED_0061;
-    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    let (obj, _, _, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     unsafe { register_test_method(class_id, b"m") };
 
     let guard = unsafe {
@@ -1844,7 +1935,7 @@ fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
             61,
             receiver,
             class_id,
-            keys,
+            expected_shape_id,
             b"m".as_ptr() as *const i8,
             1,
             test_direct_method_ptr(),
@@ -1866,7 +1957,8 @@ fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
     register(62, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
     let class_id = 0x7EED_0062;
-    let (obj, keys, _, receiver) = class_instance(class_id, b"x");
+    let (obj, _, _, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     unsafe { register_test_method(class_id, b"m") };
     let key_m = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(obj, key_m, 123.0);
@@ -1876,7 +1968,7 @@ fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
             62,
             receiver,
             class_id,
-            keys,
+            expected_shape_id,
             b"m".as_ptr() as *const i8,
             1,
             test_direct_method_ptr(),
@@ -1898,7 +1990,8 @@ fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() 
     register(63, TypedFeedbackSiteKind::MethodCall, "obj.m()");
 
     let class_id = 0x7EED_0063;
-    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    let (obj, _, _, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     unsafe {
         register_test_method(class_id, b"m");
         crate::object::js_register_prototype_method(
@@ -1914,7 +2007,7 @@ fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() 
             63,
             receiver,
             class_id,
-            keys,
+            expected_shape_id,
             b"m".as_ptr() as *const i8,
             1,
             test_direct_method_ptr(),
@@ -1943,7 +2036,7 @@ fn typed_feedback_method_direct_guard_fails_for_native_receiver() {
             64,
             receiver,
             crate::object::NATIVE_MODULE_CLASS_ID,
-            std::ptr::null(),
+            shape_id(native),
             b"m".as_ptr() as *const i8,
             1,
             test_direct_method_ptr(),
@@ -1980,14 +2073,15 @@ fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
     }
 
     let class_id = 0x7EED_0065;
-    let (_, keys, _, receiver) = class_instance(class_id, b"x");
+    let (obj, _, _, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
     unsafe { register_test_method(class_id, b"m") };
     let guard = unsafe {
         js_typed_feedback_method_direct_call_guard(
             65,
             receiver,
             class_id,
-            keys,
+            expected_shape_id,
             b"m".as_ptr() as *const i8,
             1,
             test_direct_method_ptr(),

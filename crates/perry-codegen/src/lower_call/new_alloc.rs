@@ -19,7 +19,7 @@
 use perry_hir::Class;
 
 use crate::expr::FnCtx;
-use crate::types::{I1, I32, I64, I8, PTR};
+use crate::types::{I32, I64, I8, PTR};
 
 /// Load the immutable ShapeId paired with a class's canonical keys global.
 ///
@@ -27,7 +27,7 @@ use crate::types::{I1, I32, I64, I8, PTR};
 /// allocation slow path is an opaque runtime call, so LLVM will not reliably
 /// hoist the module-global load out of a hot loop by itself. Unlike the keys
 /// pointer this scalar is not a GC root and needs no shadow-slot binding.
-pub(super) fn load_class_shape_id(
+pub(crate) fn load_class_shape_id(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     keys_global_name: &str,
@@ -588,14 +588,10 @@ fn emit_instance_alloc_inner(
             blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
 
             // Second 8 bytes: ShapeId (u32, low) | field_count (u32, high).
-            // Rung 0 removed the last inheritance consumer of this word; the
-            // parent edge was registered during module init. A zero id is the
-            // recoverable exhaustion path: retain the old parent word and let
-            // the still-authoritative pointer/count guards handle the object.
+            // The module-init runtime call either publishes a usable ShapeId
+            // or fail-stops on exhaustion; there is no pointer-token fallback.
             let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
-            let has_shape_id = blk.icmp_ne(I32, &shape_id, "0");
-            let shape_word = blk.select(I1, &has_shape_id, I32, &shape_id, &parent_cid.to_string());
-            let shape_word64 = blk.zext(I32, &shape_word, I64);
+            let shape_word64 = blk.zext(I32, &shape_id, I64);
             let oh_word_2 = blk.or(
                 I64,
                 &shape_word64,

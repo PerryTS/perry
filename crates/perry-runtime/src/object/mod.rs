@@ -73,7 +73,6 @@ mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
 mod field_get_set;
-pub(crate) use field_get_set::pic_epoch_bump;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod global_fetch;
@@ -1709,11 +1708,9 @@ pub struct ObjectHeader {
 /// free paths, no owner registry, and no stale-address hazard: the record
 /// dies with (and only with) its owner.
 ///
-/// CAUTION — RegExp aliasing: `RegExpHeader` is a different struct that is
-/// also tagged `GC_TYPE_OBJECT` (see `gc_child_slots`'s regex special
-/// case). Reading `.meta` at the `ObjectHeader` offset off a RegExp yields
-/// garbage; every `meta` access must first establish a genuine shaped
-/// object (`object_meta_slot_addr` centralizes that check).
+/// Only the authoritative `GC_TYPE_OBJECT` kind has this layout. RegExp uses
+/// its own GC kind and slot descriptor, so no ObjectHeader consumer needs to
+/// inspect its native payload to disambiguate the two.
 ///
 /// The shipped Phase B record holds the custom `[[Prototype]]`, the Phase C2
 /// per-key descriptor summaries, object flags, and owned spill storage. The
@@ -1763,6 +1760,34 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
+/// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
+/// and heap class-expression values carry an explicit GcHeader kind bit. The
+/// legacy `ObjectHeader::object_type` word is only an ABI mirror pending #8047.
+#[inline]
+pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && header._reserved & crate::gc::OBJ_FLAG_CLASS_OBJECT == 0
+}
+
+#[inline]
+pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+}
+
 // #6812 spill lanes: the versioned write-loop emitter
 // (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
@@ -1771,7 +1796,7 @@ const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
-/// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
+/// established that `obj` is a live `GC_TYPE_OBJECT` allocation
 /// (see `prototype_chain::meta_capable_object`).
 pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
     if !(*obj).meta.is_null() {
@@ -1811,15 +1836,11 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     meta
 }
 
-/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-
-/// pointer child slot exactly like `gc_keys_array_slot`. Returns `None` for
-/// a null meta AND for a `RegExpHeader` masquerading as `GC_TYPE_OBJECT`
-/// (its bytes at this offset are native data — see the regex special case
-/// in `gc_child_slots`).
+/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-pointer
+/// child slot exactly like `gc_keys_array_slot`. The GC type table calls this
+/// only for `GC_TYPE_OBJECT`; RegExp uses its dedicated slot descriptor.
 pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
-    if user_ptr == 0
-        || crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader)
-    {
+    if user_ptr == 0 {
         return None;
     }
     let obj = user_ptr as *mut ObjectHeader;
@@ -1945,7 +1966,17 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 }
 
 pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
-    if obj.is_null() || (*obj).keys_array.is_null() {
+    if obj.is_null() {
+        return None;
+    }
+    if let Some(descriptor) = shapes::object_shape_descriptor(obj) {
+        // Compatibility scratch slot: GC obtains the authoritative edge from
+        // the ShapeId descriptor, then lets the existing slot visitor rewrite
+        // it in place. #8047 can replace this scratch with a descriptor-table
+        // rewrite without changing the source of the edge.
+        (*obj).keys_array = descriptor.keys as usize as *mut ArrayHeader;
+    }
+    if (*obj).keys_array.is_null() {
         return None;
     }
     Some(&mut (*obj).keys_array as *mut _ as *mut u64)
@@ -1957,7 +1988,11 @@ pub(crate) unsafe fn gc_field_slot_range(
     if obj.is_null() {
         return None;
     }
-    let field_count = (*obj).field_count as usize;
+    let field_count = shapes::object_shape_descriptor(obj)
+        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+        // Compatibility only for synthetic/raw test fixtures that bypass all
+        // runtime allocators. Published runtime objects are always stamped.
+        .unwrap_or((*obj).field_count as usize);
     if field_count > 1_000_000 {
         return None;
     }
