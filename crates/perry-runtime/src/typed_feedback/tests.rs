@@ -1663,10 +1663,16 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
         std::ptr::null(),
         0,
     );
+    crate::gc::test_reset_typed_raw_f64_descriptor_queries();
 
     let first =
         js_typed_feedback_class_field_get_guard(43, receiver, class_id, expected_keys, key_x, 0, 1);
     assert_eq!(first, 1);
+    assert_eq!(
+        crate::gc::test_typed_raw_f64_descriptor_queries(),
+        0,
+        "the production guard must prove the raw slot from the canonical-layout header bit"
+    );
 
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::string_ptr(payload));
@@ -1674,6 +1680,11 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
     let second =
         js_typed_feedback_class_field_get_guard(43, receiver, class_id, expected_keys, key_x, 0, 1);
     assert_eq!(second, 0);
+    assert_eq!(
+        crate::gc::test_typed_raw_f64_descriptor_queries(),
+        0,
+        "a cleared intact bit must reject without probing either descriptor map"
+    );
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
@@ -1699,6 +1710,7 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         std::ptr::null(),
         0,
     );
+    crate::gc::test_reset_typed_raw_f64_descriptor_queries();
 
     let first = js_typed_feedback_class_field_set_guard(
         44,
@@ -1711,6 +1723,11 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         1,
     );
     assert_eq!(first, 1);
+    assert_eq!(
+        crate::gc::test_typed_raw_f64_descriptor_queries(),
+        0,
+        "the set guard must use the same O(1) canonical-layout proof as the get guard"
+    );
 
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
     let payload_value = crate::value::js_nanbox_string(payload as i64);
@@ -1751,6 +1768,11 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         1,
     );
     assert_eq!(fourth, 0);
+    assert_eq!(
+        crate::gc::test_typed_raw_f64_descriptor_queries(),
+        0,
+        "value rejections and the intact-bit proof must keep descriptor maps off the hot path"
+    );
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);

@@ -131,6 +131,7 @@ pub(super) struct TypedLayoutDescriptor {
 thread_local! {
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
     static TYPED_SLOT_DESCRIPTOR_PROBES: Cell<usize> = const { Cell::new(0) };
+    static TYPED_RAW_F64_DESCRIPTOR_QUERIES: Cell<usize> = const { Cell::new(0) };
 }
 
 // #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
@@ -1344,6 +1345,8 @@ pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
 }
 
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {
+    #[cfg(test)]
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(c.get() + 1));
     with_typed_descriptor_for_query(user_ptr, |layout| {
         slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index)
     })
@@ -1839,4 +1842,14 @@ pub(super) fn test_reset_typed_slot_descriptor_probes() {
 #[cfg(test)]
 pub(super) fn test_typed_slot_descriptor_probes() -> usize {
     TYPED_SLOT_DESCRIPTOR_PROBES.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_typed_raw_f64_descriptor_queries() {
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_typed_raw_f64_descriptor_queries() -> usize {
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(Cell::get)
 }

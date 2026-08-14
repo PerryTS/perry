@@ -234,6 +234,30 @@ fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &
     false
 }
 
+/// Decide the raw-f64 half of a class-field guard after the caller has proven
+/// the receiver's exact class/keys pair and that `field_index` is in bounds.
+///
+/// That shape proof ties the slot to the compile-time mask which made
+/// `require_raw_f64` true. The per-object INTACT bit is therefore the complete
+/// production answer: it is cleared before any representation downgrade and
+/// is the same O(1) fact the codegen-inlined guard already trusts. Keep the
+/// descriptor lookup only in `PERRY_VERIFY_TYPED_INTACT` mode, where doing the
+/// expensive independent check is the feature's purpose.
+#[inline]
+fn class_field_raw_f64_layout_contract(
+    object_addr: usize,
+    field_index: u32,
+    require_raw_f64: bool,
+) -> bool {
+    if !require_raw_f64 {
+        return true;
+    }
+    if verify_typed_intact_enabled() {
+        return crate::gc::layout_typed_raw_f64_slot_for_user(object_addr, field_index as usize);
+    }
+    crate::gc::layout_typed_intact_for_user(object_addr)
+}
+
 fn class_field_get_contract(
     receiver: f64,
     expected_class_id: u32,
@@ -272,11 +296,11 @@ fn class_field_get_contract(
             && expected_field_index < (*obj).field_count
             && plain_array_index_guard(expected_keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
-            && (!require_raw_f64
-                || crate::gc::layout_typed_raw_f64_slot_for_user(
-                    object_addr,
-                    expected_field_index as usize,
-                ))
+            && class_field_raw_f64_layout_contract(
+                object_addr,
+                expected_field_index,
+                require_raw_f64,
+            )
             && !class_getter_in_chain(class_id, &key_name)
             && !descriptor_blocks_class_field_get(object_addr, class_id, &key_name);
         (shape_addr, class_id, gc_type, valid)
@@ -308,6 +332,12 @@ fn class_field_fast_contract(
             && (*obj).class_id == expected_class_id
             && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
             && expected_field_index < (*obj).field_count;
+        let layout_ok = shape_ok
+            && class_field_raw_f64_layout_contract(
+                object_addr,
+                expected_field_index,
+                require_raw_f64,
+            );
         // #5093 self-check: the codegen-inlined fast path concludes "slot K is
         // raw-f64" purely from the per-object intact bit (plus a class_id/keys
         // match). Under PERRY_VERIFY_TYPED_INTACT=1, assert that whenever this
@@ -317,11 +347,7 @@ fn class_field_fast_contract(
         // double. Any drift aborts loudly during the test sweep.
         if require_raw_f64 && shape_ok && verify_typed_intact_enabled() {
             let intact = crate::gc::layout_typed_intact_for_user(object_addr);
-            let raw = crate::gc::layout_typed_raw_f64_slot_for_user(
-                object_addr,
-                expected_field_index as usize,
-            );
-            if intact && !raw {
+            if intact && !layout_ok {
                 eprintln!(
                     "PERRY_VERIFY_TYPED_INTACT: intact bit set on class {} but slot {} is not raw-f64 in the side table (inline fast path would corrupt)",
                     expected_class_id, expected_field_index
@@ -329,12 +355,7 @@ fn class_field_fast_contract(
                 std::process::abort();
             }
         }
-        shape_ok
-            && (!require_raw_f64
-                || crate::gc::layout_typed_raw_f64_slot_for_user(
-                    object_addr,
-                    expected_field_index as usize,
-                ))
+        layout_ok
     }
 }
 
@@ -528,9 +549,10 @@ fn class_field_set_contract(
             && object_key_matches_field(obj, key, expected_field_index)
             && (!require_raw_f64
                 || (is_plain_number_bits(value_bits)
-                    && crate::gc::layout_typed_raw_f64_slot_for_user(
+                    && class_field_raw_f64_layout_contract(
                         object_addr,
-                        expected_field_index as usize,
+                        expected_field_index,
+                        true,
                     )))
             && !class_setter_in_chain(class_id, &key_name)
             && !descriptor_blocks_class_field_set(object_addr, class_id, &key_name);
