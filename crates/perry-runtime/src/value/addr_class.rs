@@ -119,6 +119,12 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
 /// Values below 0x100000 (1MB) are likely INT32_TAG extracts, small handles,
 /// or null. The upper bound filters out NaN-box tag bits that leaked through.
+/// Linux-family AArch64 targets can map userspace arenas anywhere in the full
+/// low 48-bit VA range, including addresses with bit 47 set (observed under
+/// the native Linux ARM provider gate around `0x0000_e000_...`). Those
+/// addresses are still exactly representable in Perry's 48-bit NaN-box
+/// payload. The half-range bound used by x86-64 canonical low addresses must
+/// not reject them.
 ///
 /// Issue #73 follow-up: raised the lower bound from 1 MB to 2 TB to reject
 /// corrupted NaN-boxes whose 48-bit handle lands in the 1-2 TB window
@@ -181,7 +187,17 @@ pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
         target_os = "visionos",
     )))]
     const HEAP_MIN: u64 = 0x200_0000_0000;
-    (HEAP_MIN..0x8000_0000_0000).contains(&addr)
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    ))]
+    const HEAP_MAX: u64 = 0x1_0000_0000_0000;
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    )))]
+    const HEAP_MAX: u64 = 0x8000_0000_0000;
+    (HEAP_MIN..HEAP_MAX).contains(&addr)
 }
 
 /// True when `addr` is outside every handle band AND inside the platform
@@ -425,5 +441,19 @@ mod tests {
         // 45 GB. Classification is purely numeric and must not dereference
         // this representative address.
         assert!(is_valid_obj_ptr(0x0000_000a_0000_0000usize as *const u8));
+    }
+
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[test]
+    fn linux_family_aarch64_accepts_the_full_low_48_bit_heap_range() {
+        // The provider-dylib regression allocated its first ObjectHeader in
+        // this half of the AArch64 userspace range. It remains a plain 48-bit
+        // NaN-box payload; only x86-64's canonical-address rule excludes it.
+        assert!(is_valid_obj_ptr(0x0000_e000_0000_1000usize as *const u8));
+        assert!(is_plausible_heap_addr(0x0000_e000_0000_1000));
+        assert!(!is_valid_obj_ptr(0x0001_0000_0000_0000usize as *const u8));
     }
 }
