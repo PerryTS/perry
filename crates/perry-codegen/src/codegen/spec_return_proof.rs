@@ -508,7 +508,7 @@ fn root_local(expr: &Expr) -> Option<u32> {
     }
 }
 
-fn is_reference_like(aliases: &HashMap<String, Type>, ty: &Type, depth: usize) -> bool {
+pub(crate) fn is_reference_like(aliases: &HashMap<String, Type>, ty: &Type, depth: usize) -> bool {
     if depth > 32 {
         return true;
     }

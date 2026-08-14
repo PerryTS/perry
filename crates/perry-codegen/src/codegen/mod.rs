@@ -2468,11 +2468,33 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         || crate::collectors::has_any_mutation(&f.body, p.id)
                 })
                 .collect();
+            // (#8094) A descriptor proof describes a heap object and is
+            // established once, at entry. Any call in this body can run code
+            // that reaches that same object — not only through an argument we
+            // hand over, but through any alias the caller arranged before we
+            // were entered (a global, a closure, a field of another live
+            // object). So a REFERENCE-typed parameter cannot keep its proof
+            // across a call. Primitive parameters are immune: a callee has no
+            // route to the caller's copy of a number, string or boolean.
+            let body_calls = crate::collectors::body_contains_call(&f.body);
+            let guard_blocked: Vec<bool> = f
+                .params
+                .iter()
+                .map(|p| {
+                    body_calls
+                        && spec_return_proof::is_reference_like(
+                            &cross_module.type_aliases,
+                            &p.ty,
+                            0,
+                        )
+                })
+                .collect();
             let declaration_guards = param_guard::declaration_guards(
                 f.id,
                 &module_prefix,
                 &f.params,
                 &demoted,
+                &guard_blocked,
                 &cross_module.type_aliases,
                 &cross_module.interfaces,
                 &class_table,

@@ -343,6 +343,11 @@ pub(crate) fn declaration_guards(
     module_prefix: &str,
     params: &[perry_hir::Param],
     demoted_params: &[bool],
+    // (#8094) Guard-only ineligibility, kept SEPARATE from `demoted_params`
+    // because that mask also drives raw representation selection: a reference
+    // parameter that cannot keep a descriptor proof can still be passed in a
+    // raw slot.
+    guard_blocked: &[bool],
     type_aliases: &HashMap<String, Type>,
     interfaces: &HashMap<String, perry_hir::Interface>,
     classes: &HashMap<String, &perry_hir::Class>,
@@ -351,9 +356,10 @@ pub(crate) fn declaration_guards(
     params
         .iter()
         .zip(demoted_params.iter())
+        .zip(guard_blocked.iter())
         .enumerate()
-        .map(|(index, (param, demoted))| {
-            if *demoted || matches!(param.ty, Type::Any | Type::Unknown | Type::Never) {
+        .map(|(index, ((param, demoted), blocked))| {
+            if *demoted || *blocked || matches!(param.ty, Type::Any | Type::Unknown | Type::Never) {
                 return None;
             }
             Some(SpecParamGuard {

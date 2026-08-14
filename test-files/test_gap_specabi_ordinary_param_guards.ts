@@ -162,3 +162,99 @@ function surviveMovingGc(payload: Payload): string {
 
 console.log("moving-clone", surviveMovingGc({ label: "live", count: 1 }));
 console.log("moving-fallback", surviveMovingGc({ label: 9, count: "lie" } as any));
+
+// #8094: the entry guard validates the argument ONCE, at entry. A descriptor
+// proof describes a heap object, so it survives only as long as no unknown
+// code can run. These three cases each broke a `b.v + 1` into an unchecked
+// `fadd` on a NaN-box, which propagates the payload rather than producing NaN,
+// so the wrong value passed through arithmetic unchanged and printed a
+// plausible wrong answer.
+//
+// None of them needs a cast: `any` is assignable to `number`, so tsc accepts
+// all of this.
+interface AliasBox {
+  v: number;
+}
+
+const aliasPoison: any = "lie";
+
+// (a) mutation through a callee we hand the reference to.
+function aliasAssign(b: AliasBox): void {
+  b.v = aliasPoison;
+}
+
+function aliasThroughArgument(b: AliasBox): string {
+  const before = b.v + 1;
+  aliasAssign(b);
+  return "before=" + before + " after=" + (b.v + 1) + " typeof=" + typeof b.v;
+}
+
+console.log("alias-argument", aliasThroughArgument({ v: 41 }));
+
+// (b) the same hazard one level deeper, through an array element.
+interface AliasRow {
+  n: number;
+}
+
+function aliasTamper(rows: AliasRow[]): void {
+  rows[0].n = aliasPoison;
+}
+
+function aliasThroughElement(rows: AliasRow[]): string {
+  const a = rows[0].n + 1;
+  aliasTamper(rows);
+  return "a=" + a + " b=" + (rows[0].n + 1) + " typeof=" + typeof rows[0].n;
+}
+
+console.log("alias-element", aliasThroughElement([{ n: 10 }]));
+
+// (c) the parameter is NEVER passed anywhere. The callee reaches it through a
+// global the caller stashed it in first. This is why the fix keys on "did
+// unknown code run", not on "did the reference escape": an escape analysis
+// over our own argument lists answers "no escape" here and still miscompiles.
+let aliasStash: any = null;
+
+function aliasPoisonStash(): void {
+  aliasStash.v = aliasPoison;
+}
+
+function aliasThroughGlobal(b: AliasBox): string {
+  const before = b.v + 1;
+  aliasPoisonStash();
+  return "before=" + before + " after=" + (b.v + 1) + " typeof=" + typeof b.v;
+}
+
+const aliasStashed: AliasBox = { v: 41 };
+aliasStash = aliasStashed;
+console.log("alias-global", aliasThroughGlobal(aliasStashed));
+
+// #8094 follow-on: `surviveMovingGc` above takes an INTERFACE parameter and
+// calls `push`, so under the aliasing rule it is no longer guard-eligible and
+// its clone is gone. Verified with `--trace llvm`: before the rule both
+// `surviveMovingGc$spec_b` and a primitive-parameter sibling were emitted;
+// after it only the primitive sibling is. That silently turned the moving-GC
+// arm above into a test of the GENERIC path — a gate whose subject stopped
+// running.
+//
+// This row restores it. `tag: string` and `rounds: number` are primitives, so
+// they stay guard-eligible under the rule (a callee has no route to the
+// caller's copy of a string or a number), while the body still allocates
+// hard enough to force copying minors. Assert with:
+//   PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_DIAG=1
+// and check for a non-zero `copying_minors` plus `[gc-fromspace-protect]`
+// lines; a run with zero copying minors protects nothing.
+function survivePrimitiveGuardedGc(tag: string, rounds: number): string {
+  const kept: any[] = [];
+  let batch: any[] = [];
+  for (let i = 0; i < rounds; i++) {
+    batch.push({ i, text: "k" + (i & 1023) });
+    if (batch.length >= 4096) {
+      kept.push(batch[0]);
+      batch = [];
+    }
+  }
+  return tag + ":" + tag.length + ":" + kept.length;
+}
+
+console.log("moving-primitive", survivePrimitiveGuardedGc("live", 1200000));
+console.log("moving-primitive-lie", survivePrimitiveGuardedGc(7 as any, 1200000));
