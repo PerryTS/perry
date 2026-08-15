@@ -686,6 +686,44 @@ fn two_field_literal_footprint_is_exactly_accounted() {
          bytes of unusable slots to every small object; re-adding a header word \
          re-adds 8 to every object regardless of width"
     );
+
+    // #8113 acceptance: the WIDE case too. The floor does not apply at 8
+    // fields, so this isolates the header term from the padding term — it is
+    // the number that says the saving is per-OBJECT, not per-small-object.
+    let wide_keys = b"a\0b\0c\0d\0e\0f\0g\0h\0";
+    let wide =
+        js_object_alloc_with_shape(0x8113_0008, 8, wide_keys.as_ptr(), wide_keys.len() as u32);
+    assert!(!wide.is_null());
+    let wide_recorded = unsafe {
+        crate::value::addr_class::try_read_gc_header(wide as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader")
+            .size as usize
+    };
+    assert_eq!(
+        wide_recorded, 96,
+        "#8113: the 8-slot footprint is 96 bytes (104 before the header shrink)"
+    );
+}
+
+/// #8113 acceptance, spelled as offsets rather than a total so a failure names
+/// the field that moved. `GcHeader` staying 8 bytes is part of the contract:
+/// the whole 8-byte saving is the header's, not a GcHeader change.
+#[test]
+fn object_header_is_two_words_plus_two_pointers() {
+    use std::mem::{align_of, offset_of, size_of};
+    assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
+    assert_eq!(size_of::<crate::gc::GcHeader>(), 8);
+    assert_eq!(align_of::<ObjectHeader>(), size_of::<*const u8>());
+    assert_eq!(offset_of!(ObjectHeader, class_id), 0);
+    assert_eq!(offset_of!(ObjectHeader, parent_class_id), 4);
+    assert_eq!(offset_of!(ObjectHeader, keys_array), size_of::<*const u8>());
+    assert_eq!(offset_of!(ObjectHeader, meta), 2 * size_of::<*const u8>());
+    assert_eq!(size_of::<ObjectHeader>(), 3 * size_of::<*const u8>());
+    // The emitted-IR offsets in perry-codegen are literals; these two are the
+    // ones `class_field_inline_guard` / `proxy_reflect` / `generic_dispatch`
+    // splice in, and `stmt/loops.rs` + `expr/proxy_reflect.rs` used to divide
+    // the size by 8 for a word index.
+    assert_eq!(size_of::<ObjectHeader>() % 8, 0);
 }
 
 /// Paired with `inline_slot_floor_matches_runtime` in
