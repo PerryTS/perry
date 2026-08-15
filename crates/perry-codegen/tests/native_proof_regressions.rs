@@ -1113,6 +1113,81 @@ fn defined_function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     &rest[..end]
 }
 
+/// What `!ir.contains("$generic")` used to mean.
+///
+/// Before #8094 the `$generic` suffix had exactly one producer — the typed-ABI
+/// trampoline — so its absence was a sound way to say "this function was not
+/// split onto a raw ABI". #8094 added a second, unrelated producer: a
+/// guard-eligible function keeps its public name for a routing trampoline and
+/// moves its body to `$generic`. So the bare suffix no longer discriminates,
+/// and this restores the negative it stood for: every split present must be
+/// the guarded route, i.e. have a `$spec_*` sibling that its public entry
+/// reaches only after a runtime argument guard.
+fn assert_only_guarded_generic_splits(ir: &str, case: &str) {
+    for line in ir.lines().filter(|line| line.starts_with("define ")) {
+        let Some(at) = line.find('@') else { continue };
+        let Some(open) = line[at..].find('(') else {
+            continue;
+        };
+        let name = &line[at + 1..at + open];
+        let Some(base) = name.strip_suffix("$generic") else {
+            continue;
+        };
+        assert!(
+            ir.contains(&format!("@{base}$spec_")),
+            "{case}: `{base}` was split onto a non-guarded ABI:\n{ir}"
+        );
+        let entry = function_ir_section(ir, base);
+        assert!(
+            entry.contains("call i32 @js_param_type_guard(")
+                || entry.contains("_arg_guard(double "),
+            "{case}: `{base}`'s public entry reaches a clone without guarding:\n{entry}"
+        );
+    }
+}
+
+/// The IR of `symbol`'s BODY.
+///
+/// #8094 can split a guard-eligible module-level function into three symbols:
+/// a `noinline` routing trampoline that keeps the public name and the JSValue
+/// ABI, an unchanged `$generic` body, and a `$spec_*` clone that carries the
+/// post-guard parameter proofs. A test whose subject is what the BODY lowers
+/// to must follow the body; a test whose subject is the public entry (the
+/// typed-ABI wrapper, for instance) keeps using `function_ir_section`.
+///
+/// The split is pure relocation EXCEPT where a parameter's guard establishes a
+/// proof the body did not already have. That is measured, not assumed: across
+/// the 24 `$generic`/`$spec_*` pairs the callers of this helper produce, the
+/// clone makes the same set of runtime calls as its sibling in 19, and the
+/// five that differ each pin the difference themselves rather than leaning on
+/// this helper —
+///
+/// - `map_string_int32_param_without_native_i32_proof_uses_f64_helper`
+/// - `set_int32_param_without_native_i32_proof_uses_generic_helpers`
+/// - `compiler_private_async_iter_result_annotated_numeric_payload_stays_generic`
+/// - `compiler_private_async_iter_result_annotated_i32_payload_stays_generic`
+///   (the four above: the clone gains a raw slot the unproven body must not have)
+/// - `scalar_method_boolean_predicate_guards_public_numeric_argument_expressions`
+///   (the clone only LOSES calls — proven parameters need no argument guard —
+///   so its subject, block order on the unproven path, lives in the body)
+fn body_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
+    let generic = format!("{symbol}$generic");
+    if ir.contains(&format!("@{generic}(")) {
+        defined_function_ir_section(ir, &generic)
+    } else {
+        defined_function_ir_section(ir, symbol)
+    }
+}
+
+/// The IR of the `$spec_*` clone #8094 emitted for `symbol`, if there is one.
+fn spec_clone_ir_section<'a>(ir: &'a str, symbol: &str) -> Option<&'a str> {
+    let prefix = format!("@{symbol}$spec_");
+    let at = ir.find(&prefix)?;
+    let end = ir[at..].find('(')? + at;
+    let name = ir[at + 1..end].to_string();
+    Some(defined_function_ir_section(ir, &name))
+}
+
 fn error_chain(err: &anyhow::Error) -> String {
     err.chain()
         .map(|cause| cause.to_string())
@@ -2365,10 +2440,21 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
         .map(|offset| slow_start + offset)
         .expect("expected packed-f64 slow-clone function boundary");
     let slow_clone = &ir[slow_start..slow_end];
+    // (#8094) `const values = [1, 2, 3]` is a CONSTRUCTION proof now, not an
+    // annotation, so the slow clone lowers its store the same way the fast one
+    // does — a runtime numeric/layout guard with an out-of-line boxed arm —
+    // instead of unconditionally inlining the boxed store. The subject is
+    // unchanged: the side exit must still end in a COMPLETE store, never a
+    // dropped one, and a value the guard rejects must still be stored. So this
+    // pins both arms. The layout and write-barrier bookkeeping the inlined
+    // store used to carry is now inside
+    // `js_typed_feedback_array_index_set_fallback_boxed`, which stores through
+    // `js_array_set_index_or_string`.
     assert!(
-        slow_clone.contains("call void @js_gc_note_slot_layout")
-            && slow_clone.contains("call void @js_write_barrier_slot"),
-        "packed store side exit must preserve a generic boxed store, including layout and GC bookkeeping, in the slow clone:\n{ir}"
+        slow_clone.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+            && slow_clone.contains("idxset.bounded_numeric_fallback")
+            && slow_clone.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
+        "packed store side exit must preserve a complete guarded store with a boxed fallback arm in the slow clone:\n{ir}"
     );
 
     let artifact = compile_artifact_json_for_module(module);
@@ -3081,7 +3167,7 @@ fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_key_specialization_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_key_specialization_ts__probe");
     assert!(
         probe_ir.contains("call i32 @js_typed_f64_arg_guard")
             && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
@@ -3151,7 +3237,7 @@ fn map_number_key_string_value_set_uses_string_ref_until_slot() {
     );
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
-    let probe_ir = function_ir_section(
+    let probe_ir = body_ir_section(
         &ir,
         "perry_fn_map_number_string_value_specialization_ts__probe",
     );
@@ -3243,7 +3329,7 @@ fn map_number_key_string_value_rejects_unproven_value() {
     );
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_string_value_rejection_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_string_value_rejection_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set_number_key"),
         "unproven string values should preserve the guarded numeric-key helper:\n{probe_ir}"
@@ -3380,7 +3466,7 @@ fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() 
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_boolean_param_fallback_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_string_boolean_param_fallback_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set_string_key"),
         "annotation-only boolean map values should keep the generic-value string-key helper until a native-i1 proof exists:\n{probe_ir}"
@@ -3475,7 +3561,8 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_int32_param_fallback_ts__probe");
+    let symbol = "perry_fn_map_string_int32_param_fallback_ts__probe";
+    let probe_ir = body_ir_section(&ir, symbol);
     assert!(
         probe_ir.contains("call i64 @js_map_set_string_number"),
         "annotation-only Int32 values should keep the f64 helper until a native-i32 proof or guard exists:\n{probe_ir}"
@@ -3483,6 +3570,31 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
     assert!(
         !probe_ir.contains("call i64 @js_map_set_string_i32"),
         "annotation-only Int32 values must not use the raw i32 helper without proof:\n{probe_ir}"
+    );
+
+    // (#8094) The annotation is still not a proof — but the guarded entry now
+    // supplies one. This is one of the four fixtures named on `body_ir_section`
+    // whose `$spec_*` clone lowers differently from its `$generic` sibling, so
+    // it carries its own discriminating negative rather than leaning on that
+    // helper: the raw i32 helper is admitted ONLY inside a clone whose sole
+    // entry ran `js_typed_i32_arg_guard` and passed the argument as a raw
+    // `i32`.
+    let clone_ir = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone_ir.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %")),
+        "the guarded clone must take the value in a raw i32 slot:\n{clone_ir}"
+    );
+    assert!(
+        clone_ir.contains("call i64 @js_map_set_string_i32")
+            && !clone_ir.contains("call i64 @js_map_set_string_number"),
+        "the guarded clone should consume its raw i32 proof:\n{clone_ir}"
+    );
+    let entry_ir = function_ir_section(&ir, symbol);
+    assert!(
+        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
+            && entry_ir.contains(&format!("@{symbol}$generic(double ")),
+        "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
     );
 }
 
@@ -3802,7 +3914,7 @@ fn map_unproven_number_key_keeps_generic_fallback() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_unproven_key_generic_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_unproven_key_generic_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set("),
         "Map<number, boolean>.set with an unproven key should keep the generic helper:\n{probe_ir}"
@@ -4755,7 +4867,7 @@ fn set_number_add_has_delete_use_guarded_number_specialization() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_number_specialization_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_set_number_specialization_ts__probe");
     assert!(
         probe_ir.contains("call i32 @js_typed_f64_arg_guard")
             && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
@@ -4930,7 +5042,8 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_int32_param_fallback_ts__probe");
+    let symbol = "perry_fn_set_int32_param_fallback_ts__probe";
+    let probe_ir = body_ir_section(&ir, symbol);
     assert!(
         probe_ir.contains("call i64 @js_set_add("),
         "annotation-only Int32 Set.add should keep the generic helper until a native-i32 proof exists:\n{probe_ir}"
@@ -4954,6 +5067,33 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
     assert!(
         !probe_ir.contains("call i32 @js_set_delete_i32"),
         "annotation-only Int32 Set.delete must not use the raw int32 helper without proof:\n{probe_ir}"
+    );
+
+    // (#8094) The annotation is still not a proof — the guarded entry is.
+    // Another of the four fixtures named on `body_ir_section`, and it pins the
+    // limit: the raw int32 Set helpers are admitted ONLY inside a clone whose
+    // sole entry ran `js_typed_i32_arg_guard` and handed over a raw `i32`.
+    let clone_ir = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone_ir.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %")),
+        "the guarded clone must take the value in a raw i32 slot:\n{clone_ir}"
+    );
+    for (raw, generic) in [
+        ("call i64 @js_set_add_i32", "call i64 @js_set_add("),
+        ("call i32 @js_set_has_i32", "call i32 @js_set_has("),
+        ("call i32 @js_set_delete_i32", "call i32 @js_set_delete("),
+    ] {
+        assert!(
+            clone_ir.contains(raw) && !clone_ir.contains(generic),
+            "the guarded clone should consume its raw i32 proof for {raw}:\n{clone_ir}"
+        );
+    }
+    let entry_ir = function_ir_section(&ir, symbol);
+    assert!(
+        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
+            && entry_ir.contains(&format!("@{symbol}$generic(double ")),
+        "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
     );
 }
 
@@ -5320,7 +5460,7 @@ fn set_boolean_param_without_native_i1_proof_uses_generic_helpers() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_boolean_param_fallback_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_set_boolean_param_fallback_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_set_add("),
         "annotation-only boolean Set.add should keep the generic helper until a native-i1 proof exists:\n{probe_ir}"
@@ -7388,13 +7528,33 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_stays_generic() 
     )
     .unwrap();
 
+    // The subject is the word "unguarded". An annotation is still not a proof:
+    // the body reached by an unvalidated caller must keep the live JSValue.
+    // (#8094) A guarded clone may hold a raw slot, but only behind the entry
+    // guard that established it, so the negative moves from "nowhere in the
+    // module" to "nowhere on the unguarded path" — and gains a positive that
+    // pins where the raw slot IS allowed to appear.
+    let symbol = "perry_fn_compiler_private_async_iter_result_annotated_numeric_param_ts__probe";
+    let body = body_ir_section(&ir, symbol);
     assert!(
-        ir.contains("call double @js_iter_result_set("),
-        "annotation-only numeric async payloads must preserve the live JSValue:\n{ir}"
+        body.contains("call double @js_iter_result_set("),
+        "annotation-only numeric async payloads must preserve the live JSValue:\n{body}"
     );
     assert!(
-        !ir.contains("call double @js_iter_result_set_f64"),
-        "annotation-only numeric async payloads must not use the unguarded raw-f64 slot:\n{ir}"
+        !body.contains("call double @js_iter_result_set_f64"),
+        "annotation-only numeric async payloads must not use the unguarded raw-f64 slot:\n{body}"
+    );
+    let clone = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone.contains("call double @js_iter_result_set_f64")
+            && !clone.contains("call double @js_iter_result_set("),
+        "the guarded clone should consume its descriptor proof:\n{clone}"
+    );
+    let entry = function_ir_section(&ir, symbol);
+    assert!(
+        entry.contains("call i32 @js_param_type_guard(")
+            && entry.contains(&format!("@{symbol}$generic(")),
+        "the raw-f64 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );
 }
 
@@ -7436,17 +7596,36 @@ fn compiler_private_async_iter_result_annotated_i32_payload_stays_generic() {
     )
     .unwrap();
 
+    // "without proof" is the operative phrase — see the numeric sibling above.
+    // (#8094) The declared Int32 becomes a raw `i32` parameter slot only inside
+    // the clone the public entry enters after `js_typed_i32_arg_guard`; every
+    // unvalidated caller still reaches a body that keeps the runtime JSValue.
+    let symbol = "perry_fn_compiler_private_async_iter_result_annotated_i32_param_ts__probe";
+    let body = body_ir_section(&ir, symbol);
     assert!(
-        !ir.contains("call double @js_iter_result_set_i32"),
-        "annotation-only Int32 async payloads must not use the raw i32 slot without proof:\n{ir}"
+        !body.contains("call double @js_iter_result_set_i32"),
+        "annotation-only Int32 async payloads must not use the raw i32 slot without proof:\n{body}"
     );
     assert!(
-        ir.contains("call double @js_iter_result_set("),
-        "annotation-only Int32 async payloads must preserve the runtime JSValue:\n{ir}"
+        body.contains("call double @js_iter_result_set("),
+        "annotation-only Int32 async payloads must preserve the runtime JSValue:\n{body}"
     );
     assert!(
-        !ir.contains("call double @js_iter_result_set_f64"),
-        "annotation-only Int32 async payloads must not use the raw f64 slot without proof:\n{ir}"
+        !body.contains("call double @js_iter_result_set_f64"),
+        "annotation-only Int32 async payloads must not use the raw f64 slot without proof:\n{body}"
+    );
+    let clone = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %"))
+            && clone.contains("call double @js_iter_result_set_i32")
+            && !clone.contains("call double @js_iter_result_set("),
+        "the guarded clone should consume its raw i32 slot:\n{clone}"
+    );
+    let entry = function_ir_section(&ir, symbol);
+    assert!(
+        entry.contains("call i32 @js_typed_i32_arg_guard")
+            && entry.contains(&format!("@{symbol}$generic(double ")),
+        "the raw-i32 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );
 }
 
@@ -10447,7 +10626,7 @@ fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
     let generic_body = "perry_fn_typed_string_function_abi_ts__id$generic";
     let caller = "perry_fn_typed_string_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %arg1)")),
@@ -10516,9 +10695,10 @@ fn typed_string_function_clone_rejects_unsupported_string_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_string") && !ir.contains("$generic"),
+            !ir.contains("$typed_string"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -10569,7 +10749,7 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     let caller = "perry_fn_typed_f64_mixed_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10642,7 +10822,7 @@ fn typed_f64_function_clone_keeps_i32_locals_raw_until_f64_use() {
     let caller = "perry_fn_typed_f64_i32_local_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10705,9 +10885,10 @@ fn typed_f64_function_clone_rejects_any_and_unsafe_mixed_parameter_signatures() 
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_f64") && !ir.contains("$generic"),
+            !ir.contains("$typed_f64"),
             "{case} unsafe ABI surface must stay generic:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -11023,9 +11204,10 @@ fn typed_i1_function_clone_rejects_any_and_mixed_parameter_signatures() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_i1") && !ir.contains("$generic"),
+            !ir.contains("$typed_i1"),
             "{case} boolean ABI surface must stay generic:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -11037,7 +11219,7 @@ fn typed_i1_function_clone_rejects_mixed_direct_call_inputs() {
     let generic = "perry_fn_typed_i1_function_abi_ts__both";
     let typed = "perry_fn_typed_i1_function_abi_ts__both$typed_i1";
     let caller = "perry_fn_typed_i1_function_abi_ts__caller";
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     assert!(
         ir.contains(&format!("define internal i1 @{typed}")),
         "callee should still have an eligible typed-i1 clone:\n{ir}"
@@ -11068,7 +11250,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
     let caller = "perry_fn_typed_i1_numeric_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -11140,7 +11322,7 @@ fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
     let caller = "perry_fn_typed_i1_i32_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -11210,7 +11392,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
     let caller = "perry_fn_typed_i32_return_positive_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -11325,9 +11507,10 @@ fn typed_i32_return_function_rejects_annotation_only_or_unsafe_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_i32") && !ir.contains("$generic"),
+            !ir.contains("$typed_i32"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -11343,8 +11526,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
     let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir =
-        defined_function_ir_section(&ir, "perry_fn_typed_i32_method_eligible_ts__probe");
+    let caller_ir = body_ir_section(&ir, "perry_fn_typed_i32_method_eligible_ts__probe");
 
     assert!(
         ir.contains(&format!(
@@ -11497,8 +11679,7 @@ fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
     let generic_body = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir =
-        defined_function_ir_section(&ir, "perry_fn_typed_f64_i32_local_method_abi_ts__probe");
+    let caller_ir = body_ir_section(&ir, "perry_fn_typed_f64_i32_local_method_abi_ts__probe");
 
     assert!(
         ir.contains(&format!(
@@ -11543,7 +11724,7 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
     let generic_body = "perry_method_typed_string_method_eligible_ts__Labeler__pick$generic";
     let caller = "perry_fn_typed_string_method_eligible_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %arg21)")),
@@ -11854,7 +12035,7 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
     let caller = "perry_fn_typed_i1_numeric_method_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -12112,7 +12293,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -12629,7 +12810,7 @@ fn typed_i32_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_i32_closure_dynamic_ts__303";
     let generic_body = "perry_closure_typed_i32_closure_dynamic_ts__303$generic";
     let typed = "perry_closure_typed_i32_closure_dynamic_ts__303$typed_i32";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i32 @{typed}(i64 %this_closure")),
@@ -12882,7 +13063,7 @@ fn typed_i1_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_i1_closure_dynamic_ts__301";
     let generic_body = "perry_closure_typed_i1_closure_dynamic_ts__301$generic";
     let typed = "perry_closure_typed_i1_closure_dynamic_ts__301$typed_i1";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i1 @{typed}(i64 %this_closure")),
@@ -13056,7 +13237,7 @@ fn typed_string_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_string_closure_dynamic_ts__302";
     let generic_body = "perry_closure_typed_string_closure_dynamic_ts__302$generic";
     let typed = "perry_closure_typed_string_closure_dynamic_ts__302$typed_string";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %this_closure")),
@@ -13585,6 +13766,14 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
 fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() {
     let module = scalar_method_boolean_public_numeric_expr_arg_module();
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    // (#8094) `probe(limit: number, delta: int32)` is guard-eligible, so the
+    // module now holds more than one lowering of this body. Block ORDER is a
+    // property of ONE function, so scope the search to the unproven body —
+    // the context these expectations were written for.
+    let ir = body_ir_section(
+        &ir,
+        "perry_fn_scalar_method_boolean_guarded_expr_arg_ts__probe",
+    );
     assert!(
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
