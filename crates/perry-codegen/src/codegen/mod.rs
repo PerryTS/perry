@@ -2462,11 +2462,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let demoted: Vec<bool> = f
                 .params
                 .iter()
-                .map(|p| {
-                    reassigned.contains(&p.id)
-                        || closure_refs.contains(&p.id)
-                        || crate::collectors::has_any_mutation(&f.body, p.id)
-                })
+                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
                 .collect();
             // (#8094) A descriptor proof describes a heap object and is
             // established once, at entry. Any call in this body can run code
@@ -2476,17 +2472,28 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // object). So a REFERENCE-typed parameter cannot keep its proof
             // across a call. Primitive parameters are immune: a callee has no
             // route to the caller's copy of a number, string or boolean.
+            //
+            // A write THROUGH the parameter in this body invalidates the same
+            // proof without any call being involved (`node.left = x`,
+            // `values[i] = v`), so it belongs here too — and ONLY here. It is
+            // a claim about the object's CONTENTS; a raw slot (I32 / F64 /
+            // TaPtr) makes no such claim, so putting this on `demoted` deletes
+            // representation choices that predate this PR. Measured: with it
+            // on `demoted`, `fill(values: Float64Array, nodes: number)` loses
+            // `fill$spec_ta7x10000_i32` entirely, because writing an element
+            // reads as "mutation" of the typed-array parameter.
             let body_calls = crate::collectors::body_contains_call(&f.body);
             let guard_blocked: Vec<bool> = f
                 .params
                 .iter()
                 .map(|p| {
-                    body_calls
-                        && spec_return_proof::is_reference_like(
-                            &cross_module.type_aliases,
-                            &p.ty,
-                            0,
-                        )
+                    crate::collectors::has_any_mutation(&f.body, p.id)
+                        || (body_calls
+                            && spec_return_proof::is_reference_like(
+                                &cross_module.type_aliases,
+                                &p.ty,
+                                0,
+                            ))
                 })
                 .collect();
             let declaration_guards = param_guard::declaration_guards(
