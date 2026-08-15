@@ -204,7 +204,20 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     }
     report.objects_scanned += 1;
 
-    let payload_words = (total - GC_HEADER_SIZE) / 8;
+    let mut payload_words = (total - GC_HEADER_SIZE) / 8;
+    // Array capacity SLACK is not live data: elements `[length..capacity)`
+    // hold whatever bytes the allocator (or a copying minor's verbatim
+    // object copy) left there — including recycled old pointers. Decoding
+    // them produced false MISSING-REWRITE aborts on the #8036 gate (a
+    // length-8/capacity-16 array whose slack held a dead method-table
+    // fragment). Bound the walk by the LIVE length; the header words
+    // themselves cannot hold pointers.
+    if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        let arr = user as *const crate::array::ArrayHeader;
+        let header_words = std::mem::size_of::<crate::array::ArrayHeader>() / 8;
+        let live = header_words + (*arr).length as usize;
+        payload_words = payload_words.min(live);
+    }
     let words = user as *const u64;
     for i in 0..payload_words {
         let bits = *words.add(i);
@@ -313,6 +326,38 @@ pub(crate) fn scan_heap_for_fromspace_refs() -> FromSpaceScanReport {
     report
 }
 
+/// Best-effort payload dump around the stale slot so the offending owner
+/// identifies ITSELF (which array/object shape, what tags surround the slot).
+/// The heap is intact when this runs (pre-abort, post-scan), so the read is
+/// safe; classification only, no dereference of the classified words.
+fn payload_preview(r: &FromSpaceRef) -> String {
+    let payload = (r.owner_header + GC_HEADER_SIZE) as *const u64;
+    let stale_word = r.slot_offset / 8;
+    let words = stale_word.saturating_add(3).min(24);
+    let mut out = String::from("\n    payload:");
+    for i in 0..words {
+        let w = unsafe { payload.add(i).read() };
+        let kind = match w >> 48 {
+            0x7ffc => "tag",
+            0x7ffd => "ptr",
+            0x7ffe => "i32",
+            0x7fff => "str",
+            0x7ffa => "big",
+            0 => {
+                if crate::value::addr_class::is_plausible_heap_addr(w as usize) {
+                    "BARE-ADDR"
+                } else {
+                    "small"
+                }
+            }
+            _ => "f64",
+        };
+        let marker = if i == stale_word { ">>" } else { "" };
+        out.push_str(&format!(" {marker}[{i}]{w:#x}({kind})"));
+    }
+    out
+}
+
 fn describe(r: &FromSpaceRef) -> String {
     format!(
         "  owner={:#x} type={} space={:?} +{} {} -> {:#x} (type={} {:?}) {} [slot dirty_now={} ever_dirty={} owner_flags={:#x} marked={}]",
@@ -333,7 +378,7 @@ fn describe(r: &FromSpaceRef) -> String {
         r.slot_ever_dirty,
         r.owner_flags,
         r.owner_flags & GC_FLAG_MARKED != 0
-    )
+    ) + payload_preview(r).as_str()
 }
 
 fn report_and_abort(report: &FromSpaceScanReport) -> ! {

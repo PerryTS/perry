@@ -1385,6 +1385,11 @@ mod unwind {
         state.stats
     }
 
+    fn walk_trace_enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("PERRY_GC_STACKMAP_TRACE").is_some())
+    }
+
     unsafe extern "C" fn walk_frame<F: FnMut(ResolvedRoot)>(
         context: *mut UnwindContext,
         argument: *mut c_void,
@@ -1392,6 +1397,21 @@ mod unwind {
         let state = &mut *argument.cast::<WalkState<'_, F>>();
         state.stats.frames_visited = state.stats.frames_visited.saturating_add(1);
         let ip = _Unwind_GetIP(context);
+        if walk_trace_enabled() {
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            let name =
+                if libc::dladdr(ip as *const c_void, &mut info) != 0 && !info.dli_sname.is_null() {
+                    std::ffi::CStr::from_ptr(info.dli_sname)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    String::from("?")
+                };
+            eprintln!(
+                "[gc-stackmap-walk] frame {} ip={ip:#x} ({name})",
+                state.stats.frames_visited
+            );
+        }
         let matched = state.index.match_records(ip);
         if matched.is_empty() {
             return 0;
