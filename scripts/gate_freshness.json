@@ -72,6 +72,11 @@
       "why": "In-process LLVM backend arm; the promotion prerequisite."
     },
     {
+      "workflow": "npm-publish-freshness.yml",
+      "max_age_hours": 30,
+      "why": "Daily comparison of npm's `latest` against this tree (#7491: users installed a month-old build and hit a linker bug fixed weeks earlier). Its own cron going dark would restore exactly the blind spot it was built to close. Note the overlap by design: while the registry is genuinely behind, this workflow fails, produces no successful run, and therefore also appears HERE -- one alarm is the release being overdue, the other is nobody watching."
+    },
+    {
       "workflow": "security-audit.yml",
       "max_age_hours": 12,
       "why": "Required status context, still on every merge. Included so that if IT starves too, this checker says so rather than staying silent."

@@ -866,7 +866,7 @@ pub(super) fn lower_element_shape_versioned_for(
         None => crate::expr::element_shape_guard::ElementShapeLoopTripCount::ArrayLength,
     };
     let expected_class_id_str = matched.expected_class_id.to_string();
-    let (elements_base, expected_keys, shape_ok, bound_i32) =
+    let (elements_base, expected_shape_id, shape_ok, bound_i32) =
         crate::expr::element_shape_guard::emit_element_shape_loop_preheader_check(
             ctx,
             matched.array_id,
@@ -882,12 +882,6 @@ pub(super) fn lower_element_shape_versioned_for(
     // the clone is PROVEN call-free below.
     let deref_idx = ctx.current_block;
 
-    let max_field_index = matched
-        .fields
-        .values()
-        .copied()
-        .max()
-        .expect("matcher requires >= 1 tracked field");
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
     ctx.current_block = fast_pre_idx;
@@ -898,10 +892,9 @@ pub(super) fn lower_element_shape_versioned_for(
             scope_id,
             class_name: matched.class_name.clone(),
             elements_base,
-            expected_keys,
+            expected_shape_id,
             side_exit_label: slow_pre_label.clone(),
             fields: matched.fields.clone(),
-            max_field_index,
             element_binding: matched.element_binding,
             numeric_accumulator: matched.accumulator_id,
         });

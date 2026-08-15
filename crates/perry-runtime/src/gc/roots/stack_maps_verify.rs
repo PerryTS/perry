@@ -175,6 +175,7 @@ fn describe(out: &mut String, index: &StackMapIndex, root: &ResolvedRoot) {
 /// of the very data under suspicion. This is the same set the walker's
 /// `match_records` containment check consults, so a dump gated on it reads
 /// only what the walk already read.
+#[cfg(any(target_arch = "aarch64", test))]
 fn map_vouches_for(index: &StackMapIndex, function_address: usize) -> bool {
     index
         .function_starts

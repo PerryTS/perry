@@ -6,6 +6,50 @@ fn make_string(s: &str) -> *mut StringHeader {
 }
 
 #[test]
+fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("x"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
+    let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
+        .expect("RegExp must be a GC allocation");
+    assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
+    assert!(regex_header_has_magic(re));
+    assert!(!unsafe { crate::object::object_is_shaped(re.cast::<crate::object::ObjectHeader>()) });
+}
+
+#[test]
+fn malloc_finalize_clears_regexp_address_owned_tables() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("finalize"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
+    let addr = re as usize;
+    assert!(test_regex_pointer_entry_exists(addr));
+    assert!(test_regex_source_entry_exists(addr));
+    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+        addr,
+        "owned",
+        crate::value::TAG_TRUE,
+    );
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_REGEXP, re.cast::<u8>());
+    }
+
+    assert!(!test_regex_pointer_entry_exists(addr));
+    assert!(!test_regex_source_entry_exists(addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+}
+
+#[test]
 fn js_replacement_expands_special_patterns() {
     let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
     let subj = "John Smith";

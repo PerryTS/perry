@@ -1836,6 +1836,7 @@ pub(super) fn evacuate_tenured_nursery_objects_collecting(
     evacuated
 }
 
+#[cfg(test)]
 pub(super) fn old_object_pages_all_selected(
     header: *mut GcHeader,
     total_size: usize,

@@ -1534,7 +1534,7 @@ fn array_receiver_is_never_read_as_a_class_id() {
 #[test]
 fn constructor_ref_method_value_resolves_static_over_instance_method() {
     // Unique id so the process-global registries don't collide with other tests.
-    const CLASS_ID: u32 = 0x7689;
+    const LEX_METHOD_TEST_CLASS_ID: u32 = 0x7689;
     const NAME: &[u8] = b"lex";
 
     extern "C" fn static_lex_7689() -> f64 {
@@ -1546,7 +1546,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 
     unsafe {
         super::class_registry::js_register_class_method(
-            CLASS_ID as i64,
+            LEX_METHOD_TEST_CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
             instance_lex_7689 as *const () as usize as i64,
@@ -1555,7 +1555,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
             0,
         );
         super::class_registry::js_register_class_static_method(
-            CLASS_ID as i64,
+            LEX_METHOD_TEST_CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
             static_lex_7689 as *const () as usize as i64,
@@ -1564,7 +1564,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
         );
     }
 
-    let class_ref = super::native_module::class_constructor_ref_value(CLASS_ID);
+    let class_ref = super::native_module::class_constructor_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound = super::native_module::js_class_method_bind(class_ref, NAME.as_ptr(), NAME.len());
     let result = unsafe { crate::closure::js_native_call_value(bound, std::ptr::null(), 0) };
     assert_eq!(
@@ -1575,7 +1575,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 
     // The guard must not over-narrow: the PROTOTYPE ref names the instance
     // method, and an extracted `C.prototype.lex` must keep resolving it.
-    let proto_ref = super::native_module::class_prototype_ref_value(CLASS_ID);
+    let proto_ref = super::native_module::class_prototype_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound_proto =
         super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
     let result_proto =

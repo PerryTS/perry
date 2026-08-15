@@ -301,15 +301,16 @@ pub(crate) fn try_lower_sloppy_class_field_store(
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
+        let expected_shape_id =
+            crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
 
-        let (obj_bits, obj_handle, key_box, val_bits, expected_keys) = {
+        let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
             let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let val_bits = blk.bitcast_double_to_i64(&val_double);
-            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-            (obj_bits, obj_handle, key_box, val_bits, expected_keys)
+            (obj_bits, obj_handle, key_box, val_bits)
         };
 
         let fast_idx = ctx.new_block("class_field_sloppy_set.fast");
@@ -331,8 +332,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             &obj_bits,
             &obj_handle,
             &expected_class_id_str,
-            &expected_keys,
-            field_index,
+            &expected_shape_id,
             true,
             Some(&val_bits),
             &fast_label,
@@ -434,15 +434,16 @@ fn try_lower_sloppy_class_field_boxed_store(
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
+        let expected_shape_id =
+            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global_name);
 
-        let (obj_bits, obj_handle, key_box, val_bits, expected_keys) = {
+        let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
             let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let val_bits = blk.bitcast_double_to_i64(&val_double);
-            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-            (obj_bits, obj_handle, key_box, val_bits, expected_keys)
+            (obj_bits, obj_handle, key_box, val_bits)
         };
 
         let fast_idx = ctx.new_block("class_field_sloppy_set.boxed_fast");
@@ -464,8 +465,7 @@ fn try_lower_sloppy_class_field_boxed_store(
             &obj_bits,
             &obj_handle,
             &expected_class_id_str,
-            &expected_keys,
-            field_index,
+            &expected_shape_id,
             false,
             Some(&val_bits),
             &fast_label,
@@ -1287,16 +1287,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // reduction, so clang -O0 — which oversized modules are
                                 // forced to (#4880) — can actually compile the module.
                                 // Only the call's own operands are materialized (the key
-                                // handle + expected-keys), not the inline-store scaffolding.
+                                // handle + expected ShapeId), not the inline-store scaffolding.
+                                let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                                    ctx,
+                                    &class_name,
+                                    &keys_global_name,
+                                );
                                 if crate::codegen::full_outline_ic_enabled() {
-                                    let (key_raw, expected_keys) = {
+                                    let key_raw = {
                                         let blk = ctx.block();
                                         let key_box = blk.load(DOUBLE, &key_handle_global);
                                         let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                        let expected_keys =
-                                            blk.load(I64, &format!("@{}", keys_global_name));
-                                        (key_raw, expected_keys)
+                                        blk.and(I64, &key_bits, POINTER_MASK_I64)
                                     };
                                     ctx.block().call_void(
                                         "js_class_field_set_ic",
@@ -1304,7 +1306,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                             (I64, &site_id),
                                             (DOUBLE, &recv_box),
                                             (I32, &expected_class_id_str),
-                                            (I64, &expected_keys),
+                                            (I32, &expected_shape_id),
                                             (I64, &key_raw),
                                             (I32, &field_idx_str),
                                             (DOUBLE, &val_double),
@@ -1316,17 +1318,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // #5093: build the guard operands once, up front, so both
                                 // the inline shape pre-check and the guard-call fallback
                                 // can reference them.
-                                let (obj_bits, obj_handle, key_raw, expected_keys, val_bits) = {
+                                let (obj_bits, obj_handle, key_raw, val_bits) = {
                                     let blk = ctx.block();
                                     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                                     let key_box = blk.load(DOUBLE, &key_handle_global);
                                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                                     let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                    let expected_keys =
-                                        blk.load(I64, &format!("@{}", keys_global_name));
                                     let val_bits = blk.bitcast_double_to_i64(&val_double);
-                                    (obj_bits, obj_handle, key_raw, expected_keys, val_bits)
+                                    (obj_bits, obj_handle, key_raw, val_bits)
                                 };
                                 let fast_idx = ctx.new_block("class_field_set.fast");
                                 let fallback_idx = ctx.new_block("class_field_set.fallback");
@@ -1379,21 +1379,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // literal, so a candidate whose declared type disagrees
                                 // about the slot's representation is dropped.
                                 let subclass_arms =
-                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
-                                ctx,
-                                &class_name,
-                                property,
-                                field_index,
-                                requires_raw_f64,
-                            );
+                             crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                                 ctx,
+                                 &class_name,
+                                 property,
+                                 field_index,
+                                 requires_raw_f64,
+                             );
                                 let _guardcall_label =
                             crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
                                 ctx,
                                 &obj_bits,
                                 &obj_handle,
                                 &expected_class_id_str,
-                                &expected_keys,
-                                field_index,
+                                &expected_shape_id,
                                 requires_raw_f64,
                                 Some(&val_bits),
                                 &fast_label,
@@ -1406,7 +1405,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                         (I64, &site_id),
                                         (DOUBLE, &recv_box),
                                         (I32, &expected_class_id_str),
-                                        (I64, &expected_keys),
+                                        (I32, &expected_shape_id),
                                         (I64, &key_raw),
                                         (I32, &field_idx_str),
                                         (DOUBLE, &val_double),
@@ -1464,14 +1463,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                         // Guarded raw-f64 slots are pointer-free by typed
                                         // shape descriptor; non-number writes miss the
                                         // guard and use the boxed setter fallback.
-                                        // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
-                                        // slots contain numbers only.
                                         let blk = ctx.block();
                                         let numeric_value =
                                             canonicalize_raw_f64_numeric_store_value(
                                                 blk,
                                                 &val_double,
                                             );
+                                        // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
+                                        // slots contain numbers only.
                                         blk.store(DOUBLE, &numeric_value, &field_ptr);
                                         Some(numeric_value)
                                     } else {

@@ -1081,7 +1081,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         let inner = unwrap_member_obj(member.obj.as_ref());
         if let ast::Expr::Ident(obj_ident) = inner {
             let obj_name = obj_ident.sym.to_string();
-            if ctx.proxy_locals.contains(&obj_name) {
+            if ctx.is_proxy_local(&obj_name) {
                 let proxy_expr = if let Some(id) = ctx.lookup_local(&obj_name) {
                     Expr::LocalGet(id)
                 } else {

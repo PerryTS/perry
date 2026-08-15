@@ -26,7 +26,7 @@ pub(super) fn try_proxy_call(
         if let ast::Callee::Expr(callee_expr) = &call.callee {
             if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
                 let name = ident.sym.to_string();
-                if ctx.proxy_locals.contains(&name) {
+                if ctx.is_proxy_local(&name) {
                     if let Some(id) = ctx.lookup_local(&name) {
                         return Ok(Expr::ProxyApply {
                             proxy: Box::new(Expr::LocalGet(id)),

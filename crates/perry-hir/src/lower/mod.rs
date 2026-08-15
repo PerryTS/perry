@@ -133,4 +133,6 @@ mod collection_view_tests;
 #[cfg(test)]
 mod for_of_counter_tests;
 #[cfg(test)]
+mod proxy_binding_tests;
+#[cfg(test)]
 mod tests;

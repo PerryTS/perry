@@ -124,10 +124,9 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 
 /// #6759 Phase B: classify `obj_ptr` as a genuine shaped `GC_TYPE_OBJECT`
 /// whose header can carry the per-object meta record. Everything else —
-/// arrays, typed arrays, native handle-band ids, proxy ids, and the
-/// `RegExpHeader` that is tagged `GC_TYPE_OBJECT` but has a different
-/// layout — returns `None` and stays on the residual registry. The
-/// classification is a pure function of the allocation, so an owner is
+/// arrays, typed arrays, native handle-band ids, proxy ids, and the dedicated
+/// `GC_TYPE_REGEXP` cell — returns `None` and stays on the residual registry.
+/// The classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
     if !crate::value::addr_class::is_above_handle_band(obj_ptr)
@@ -137,9 +136,6 @@ pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::O
     }
     let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return None;
-    }
-    if crate::regex::regex_header_has_magic(obj_ptr as *const crate::regex::RegExpHeader) {
         return None;
     }
     Some(obj_ptr as *mut crate::ObjectHeader)
@@ -201,7 +197,14 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     // registry.
     unsafe {
         if let Some(obj) = meta_capable_object(obj_ptr) {
-            let meta = crate::object::object_meta_ensure(obj);
+            // `object_meta_ensure` allocates and may evacuate the owner. Keep
+            // the caller's pointer rooted and reload it before the semantic
+            // ShapeId transition below.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (meta, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+                crate::object::object_meta_ensure(obj)
+            });
             (*meta).prototype = proto_bits;
             if instance_override {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;
@@ -214,6 +217,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
                 &(*meta).prototype as *const u64 as usize,
                 proto_bits,
             );
+            if instance_override {
+                crate::object::shapes::transition_object_shape_semantics(obj);
+            }
             return;
         }
     }

@@ -675,7 +675,22 @@ pub struct LoweringContext {
     /// takes `this` as its first parameter. Consumed by `for...of` to
     /// dispatch through the iterator protocol via a direct FuncRef call.
     pub(crate) iterator_func_for_class: std::collections::HashMap<String, crate::types::FuncId>,
+    /// Bare NAMES the module-wide pre-scan saw bound to `new Proxy(...)`.
+    /// Scope-blind by construction, so this is no longer authoritative — it is
+    /// the fallback arm of `LoweringContext::is_proxy_local`, consulted only for
+    /// a receiver that resolves to no local at all. See `proxy_local_ids`.
     pub(crate) proxy_locals: HashSet<String>,
+    /// #7775: the RESOLVED bindings that actually hold a proxy. Recorded when a
+    /// declarator's lowered initializer is `Expr::ProxyNew` (and for the
+    /// `Proxy.revocable` destructuring form), so "this binding is a proxy" stops
+    /// meaning "something in this file spells it this way".
+    ///
+    /// `proxy_locals` alone rewrote property reads/writes and `in` checks to
+    /// proxy operations on any receiver sharing the spelling, in any function.
+    /// `js_proxy_get` on a non-proxy answers `undefined`, so the wrong answer
+    /// was silent — a plain `const a = { v: 42 }; a.v` read `undefined` merely
+    /// because some never-called function elsewhere also named a proxy `a`.
+    pub(crate) proxy_local_ids: HashSet<LocalId>,
     /// #3144: local name -> builtin prototype method name, for bindings like
     /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
     /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain

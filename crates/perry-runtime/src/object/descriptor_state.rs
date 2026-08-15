@@ -426,6 +426,10 @@ pub(crate) fn note_descriptor_target(obj: usize) {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                 let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                let object = obj as *mut crate::object::ObjectHeader;
+                if crate::object::object_is_shaped(object) {
+                    crate::object::shapes::transition_object_shape_semantics(object);
+                }
             }
         }
     }
@@ -689,12 +693,22 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
-    super::prop_plan::prop_plan_epoch_bump();
-    state()
+    let removed = state()
         .descriptors
         .property_descriptors
         .borrow_mut()
-        .remove(&(obj, key.to_string()));
+        .remove(&(obj, key.to_string()))
+        .is_some();
+    if !removed {
+        return;
+    }
+    super::prop_plan::prop_plan_epoch_bump();
+    unsafe {
+        let object = obj as *mut crate::object::ObjectHeader;
+        if crate::object::object_is_shaped(object) {
+            crate::object::shapes::transition_object_shape_semantics(object);
+        }
+    }
 }
 
 /// Look up the accessor descriptor (get/set) for (obj, key).
@@ -875,12 +889,22 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
-    super::prop_plan::prop_plan_epoch_bump();
-    state()
+    let removed = state()
         .descriptors
         .accessor_descriptors
         .borrow_mut()
-        .remove(&(obj, key.to_string()));
+        .remove(&(obj, key.to_string()))
+        .is_some();
+    if !removed {
+        return;
+    }
+    super::prop_plan::prop_plan_epoch_bump();
+    unsafe {
+        let object = obj as *mut crate::object::ObjectHeader;
+        if crate::object::object_is_shaped(object) {
+            crate::object::shapes::transition_object_shape_semantics(object);
+        }
+    }
 }
 
 /// Install a built-in *reflection-only* accessor descriptor for (obj, key)

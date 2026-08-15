@@ -685,6 +685,111 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
 }
 
+/// Resolve a receiver a plain-array helper was handed but that is really a
+/// registered %TypedArray%, so the helper can delegate to its element-typed
+/// `js_typed_array_*` twin.
+///
+/// **Ask this BEFORE `clean_arr_ptr`, never after.** Codegen routes
+/// statically-typed typed-array receivers through the generic `js_array_*`
+/// helpers on purpose (#3148 / #654 — perry-codegen `is_array_expr` answers
+/// `true` for `Int32Array` &co.) on the contract that each helper
+/// re-dispatches on `lookup_typed_array_kind`. But `clean_arr_ptr` *rejects*
+/// those receivers, and must: since #7574 it returns null for every tracked
+/// non-`GC_TYPE_ARRAY` object, because a `TypedArrayHeader`'s raw per-kind
+/// storage is not boxed-f64 `ArrayHeader` slots. Since the 2026-07-09
+/// typed-array audit gave every typed array a real `GC_TYPE_TYPED_ARRAY`
+/// header, that rejection fires for all of them — so a delegation written
+/// after the clean is unreachable code, and its helper silently returns the
+/// receiver unmutated. That is exactly how `fill`/`fill_range`/`reverse`/
+/// `copyWithin` became no-ops with no error and no diagnostic (#2879).
+///
+/// Strips the NaN-box tag itself (callers may hold a `POINTER_TAG`-boxed
+/// value) and never dereferences the address: the side-table probe is the
+/// whole test, which also keeps the header-less legacy shapes safe.
+#[inline]
+pub(crate) fn typed_array_receiver(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0 {
+        return None;
+    }
+    crate::typedarray::lookup_typed_array_kind(addr)
+        .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+}
+
+/// #8096: resolve a receiver that is a registered `Buffer` / `Uint8Array`
+/// into a fresh `KIND_UINT8` %TypedArray% COPY, so an `Array.prototype`
+/// helper can delegate to a `js_typed_array_*` twin that only accepts a
+/// `TypedArrayHeader`.
+///
+/// [`typed_array_receiver`] does not answer for the most common typed array
+/// in the language. Perry's `new Uint8Array([…])` returns a `BufferHeader`
+/// (`buffer::js_uint8array_new`), registered as a BUFFER and marked
+/// `mark_as_uint8array` — it is not in the typed-array registry at all. The
+/// receiver is still a tracked non-`GC_TYPE_ARRAY` allocation, so
+/// `clean_arr_ptr` rejects it exactly as it rejects a real
+/// `GC_TYPE_TYPED_ARRAY`, and the caller answers an EMPTY plain array.
+///
+/// Most `Array.prototype` entry points never see that: `sort` / `with` /
+/// `reverse` / `fill` on a Buffer-backed `Uint8Array` resolve through the
+/// dynamic method dispatcher, and `copyWithin` grew its own Buffer arm in
+/// #8090. `toReversed` and `toSorted` fold unconditionally in HIR
+/// (`lower/expr_call/local_array_methods.rs` — no receiver-type guard), and
+/// the dynamic tower's own `toReversed` / `toSorted` arms
+/// (`object/native_call_method/handle_methods.rs`) call straight back into
+/// these same helpers, so those two were wrong on EVERY dispatch path.
+///
+/// **Only sound for the IMMUTABLE methods.** The answer is a copy, so an
+/// in-place mutator delegating to it would sort/reverse the copy and leave
+/// the receiver untouched — a different wrong answer. `toReversed`,
+/// `toSorted` and `with` all return a new collection, which is why they can
+/// use it; `js_array_sort_*` deliberately does not.
+///
+/// `None` for an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` receiver:
+/// none of those has `%TypedArray%.prototype`, so node throws
+/// `TypeError: … is not a function` rather than answering elements.
+#[inline]
+pub(crate) fn buffer_receiver_as_uint8_typed_array(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0
+        || !crate::buffer::is_registered_buffer(addr)
+        || crate::buffer::is_any_array_buffer(addr)
+        || crate::buffer::is_data_view(addr)
+    {
+        return None;
+    }
+    // Copy the bytes out BEFORE allocating: `typed_array_alloc` can collect,
+    // and a raw payload pointer read across it is exactly the borrowed-heap-
+    // slice shape rooting cannot fix.
+    let buf = addr as *const crate::buffer::BufferHeader;
+    let bytes: Vec<u8> = unsafe {
+        let len = (*buf).length as usize;
+        if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), len).to_vec()
+        }
+    };
+    let ta =
+        crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
+    for (i, byte) in bytes.iter().enumerate() {
+        crate::typedarray::js_typed_array_set(ta, i as i32, f64::from(*byte));
+    }
+    Some(ta)
+}
+
+/// The de-NaN-boxed address of an `Array.prototype` receiver, for side-table
+/// probes only. Says nothing about what lives there — never dereference it
+/// without one of the registry answers (`typed_array_receiver`,
+/// `buffer::is_registered_buffer`) or a `clean_arr_ptr` round trip.
+#[inline]
+pub(crate) fn array_receiver_addr(arr: *mut ArrayHeader) -> usize {
+    crate::typedarray::strip_nanbox(arr as u64)
+}
+
 /// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
 /// expected. immer's array drafts are Proxies typed (statically) as plain
 /// arrays, so `draft.push(x)` / `draft.length` reach the native array helpers

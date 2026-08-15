@@ -665,6 +665,10 @@ pub(crate) fn lower_stmt(
                                             }),
                                         });
                                         ctx.proxy_locals.insert(p_name.clone());
+                                        // #7775: the binding-keyed half. The
+                                        // name set above only steers receivers
+                                        // that resolve to no local.
+                                        ctx.register_proxy_local(proxy_id);
                                         if let Some(r_name) = revoke_alias {
                                             ctx.proxy_revoke_locals.insert(r_name.clone(), p_name);
                                             let rev_id =

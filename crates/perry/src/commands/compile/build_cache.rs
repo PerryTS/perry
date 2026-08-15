@@ -110,6 +110,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
 /// would thrash the cache rather than protect it. Anything not listed here must
 /// be a build-cache input; `codegen_env_vars_are_build_cache_inputs` enforces
 /// that, so a new compile-time gate cannot repeat #7161's omission silently.
+#[cfg(test)]
 const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // Diagnostics: emit an extra file / extra stderr, same object bytes.
     "PERRY_SAVE_LL",
@@ -134,7 +135,119 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILD_CACHE_ENV_EXCLUSIONS, BUILD_CACHE_ENV_VARS};
+    use super::{
+        absolute_identity, current_env, current_perry_fingerprint, file_fingerprint,
+        file_fingerprint_from_str, BuildCacheManifest, BuildCacheProbe, BUILD_CACHE_ENV_EXCLUSIONS,
+        BUILD_CACHE_ENV_VARS, BUILD_CACHE_MANIFEST_VERSION,
+    };
+
+    /// The build cache must compare against the compiler RUNNING NOW, not the
+    /// one that wrote the manifest.
+    ///
+    /// The bug this pins: the check used to re-fingerprint the path recorded in
+    /// the manifest and compare it to the recorded value. That asks "is the
+    /// binary I recorded still unchanged?", which is trivially true when a
+    /// DIFFERENT perry runs the second build — the recorded binary is sitting
+    /// right where it was. The cache then reported `manifest-match`, skipped
+    /// the build, and handed back the first compiler's executable while
+    /// printing nothing and exiting 0.
+    ///
+    /// `perry_version` does not cover this: during pass development the
+    /// version rarely moves between rebuilds, which is why `perry_build_id`
+    /// exists at all (#544).
+    #[test]
+    fn a_manifest_from_another_compiler_does_not_match_this_one() {
+        // Stand in for "the compiler that wrote the manifest": any other file
+        // that exists and is not this executable. Its own fingerprint is
+        // self-consistent, which is exactly what made the old check pass.
+        let other = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let recorded = file_fingerprint(&other).expect("fingerprint the stand-in");
+        assert_eq!(
+            file_fingerprint_from_str(&recorded.path).ok(),
+            Some(recorded.clone()),
+            "precondition: the recorded binary is unchanged on disk, so the OLD \
+             check would have passed here — without this the test proves nothing"
+        );
+
+        let running = current_perry_fingerprint().expect("fingerprint the test binary");
+        assert_ne!(
+            running, recorded,
+            "a manifest written by a different compiler must not match"
+        );
+    }
+
+    /// The expression test above pins the two comparisons in isolation, but it
+    /// never calls `probe()` — reverting the production call site to the buggy
+    /// form leaves it green. This one drives the real decision path, so it is
+    /// the one that actually guards the fix.
+    ///
+    /// Verified by sabotage: restoring
+    /// `file_fingerprint_from_str(&manifest.perry_build_id.path)` at the call
+    /// site turns this red while the expression test stays green.
+    #[test]
+    fn a_foreign_build_id_misses_at_the_probe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("in.ts");
+        let output = dir.path().join("out.bin");
+        let manifest_path = dir.path().join("manifest.json");
+        std::fs::write(&input, b"export {}\n").expect("write input");
+        std::fs::write(&output, b"binary").expect("write output");
+
+        // A build id belonging to some other compiler: any real file that is
+        // not this executable. It is unchanged on disk, which is precisely the
+        // condition under which the old self-comparison passed.
+        let foreign = file_fingerprint(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+        )
+        .expect("fingerprint the foreign build id");
+        assert_ne!(
+            foreign,
+            current_perry_fingerprint().expect("fingerprint the running binary"),
+            "precondition: the manifest must claim a DIFFERENT compiler"
+        );
+
+        let manifest = BuildCacheManifest {
+            version: BUILD_CACHE_MANIFEST_VERSION,
+            perry_version: env!("CARGO_PKG_VERSION").to_string(),
+            perry_build_id: foreign,
+            args_key: "args".to_string(),
+            env: current_env(),
+            input_path: absolute_identity(&input),
+            output_path: absolute_identity(&output),
+            target: "native".to_string(),
+            compiled_features: Vec::new(),
+            sources: Vec::new(),
+            config_inputs: Vec::new(),
+            runtime_inputs: Vec::new(),
+            object_fingerprints: Vec::new(),
+            native_modules: 0,
+            js_modules: 0,
+            output: file_fingerprint(&output).expect("fingerprint output"),
+        };
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let probe = BuildCacheProbe {
+            args_key: "args".to_string(),
+            manifest_path,
+            output_path: output,
+            target_name: "native".to_string(),
+            input_path: input,
+            project_root: dir.path().to_path_buf(),
+            cache_root: dir.path().to_path_buf(),
+            eligible: Ok(()),
+        };
+
+        let stats = probe.probe();
+        assert!(!stats.hit, "a manifest from another compiler must not hit");
+        assert_eq!(
+            stats.reason, "perry-build-id",
+            "must miss on the build id specifically, not incidentally on a later check"
+        );
+    }
 
     #[test]
     fn binding_policy_switches_are_build_cache_inputs() {
@@ -337,9 +450,23 @@ impl BuildCacheProbe {
         if manifest.output_path != absolute_identity(&self.output_path) {
             return miss("output-path");
         }
-        if file_fingerprint_from_str(&manifest.perry_build_id.path).ok()
-            != Some(manifest.perry_build_id.clone())
-        {
+        // Compare against the compiler RUNNING NOW, not the one the manifest
+        // was written by. Re-fingerprinting `manifest.perry_build_id.path`
+        // asks "is the binary I recorded still unchanged?", which is trivially
+        // true whenever a DIFFERENT perry does the second build — its path is
+        // not the recorded one, so the recorded binary sits there untouched
+        // and the check passes. The cache then hands back the first compiler's
+        // executable and skips the build entirely, reporting
+        // `"hit": true, "reason": "manifest-match"` and printing nothing.
+        //
+        // That is not hypothetical: it cost a full false-regression hunt. A
+        // probe compiled by a pre-fix perry kept its stale output when
+        // recompiled by a fixed one, the fix read as not working, and the
+        // phantom bisected onto an unrelated commit. `perry_version` above
+        // does not cover it either — during pass development the version
+        // rarely moves between rebuilds, which is the whole reason
+        // `perry_build_id` exists (#544).
+        if current_perry_fingerprint().ok() != Some(manifest.perry_build_id.clone()) {
             return miss("perry-build-id");
         }
         if verify_files(&manifest.sources).is_err() {

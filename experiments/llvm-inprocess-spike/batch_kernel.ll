@@ -50,7 +50,6 @@ module asm ".no_dead_strip __LLVM_StackMaps"
 @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT = external global i32
 @PERRY_TA_KIND_CACHE = external global [64 x i64]
 @PERRY_TA_VIEW_GUARD = external global i64
-@PERRY_IC_EPOCH = external global i64
 @perry_class_keys_batch_ts__Row = internal global i64 0
 @perry_class_keys_batch_ts____AnonShape_e75d7e32e87dc826 = internal global i64 0
 @perry_class_keys_batch_ts____AnonShape_c33c4204c28b9430 = internal global i64 0
@@ -4747,7 +4746,7 @@ pic.token.33:
   %r152 = and i1 %r150, %r151
   %r153 = getelementptr i64, ptr @perry_ic_2, i64 2
   %r154 = load i64, ptr %r153
-  %r155 = load i64, ptr @PERRY_IC_EPOCH
+  %r155 = add i64 0, 0
   %r156 = icmp eq i64 %r154, %r155
   %r157 = or i1 %r144, %r156
   %r158 = and i1 %r152, %r157
@@ -5048,7 +5047,7 @@ pic.token.60:
   %r335 = and i1 %r333, %r334
   %r336 = getelementptr i64, ptr @perry_ic_5, i64 2
   %r337 = load i64, ptr %r336
-  %r338 = load i64, ptr @PERRY_IC_EPOCH
+  %r338 = add i64 0, 0
   %r339 = icmp eq i64 %r337, %r338
   %r340 = or i1 %r327, %r339
   %r341 = and i1 %r335, %r340
@@ -5304,7 +5303,7 @@ pic.token.14:
   %r50 = and i1 %r48, %r49
   %r51 = getelementptr i64, ptr @perry_ic_8, i64 2
   %r52 = load i64, ptr %r51
-  %r53 = load i64, ptr @PERRY_IC_EPOCH
+  %r53 = add i64 0, 0
   %r54 = icmp eq i64 %r52, %r53
   %r55 = or i1 %r42, %r54
   %r56 = and i1 %r50, %r55
@@ -5509,7 +5508,7 @@ pic.token.35:
   %r183 = and i1 %r181, %r182
   %r184 = getelementptr i64, ptr @perry_ic_10, i64 2
   %r185 = load i64, ptr %r184
-  %r186 = load i64, ptr @PERRY_IC_EPOCH
+  %r186 = add i64 0, 0
   %r187 = icmp eq i64 %r185, %r186
   %r188 = or i1 %r175, %r187
   %r189 = and i1 %r183, %r188
@@ -5881,7 +5880,7 @@ pic.token.70:
   %r378 = and i1 %r376, %r377
   %r379 = getelementptr i64, ptr @perry_ic_12, i64 2
   %r380 = load i64, ptr %r379
-  %r381 = load i64, ptr @PERRY_IC_EPOCH
+  %r381 = add i64 0, 0
   %r382 = icmp eq i64 %r380, %r381
   %r383 = or i1 %r370, %r382
   %r384 = and i1 %r378, %r383
@@ -6169,7 +6168,7 @@ pic.token.14:
   %r51 = and i1 %r49, %r50
   %r52 = getelementptr i64, ptr @perry_ic_14, i64 2
   %r53 = load i64, ptr %r52
-  %r54 = load i64, ptr @PERRY_IC_EPOCH
+  %r54 = add i64 0, 0
   %r55 = icmp eq i64 %r53, %r54
   %r56 = or i1 %r43, %r55
   %r57 = and i1 %r51, %r56
@@ -6347,7 +6346,7 @@ pic.token.33:
   %r177 = and i1 %r175, %r176
   %r178 = getelementptr i64, ptr @perry_ic_16, i64 2
   %r179 = load i64, ptr %r178
-  %r180 = load i64, ptr @PERRY_IC_EPOCH
+  %r180 = add i64 0, 0
   %r181 = icmp eq i64 %r179, %r180
   %r182 = or i1 %r169, %r181
   %r183 = and i1 %r177, %r182
@@ -6632,7 +6631,7 @@ pic.token.64:
   %r351 = and i1 %r349, %r350
   %r352 = getelementptr i64, ptr @perry_ic_18, i64 2
   %r353 = load i64, ptr %r352
-  %r354 = load i64, ptr @PERRY_IC_EPOCH
+  %r354 = add i64 0, 0
   %r355 = icmp eq i64 %r353, %r354
   %r356 = or i1 %r343, %r355
   %r357 = and i1 %r351, %r356
@@ -6830,7 +6829,7 @@ pic.token.85:
   %r482 = and i1 %r480, %r481
   %r483 = getelementptr i64, ptr @perry_ic_20, i64 2
   %r484 = load i64, ptr %r483
-  %r485 = load i64, ptr @PERRY_IC_EPOCH
+  %r485 = add i64 0, 0
   %r486 = icmp eq i64 %r484, %r485
   %r487 = or i1 %r474, %r486
   %r488 = and i1 %r482, %r487
@@ -7016,7 +7015,7 @@ pic.token.104:
   %r611 = and i1 %r609, %r610
   %r612 = getelementptr i64, ptr @perry_ic_22, i64 2
   %r613 = load i64, ptr %r612
-  %r614 = load i64, ptr @PERRY_IC_EPOCH
+  %r614 = add i64 0, 0
   %r615 = icmp eq i64 %r613, %r614
   %r616 = or i1 %r603, %r615
   %r617 = and i1 %r611, %r616
@@ -7194,7 +7193,7 @@ pic.token.123:
   %r737 = and i1 %r735, %r736
   %r738 = getelementptr i64, ptr @perry_ic_24, i64 2
   %r739 = load i64, ptr %r738
-  %r740 = load i64, ptr @PERRY_IC_EPOCH
+  %r740 = add i64 0, 0
   %r741 = icmp eq i64 %r739, %r740
   %r742 = or i1 %r729, %r741
   %r743 = and i1 %r737, %r742
@@ -7401,7 +7400,7 @@ pic.token.145:
   %r866 = and i1 %r864, %r865
   %r867 = getelementptr i64, ptr @perry_ic_26, i64 2
   %r868 = load i64, ptr %r867
-  %r869 = load i64, ptr @PERRY_IC_EPOCH
+  %r869 = add i64 0, 0
   %r870 = icmp eq i64 %r868, %r869
   %r871 = or i1 %r858, %r870
   %r872 = and i1 %r866, %r871
@@ -7579,7 +7578,7 @@ pic.token.164:
   %r992 = and i1 %r990, %r991
   %r993 = getelementptr i64, ptr @perry_ic_28, i64 2
   %r994 = load i64, ptr %r993
-  %r995 = load i64, ptr @PERRY_IC_EPOCH
+  %r995 = add i64 0, 0
   %r996 = icmp eq i64 %r994, %r995
   %r997 = or i1 %r984, %r996
   %r998 = and i1 %r992, %r997
@@ -7954,7 +7953,7 @@ pic.token.23:
   %r122 = and i1 %r120, %r121
   %r123 = getelementptr i64, ptr @perry_ic_31, i64 2
   %r124 = load i64, ptr %r123
-  %r125 = load i64, ptr @PERRY_IC_EPOCH
+  %r125 = add i64 0, 0
   %r126 = icmp eq i64 %r124, %r125
   %r127 = or i1 %r114, %r126
   %r128 = and i1 %r122, %r127
@@ -8245,7 +8244,7 @@ pic.token.50:
   %r341 = and i1 %r339, %r340
   %r342 = getelementptr i64, ptr @perry_ic_34, i64 2
   %r343 = load i64, ptr %r342
-  %r344 = load i64, ptr @PERRY_IC_EPOCH
+  %r344 = add i64 0, 0
   %r345 = icmp eq i64 %r343, %r344
   %r346 = or i1 %r333, %r345
   %r347 = and i1 %r341, %r346
@@ -8780,7 +8779,7 @@ pic.token.93:
   %r682 = and i1 %r680, %r681
   %r683 = getelementptr i64, ptr @perry_ic_39, i64 2
   %r684 = load i64, ptr %r683
-  %r685 = load i64, ptr @PERRY_IC_EPOCH
+  %r685 = add i64 0, 0
   %r686 = icmp eq i64 %r684, %r685
   %r687 = or i1 %r674, %r686
   %r688 = and i1 %r682, %r687
@@ -11859,7 +11858,7 @@ pic.token.39:
   %r214 = and i1 %r212, %r213
   %r215 = getelementptr i64, ptr @perry_ic_60, i64 2
   %r216 = load i64, ptr %r215
-  %r217 = load i64, ptr @PERRY_IC_EPOCH
+  %r217 = add i64 0, 0
   %r218 = icmp eq i64 %r216, %r217
   %r219 = or i1 %r206, %r218
   %r220 = and i1 %r214, %r219
@@ -12215,7 +12214,7 @@ pic.token.74:
   %r442 = and i1 %r440, %r441
   %r443 = getelementptr i64, ptr @perry_ic_63, i64 2
   %r444 = load i64, ptr %r443
-  %r445 = load i64, ptr @PERRY_IC_EPOCH
+  %r445 = add i64 0, 0
   %r446 = icmp eq i64 %r444, %r445
   %r447 = or i1 %r434, %r446
   %r448 = and i1 %r442, %r447
@@ -12486,7 +12485,7 @@ pic.token.99:
   %r631 = and i1 %r629, %r630
   %r632 = getelementptr i64, ptr @perry_ic_66, i64 2
   %r633 = load i64, ptr %r632
-  %r634 = load i64, ptr @PERRY_IC_EPOCH
+  %r634 = add i64 0, 0
   %r635 = icmp eq i64 %r633, %r634
   %r636 = or i1 %r623, %r635
   %r637 = and i1 %r631, %r636

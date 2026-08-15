@@ -24,12 +24,28 @@ pub extern "C" fn js_typed_array_length(ta: *const TypedArrayHeader) -> i32 {
 }
 
 /// `ta[i]` — returns plain f64 numeric value (NOT NaN-boxed).
+///
+/// #8100: codegen emits this for a local whose DECLARED type is a typed array
+/// even after the binding was reassigned (`is_width_tracked_typed_array_
+/// receiver` keeps the hint on purpose — see its #7494 comment — and pays for
+/// that with the promise that this helper re-validates the receiver's actual
+/// GC kind). `clean_ta_ptr` does not validate anything but the magnitude, so
+/// a plain array landing here was read AS a `TypedArrayHeader` and every
+/// element came back `0`. Classify first, then dispatch: a non-typed-array
+/// receiver takes the ordinary `[[Get]]`, exactly as if the static hint had
+/// never existed.
 #[no_mangle]
 pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) -> f64 {
-    let ta = clean_ta_ptr(ta);
-    if ta.is_null() {
-        return 0.0;
-    }
+    let ta = match classify_element_read_receiver(ta as u64) {
+        ElementReadReceiver::TypedArray(addr) => addr as *const TypedArrayHeader,
+        ElementReadReceiver::Ordinary(receiver) => {
+            return crate::value::js_dyn_index_get(receiver, f64::from(index))
+        }
+        // Was `0.0`. `undefined` is the ECMAScript answer and the one node
+        // prints: `let P: Int32Array = new Int32Array(1); P = 42 as any; P[0]`
+        // is `undefined`, not `0`.
+        ElementReadReceiver::Absent => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
     unsafe {
         if crate::native_arena::is_native_typed_view(ta) {
             crate::native_arena::validate_view_alive(
@@ -554,24 +570,36 @@ pub extern "C" fn js_typed_array_copy_within(
     ta
 }
 
+/// `uint8array[i]` / `buffer[i]` read as a raw byte. See
+/// [`js_uint8array_index_get_value`] for the JS-value twin and for the #8111
+/// stale-static-hint dispatch both share.
 #[no_mangle]
 pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32) -> i32 {
     let addr = strip_nanbox(target as u64);
     if addr < 0x1000 || index < 0 {
         return 0;
     }
-    if let Some(kind) = lookup_typed_array_kind(addr) {
-        if !matches!(kind, KIND_UINT8 | KIND_UINT8_CLAMPED) {
-            return 0;
-        }
-        let value = js_typed_array_get(addr as *const TypedArrayHeader, index);
-        if value.to_bits() == crate::value::TAG_UNDEFINED {
-            0
-        } else {
-            value as i32
-        }
+    let value = if lookup_typed_array_kind(addr).is_some() {
+        js_typed_array_get(addr as *const TypedArrayHeader, index)
     } else if crate::buffer::is_registered_buffer(addr) {
-        crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, index)
+        return crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, index);
+    } else {
+        // #8111: not a registered typed array and not a registered buffer, so
+        // the `Uint8Array` / `Buffer` static type codegen keyed on was a stale
+        // hint. `js_typed_array_get` performs #8109's
+        // `classify_element_read_receiver` dispatch on our behalf.
+        js_typed_array_get(addr as *const TypedArrayHeader, index)
+    };
+    // This accessor's ABI is a byte-typed i32, so an `undefined` (absent
+    // receiver, or out of range) collapses to the `0` byte sentinel the caller
+    // expects (#6088), and a recovered non-number element takes ToNumber
+    // rather than having its NaN-box bits reinterpreted as an integer.
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        return 0;
+    }
+    let n = jsvalue_to_f64(value);
+    if n.is_finite() {
+        n as i32
     } else {
         0
     }
@@ -585,6 +613,14 @@ pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32)
 /// i32 accessor is forced to return (#6088). `js_typed_array_get` and
 /// `js_buffer_index_get_value` both already yield `undefined` for out-of-range,
 /// so each arm forwards directly.
+///
+/// #8111: codegen picks this helper from `is_uint8array_receiver`
+/// (`perry-codegen/src/expr/index_get.rs`), which reads `receiver_class_name`
+/// and so still fires for a local DECLARED `Uint8Array` whose binding was
+/// reassigned — the `Uint8Array`-specialized twin of the #8100 defect. Two
+/// arms used to answer `undefined` for a receiver that is perfectly
+/// readable: a registered typed array of the WRONG kind, and anything the
+/// registry does not know at all. Both now dispatch.
 #[no_mangle]
 pub extern "C" fn js_uint8array_index_get_value(
     target: *const TypedArrayHeader,
@@ -595,15 +631,18 @@ pub extern "C" fn js_uint8array_index_get_value(
     if addr < 0x1000 || index < 0 {
         return undefined;
     }
-    if let Some(kind) = lookup_typed_array_kind(addr) {
-        if !matches!(kind, KIND_UINT8 | KIND_UINT8_CLAMPED) {
-            return undefined;
-        }
+    if lookup_typed_array_kind(addr).is_some() {
         js_typed_array_get(addr as *const TypedArrayHeader, index)
     } else if crate::buffer::is_registered_buffer(addr) {
         crate::buffer::js_buffer_index_get_value(addr as *const crate::buffer::BufferHeader, index)
     } else {
-        undefined
+        // #8111: the `Uint8Array` static type was a stale hint — the binding
+        // was reassigned. Answering `undefined` here dropped the real element.
+        // `js_typed_array_get` owns #8109's `classify_element_read_receiver`
+        // dispatch, so this arm inherits it: header-wins-on-registry-miss for
+        // a real typed array, ordinary `[[Get]]` for a plain array / object /
+        // string, `undefined` for a masked-away non-pointer.
+        js_typed_array_get(addr as *const TypedArrayHeader, index)
     }
 }
 
@@ -615,18 +654,53 @@ pub extern "C" fn js_uint8array_index_get_value(
 static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_uint8array_index_get_value;
 
+/// `uint8array[i] = v` / `buffer[i] = v`. See
+/// [`js_uint8array_index_get_value`] for the #8111 stale-static-hint dispatch
+/// this shares, and the trailing arm below for the one residual its i32 value
+/// ABI cannot close.
 #[no_mangle]
 pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, value: i32) {
     let addr = strip_nanbox(target as u64);
     if addr < 0x1000 || index < 0 {
         return;
     }
-    if let Some(kind) = lookup_typed_array_kind(addr) {
-        if !matches!(kind, KIND_UINT8 | KIND_UINT8_CLAMPED) {
-            return;
-        }
-        js_typed_array_set(addr as *mut TypedArrayHeader, index, value as f64);
+    if lookup_typed_array_kind(addr).is_some() {
+        js_typed_array_set(addr as *mut TypedArrayHeader, index, f64::from(value));
     } else if crate::buffer::is_registered_buffer(addr) {
         crate::buffer::js_buffer_set(addr as *mut crate::buffer::BufferHeader, index, value);
+    } else {
+        // #8111, store side. The read helpers above recover the element; a
+        // dropped STORE is the same defect one call earlier, and it is the
+        // more damaging half — `Q[0] = 5` left no trace at all.
+        //
+        // The receiver question is the one #8109 already answers, so ask it
+        // the same way rather than adding a third classifier. Only a
+        // POSITIVELY identified receiver is diverted:
+        //
+        // * `TypedArray` — a `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_
+        //   VIEW` header the registry missed; `js_typed_array_set` is
+        //   kind-generic (it reads `(*ta).kind`).
+        // * `Ordinary` — a plain array, object, or anything else indexable.
+        //   `js_dyn_index_set` is the `[[Set]]` this access would have taken
+        //   if the stale static hint had never existed.
+        // * `Absent` — nothing indexable; drop the store, which is what a
+        //   write through a non-object primitive does in sloppy mode.
+        //
+        // RESIDUAL (pre-existing, not introduced here): codegen narrows this
+        // helper's `value` to i32 at the call site (`fptosi`, perry-codegen
+        // `expr/arrays_finds.rs`'s `Uint8ArraySet` arm) because the declared
+        // receiver is a byte view. A FRACTIONAL value written through a
+        // reassigned binding therefore arrives already truncated, so
+        // `Q[0] = 1.5` stores `1` where node stores `1.5`. Closing that needs
+        // an f64-valued entry point, not a runtime-side dispatch.
+        match crate::typedarray::classify_element_read_receiver(target as u64) {
+            ElementReadReceiver::TypedArray(ta) => {
+                js_typed_array_set(ta as *mut TypedArrayHeader, index, f64::from(value));
+            }
+            ElementReadReceiver::Ordinary(receiver) => {
+                crate::value::js_dyn_index_set(receiver, f64::from(index), f64::from(value));
+            }
+            ElementReadReceiver::Absent => {}
+        }
     }
 }

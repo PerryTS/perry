@@ -20,14 +20,15 @@
 //! `js_array_ensure_element_shape` returning class id `C` means every element
 //! in `[0, verified_len)` passed `element_class_of_bits`: `POINTER_TAG`, a
 //! readable `GcHeader` (which rejects the handle bands and implausible
-//! magnitudes), `obj_type == GC_TYPE_OBJECT`, `object_type ==
-//! OBJECT_TYPE_REGULAR`, and `class_id == C`. That is exactly the set of
+//! magnitudes), `obj_type == GC_TYPE_OBJECT`, an exact ordinary-instance
+//! ShapeId,
+//! `class_id == C`. That is exactly the set of
 //! predicates the element-read tier and the *front half* of the class-field
 //! precheck spend per iteration, so the clone drops them.
 //!
 //! It proves nothing about the per-OBJECT facts a raw-f64 slot load needs —
-//! `keys_array` identity (a `delete elem.f` compacts the packed slots while
-//! preserving `class_id`), `field_count`, the per-object descriptor flag, or
+//! exact ShapeId (a `delete elem.f` compacts the packed slots while preserving
+//! `class_id`), the per-object descriptor flag, or
 //! the typed-layout intact bit. Those stay per element, but collapse to ONE
 //! 4-byte header load + two more loads and a single branch, because the three
 //! header bytes the check needs are contiguous.
@@ -127,7 +128,7 @@ pub(crate) enum ElementShapeLoopTripCount<'a> {
 ///    an allocation can move the array, so a base derived before it could be a
 ///    from-space address.
 ///
-/// Returns `(elements_base, expected_keys, shape_ok, bound_i32)`.
+/// Returns `(elements_base, expected_shape_id, shape_ok, bound_i32)`.
 pub(crate) fn emit_element_shape_loop_preheader_check(
     ctx: &mut FnCtx,
     array_local_id: u32,
@@ -255,7 +256,6 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     // clone is call-free, so THIS pointer is the pointer the clone uses.
     ctx.current_block = deref_idx;
     let arr1 = super::lower_expr(ctx, &perry_hir::Expr::LocalGet(array_local_id))?;
-    let keys_load = format!("@{keys_global_name}");
     let blk = ctx.block();
     let bits1 = blk.bitcast_double_to_i64(&arr1);
     let tag1 = blk.lshr(I64, &bits1, "48");
@@ -305,7 +305,8 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     // load is hoistable here for the same reason the class-field preheader
     // check hoists it: flipping it requires a runtime call, and the fast clone
     // makes none.
-    let expected_keys = blk.load(I64, &keys_load);
+    let shape_global = crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
+    let expected_shape_id = blk.load(I32, &format!("@{shape_global}"));
     let gate = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
     let gate_ok = blk.icmp_eq(I8, &gate, "0");
 
@@ -315,7 +316,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     acc = blk.and(I1, &acc, &gate_ok);
 
     // No terminator: the caller branches after proving the clone call-free.
-    Ok((elements_base, expected_keys, acc, bound_i32))
+    Ok((elements_base, expected_shape_id, acc, bound_i32))
 }
 
 /// Emit one `arr[i].field` read inside the fast clone: bare element load,
@@ -331,7 +332,6 @@ pub(crate) fn emit_element_shape_field_load(
     field_index: u32,
 ) -> String {
     let field_index_str = field_index.to_string();
-    let max_field_index_str = fact.max_field_index.to_string();
     let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
 
     let load_idx = ctx.new_block("element_shape.load");
@@ -356,16 +356,11 @@ pub(crate) fn emit_element_shape_field_load(
         let hdr_masked = blk.and(I32, &hdr, ELEM_HEADER_MASK);
         let hdr_ok = blk.icmp_eq(I32, &hdr_masked, ELEM_HEADER_EXPECT);
 
-        let fc_ptr = blk.gep(I8, &elem_ptr, &[(I64, "12")]);
-        let field_count = blk.load(I32, &fc_ptr);
-        let fc_ok = blk.icmp_ugt(I32, &field_count, &max_field_index_str);
+        let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "8")]);
+        let shape_id = blk.load(I32, &sid_ptr);
+        let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
 
-        let ka_ptr = blk.gep(I8, &elem_ptr, &[(I64, "16")]);
-        let keys_array = blk.load(I64, &ka_ptr);
-        let ka_ok = blk.icmp_eq(I64, &keys_array, &fact.expected_keys);
-
-        let mut ok = blk.and(I1, &hdr_ok, &fc_ok);
-        ok = blk.and(I1, &ok, &ka_ok);
+        let ok = blk.and(I1, &hdr_ok, &shape_ok);
         // One branch per access. The side exit resumes the CURRENT iteration
         // in the slow clone; the matcher guarantees no effect of this
         // iteration has committed yet, so re-executing cannot double-apply.

@@ -54,17 +54,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
-    // #6080a: process-global read-PIC epoch (perry-runtime
-    // `object::field_get_set::ic_miss::PERRY_IC_EPOCH`, starts at 1, bumped on
-    // every completed GC collection and at budgeted-sweep entry). The inline
-    // monomorphic property-get hit path compares its per-site `cache[2]`
-    // snapshot against this before trusting a raw keys-array POINTER token —
-    // the `@perry_ic_N` globals are invisible to every GC scanner, so a
-    // primed address that GC has since freed/moved would otherwise
-    // pointer-match a recycled keys array of a different shape and load the
-    // wrong slot. Shape-ID tokens (#6804, bit 62) skip the check: ids are
-    // never reused.
-    module.add_external_global("PERRY_IC_EPOCH", I64);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
@@ -163,7 +152,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_class_field_set_guard",
         I32,
-        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
     );
     // #5334 lever A: class-field-SET guard-MISS fallback, outlined. The cold arm
     // of the default diamond collapses from two calls (record_fallback +
@@ -175,26 +164,26 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     // #5334 lever B: class-field-SET inline cache, FULLY outlined. For oversized
     // modules the whole diamond (guard + fast store + fallback) collapses to one
-    // call. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // call. Args: (site_id, recv, expected_class_id, expected_shape_id, key,
     // field_index, value, require_raw_f64). Same signature as the set guard.
     module.declare_function(
         "js_class_field_set_ic",
         VOID,
-        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
     );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
-        &[I64, DOUBLE, I32, I64, I64, I32, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32],
     );
     // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
     // modules the whole get diamond collapses to one call returning the field
-    // value. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // value. Args: (site_id, recv, expected_class_id, expected_shape_id, key,
     // field_index, require_raw_f64). Same signature as the get guard (+ f64 ret).
     module.declare_function(
         "js_class_field_get_ic",
         DOUBLE,
-        &[I64, DOUBLE, I32, I64, I64, I32, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_native_call_method",
@@ -219,9 +208,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_method_direct_call_guard",
         I32,
-        &[I64, DOUBLE, I32, I64, PTR, I64, PTR],
+        &[I64, DOUBLE, I32, I32, PTR, I64, PTR],
     );
-    module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I64]);
+    module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I32]);
     module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
     module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",

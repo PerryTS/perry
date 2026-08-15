@@ -502,7 +502,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
         return Outcome::HasDescriptors;
     }
     let obj = addr as *const ObjectHeader;
-    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+    if !crate::object::object_is_regular(obj as *mut ObjectHeader) {
         return Outcome::NotPlainObject;
     }
     if !class_id_admissible((*obj).class_id) {

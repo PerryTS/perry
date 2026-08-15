@@ -718,15 +718,16 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     );
     let field_idx_str = field_index.to_string();
     let expected_class_id_str = expected_class_id.to_string();
-    let (obj_bits, obj_handle, key_raw, expected_keys) = {
+    let expected_shape_id =
+        crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
+    let (obj_bits, obj_handle, key_raw) = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
         let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-        (obj_bits, obj_handle, key_raw, expected_keys)
+        (obj_bits, obj_handle, key_raw)
     };
 
     let fast_idx = ctx.new_block("class_field_get_number.fast");
@@ -748,8 +749,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         &obj_bits,
         &obj_handle,
         &expected_class_id_str,
-        &expected_keys,
-        field_index,
+        &expected_shape_id,
         true,
         None,
         &fast_label,
@@ -762,7 +762,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
             (I64, &site_id),
             (DOUBLE, &recv_box),
             (I32, &expected_class_id_str),
-            (I64, &expected_keys),
+            (I32, &expected_shape_id),
             (I64, &key_raw),
             (I32, &field_idx_str),
             (I32, "1"),

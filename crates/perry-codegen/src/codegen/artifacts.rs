@@ -17,7 +17,9 @@ use super::closure::{
     compile_typed_i32_closure, compile_typed_string_closure,
 };
 use super::entry::compile_module_entry;
-use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
+use super::helpers::{
+    function_body_returns_generator_object, sanitize, scoped_fn_name, unknown_func_wrapper_name,
+};
 use super::method::{
     compile_method, compile_static_method, compile_typed_f64_method,
     compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
@@ -1220,15 +1222,15 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         }
     }
 
-    // #337: emit an always-defined fallback wrapper for the
-    // `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef` falls
-    // through to `wrap_name = "__perry_wrap_perry_unknown_func"` when the
+    // #337: emit an always-defined fallback wrapper for the module-scoped
+    // `perry_unknown_func_<module>` sentinel. `expr.rs::Expr::FuncRef` falls
+    // through to the matching wrapper when the
     // FuncRef's id isn't in `func_names` (cross-module reference whose
     // Source HIR wasn't lowered into THIS LLVM module — should normally
     // route to ExternFuncRef instead, but some HIR shapes still emit
-    // FuncRef with an unresolvable id). Pre-fix the wrapper was never
-    // defined and clang errored with `use of undefined value
-    // @__perry_wrap_perry_unknown_func`. This stub returns TAG_UNDEFINED
+    // FuncRef with an unresolvable id). Before #337, the wrapper was never
+    // defined and clang rejected the unresolved reference during IR
+    // validation. This stub returns TAG_UNDEFINED
     // (encoded as `f64::from_bits(0x7FFC_0000_0000_0001)` =
     // 1.7800590868057611e-307 — the canonical undefined sentinel matching
     // `value::TAG_UNDEFINED`); any runtime-side `js_closure_callN`
@@ -1238,11 +1240,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // imported classes (see the existing comment block below).
     //
     // Emitted unconditionally — link-time DCE strips it when no
-    // `Expr::FuncRef(unknown_id)` site exists in this module.
+    // `Expr::FuncRef(unknown_id)` site exists in this module. The stable
+    // module suffix is load-bearing under codegen-unit splitting: splitting
+    // promotes this internal definition for cross-unit calls, and a shared
+    // final link may contain split objects from many source modules (#8064).
     {
-        let wrap_name = "__perry_wrap_perry_unknown_func";
+        let wrap_name = unknown_func_wrapper_name(module_prefix);
         let wf = llmod.define_function(
-            wrap_name,
+            &wrap_name,
             DOUBLE,
             vec![
                 (I64, "%this_closure".to_string()),
@@ -1253,14 +1258,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 (DOUBLE, "%a4".to_string()),
             ],
         );
-        // Fix #420 (v0.5.576): internal linkage so multi-module
-        // programs (drizzle-orm has 5+ modules each emitting this
-        // fallback) don't fail link with `duplicate symbol
-        // ___perry_wrap_perry_unknown_func`. Same pattern as the
-        // `__perry_wrap_extern_*` wrappers below — comment block at
-        // line ~1957 explicitly calls out that wrappers like this
-        // should be `internal` linkage so each module gets its own
-        // dead-code-eliminable copy.
+        // Fix #420 (v0.5.576): internal linkage keeps unsplit modules' copies
+        // dead-code-eliminable. Split units promote the definition so calls
+        // from sibling units can bind; #8064's module-scoped name keeps those
+        // promoted copies distinct at the application link.
         wf.linkage = "internal".to_string();
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();

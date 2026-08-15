@@ -178,7 +178,10 @@ unsafe fn object_keys_array_ptr(user_ptr: usize) -> usize {
     if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
         return 0;
     }
-    (*(user_ptr as *const crate::object::ObjectHeader)).keys_array as usize
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    crate::object::shapes::object_shape_descriptor(object)
+        .map(|descriptor| descriptor.keys as usize)
+        .unwrap_or((*object).keys_array as usize)
 }
 
 /// Borrow the shared canonical descriptor for `user_ptr`'s shape, if
@@ -198,13 +201,12 @@ unsafe fn with_shape_shared_descriptor<R>(
     if keys == 0 {
         return None;
     }
-    // Defense-in-depth: the descriptor's `slot_count` is pinned to the owning
-    // object's `field_count` at install (`init_typed_shape_layout` rejects a
-    // mismatch). A differing current field_count means this object's shape is
-    // not the one the descriptor describes — e.g. a keys_array address reused by
-    // a shape with a different field count (moving-GC relocation before the new
-    // address is re-installed). Fall back (per-object → conservative).
-    let field_count = (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize;
+    // Defense-in-depth: both descriptor families must agree on the exact live
+    // bound. The ObjectHeader count is only an ABI mirror pending #8047.
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    let field_count = crate::object::shapes::object_shape_descriptor(object)
+        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+        .unwrap_or((*object).field_count as usize);
     let map = hot_shape_layouts().borrow();
     let desc = map.get(&keys)?.as_ref()?;
     if desc.slot_count != field_count {
@@ -411,7 +413,9 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
         | GcLayoutSlotKind::ClosureCaptures => Some(header),
         // #6812: meta records keep no layout mask — their two child slots
         // (prototype, spill) are enumerated unconditionally.
-        GcLayoutSlotKind::None | GcLayoutSlotKind::ObjectMeta => None,
+        GcLayoutSlotKind::None | GcLayoutSlotKind::ObjectMeta | GcLayoutSlotKind::RegExpFields => {
+            None
+        }
     }
 }
 
@@ -619,7 +623,10 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 && (*header).obj_type == GC_TYPE_OBJECT
             {
                 let object = parent_user as *const crate::object::ObjectHeader;
-                if slot_index < (*object).field_count as usize {
+                let live_slots = crate::object::shapes::object_shape_descriptor(object)
+                    .map(|descriptor| descriptor.live_inline_slot_count as usize)
+                    .unwrap_or((*object).field_count as usize);
+                if slot_index < live_slots {
                     return;
                 }
             }
@@ -915,7 +922,10 @@ unsafe fn init_typed_shape_layout(
         return;
     }
     let obj_header = user_ptr as *const crate::object::ObjectHeader;
-    let object_slot_count = (*obj_header).field_count as usize;
+    let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
+    let object_slot_count = shape_descriptor
+        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+        .unwrap_or((*obj_header).field_count as usize);
     if object_slot_count != slot_count {
         layout_set_typed_unknown(header, user_ptr);
         return;
@@ -965,7 +975,9 @@ unsafe fn init_typed_shape_layout(
     // `object_keys_array_ptr`'s two guards are already discharged above (the
     // low addresses were rejected, `GcLayoutSlotKind::ObjectFields` was
     // checked), so read the field directly rather than re-walking the header.
-    let keys = (*obj_header).keys_array as usize;
+    let keys = shape_descriptor
+        .map(|descriptor| descriptor.keys as usize)
+        .unwrap_or((*obj_header).keys_array as usize);
     let memo = if keys == 0 {
         None
     } else {
@@ -1682,27 +1694,6 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
                 .unwrap_or_else(HeapChildSlotIterator::empty)
         }
         GcLayoutSlotKind::ObjectFields => {
-            // Wall 18 follow-up: a `RegExpHeader` is allocated as
-            // `GC_TYPE_OBJECT` but is a NATIVE struct, NOT a shaped JS object.
-            // The generic ObjectHeader read takes `field_count` from offset 12,
-            // which for a `RegExpHeader` overlaps the high 32 bits of
-            // `pattern_ptr` (~900 on macOS's 0x3xx_… heap) → a bogus ~900-slot
-            // range that scans/rewrites ADJACENT heap during evacuation (heap
-            // corruption; `PERRY_GC_VERIFY_EVACUATION` reports it as a stale
-            // forwarded pointer "inside" the regex at an offset far past its
-            // size). This is a latent pre-existing bug — exposed deterministically
-            // once Wall 18 grew the header. Detect the regex via its
-            // self-identifying magic and scan EXACTLY its GC-visible slots —
-            // `pattern_ptr`/`flags_ptr` (a 2-slot contiguous payload range) and
-            // `last_index` (the prefix slot). The off-heap `regex_ptr`/`fancy_ptr`,
-            // the bool flags, the `magic` sentinel, and any tail padding are never
-            // inspected, so evacuation can never touch raw native data.
-            if crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader) {
-                let (pattern_slot, slot_count, last_index_slot) =
-                    crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
-                let range = HeapSlotRange::new(pattern_slot, slot_count);
-                return HeapChildSlotIterator::new(header, Some(last_index_slot), range);
-            }
             let obj = user_ptr as *mut crate::object::ObjectHeader;
             let Some(range) = crate::object::gc_field_slot_range(obj) else {
                 return HeapChildSlotIterator::empty();
@@ -1716,6 +1707,15 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             // keeps payload slot indices aligned with the layout masks.
             HeapChildSlotIterator::new(header, keys_slot, range)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
+        }
+        GcLayoutSlotKind::RegExpFields => {
+            let (pattern_slot, slot_count, last_index_slot) =
+                crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
+            HeapChildSlotIterator::new(
+                header,
+                Some(last_index_slot),
+                HeapSlotRange::new(pattern_slot, slot_count),
+            )
         }
         GcLayoutSlotKind::ObjectMeta => {
             // #6812: prototype (NaN-boxed / raw / sentinel) as the prefix
@@ -1816,6 +1816,21 @@ pub(crate) fn test_gc_rewrite_slot_count(user_ptr: usize) -> Option<usize> {
         });
     }
     Some(count)
+}
+
+#[cfg(test)]
+pub(crate) fn test_gc_rewrite_slot_addresses(user_ptr: usize) -> Option<Vec<usize>> {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
+    let mut slots = Vec::new();
+    unsafe {
+        visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+            descriptor.visit_slots(&mut |slot| slots.push(slot.slot as usize));
+        });
+    }
+    Some(slots)
 }
 
 #[inline(always)]

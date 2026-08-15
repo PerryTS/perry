@@ -518,7 +518,7 @@ fn lower_assignment_target(
             // Proxy set: `proxy.foo = v` / `proxy[k] = v`
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 let obj_name = obj_ident.sym.to_string();
-                if ctx.proxy_locals.contains(&obj_name) {
+                if ctx.is_proxy_local(&obj_name) {
                     let proxy = Box::new(if let Some(id) = ctx.lookup_local(&obj_name) {
                         Expr::LocalGet(id)
                     } else {
@@ -1279,7 +1279,7 @@ pub(crate) fn hoist_compound_member_assign(
     }
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let n = obj_ident.sym.as_ref();
-        if ctx.proxy_locals.contains(n) || !ctx.active_with_envs_for_ident(n).is_empty() {
+        if ctx.is_proxy_local(n) || !ctx.active_with_envs_for_ident(n).is_empty() {
             return Ok(None);
         }
     }

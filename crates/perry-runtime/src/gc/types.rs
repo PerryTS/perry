@@ -61,7 +61,11 @@ pub const GC_TYPE_TEMPORAL: u8 = 18;
 /// its owner's header slot, so ordinary tracing gives it exactly the
 /// owner's lifetime; movable, and holds one traced NaN-box slot.
 pub const GC_TYPE_OBJECT_META: u8 = 19;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_OBJECT_META;
+/// Native `RegExpHeader`. RegExp used to share `GC_TYPE_OBJECT`, forcing every
+/// ObjectHeader consumer to inspect unrelated payload words for a magic value.
+/// A distinct GC kind is the authoritative, header-external discriminator.
+pub const GC_TYPE_REGEXP: u8 = 20;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEXP;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -153,6 +157,7 @@ pub(crate) enum GcRewriteDescriptorKind {
     Leaf,
     Array,
     Object,
+    RegExp,
     Closure,
     Promise,
     Error,
@@ -171,6 +176,7 @@ pub(crate) enum GcLayoutSlotKind {
     None,
     ArrayElements,
     ObjectFields,
+    RegExpFields,
     ClosureCaptures,
     /// #6812: ObjectMeta records carry two live edges — the custom
     /// `[[Prototype]]` value and the raw spill-buffer pointer. Before the
@@ -215,6 +221,10 @@ pub(crate) enum GcMoveHookKind {
     /// move. Errors are movable; without this a moved error lost its
     /// `err.code`/`err.syscall`/user-assigned props.
     ErrorSideTables,
+    /// Rekey RegExp identity/source registries plus its exotic expando owner
+    /// entry. `GC_TYPE_REGEXP` is movable, and all three tables use the
+    /// payload address as their key.
+    RegExpSideTables,
 }
 
 #[allow(dead_code)]
@@ -258,6 +268,11 @@ pub(crate) enum GcFinalizeHookKind {
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.
     LazyArrayTape,
+    /// Drop a dead RegExp cell's entries from every payload-address-keyed
+    /// registry. Arena reclamation reaches the equivalent cleanup through the
+    /// move-hook dead-owner fan-out; malloc-tracked cells use this finalize
+    /// hook instead.
+    RegExpSideTables,
 }
 
 #[allow(dead_code)]
@@ -650,6 +665,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_REGEXP,
+        "regexp",
+        GcAllocationPolicy::ArenaOrMalloc,
+        true,
+        GcRewriteDescriptorKind::RegExp,
+        GcLayoutSlotKind::RegExpFields,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::MallocTracked,
+        false,
+        GcMoveHookKind::RegExpSideTables,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::RegExpSideTables,
+    )),
 ];
 
 #[inline]
@@ -757,6 +787,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
                 old_user, new_user,
             );
         }
+        GcMoveHookKind::RegExpSideTables => {
+            crate::regex::regex_header_moved_for_gc(old_user, new_user);
+        }
     }
 }
 
@@ -779,6 +812,9 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         }
         GcMoveHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
+        }
+        GcMoveHookKind::RegExpSideTables => {
+            crate::regex::regex_header_clear_dead_for_gc(user_ptr);
         }
         GcMoveHookKind::None
         | GcMoveHookKind::MapSideTables
@@ -835,6 +871,9 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         GcFinalizeHookKind::LazyArrayTape => {
             crate::json_tape_store::release(user_ptr as usize);
         }
+        GcFinalizeHookKind::RegExpSideTables => {
+            crate::regex::regex_header_clear_dead_for_gc(user_ptr as usize);
+        }
     }
 }
 
@@ -871,6 +910,11 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         GcRewriteDescriptorKind::Object => {
             if info.layout_slot_kind != GcLayoutSlotKind::ObjectFields {
                 return Err("object rewrite descriptor must expose object field slots");
+            }
+        }
+        GcRewriteDescriptorKind::RegExp => {
+            if info.layout_slot_kind != GcLayoutSlotKind::RegExpFields {
+                return Err("regexp rewrite descriptor must expose regexp fields");
             }
         }
         GcRewriteDescriptorKind::Closure => {
@@ -1044,6 +1088,12 @@ pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
 // path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
 // `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+/// Heap class-expression value (`class C {}`), as distinct from an ordinary
+/// instance carrying the same `GC_TYPE_OBJECT` allocation tag. This is the
+/// authoritative replacement for `ObjectHeader::object_type ==
+/// OBJECT_TYPE_CLASS`; the legacy payload word remains an ABI mirror until
+/// #8047 removes it. Bit 13 is preserved by survival-age and layout-state
+/// updates and is otherwise unused for `GC_TYPE_OBJECT`.
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
@@ -1058,6 +1108,24 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
 pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
+/// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
+/// no class, but it also carries none of the per-object `[[Set]]` semantics a
+/// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…
+/// slots are live views whose setters rebuild `href`, `Object.prototype` is the
+/// realm intrinsic, and native-module receivers dispatch. Only a runtime birth
+/// site that has established the receiver is ordinary may set this; it is what
+/// admits `JSON.parse` output to the object-write fast paths, whose generated
+/// hit paths re-test this exact bit on every store, so a ShapeId shared with an
+/// unmarked population can never carry one population's cached slot into
+/// another's.
+///
+/// Bit 9 — only meaningful for `GC_TYPE_OBJECT`, disjoint from the array-only
+/// `GC_ARRAY_ARGUMENTS_OBJECT` by `obj_type` (its sole reader goes through
+/// `array::header::array_gc_header`, which refuses any header that is not
+/// `GC_TYPE_ARRAY`), the same sharing bits 11 and 12 already use. The value
+/// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
+/// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
+pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
 /// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a

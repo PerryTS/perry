@@ -73,9 +73,13 @@ mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
 mod field_get_set;
-pub(crate) use field_get_set::pic_epoch_bump;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
+mod gc_slots;
+pub(crate) use gc_slots::{
+    gc_field_slot_range, gc_keys_array_slot, rebuild_array_layout_from_slots,
+    rebuild_object_field_layout,
+};
 mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 mod global_this;
@@ -1681,7 +1685,9 @@ pub struct ObjectHeader {
     pub object_type: u32,
     /// Class ID for this object (used for instanceof, vtable lookup)
     pub class_id: u32,
-    /// Parent class ID for inheritance chain (0 if no parent)
+    /// Compatibility word: the parent class ID during allocation, then the
+    /// runtime `ShapeId` after shape stamping. Parent lookup must use the class
+    /// registry; direct reads of this word are not authoritative parent data.
     pub parent_class_id: u32,
     /// Number of fields in this object
     pub field_count: u32,
@@ -1707,11 +1713,9 @@ pub struct ObjectHeader {
 /// free paths, no owner registry, and no stale-address hazard: the record
 /// dies with (and only with) its owner.
 ///
-/// CAUTION — RegExp aliasing: `RegExpHeader` is a different struct that is
-/// also tagged `GC_TYPE_OBJECT` (see `gc_child_slots`'s regex special
-/// case). Reading `.meta` at the `ObjectHeader` offset off a RegExp yields
-/// garbage; every `meta` access must first establish a genuine shaped
-/// object (`object_meta_slot_addr` centralizes that check).
+/// Only the authoritative `GC_TYPE_OBJECT` kind has this layout. RegExp uses
+/// its own GC kind and slot descriptor, so no ObjectHeader consumer needs to
+/// inspect its native payload to disambiguate the two.
 ///
 /// The shipped Phase B record holds the custom `[[Prototype]]`, the Phase C2
 /// per-key descriptor summaries, object flags, and owned spill storage. The
@@ -1761,6 +1765,36 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
+/// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
+/// and heap class-expression values carry their kind in the immutable ShapeId
+/// descriptor. The legacy `ObjectHeader::object_type` word is only an ABI
+/// mirror pending #8047.
+#[inline]
+pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && shapes::object_shape_descriptor(obj)
+            .is_some_and(|shape| shape.object_kind == shapes::ShapeObjectKind::Ordinary)
+}
+
+#[inline]
+pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+}
+
 // #6812 spill lanes: the versioned write-loop emitter
 // (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
@@ -1769,7 +1803,7 @@ const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
-/// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
+/// established that `obj` is a live `GC_TYPE_OBJECT` allocation
 /// (see `prototype_chain::meta_capable_object`).
 pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
     if !(*obj).meta.is_null() {
@@ -1809,15 +1843,11 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     meta
 }
 
-/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-
-/// pointer child slot exactly like `gc_keys_array_slot`. Returns `None` for
-/// a null meta AND for a `RegExpHeader` masquerading as `GC_TYPE_OBJECT`
-/// (its bytes at this offset are native data — see the regex special case
-/// in `gc_child_slots`).
+/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-pointer
+/// child slot exactly like `gc_keys_array_slot`. The GC type table calls this
+/// only for `GC_TYPE_OBJECT`; RegExp uses its dedicated slot descriptor.
 pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
-    if user_ptr == 0
-        || crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader)
-    {
+    if user_ptr == 0 {
         return None;
     }
     let obj = user_ptr as *mut ObjectHeader;
@@ -1830,33 +1860,31 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
     // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
-    // described the OLD keys array — clear it on a pointer CHANGE so the stamp
-    // invariant (`stamp != 0 ⟹ stamp == id of current keys`) holds; the resolve
-    // paths re-stamp on their next successful lookup. A same-pointer update
-    // (in-place append) keeps the stamp: slots are append-only, existing
-    // mappings stay valid — and the C3a grow-migration keeps the id itself
-    // alive across reallocs, so the fresh stamp after a grow resolves to the
-    // SAME id.
+    // described the OLD keys array — clear it on a pointer CHANGE so no stale
+    // id is visible while the authoritative header changes. A same-pointer
+    // append is versioned by `synchronize_object_shape_descriptor` below; an
+    // immutable old descriptor is never silently changed in place.
     //
     // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
     // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
     // tests exactly that, so an instance still carrying its allocation-time
     // `parent_class_id` (never in the ShapeId range) is left alone.
-    if (*obj).keys_array != keys_array {
-        shapes::clear_object_shape_stamp(obj);
-    }
-    // #6893: the object's typed-shape layout descriptor is keyed by its
-    // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer
-    // change is a shape change (add/delete key), so the exact typed layout no
-    // longer applies to THIS object. Pre-#6893 the per-object store-validation
-    // (`layout_note_slot`, keyed by the object address) caught this implicitly
-    // during the field shuffle; the shared descriptor lookup now misses on the
-    // NEW keys_array, so that trigger is lost — invalidate explicitly here.
-    // Gated: `mark_object_dynamic_shape_unknown` early-returns for objects that
-    // carry no typed layout, so plain/growing objects and initial construction
-    // (INTACT not yet set) pay nothing.
-    if (*obj).keys_array != keys_array {
+    let predecessor = shapes::object_shape_descriptor(obj);
+    let keys_changed = (*obj).keys_array != keys_array;
+    if keys_changed {
+        // #6893: the object's typed-shape layout descriptor is keyed by its
+        // keys_array (shared per shape via SHAPE_LAYOUTS). A pointer change
+        // makes that exact typed layout inapplicable. This is gated internally
+        // so plain/growing objects and initial construction pay nothing.
+        //
+        // Invalidate while the predecessor stamp is still authoritative.
+        // `layout_mark_unknown` reports the representation change through
+        // typed feedback, whose defensive shape lookup self-heals an
+        // unstamped object. Clearing first therefore let that re-entrant
+        // lookup publish an Ordinary descriptor for a class object; the
+        // structural synchronization below then inherited the wrong kind.
         mark_object_dynamic_shape_unknown(obj);
+        shapes::clear_object_shape_stamp(obj);
     }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
@@ -1865,6 +1893,28 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         &(*obj).keys_array as *const _ as usize,
         keys_array as u64,
     );
+    // #8067: the old header edge remains authoritative, but every visible
+    // ShapeId must now resolve to the exact rooted ordered-keys/live-slot
+    // descriptor. Same-pointer appends are versioned inside the helper.
+    shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
+}
+
+/// Publish a new authoritative live-inline-slot bound without ever exposing a
+/// ShapeId whose descriptor disagrees with `ObjectHeader.field_count`.
+///
+/// Callers growing the traced range must invoke this before publishing the
+/// pointer-bearing field value (#7154): old stamp clear → header count write →
+/// complete descriptor install → new stamp → value-slot store.
+#[inline]
+pub(super) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
+    if (*obj).field_count != field_count {
+        let predecessor = shapes::object_shape_descriptor(obj);
+        shapes::clear_object_shape_stamp(obj);
+        (*obj).field_count = field_count;
+        shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
+    } else {
+        shapes::debug_assert_object_shape_parity(obj);
+    }
 }
 
 #[inline]
@@ -1924,53 +1974,5 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
     crate::gc::layout_mark_unknown(obj as *mut u8);
 }
 
-pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
-    if obj.is_null() || (*obj).keys_array.is_null() {
-        return None;
-    }
-    Some(&mut (*obj).keys_array as *mut _ as *mut u64)
-}
-
-pub(crate) unsafe fn gc_field_slot_range(
-    obj: *mut ObjectHeader,
-) -> Option<crate::gc::HeapSlotRange> {
-    if obj.is_null() {
-        return None;
-    }
-    let field_count = (*obj).field_count as usize;
-    if field_count > 1_000_000 {
-        return None;
-    }
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    Some(crate::gc::HeapSlotRange::new(fields, field_count))
-}
-
-#[inline]
-pub(super) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
-    if crate::arena::pointer_in_old_gen(obj as usize) {
-        for i in 0..slot_count {
-            let slot = fields.add(i);
-            crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, *slot);
-        }
-    }
-}
-
-#[inline]
-pub(super) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
-    if arr.is_null() {
-        return;
-    }
-    let len = (*arr).length as usize;
-    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
-    if crate::arena::pointer_in_old_gen(arr as usize) {
-        for i in 0..len {
-            let slot = slots.add(i);
-            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-        }
-    }
-}
 #[cfg(test)]
 mod tests;

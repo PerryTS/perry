@@ -577,28 +577,3 @@ fn test_pause_ring_records_max_and_window() {
     assert!(recent_max >= GC_RECENT_PAUSE_WINDOW as u64);
     assert!(recent_avg > 0 && recent_avg <= recent_max);
 }
-
-/// #6080a: `record_collection` is the single per-collection funnel, and the
-/// read-PIC epoch bump rides it — a completed collection may have recycled a
-/// keys-array address some `@perry_ic_N` cache still holds as a raw pointer
-/// token, so every collection must strand those primes. Asserting >= (not ==)
-/// keeps the test robust against concurrent collections on other test threads
-/// (the epoch is process-global by design).
-#[test]
-fn test_record_collection_bumps_read_pic_epoch() {
-    use std::sync::atomic::Ordering;
-    let before = crate::object::PERRY_IC_EPOCH.load(Ordering::Relaxed);
-    assert!(
-        before >= 1,
-        "epoch starts at 1 so zeroinitializer never hits"
-    );
-    GC_STATS.with(|stats| {
-        stats.borrow_mut().record_collection(0, 1);
-    });
-    let after = crate::object::PERRY_IC_EPOCH.load(Ordering::Relaxed);
-    assert!(
-        after > before,
-        "every completed collection must advance PERRY_IC_EPOCH \
-         (before={before}, after={after})"
-    );
-}

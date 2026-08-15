@@ -552,12 +552,14 @@ unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
             buf.push_str("true");
         } else if elem_bits == TAG_FALSE {
             buf.push_str("false");
-        } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
-            let elem_ptr = if elem_tag == POINTER_TAG {
-                (elem_bits & POINTER_MASK) as *const u8
-            } else {
-                elem_bits as *const u8
-            };
+        // #7448 converted the object path to `extract_pointer` but left this
+        // array-element path calling the `is_raw_pointer` it deleted, so
+        // perry-ui-android stopped compiling for any Android target. Routing
+        // it through the same helper also gives array elements the fix the
+        // object path already had: the old bit test was the IEEE-754
+        // positive-subnormal predicate, so every positive denormal element was
+        // classified as a pointer and dereferenced (#7447).
+        } else if let Some(elem_ptr) = extract_pointer(elem_bits) {
             if is_object_pointer(elem_ptr) {
                 stringify_object(elem_ptr, buf);
             } else {

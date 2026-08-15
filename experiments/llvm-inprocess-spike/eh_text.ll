@@ -48,7 +48,6 @@ module asm ".no_dead_strip __LLVM_StackMaps"
 @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT = external global i32
 @PERRY_TA_KIND_CACHE = external global [64 x i64]
 @PERRY_TA_VIEW_GUARD = external global i64
-@PERRY_IC_EPOCH = external global i64
 @perry_ic_1 = private global [12 x i64] zeroinitializer
 @perry_ic_3 = private global [12 x i64] zeroinitializer
 @perry_ic_5 = private global [12 x i64] zeroinitializer
@@ -3204,7 +3203,7 @@ pic.token.20:
   %r62 = and i1 %r60, %r61
   %r63 = getelementptr i64, ptr @perry_ic_1, i64 2
   %r64 = load i64, ptr %r63
-  %r65 = load i64, ptr @PERRY_IC_EPOCH
+  %r65 = add i64 0, 0
   %r66 = icmp eq i64 %r64, %r65
   %r67 = or i1 %r54, %r66
   %r68 = and i1 %r62, %r67
@@ -3891,7 +3890,7 @@ pic.token.24:
   %r65 = and i1 %r63, %r64
   %r66 = getelementptr i64, ptr @perry_ic_3, i64 2
   %r67 = load i64, ptr %r66
-  %r68 = load i64, ptr @PERRY_IC_EPOCH
+  %r68 = add i64 0, 0
   %r69 = icmp eq i64 %r67, %r68
   %r70 = or i1 %r57, %r69
   %r71 = and i1 %r65, %r70
@@ -4086,7 +4085,7 @@ pic.token.45:
   %r208 = and i1 %r206, %r207
   %r209 = getelementptr i64, ptr @perry_ic_5, i64 2
   %r210 = load i64, ptr %r209
-  %r211 = load i64, ptr @PERRY_IC_EPOCH
+  %r211 = add i64 0, 0
   %r212 = icmp eq i64 %r210, %r211
   %r213 = or i1 %r200, %r212
   %r214 = and i1 %r208, %r213
@@ -4968,7 +4967,7 @@ pic.token.35:
   %r108 = and i1 %r106, %r107
   %r109 = getelementptr i64, ptr @perry_ic_7, i64 2
   %r110 = load i64, ptr %r109
-  %r111 = load i64, ptr @PERRY_IC_EPOCH
+  %r111 = add i64 0, 0
   %r112 = icmp eq i64 %r110, %r111
   %r113 = or i1 %r100, %r112
   %r114 = and i1 %r108, %r113
@@ -5373,7 +5372,7 @@ pic.token.32:
   %r100 = and i1 %r98, %r99
   %r101 = getelementptr i64, ptr @perry_ic_9, i64 2
   %r102 = load i64, ptr %r101
-  %r103 = load i64, ptr @PERRY_IC_EPOCH
+  %r103 = add i64 0, 0
   %r104 = icmp eq i64 %r102, %r103
   %r105 = or i1 %r92, %r104
   %r106 = and i1 %r100, %r105

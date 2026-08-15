@@ -488,6 +488,111 @@ mod tests {
         }
     }
 
+    /// Bytes currently in an `ArrayBuffer`'s own storage — the shared truth a
+    /// DataView and a typed array over it must both agree with.
+    fn backing_bytes(ab: *const BufferHeader, len: usize) -> Vec<u8> {
+        unsafe { std::slice::from_raw_parts(buffer_data(ab), len).to_vec() }
+    }
+
+    /// A `DataView` and a MULTI-BYTE typed array over the same `ArrayBuffer`
+    /// must observe each other's writes in both directions.
+    ///
+    /// A DataView owns a `BufferHeader` seeded from the backing at construction
+    /// (`js_data_view_new`), and only writes routed through the view registry
+    /// refresh that snapshot. A `Uint16Array`/`Uint32Array`/`Float64Array`
+    /// element store goes straight into the backing store
+    /// (`typedarray::data_ptr_mut`), so nothing refreshed the snapshot and every
+    /// `get*` returned pre-write bytes — silently, with no throw. `Uint8Array`
+    /// masked the bug: its element writes go through `js_buffer_set`, which
+    /// mirrors into every registered view.
+    #[test]
+    fn data_view_reads_multi_byte_typed_array_writes() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        for (kind, elem_size) in [
+            (crate::typedarray::KIND_UINT16, 2usize),
+            (crate::typedarray::KIND_UINT32, 4),
+            (crate::typedarray::KIND_FLOAT64, 8),
+        ] {
+            let ab = js_array_buffer_new(elem_size as i32);
+            let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
+            let ta =
+                crate::typedarray_view::js_typed_array_view(kind as i32, ab_value, undef, undef);
+            assert!(!ta.is_null(), "kind={kind}: typed-array view");
+            // Constructed BEFORE the write, so its snapshot is all zeroes and a
+            // stale read is unambiguous.
+            let dv = js_data_view_new(ab_value, undef, undef);
+
+            crate::typedarray::js_typed_array_set(ta, 0, 258.0);
+
+            // Subject-liveness: without a store that actually reaches the
+            // ArrayBuffer, every byte comparison below would pass vacuously
+            // (0 == 0).
+            let backing = backing_bytes(ab, elem_size);
+            assert_ne!(
+                backing,
+                vec![0u8; elem_size],
+                "kind={kind}: typed-array store never reached the ArrayBuffer, \
+                 so this test proves nothing"
+            );
+
+            for i in 0..elem_size {
+                assert_eq!(
+                    js_data_view_get(dv, i as f64, DataViewKind::Uint8, false),
+                    backing[i] as f64,
+                    "kind={kind}: DataView byte {i} lags the typed-array write"
+                );
+            }
+        }
+    }
+
+    /// The other direction, and the windowed (`new DataView(ab, 4, 8)`) shape:
+    /// a DataView write must land in the backing at `byteOffset + offset` where
+    /// the typed array reads it.
+    #[test]
+    fn multi_byte_typed_array_reads_windowed_data_view_writes() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let ab = js_array_buffer_new(16);
+        let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
+        let ta = crate::typedarray_view::js_typed_array_view(
+            crate::typedarray::KIND_UINT32 as i32,
+            ab_value,
+            undef,
+            undef,
+        );
+        assert!(!ta.is_null());
+        // Window covering elements 1 and 2 of the Uint32Array.
+        let dv = js_data_view_new(ab_value, 4.0, 8.0);
+
+        // DataView -> typed array. Big-endian (the DataView default) so the
+        // byte order is fixed regardless of host endianness.
+        js_data_view_set(dv, 0.0, 0x0102_0304u32 as f64, DataViewKind::Uint32, false);
+        assert_eq!(
+            backing_bytes(ab, 16)[4..8],
+            [0x01, 0x02, 0x03, 0x04],
+            "windowed DataView write must land at byteOffset 4 of the backing"
+        );
+        assert_eq!(
+            crate::typedarray::js_typed_array_get(ta, 1),
+            u32::from_ne_bytes([0x01, 0x02, 0x03, 0x04]) as f64,
+            "typed array must read the DataView's bytes"
+        );
+
+        // typed array -> windowed DataView, at the window's far end.
+        crate::typedarray::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
+        let backing = backing_bytes(ab, 16);
+        for i in 0..8usize {
+            assert_eq!(
+                js_data_view_get(dv, i as f64, DataViewKind::Uint8, false),
+                backing[4 + i] as f64,
+                "windowed DataView byte {i} must mirror backing byte {}",
+                4 + i
+            );
+        }
+        // Bytes outside the window stay untouched and unreachable.
+        assert_eq!(&backing[0..4], &[0u8; 4], "element 0 must be untouched");
+        assert_eq!(&backing[12..16], &[0u8; 4], "element 3 must be untouched");
+    }
+
     /// Same SSO value, but decoded under the `hex` encoding tag (1): the
     /// short string holds hex digits and must produce the decoded bytes,
     /// proving the SSO branch routes through the shared encoding helper

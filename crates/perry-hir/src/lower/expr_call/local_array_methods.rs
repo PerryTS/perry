@@ -111,7 +111,7 @@ pub(super) fn try_local_array_methods(
                 // gate (a proxy local is typed `Named("Proxy")`), but
                 // `reduce`/`forEach`/`join`/`sort`/`splice`/… did not — guard
                 // them all here, uniformly, by falling through.
-                if ctx.proxy_locals.contains(&arr_name) {
+                if ctx.is_proxy_local(&arr_name) {
                     return Ok(Err(args));
                 }
                 // Check that this is NOT a String type (Array, Set, Map are all OK)
@@ -802,9 +802,16 @@ pub(super) fn try_local_array_methods(
                                 // `Expr::ArrayCopyWithin` — that path treats the
                                 // receiver as an `ArrayHeader` with boxed f64 slots,
                                 // which is invalid for `TypedArrayHeader` raw
-                                // storage. Fall through so they reach the runtime
-                                // `js_typed_array_copy_within` arm in
-                                // `js_native_call_method`.
+                                // storage. Falling through hands them to codegen's
+                                // `lower_array_method` `copyWithin` arm (typed-array
+                                // names satisfy `is_array_expr`), whose
+                                // `js_array_copy_within` re-dispatches on
+                                // `typed_array_receiver` to the element-typed impl.
+                                // Declining this fold is therefore about the SLOT
+                                // LAYOUT, not about reaching a particular dispatcher:
+                                // the un-declined `any`-typed case lands on that same
+                                // helper, which is why the receiver check there must
+                                // run before `clean_arr_ptr` rejects it.
                                 let is_typed_array = ctx
                                     .lookup_local_type(&arr_name)
                                     .map(|ty| {

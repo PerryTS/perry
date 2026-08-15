@@ -137,6 +137,7 @@ _CODEGEN_SUITES = [
     "private_guard_declaring_class",
     "scalar_replaced_slot_roots",
     "shadow_slot_hygiene",
+    "spec_abi_typed_array_local_length",
     "static_symbol_hygiene",
     "temp_root_operand_temporaries",
     "typed_feedback",

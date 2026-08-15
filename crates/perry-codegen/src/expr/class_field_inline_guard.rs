@@ -45,7 +45,6 @@ const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD — NaN-box tag for heap point
 const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — handles are <= this; objects are above
 const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
-const OBJECT_TYPE_REGULAR: &str = "1";
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
 const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
@@ -62,7 +61,7 @@ const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 #[derive(Clone, Debug)]
 pub(crate) struct ClassFieldSubclassArm {
     pub class_id: u32,
-    pub keys_global: String,
+    pub shape_id_global: String,
 }
 
 /// A hierarchy wider than this turns the shape check into a longer compare
@@ -153,7 +152,9 @@ pub(crate) fn class_field_subclass_arms(
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
-            keys_global,
+            shape_id_global: crate::typed_shape::shape_id_global_name_from_keys_global(
+                &keys_global,
+            ),
         });
         if arms.len() > MAX_CLASS_FIELD_SUBCLASS_ARMS {
             return Vec::new();
@@ -209,9 +210,7 @@ pub(crate) fn emit_plain_finite_number_check(
 /// keys_array / field_count / the typed-layout intact bit / the frozen bit /
 /// the process-global enable flag mid-loop.
 ///
-/// `max_field_index` is the largest packed slot index the loop touches
-/// (`field_count ugt max_field_index` covers every access). `require_raw_f64`
-/// adds the per-object typed-layout intact check (any raw-f64 read or write in
+/// `require_raw_f64` adds the per-object typed-layout intact check (any raw-f64 read or write in
 /// the loop); `require_not_frozen` adds the frozen-bit check (any write in the
 /// loop). Per-store value checks are NOT emitted here — the fast clone's
 /// stores keep their inline plain-finite check and side-exit to `slow_label`.
@@ -233,15 +232,13 @@ pub(crate) fn emit_class_field_loop_preheader_check(
     obj_bits: &str,
     obj_handle: &str,
     expected_class_id: &str,
-    expected_keys: &str,
-    max_field_index: u32,
+    expected_shape_id: &str,
     require_raw_f64: bool,
     require_not_frozen: bool,
     slow_label: &str,
 ) -> (String, String) {
     let deref_idx = ctx.new_block("class_field_loop.preheader.deref");
     let deref_label = ctx.block_label(deref_idx);
-    let max_field_index_str = max_field_index.to_string();
 
     // Gate: enable flag first (volatile — the runtime flips it sticky 0 -> 1
     // when descriptors / typed feedback / verify mode come into use), then
@@ -277,28 +274,19 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
 
-        // ObjectHeader: object_type @0 (i32)==REGULAR, class_id @4 (i32),
-        // field_count @12 (i32), keys_array @16 (i64).
-        let object_type = blk.load(I32, &obj_ptr);
-        let ot_ok = blk.icmp_eq(I32, &object_type, OBJECT_TYPE_REGULAR);
-
+        // ObjectHeader: class_id @4 and authoritative ShapeId @8. Matching
+        // the immutable descriptor proves the live-slot bound and key order.
         let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
         let class_id = blk.load(I32, &cid_ptr);
         let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
 
-        let fc_ptr = blk.gep(I8, &obj_ptr, &[(I64, "12")]);
-        let field_count = blk.load(I32, &fc_ptr);
-        let fc_ok = blk.icmp_ugt(I32, &field_count, &max_field_index_str);
-
-        let ka_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
-        let keys_array = blk.load(I64, &ka_ptr);
-        let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
+        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+        let shape_id = blk.load(I32, &sid_ptr);
+        let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
-        acc = blk.and(I1, &acc, &ot_ok);
         acc = blk.and(I1, &acc, &cid_ok);
-        acc = blk.and(I1, &acc, &fc_ok);
-        acc = blk.and(I1, &acc, &ka_ok);
+        acc = blk.and(I1, &acc, &shape_ok);
 
         // #5654: a receiver that has ever had a property / accessor descriptor
         // installed on it needs the guard's descriptor-aware dispatch (an
@@ -345,14 +333,12 @@ pub(crate) fn emit_class_field_loop_preheader_check(
 ///
 /// ## What is left, and why each one
 ///
-/// * **`keys_array` identity** — the load-bearing one. `delete inst.f` compacts
+/// * **ShapeId identity** — the load-bearing one. `delete inst.f` compacts
 ///   the packed inline slots while PRESERVING `class_id`, so a class-id match
 ///   alone does not prove the layout: on `class C { a; b; c }`, `delete inst.b`
-///   moves `c` from slot 2 to slot 1. The compaction installs a freshly CLONED
-///   keys array (`object/delete_rest.rs` — `js_array_alloc` +
-///   `set_object_keys_array`, cloned precisely because the old array is shared
-///   between every instance of the shape), so a pointer compare against the
-///   class's `@perry_class_keys_*` global catches it. The check is deliberately
+///   moves `c` from slot 2 to slot 1. The compaction publishes a semantic
+///   successor descriptor, so a ShapeId compare against the class's
+///   `@perry_class_shape_id_*` global catches it. The check is deliberately
 ///   DYNAMIC: the `delete` shape barrier that stands the analysis down is
 ///   module-scoped while receivers alias across modules (#7143), so no static
 ///   proof is available at this site.
@@ -369,12 +355,12 @@ pub(crate) fn emit_class_field_loop_preheader_check(
 ///   where the spec requires a strict-mode `TypeError`. The clone's own
 ///   admission rules this out only through a MODULE-scoped freeze-barrier kill,
 ///   so the receiver is vetted here as well.
-/// * **Not-forwarded** and **`object_type == OBJECT_TYPE_REGULAR`** — the two
+/// * **Not-forwarded**, **`GC_TYPE_OBJECT`**, and **not a class object** — the
 ///   header predicates `js_object_get_class_id` does not itself check.
 ///
 /// Cost: one volatile `i8` load of the latch, three loads off the receiver (two
 /// of them from the `GcHeader` word the tower's class-id read already pulled
-/// in), nine ALU ops and one conditional branch. `expected_keys` is expected to
+/// in), nine ALU ops and one conditional branch. `expected_shape_id` is expected to
 /// come from an entry-hoisted slot (`LlFunction::entry_init_load_global`), so
 /// the global itself is read once per function, not per call.
 ///
@@ -383,7 +369,7 @@ pub(crate) fn emit_class_field_loop_preheader_check(
 pub(crate) fn emit_proven_shape_recheck(
     ctx: &mut FnCtx,
     obj_handle: &str,
-    expected_keys: &str,
+    expected_shape_id: &str,
     proven_label: &str,
     generic_label: &str,
 ) {
@@ -409,19 +395,15 @@ pub(crate) fn emit_proven_shape_recheck(
     let latched = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_OR_DESCRIPTORS);
     let unlatched = blk.icmp_eq(I16, &latched, "0");
 
-    // ObjectHeader: object_type @0 (i32), keys_array @16 (i64). `class_id` @4
-    // was already matched by the tower's `js_object_get_class_id` compare.
-    let object_type = blk.load(I32, &obj_ptr);
-    let ot_ok = blk.icmp_eq(I32, &object_type, OBJECT_TYPE_REGULAR);
-
-    let ka_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
-    let keys_array = blk.load(I64, &ka_ptr);
-    let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
+    // `class_id` @4 was already matched by the tower. ShapeId @8 proves the
+    // exact immutable layout and receiver-kind descriptor.
+    let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+    let shape_id = blk.load(I32, &sid_ptr);
+    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 
     let mut acc = blk.and(I1, &flag_ok, &not_fwd);
     acc = blk.and(I1, &acc, &unlatched);
-    acc = blk.and(I1, &acc, &ot_ok);
-    acc = blk.and(I1, &acc, &ka_ok);
+    acc = blk.and(I1, &acc, &shape_ok);
     blk.cond_br(&acc, proven_label, generic_label);
 }
 
@@ -454,8 +436,7 @@ pub(crate) fn emit_class_field_inline_precheck(
     obj_bits: &str,
     obj_handle: &str,
     expected_class_id: &str,
-    expected_keys: &str,
-    field_index: u32,
+    expected_shape_id: &str,
     require_raw_f64: bool,
     set_value_bits: Option<&str>,
     fast_label: &str,
@@ -465,7 +446,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
     let guardcall_label = ctx.block_label(guardcall_idx);
-    let field_index_str = field_index.to_string();
 
     // Gate the dereference: a basic block has no short-circuit, so the field
     // loads below must only run once we know (a) the inline path is enabled and
@@ -511,27 +491,18 @@ pub(crate) fn emit_class_field_inline_precheck(
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
 
-        // ObjectHeader: object_type @0 (i32)==REGULAR, class_id @4 (i32),
-        // field_count @12 (i32), keys_array @16 (i64).
-        let object_type = blk.load(I32, &obj_ptr);
-        let ot_ok = blk.icmp_eq(I32, &object_type, OBJECT_TYPE_REGULAR);
-
+        // ObjectHeader: class_id @4, authoritative ShapeId @8.
         let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
         let class_id = blk.load(I32, &cid_ptr);
         let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
 
-        let fc_ptr = blk.gep(I8, &obj_ptr, &[(I64, "12")]);
-        let field_count = blk.load(I32, &fc_ptr);
-        let fc_ok = blk.icmp_ugt(I32, &field_count, &field_index_str);
-
-        let ka_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
-        let keys_array = blk.load(I64, &ka_ptr);
-        let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
+        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+        let shape_id = blk.load(I32, &sid_ptr);
+        let sid_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 
         // (The process-global enable flag was already checked at the gate above,
         // before this dereference.)
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
-        acc = blk.and(I1, &acc, &ot_ok);
         if subclass_arms.is_empty() {
             // Byte-for-byte the pre-widening and-chain. A class with no
             // eligible subclass must emit IDENTICAL IR, so the corpus-wide
@@ -539,24 +510,20 @@ pub(crate) fn emit_class_field_inline_precheck(
             // and-chain alone made 17 of 19 corpus binaries differ for no
             // behavioural reason).
             acc = blk.and(I1, &acc, &cid_ok);
-            acc = blk.and(I1, &acc, &fc_ok);
-            acc = blk.and(I1, &acc, &ka_ok);
+            acc = blk.and(I1, &acc, &sid_ok);
         } else {
-            // The declared class's own (class id, keys) pair, OR any subclass
+            // The declared class's own (class id, ShapeId) pair, OR any subclass
             // arm's. Each arm is a full pair — matching a class id without its
-            // canonical keys array would accept an instance that has since
-            // grown a property and no longer has the packed layout this slot
-            // index describes.
-            let mut shape_ok = blk.and(I1, &cid_ok, &ka_ok);
+            // canonical descriptor would accept a diverged layout.
+            let mut shape_ok = blk.and(I1, &cid_ok, &sid_ok);
             for arm in subclass_arms {
                 let arm_cid_ok = blk.icmp_eq(I32, &class_id, &arm.class_id.to_string());
-                let arm_keys = blk.load(I64, &format!("@{}", arm.keys_global));
-                let arm_ka_ok = blk.icmp_eq(I64, &keys_array, &arm_keys);
-                let arm_ok = blk.and(I1, &arm_cid_ok, &arm_ka_ok);
+                let arm_shape = blk.load(I32, &format!("@{}", arm.shape_id_global));
+                let arm_shape_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
+                let arm_ok = blk.and(I1, &arm_cid_ok, &arm_shape_ok);
                 shape_ok = blk.or(I1, &shape_ok, &arm_ok);
             }
             acc = blk.and(I1, &acc, &shape_ok);
-            acc = blk.and(I1, &acc, &fc_ok);
         }
 
         // #5654: a receiver that has ever had a property / accessor descriptor

@@ -42,6 +42,7 @@ mod runtime_roots;
 mod scan_fallback;
 mod schedule;
 mod shadow_stack_ops;
+mod shape_descriptor_authority;
 mod smoke;
 mod step_bounds;
 pub(super) mod support;

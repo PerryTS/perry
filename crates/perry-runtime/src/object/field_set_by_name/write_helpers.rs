@@ -68,7 +68,7 @@ pub(super) unsafe fn mirror_class_object_static_write(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    if (*obj).object_type != crate::error::OBJECT_TYPE_CLASS
+    if !crate::object::is_class_object_ptr(obj as *const u8)
         || (*obj).class_id == 0
         || key.is_null()
     {

@@ -1648,8 +1648,8 @@ pub(crate) struct ElementShapeLoopFact {
     /// SSA name of the elements base pointer (`arr_handle + 8`), derived in
     /// the preheader AFTER the guard call, so it cannot be a pre-move address.
     pub elements_base: String,
-    /// SSA name of the hoisted `@perry_class_keys_<class>` load.
-    pub expected_keys: String,
+    /// SSA name of the hoisted canonical ShapeId load.
+    pub expected_shape_id: String,
     /// Slow clone's preheader label. The per-element residual check (see
     /// `expr::element_shape_guard`) branches here on a miss; the slow clone
     /// re-executes the current iteration, which is safe because the matcher
@@ -1658,9 +1658,6 @@ pub(crate) struct ElementShapeLoopFact {
     /// property name -> packed slot index, every entry a declared raw-f64
     /// candidate validated by the matcher.
     pub fields: std::collections::BTreeMap<String, u32>,
-    /// Largest packed slot index the loop touches — the per-element
-    /// `field_count` check covers every tracked access with one compare.
-    pub max_field_index: u32,
     /// #7771: the body's `const r = arr[counter]` binding, when the matcher
     /// admitted the element-binding form. Inside the fast clone the `Let`
     /// itself emits nothing (`stmt/let_stmt.rs`) and every `r.field` read

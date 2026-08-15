@@ -1,0 +1,77 @@
+name: npm publish freshness
+
+# Alerts when the packages npm serves as `latest` fall behind `main` (#7491).
+# This is deliberately advisory: release cadence is maintainer state, not a PR
+# author's responsibility. A scheduled/main-dispatch run maintains one sticky
+# issue, while pull requests exercise only the offline checker with read access.
+
+on:
+  schedule:
+    - cron: "20 7 * * *"
+  pull_request:
+    paths:
+      - scripts/check_npm_publish_freshness.py
+      - scripts/npm_publish_freshness.json
+      - .github/workflows/npm-publish-freshness.yml
+      - npm/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-freshness-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # PR-controlled code runs only here, with no issue-writing token and no live
+  # registry verdict that could fail because main is overdue for a release.
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Self-test — prove the checker can fail
+        run: python3 scripts/check_npm_publish_freshness.py --self-test
+      - name: Manifest covers every package published from npm/
+        run: python3 scripts/check_npm_publish_freshness.py --check-manifest
+
+  # A feature-branch dispatch must never update the repository-wide sticky
+  # issue using that branch's version or package manifest.
+  reject-nonmain-dispatch:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Require a main-branch dispatch
+        run: |
+          echo "::error::npm freshness may be dispatched only from main (got $GITHUB_REF)"
+          exit 1
+
+  npm-publish-freshness:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Self-test — prove the checker can fail
+        run: python3 scripts/check_npm_publish_freshness.py --self-test
+      - name: Manifest covers every package published from npm/
+        run: python3 scripts/check_npm_publish_freshness.py --check-manifest
+      - name: Compare the registry against main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_npm_publish_freshness.py

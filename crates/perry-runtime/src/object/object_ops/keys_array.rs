@@ -34,7 +34,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         refresh_define_property_roots!();
         set_object_keys_array(obj, new_keys);
         if (*obj).field_count == 0 {
-            (*obj).field_count = 1;
+            set_object_live_slot_count(obj, 1);
         }
         return;
     }
@@ -150,7 +150,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     let inline_capacity =
         std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
     if new_index < inline_capacity && new_index >= (*obj).field_count {
-        (*obj).field_count = new_index + 1;
+        set_object_live_slot_count(obj, new_index + 1);
     }
 }
 
@@ -160,6 +160,7 @@ mod tests {
 
     #[test]
     fn define_property_key_growth_does_not_mutate_a_shared_shape_sibling() {
+        let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let packed = b"";
             let first =
@@ -171,13 +172,25 @@ mod tests {
             // A logical-field/key-count mismatch is not evidence that the
             // keys array is privately owned. This was the false assumption in
             // the old clone condition.
-            (*first).field_count = 1;
+            set_object_live_slot_count(first, 1);
+            let sibling_shape = (*sibling).parent_class_id;
             let key = crate::string::js_string_from_bytes(b"ALIAS_KEYS".as_ptr(), 10);
             ensure_key_in_keys_array(first, key);
 
             assert!(own_key_present(first, key));
             assert!(!own_key_present(sibling, key));
             assert_ne!((*first).keys_array, (*sibling).keys_array);
+            assert_ne!((*first).parent_class_id, sibling_shape);
+            let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
+                .expect("sibling descriptor must remain installed");
+            assert_eq!(sibling_descriptor.keys, (*sibling).keys_array as u64);
+            assert_eq!(sibling_descriptor.logical_key_count, 0);
+            let first_descriptor =
+                crate::object::shapes::shape_descriptor_by_id((*first).parent_class_id)
+                    .expect("defineProperty growth must install an exact descriptor");
+            assert_eq!(first_descriptor.keys, (*first).keys_array as u64);
+            assert_eq!(first_descriptor.logical_key_count, 1);
+            assert_eq!(first_descriptor.live_inline_slot_count, 1);
         }
     }
 }

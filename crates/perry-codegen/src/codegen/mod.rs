@@ -203,6 +203,8 @@ mod string_pool;
 mod testing_feature_gate_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
+#[cfg(test)]
+mod unknown_func_tests;
 
 pub(crate) use closure::emit_typed_capture_guard;
 pub use helpers::resolve_target_triple;

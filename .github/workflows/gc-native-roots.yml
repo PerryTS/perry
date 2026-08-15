@@ -279,6 +279,19 @@ jobs:
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
           cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
 
+      # #8075/#8038 are loader shapes, not standalone-executable probes: the
+      # runtime and stdlib are process-wide providers, generated frames live in
+      # a later-loaded app-only dylib, and full GC runs from a clean host
+      # boundary. The gate owns the exact two-module JSON/Buffer fixture plus
+      # #8038's streamed Response fixture. It requires 32,768 valid responses,
+      # >=10 full collections, retained and temporary Buffer classifications,
+      # concurrent producers serialized on one Perry executor, reclaimed
+      # temporary bytes, a flat live slope, and exact normal/forced-GC Response
+      # output including two chunks, EOF, headers, cookies, and rejection.
+      - name: Provider dylib host-boundary GC and Response
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: scripts/gc_provider_dylib_gate.sh
+
       # The two aarch64 walkers, over a frame this repository wrote, on the host
       # that has to walk it.
       #

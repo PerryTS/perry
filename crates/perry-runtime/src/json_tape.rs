@@ -671,6 +671,10 @@ unsafe fn materialize_object(
 ) -> JSValue {
     let field_count = count_object_fields(source, *idx, end_idx);
     let obj = crate::object::js_object_alloc(0, 0);
+    // #8098: a lazily materialized tape record is `JSON.parse` output too — the
+    // >1 KB top-level-array payloads (HTTP bodies, ORM result sets) that the
+    // eager `DirectParser` never sees all arrive through here.
+    crate::object::mark_object_plain_ordinary(obj);
     let obj_handle = scope.root_raw_mut_ptr(obj);
     json_tape_safepoint(JsonTapeSafepoint::MaterializeObjectRooted, obj as usize);
     let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
@@ -1253,7 +1257,8 @@ pub unsafe fn alloc_lazy_array(
     // which can trigger, but the only live thing we hold across it is
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = crate::json_tape_store::allocate(tape_entries);
-    let raw = alloc_lazy_header_bytes();
+    let (raw, blob_str) =
+        blob_handle.across_const::<crate::StringHeader, _>(alloc_lazy_header_bytes);
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
     (*hdr).magic = LAZY_ARRAY_MAGIC;
@@ -1262,7 +1267,7 @@ pub unsafe fn alloc_lazy_array(
     // GC_STORE_AUDIT(POINTER_FREE): side-allocated tape bytes, not a heap edge —
     // no barrier, and deliberately absent from the LazyArray rewrite descriptor.
     (*hdr).tape = tape_ptr;
-    (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
+    (*hdr).blob_str = blob_str;
     (*hdr).materialized = std::ptr::null_mut();
     (*hdr).materialized_elements = std::ptr::null_mut();
     (*hdr).materialized_bitmap = std::ptr::null_mut();

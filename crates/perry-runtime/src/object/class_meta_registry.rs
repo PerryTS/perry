@@ -94,15 +94,6 @@ pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
     registry.as_ref().and_then(|r| r.get(&class_id).copied())
 }
 
-/// Test-only reset of the dense mirror, for suites that clear `CLASS_REGISTRY`
-/// between cases.
-#[cfg(test)]
-pub(crate) fn parent_dense_clear() {
-    for slot in PARENT_DENSE.iter() {
-        slot.store(0, Ordering::Release);
-    }
-}
-
 /// class_id -> fetch-builtin parent kind (1 = Request, 2 = Response). Recorded
 /// when a class is registered (at module init / class-expression evaluation)
 /// whose parent value identifies as the global `Request`/`Response`

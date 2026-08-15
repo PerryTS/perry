@@ -48,15 +48,7 @@ impl GcStats {
     /// recent-pause ring advance together with the counters, so no future
     /// collection path can update one without the others.
     ///
-    /// #6080a: the read-PIC epoch bump rides the same funnel — every
-    /// completed collection may have freed or moved a keys array whose raw
-    /// address is primed in a `@perry_ic_N` cache no GC scanner can see, so
-    /// pointer-token primes must stop hitting from here on. (Budgeted cycles
-    /// bump a second time at sweep ENTRY — see `step_sweep` — because their
-    /// sweep slices interleave with the mutator before this funnel runs.
-    /// Double-bumping is harmless: it only costs one extra re-prime.)
     pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
-        crate::object::pic_epoch_bump();
         self.collection_count += 1;
         self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
         self.last_pause_us = elapsed_us;

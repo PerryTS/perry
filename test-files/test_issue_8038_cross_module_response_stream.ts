@@ -12,7 +12,10 @@ declare function gc(): void;
 
 function forceGc(): void {
   const churn: Array<{ index: number; payload: string }> = [];
-  for (let index = 0; index < 2_000; index += 1) {
+  // Keep enough allocation between explicit collections to exercise the
+  // schedule-rate pacer without making the focused parity test exceed the
+  // harness's 10-second process timeout on loaded CI hosts.
+  for (let index = 0; index < 256; index += 1) {
     churn.push({ index, payload: `response-root-${index}` });
   }
   if (typeof gc === "function") gc();

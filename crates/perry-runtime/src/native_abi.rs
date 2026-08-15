@@ -351,7 +351,7 @@ pub extern "C" fn js_native_abi_check_pod_object(value: f64) -> i64 {
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let is_gc_object = (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT;
-        let is_regular = (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR;
+        let is_regular = crate::object::object_is_regular(obj);
         if !is_gc_object || !is_regular {
             throw_type_error("Expected object for native pod parameter");
         }

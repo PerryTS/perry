@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Freshness budgets for what is published to npm. Checked by",
+    "scripts/check_npm_publish_freshness.py, run daily by .github/workflows/npm-publish-freshness.yml.",
+    "",
+    "WHY THIS FILE EXISTS: #7491. npm served a month-old `latest` while the fix users",
+    "were hitting had been on `main` for weeks. Every gate in the repo was green,",
+    "because every gate measures `main` -- and `main` is not what `npm install`",
+    "gives you. A user found it from the outside and filed a bug.",
+    "",
+    "max_unpublished_age_days is counted ONLY while this checkout is ahead of the",
+    "published version, so a quiet week with nothing to release is not a failure.",
+    "It is the primary signal: it is what would have caught #7491 on day 15.",
+    "",
+    "max_version_distance is a backstop, not a release-cadence rule. Every merge to",
+    "`main` bumps the workspace patch, so the distance is a commit count wearing a",
+    "version number -- at the merge rate measured in #7856 (10-58 a day) 500 patches",
+    "is roughly one to seven weeks. It exists to catch a sprint that outruns the age",
+    "budget, which is why it is not tuned tight enough to fire on a normal week: a",
+    "budget that goes red every week gets muted, and a muted gate is gone.",
+    "",
+    "`anchor` marks the launcher. npm/perry/package.json.tmpl pins its",
+    "optionalDependencies to its own exact version, so every other package here must",
+    "publish the SAME `latest` -- that invariant is checked with no budget at all,",
+    "because a partial publish breaks installs while both halves sit inside theirs.",
+    "",
+    "Every package published from npm/ must appear here; the checker fails if the two",
+    "sets differ, so adding a platform target cannot silently shrink the gate."
+  ],
+  "defaults": {
+    "max_unpublished_age_days": 14,
+    "max_version_distance": 500
+  },
+  "packages": [
+    {
+      "name": "@perryts/perry",
+      "anchor": true,
+      "why": "The launcher -- the package `npm install @perryts/perry` resolves. This is the one #7491 was about."
+    },
+    { "name": "@perryts/perry-darwin-arm64" },
+    { "name": "@perryts/perry-darwin-x64" },
+    { "name": "@perryts/perry-linux-arm64" },
+    { "name": "@perryts/perry-linux-arm64-musl" },
+    { "name": "@perryts/perry-linux-x64" },
+    { "name": "@perryts/perry-linux-x64-musl" },
+    { "name": "@perryts/perry-win32-arm64" },
+    { "name": "@perryts/perry-win32-x64" }
+  ]
+}

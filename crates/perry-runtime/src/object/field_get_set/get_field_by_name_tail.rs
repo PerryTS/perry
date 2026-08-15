@@ -1034,14 +1034,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 gc_type == crate::gc::GC_TYPE_MAP,
             );
         }
-        // RegExp: RegExpHeader is allocated via GC_TYPE_OBJECT but tracked
-        // in REGEX_POINTERS. Detect and route `.source`, `.flags`,
+        // RegExp has a dedicated GC kind. Route `.source`, `.flags`,
         // `.lastIndex`, `.global`, `.ignoreCase`, `.multiline`, `.sticky`,
-        // `.unicode`, `.dotAll` to the regex header fields. Must run
-        // before the generic object-field path so the keys_array lookup
-        // doesn't try to read the regex header bytes as ObjectHeader.
-        if gc_type == crate::gc::GC_TYPE_OBJECT && crate::regex::is_regex_pointer(obj as *const u8)
-        {
+        // `.unicode`, `.dotAll` to the regex header fields. The kind check keeps
+        // its native payload out of the generic ObjectHeader field path.
+        if gc_type == crate::gc::GC_TYPE_REGEXP {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -1139,10 +1136,7 @@ pub(crate) fn get_field_by_name_object_tail(
             return JSValue::undefined();
         }
         if gc_type != crate::gc::GC_TYPE_OBJECT {
-            let object_type = (*obj).object_type;
-            if object_type != crate::error::OBJECT_TYPE_REGULAR {
-                return JSValue::undefined();
-            }
+            return JSValue::undefined();
         }
         if super::super::is_arguments_object(obj) {
             if let Some(value) = super::super::arguments_object_get_field(obj, key) {
@@ -1287,7 +1281,7 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             // #4949 `.prototype` / #6497 `.name` on heap class-expression
             // values — see `class_object_props`.
-            if (*obj).object_type == crate::error::OBJECT_TYPE_CLASS && (*obj).class_id != 0 {
+            if super::super::is_class_object_ptr(obj as *const u8) && (*obj).class_id != 0 {
                 if key_bytes == b"prototype" {
                     return super::class_object_props::class_object_prototype_value(obj);
                 }

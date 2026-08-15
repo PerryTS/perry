@@ -851,9 +851,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
             } else if crate::regex::is_registered_regex(ptr as usize) {
-                // RegExp literals are GC_TYPE_OBJECT with no enumerable keys
-                // (generic formatter prints `{}`); render `/source/flags`
-                // instead (registry-gated, before the GC-header read; #800).
+                // RegExp literals have their own GC kind and no enumerable
+                // keys; render `/source/flags` instead (#800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
             } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
                 format_proxy_value(value, depth, false)

@@ -223,8 +223,8 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     // A RegExp's `[[Prototype]]` chain is `RegExp.prototype → Object.prototype`.
-    // The RegExpHeader isn't a plain GC_TYPE_OBJECT with a registered class
-    // prototype, so the generic class-id walk below misses it (which is why
+    // The dedicated RegExp cell has no registered class prototype, so the
+    // generic class-id walk below misses it (which is why
     // `RegExp.prototype.isPrototypeOf(re)` returned false). Handle it directly.
     {
         let tv = JSValue::from_bits(target.to_bits());
