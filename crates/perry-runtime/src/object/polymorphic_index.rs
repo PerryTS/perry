@@ -316,6 +316,30 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     if raw < 0x1000 {
         return;
     }
+    // Ask the KEY-KIND question before either typed-array arm claims the
+    // receiver. A Symbol is definitionally not a CanonicalNumericIndexString,
+    // so ECMA-262 §10.4.5.5 requires OrdinarySet — the symbol side table, the
+    // same place `js_put_value_set` and `js_array_set_index_or_string` already
+    // put it. Without this, `typed_array_set_numeric_index` read the NaN-boxed
+    // symbol pointer as a non-finite f64, classified it "canonical-invalid
+    // index", and returned "handled" — so `u8[sym] = v` was dropped silently:
+    // the store never landed, `u8[sym]` read back `undefined`, and
+    // `Object.getOwnPropertySymbols(u8)` stayed empty while the same code on a
+    // plain object, a plain array and a Buffer all worked.
+    //
+    // The visible consequence was `@@isConcatSpreadable`: `concat` honours the
+    // opt-in correctly (`Object.defineProperty` proves it), but the assignment
+    // form could never install the property, so a typed array could not opt in.
+    //
+    // Gated on the receiver so only the broken case changes: BOTH registries
+    // are consulted, because either arm alone would still claim the write.
+    if unsafe { crate::symbol::js_is_symbol(idx) } != 0
+        && (crate::typedarray::lookup_typed_array_kind(raw as usize).is_some()
+            || crate::typedarray_props::is_typed_array_owner(raw as usize))
+    {
+        unsafe { crate::symbol::js_object_set_symbol_property(boxed, idx, value) };
+        return;
+    }
     // #5525 fast path: a cached typed-array kind lookup + inline store, before
     // the thread-local `typed_array_set_numeric_index` registry dispatch
     // (`typed_array_owner_*` → `_tlv_get_addr`) that dominated the bcrypt

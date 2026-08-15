@@ -566,8 +566,28 @@ unsafe fn typed_array_coerce_element_for_side_effects(owner: usize, value: f64) 
     }
 }
 
+/// True when `owner` is a typed-array receiver by EITHER registry — the
+/// cached-kind lookup used by the inline fast path, or the thread-local owner
+/// registry this module's slow dispatch gates on. Callers routing a key AWAY
+/// from the numeric-index arms need both, because either one alone leaves the
+/// other arm free to claim the write.
+pub(crate) fn is_typed_array_owner(owner: usize) -> bool {
+    typed_array_owner_kind(owner).is_some()
+}
+
 pub(crate) unsafe fn typed_array_set_numeric_index(owner: usize, index: f64, value: f64) -> bool {
     if typed_array_owner_kind(owner).is_none() {
+        return false;
+    }
+    // A Symbol key is NOT a CanonicalNumericIndexString, so ECMA-262
+    // §10.4.5.5 sends it to OrdinarySet — it is not an invalid index to be
+    // dropped. The `is_finite` test below cannot tell the two apart: a Symbol
+    // arrives as a NaN-boxed pointer, which AS AN f64 is a NaN, so it took the
+    // "canonical-invalid index" arm and returned `true` (write handled), and
+    // `u8[sym] = v` vanished with no error. Say "not mine" instead, so the
+    // caller can route it. Inert for this module's own callers, which reach
+    // here only under `is_int32()` / `is_finite()`.
+    if crate::symbol::js_is_symbol(index) != 0 {
         return false;
     }
     if !index.is_finite() || index.fract() != 0.0 || index < 0.0 || index > u32::MAX as f64 {
