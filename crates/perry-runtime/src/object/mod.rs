@@ -1753,34 +1753,6 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    object_is_regular_with_header(header, obj)
-}
-
-/// [`object_is_regular`] for a caller that has ALREADY read the receiver's
-/// `GcHeader`. The predicate is character-for-character the same — this only
-/// moves where the header comes from.
-///
-/// # Why it exists (#8113)
-///
-/// `proxy.rs`'s #6595 store-plan gate used to be
-/// `(*obj).object_type == OBJECT_TYPE_REGULAR`, a free `u32` compare on a word
-/// this rung deleted. Its replacement, `object_is_regular`, is the correct
-/// predicate — but it is a `try_read_gc_header` (band check, heap-range check,
-/// small-buffer-slab check, then the load) plus a shape-table probe, and a
-/// per-callsite counter measured it firing **exactly once per allocated
-/// object**: 3,000,000 on `retain`, 20,000,002 on `churn`, and still 1.00 per
-/// object on `retain_wide`'s 8-field literals. That gate is the single largest
-/// piece of this rung's instruction cost.
-///
-/// The caller there has already read the very same `GcHeader` for its
-/// blocking-flags test, so passing it in deletes the whole re-derivation at
-/// zero semantic cost. The remaining shape-table probe is a real design
-/// question (#6595 forbids weakening the predicate) and is tracked separately.
-#[inline]
-pub(crate) unsafe fn object_is_regular_with_header(
-    header: &crate::gc::GcHeader,
-    obj: *const ObjectHeader,
-) -> bool {
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::object_shape_descriptor(obj)

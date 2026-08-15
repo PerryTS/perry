@@ -473,16 +473,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
 
     # RegExp identity lives in the GcHeader kind. No ObjectHeader payload word
     # or registry/magic conjunction may decide these ordinary-object forks.
-    # #8113: `object_is_regular` delegates its predicate to
-    # `object_is_regular_with_header` so `proxy.rs`'s store-plan gate can pass a
-    # `GcHeader` it has already read. The two must not drift, so the delegation
-    # itself is asserted and the predicate is checked where it now lives.
-    require_code(
-        function_body(object_mod, "object_is_regular"),
-        r"object_is_regular_with_header\s*\(",
-        "object_is_regular delegates to the header-taking form",
-    )
-    for name in ("object_is_regular_with_header", "object_is_shaped"):
+    for name in ("object_is_regular", "object_is_shaped"):
         body = function_body(object_mod, name)
         require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
         if re.search(r"regex_header_has_magic|object_type", body):
@@ -600,7 +591,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if "OBJ_FLAG_CLASS_OBJECT" in gc_types + class_guard + element_guard + write_pics:
         raise CensusError("class kind reintroduced a GcHeader layout-bit alias")
     assert_header_fields(object_mod)
-    class_probe = function_body(object_mod, "object_is_regular_with_header")
+    class_probe = function_body(object_mod, "object_is_regular")
     require_code(
         class_probe,
         r"ShapeObjectKind::Ordinary",
@@ -823,19 +814,6 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "clear-then-remint window in the live-slot publication",
         lambda: assert_authority_surfaces(cleared_publication),
-    )
-
-    # #8113: the two spellings of the ordinary-object predicate must not drift.
-    undelegated = dict(sources)
-    path = "crates/perry-runtime/src/object/mod.rs"
-    undelegated[path] = undelegated[path].replace(
-        "    object_is_regular_with_header(header, obj)\n",
-        "    header.obj_type == crate::gc::GC_TYPE_OBJECT\n",
-        1,
-    )
-    expect_rejected(
-        "object_is_regular stopped delegating to the header-taking form",
-        lambda: assert_authority_surfaces(undelegated),
     )
 
     stale_summary = json.loads(json.dumps(baseline))
