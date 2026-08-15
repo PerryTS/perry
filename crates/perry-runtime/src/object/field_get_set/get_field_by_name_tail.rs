@@ -38,22 +38,24 @@ pub(crate) fn get_field_by_name_object_tail(
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                        if is_timer_handle_method_key(key_bytes)
-                            && crate::timer::is_known_timer_id(raw as i64)
-                        {
-                            let this_f64 = f64::from_bits(
-                                crate::value::js_nanbox_pointer(raw as i64).to_bits(),
-                            );
-                            let result =
-                                super::super::js_class_method_bind(this_f64, key_ptr, key_len);
-                            return JSValue::from_bits(result.to_bits());
+                        if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                            if crate::timer::is_known_timer_id(raw as i64) {
+                                let this_f64 = f64::from_bits(
+                                    crate::value::js_nanbox_pointer(raw as i64).to_bits(),
+                                );
+                                // #8133: the `'static` literal, NOT `key_ptr` —
+                                // that is the interior of a movable heap string
+                                // this read does not own.
+                                let result = super::super::js_class_method_bind(
+                                    this_f64,
+                                    method.as_ptr(),
+                                    method.len(),
+                                );
+                                return JSValue::from_bits(result.to_bits());
+                            }
                         }
-                        if let Some(v) = crate::text::text_handle_property(
-                            raw as usize,
-                            key_bytes,
-                            key_ptr,
-                            key_len,
-                        ) {
+                        if let Some(v) = crate::text::text_handle_property(raw as usize, key_bytes)
+                        {
                             return v;
                         }
                     }
@@ -113,17 +115,20 @@ pub(crate) fn get_field_by_name_object_tail(
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if is_timer_handle_method_key(key_bytes)
-                    && crate::timer::is_known_timer_id(obj as i64)
-                {
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
-                    return JSValue::from_bits(result.to_bits());
+                if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                    if crate::timer::is_known_timer_id(obj as i64) {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        // #8133: see the sibling arm above.
+                        let result = super::super::js_class_method_bind(
+                            this_f64,
+                            method.as_ptr(),
+                            method.len(),
+                        );
+                        return JSValue::from_bits(result.to_bits());
+                    }
                 }
-                if let Some(v) =
-                    crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
-                {
+                if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
                     return v;
                 }
             }

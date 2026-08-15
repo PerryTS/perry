@@ -21,6 +21,7 @@ mod fromspace_protect;
 mod fromspace_scan;
 mod global_bootstrap;
 mod global_sink_isolation;
+mod handle_bound_method_name;
 mod heap_accounting;
 mod helper_stores;
 mod host_safepoints;
