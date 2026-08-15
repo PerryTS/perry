@@ -340,6 +340,38 @@ pub(crate) fn scan_heap_for_fromspace_refs() -> FromSpaceScanReport {
     report
 }
 
+/// Best-effort payload dump around the stale slot so the offending owner
+/// identifies ITSELF (which array/object shape, what tags surround the slot).
+/// The heap is intact when this runs (pre-abort, post-scan), so the read is
+/// safe; classification only, no dereference of the classified words.
+fn payload_preview(r: &FromSpaceRef) -> String {
+    let payload = (r.owner_header + GC_HEADER_SIZE) as *const u64;
+    let stale_word = r.slot_offset / 8;
+    let words = stale_word.saturating_add(3).min(24);
+    let mut out = String::from("\n    payload:");
+    for i in 0..words {
+        let w = unsafe { payload.add(i).read() };
+        let kind = match w >> 48 {
+            0x7ffc => "tag",
+            0x7ffd => "ptr",
+            0x7ffe => "i32",
+            0x7fff => "str",
+            0x7ffa => "big",
+            0 => {
+                if crate::value::addr_class::is_plausible_heap_addr(w as usize) {
+                    "BARE-ADDR"
+                } else {
+                    "small"
+                }
+            }
+            _ => "f64",
+        };
+        let marker = if i == stale_word { ">>" } else { "" };
+        out.push_str(&format!(" {marker}[{i}]{w:#x}({kind})"));
+    }
+    out
+}
+
 fn describe(r: &FromSpaceRef) -> String {
     format!(
         "  owner={:#x} type={} space={:?} +{} {} -> {:#x} (type={} {:?}) {} [slot dirty_now={} ever_dirty={} owner_flags={:#x} marked={}]",
@@ -360,7 +392,7 @@ fn describe(r: &FromSpaceRef) -> String {
         r.slot_ever_dirty,
         r.owner_flags,
         r.owner_flags & GC_FLAG_MARKED != 0
-    )
+    ) + payload_preview(r).as_str()
 }
 
 /// #7803 identification dump: the offender line names the owner's GC type
