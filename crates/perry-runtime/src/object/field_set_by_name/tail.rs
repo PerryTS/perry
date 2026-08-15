@@ -50,7 +50,7 @@ pub(super) fn set_field_by_name_object_tail(
     // Safety: obj is a valid heap pointer (> 0x10000) at this point
     unsafe {
         // Validate this is an ObjectHeader, not some other heap type. Every
-        // shaped object has a tracked GcHeader; payload `object_type` is only
+        // shaped object has a tracked GcHeader; the payload's first word is only
         // a compatibility mirror and is never a kind fallback.
         // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
@@ -157,7 +157,7 @@ pub(super) fn set_field_by_name_object_tail(
             // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
             // must never fall through to the plain-object write below: their
             // layouts alias ObjectHeader fields. A Map with EXACTLY one entry
-            // had MapHeader.size aliasing object_type == OBJECT_TYPE_REGULAR,
+            // had MapHeader.size aliasing the first ObjectHeader word,
             // so `m.customProp = 5` walked the Map's bytes as object fields —
             // deterministic heap corruption (2026-07-02 audit P1). The
             return;
@@ -454,9 +454,10 @@ pub(super) fn set_field_by_name_object_tail(
                 };
                 set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                 super::mark_object_dynamic_shape_unknown(obj);
-                let alloc_limit =
-                    std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32)
-                        as usize;
+                let alloc_limit = std::cmp::max(
+                    crate::object::object_live_slot_count(obj),
+                    crate::object::INLINE_SLOT_FLOOR as u32,
+                ) as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
                     // validated (GC header read, type check, closure
@@ -468,7 +469,7 @@ pub(super) fn set_field_by_name_object_tail(
                     let slot = fields_ptr.add(slot_idx as usize);
                     // Publish the expanded traced range and its exact
                     // descriptor before the pointer-bearing slot value.
-                    if slot_idx >= (*obj).field_count {
+                    if slot_idx >= crate::object::object_live_slot_count(obj) {
                         set_object_live_slot_count(obj, slot_idx + 1);
                     }
                     crate::gc::runtime_store_jsvalue_slot(
@@ -522,7 +523,7 @@ pub(super) fn set_field_by_name_object_tail(
             // slot is undefined-initialized at allocation, so the widened range
             // can only expose non-pointer sentinels — then publish the value.
             // Bump field_count so Object.keys()/values()/entries() see the new property.
-            if (*obj).field_count == 0 {
+            if crate::object::object_live_slot_count(obj) == 0 {
                 set_object_live_slot_count(obj, 1);
             }
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
@@ -538,7 +539,7 @@ pub(super) fn set_field_by_name_object_tail(
             // #6759 C3 rung 1: no `class_id == 0` gate — a keyless class
             // instance gaining its first by-name property is stamped like
             // any other receiver.
-            super::shapes::stamp_object_shape(obj, new_keys, 1);
+            super::shapes::stamp_object_shape(obj, new_keys, 1, 1);
             return;
         }
 
@@ -605,8 +606,10 @@ pub(super) fn set_field_by_name_object_tail(
 
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit = std::cmp::max(
+            crate::object::object_live_slot_count(obj),
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        ) as usize;
 
         // Sidecar O(1) lookup when keys_array has grown past the
         // linear-scan break-even. Without this, the build-then-fill
@@ -744,7 +747,7 @@ pub(super) fn set_field_by_name_object_tail(
             // and evacuation rewriting. Widen the count FIRST — every physical
             // slot is undefined-initialized at allocation, so the widened range
             // can only expose non-pointer sentinels — then publish the value.
-            if new_index as u32 >= (*obj).field_count {
+            if new_index as u32 >= crate::object::object_live_slot_count(obj) {
                 set_object_live_slot_count(obj, new_index as u32 + 1);
             }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
@@ -961,7 +964,7 @@ pub(super) fn set_field_by_name_object_tail(
         // slot is undefined-initialized at allocation, so the widened range
         // can only expose non-pointer sentinels — then publish the value.
         // Bump field_count to reflect the newly added property
-        if new_index as u32 >= (*obj).field_count {
+        if new_index as u32 >= crate::object::object_live_slot_count(obj) {
             set_object_live_slot_count(obj, new_index as u32 + 1);
         }
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));

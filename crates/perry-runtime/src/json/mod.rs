@@ -1364,7 +1364,11 @@ mod tests {
         let arr = (value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
         let elem0 = crate::array::js_array_get(arr, 0);
         let obj = (elem0.bits() & POINTER_MASK) as *const crate::ObjectHeader;
-        (value, (*obj).field_count, (*(*obj).keys_array).length)
+        (
+            value,
+            crate::object::object_live_slot_count(obj),
+            (*(*obj).keys_array).length,
+        )
     }
 
     #[test]
@@ -1497,7 +1501,7 @@ mod tests {
                     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
                     crate::object::js_object_set_field_by_name(obj, key, base + i as f64);
                 }
-                assert!((*obj).field_count >= (*(*obj).keys_array).length);
+                assert!(crate::object::object_live_slot_count(obj) >= (*(*obj).keys_array).length);
                 arr = crate::array::js_array_push(arr, JSValue::object_ptr(obj as *mut u8));
             }
             let boxed = crate::value::js_nanbox_pointer(arr as i64);

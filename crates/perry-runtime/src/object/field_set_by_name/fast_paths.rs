@@ -99,10 +99,12 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         vbits
     };
     super::mark_object_dynamic_shape_unknown(obj);
-    let alloc_limit =
-        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit = std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    ) as usize;
     if (idx as usize) < alloc_limit {
-        if idx >= (*obj).field_count {
+        if idx >= crate::object::object_live_slot_count(obj) {
             set_object_live_slot_count(obj, idx + 1);
         }
         store_object_field_slot(obj, idx as usize, vbits);
@@ -258,8 +260,10 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         set_object_keys_array(obj, next_keys as *mut ArrayHeader);
         super::mark_object_dynamic_shape_unknown(obj);
 
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit = std::cmp::max(
+            crate::object::object_live_slot_count(obj),
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        ) as usize;
         let slot_usize = slot_idx as usize;
         let vbits = value.to_bits();
         let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
@@ -269,7 +273,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         };
 
         if slot_usize < alloc_limit {
-            if slot_idx >= (*obj).field_count {
+            if slot_idx >= crate::object::object_live_slot_count(obj) {
                 set_object_live_slot_count(obj, slot_idx + 1);
             }
             store_object_field_slot(obj, slot_usize, vbits);

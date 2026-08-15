@@ -16,9 +16,17 @@
 //! ordered-keys edge plus the exact logical-key and live-inline-slot bounds.
 //! The descriptor table is agent-local while ids are process-global. A live
 //! object's ShapeId is authoritative for its ordered keys, logical-key count,
-//! live inline-slot bound, and semantic generation. The legacy
-//! `ObjectHeader::{keys_array,field_count}` words remain ABI mirrors until
-//! #8047 removes them; guards and GC must not use their values as shape facts.
+//! live inline-slot bound, and semantic generation.
+//!
+//! #8113 removed `ObjectHeader::field_count`, so the descriptor's
+//! `live_inline_slot_count` is no longer a mirror of a header word — it is the
+//! ONLY record of the bound. Every publication below is therefore
+//! MINT-THEN-STAMP: the successor descriptor is fully installed while the
+//! predecessor stamp is still readable, and the `parent_class_id` store is the
+//! single, allocation-free publication point. A stamp-cleared window would be a
+//! window in which the collector sees a live bound of 0 (#7154/#7164).
+//! `ObjectHeader::keys_array` remains an ABI mirror until #8047 removes it;
+//! guards and GC must not use its value as a shape fact.
 
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
@@ -469,12 +477,13 @@ pub(crate) unsafe fn stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
     keys: *const ArrayHeader,
     key_count: u32,
+    live_inline_slot_count: u32,
 ) -> u32 {
     if !shape_word_is_writable(obj) {
         return 0;
     }
     let Some(lineage) = object_shape_descriptor(obj) else {
-        let id = shape_descriptor_ensure(keys, key_count, (*obj).field_count)
+        let id = shape_descriptor_ensure(keys, key_count, live_inline_slot_count)
             .unwrap_or_else(|error| shape_descriptor_error_abort(error));
         (*obj).parent_class_id = id;
         debug_assert_object_shape_parity(obj);
@@ -502,54 +511,138 @@ pub(crate) unsafe fn stamp_object_shape(
 /// `ObjectHeader` must call this so all runtime and emitted guards observe the
 /// same descriptor identity from birth.
 ///
-/// No `shape_word_is_writable` check: the callers have just written
-/// `object_type`/`class_id` into a header they allocated, so the receiver is a
-/// genuine `ObjectHeader` and never the `RegExpHeader` alias.
+/// `live_inline_slot_count` is the birth bound the allocator sized the object
+/// with. #8113: it is a parameter rather than a `(*obj).field_count` read
+/// because the header no longer carries the word — the descriptor this
+/// publishes is the only record of it.
+///
+/// No `shape_word_is_writable` check beyond the null test: the callers have just
+/// written `class_id` into a header they allocated, so the receiver is a genuine
+/// `ObjectHeader` and never the `RegExpHeader` alias.
 #[inline]
 pub(crate) unsafe fn birth_stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
     runtime_shape_id: u32,
+    live_inline_slot_count: u32,
 ) {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return;
     }
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
-        synchronize_object_shape_descriptor(obj);
+        birth_publish_object_shape(obj, live_inline_slot_count);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
     let keys = current.keys as usize as *mut ArrayHeader;
     let key_count = current.logical_key_count;
-    let supplied_id_is_local = descriptor_matches_object(runtime_shape_id, obj)
-        || install_external_shape_id(runtime_shape_id, keys, key_count, (*obj).field_count);
+    let supplied_id_is_local =
+        descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
+            || install_external_shape_id(runtime_shape_id, keys, key_count, live_inline_slot_count);
     if supplied_id_is_local {
         (*obj).parent_class_id = runtime_shape_id;
         debug_assert_object_shape_parity(obj);
     } else {
-        synchronize_object_shape_descriptor(obj);
+        birth_publish_object_shape(obj, live_inline_slot_count);
     }
 }
 
-/// Install the exact descriptor for the object's current authoritative header
-/// facts. This is the only structural shape publication operation used by
-/// mutations. Keyless objects receive a descriptor too.
-pub(crate) unsafe fn synchronize_object_shape_descriptor(
+/// Publish the exact descriptor for a FRESHLY ALLOCATED header. #8113: the
+/// birth live-slot bound must be supplied because no header word carries it.
+///
+/// Mint-then-stamp: `shape_descriptor_ensure_with_generation` can collect, and
+/// at that point the object is still unstamped, which is sound only because it
+/// is also still unpublished — the allocator has not returned it and no live
+/// edge reaches it. Every LATER bound change goes through
+/// [`publish_object_live_slot_count`], which keeps a valid predecessor stamp
+/// across the mint.
+#[inline]
+pub(crate) unsafe fn birth_publish_object_shape(
     obj: *mut crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
 ) -> u32 {
-    let predecessor = object_shape_descriptor(obj);
-    synchronize_object_shape_descriptor_from(obj, predecessor)
+    synchronize_object_shape_descriptor_from(obj, None, live_inline_slot_count)
 }
 
-/// Structural synchronization after a caller has temporarily cleared the
-/// stamp. `predecessor` carries semantic lineage (including class kind) across
-/// the pointer/count mutation without exposing stale structural facts.
-pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
+/// Publish a new live inline-slot bound for an ALREADY PUBLISHED object.
+///
+/// This is the #8113 replacement for `(*obj).field_count = n`. The successor
+/// descriptor is minted while the predecessor stamp is still installed, so a
+/// collection inside the mint observes the OLD bound — correct, because the
+/// slot the caller is about to expose has not been written yet — and the new
+/// bound becomes visible at the single `parent_class_id` store, which cannot
+/// allocate and therefore cannot collect.
+pub(crate) unsafe fn publish_object_live_slot_count(
     obj: *mut crate::object::ObjectHeader,
-    predecessor: Option<ShapeDescriptor>,
+    live_inline_slot_count: u32,
 ) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
-    let keys = (*obj).keys_array;
+    let predecessor = object_shape_descriptor(obj);
+    if let Some(current) = predecessor {
+        if current.live_inline_slot_count == live_inline_slot_count {
+            debug_assert_object_shape_parity(obj);
+            return object_shape_stamp(obj);
+        }
+    }
+    synchronize_object_shape_descriptor_from(obj, predecessor, live_inline_slot_count)
+}
+
+/// Install the exact descriptor for the object's current authoritative keys
+/// edge, preserving the live inline-slot bound the receiver already carries.
+/// This is the only structural shape publication operation used by mutations.
+/// Keyless objects receive a descriptor too.
+///
+/// #8113: an UNSTAMPED receiver has no recorded bound anywhere, so this
+/// publishes 0 for it rather than inventing one. Callers that know the bound
+/// (allocators, the by-name append path) must use
+/// [`birth_publish_object_shape`] / [`publish_object_live_slot_count`].
+pub(crate) unsafe fn synchronize_object_shape_descriptor(
+    obj: *mut crate::object::ObjectHeader,
+) -> u32 {
+    let predecessor = object_shape_descriptor(obj);
+    let live = predecessor
+        .map(|descriptor| descriptor.live_inline_slot_count)
+        .unwrap_or(0);
+    synchronize_object_shape_descriptor_from(obj, predecessor, live)
+}
+
+/// Structural synchronization across a keys-edge or slot-bound mutation.
+/// `predecessor` carries semantic lineage (including class kind) across the
+/// mutation without exposing stale structural facts.
+///
+/// MINT-THEN-STAMP (#8113): every allocation below happens with the
+/// predecessor stamp still installed; the receiver's published shape changes at
+/// the final `parent_class_id` store and nowhere else.
+pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    live_inline_slot_count: u32,
+) -> u32 {
+    if obj.is_null() {
+        return 0;
+    }
+    publish_object_shape_from(obj, predecessor, (*obj).keys_array, live_inline_slot_count)
+}
+
+/// Publish the exact descriptor for an EXPLICIT keys edge — which may not be
+/// the one the header currently holds.
+///
+/// This is what makes the keys-edge mutation mint-then-stamp (#8113). The
+/// caller stamps the successor here, with the predecessor still describing the
+/// header's current edge throughout every allocation inside, and only then
+/// stores the header word. The gap between the stamp store and the header store
+/// is allocation-free, and `object::gc_keys_array_slot` materializes
+/// `descriptor.keys` into the header slot anyway, so a collection inside it
+/// still sees exactly one authoritative edge.
+pub(crate) unsafe fn publish_object_shape_from(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    keys: *mut ArrayHeader,
+    live_inline_slot_count: u32,
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
     let key_count = if keys.is_null() {
         0
     } else {
@@ -562,14 +655,17 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
     let old_id = object_shape_stamp(obj);
     if let Some(old) = shape_descriptor_by_id(old_id) {
         if old.keys == keys as u64 && old.logical_key_count != key_count {
+            // #8113: these three arms are unreachable-by-construction defenses
+            // (`debug_assert!` below). They deliberately leave the receiver
+            // STAMPED with its predecessor rather than clearing: an unstamped
+            // object now has no live-slot bound at all, so clearing would turn
+            // a shape-identity fault into heap-payload loss.
             let Some(gc) = crate::value::addr_class::try_read_tracked_gc_header(keys as usize)
             else {
-                clear_object_shape_stamp(obj);
-                return 0;
+                return old_id;
             };
             if (*gc.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
-                clear_object_shape_stamp(obj);
-                return 0;
+                return old_id;
             }
             let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
             debug_assert!(
@@ -577,8 +673,7 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
                 "shared keys array mutated in place under an immutable ShapeId"
             );
             if shared {
-                clear_object_shape_stamp(obj);
-                return 0;
+                return old_id;
             }
             retain_key_count_versions(keys as u64);
         }
@@ -599,12 +694,12 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
         keys,
         key_count,
-        (*obj).field_count,
+        live_inline_slot_count,
         semantic_generation,
         object_kind,
     ));
     (*obj).parent_class_id = id;
-    debug_assert_object_shape_parity(obj);
+    debug_assert_object_shape_parity_for_keys(obj, keys);
     id
 }
 
@@ -720,29 +815,63 @@ fn retain_key_count_versions(keys: u64) {
     }
 }
 
-fn descriptor_matches_object(shape_id: u32, obj: *const crate::object::ObjectHeader) -> bool {
+/// Exact-facts test for a candidate id against the receiver's authoritative
+/// header facts. #8113: the live bound is a PARAMETER — the header no longer
+/// mirrors it, so the caller supplies the bound it is claiming.
+fn descriptor_matches_object(
+    shape_id: u32,
+    obj: *const crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
+) -> bool {
     let Some(d) = shape_descriptor_by_id(shape_id) else {
         return false;
     };
     unsafe {
-        let keys = (*obj).keys_array;
+        d.keys == (*obj).keys_array as u64
+            && d.logical_key_count == object_header_key_count(obj)
+            && d.live_inline_slot_count == live_inline_slot_count
+    }
+}
+
+#[inline]
+unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u32 {
+    let keys = (*obj).keys_array;
+    if keys.is_null() {
+        0
+    } else {
+        crate::array::keys_array_len_capped_to_capacity(keys) as u32
+    }
+}
+
+/// #8113: the live-slot bound is no longer independently observable, so parity
+/// is now exactly "the stamp resolves, and its structural keys facts match the
+/// keys edge the receiver is about to carry". The bound cannot disagree with
+/// itself.
+#[inline]
+pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
+    debug_assert_object_shape_parity_for_keys(obj, (*obj).keys_array);
+}
+
+/// Parity against an EXPLICIT keys edge.
+///
+/// `publish_object_shape_from` stamps the successor before the header store
+/// (that is what makes the keys mutation mint-then-stamp), so for that one
+/// window the authoritative edge is the caller's argument, not the header word.
+#[inline]
+pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
+    obj: *const crate::object::ObjectHeader,
+    keys: *mut ArrayHeader,
+) {
+    let id = object_shape_stamp(obj);
+    if id != 0 {
         let key_count = if keys.is_null() {
             0
         } else {
             crate::array::keys_array_len_capped_to_capacity(keys) as u32
         };
-        d.keys == keys as u64
-            && d.logical_key_count == key_count
-            && d.live_inline_slot_count == (*obj).field_count
-    }
-}
-
-#[inline]
-pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
-    let id = object_shape_stamp(obj);
-    if id != 0 {
         debug_assert!(
-            descriptor_matches_object(id, obj),
+            shape_descriptor_by_id(id)
+                .is_some_and(|d| { d.keys == keys as u64 && d.logical_key_count == key_count }),
             "published ShapeId disagrees with authoritative ObjectHeader facts"
         );
     }
@@ -814,9 +943,16 @@ pub(crate) unsafe fn synchronize_live_object_shape_descriptor_after_header_visit
 /// Drop the stamp iff the word currently holds one, leaving a real
 /// `parent_class_id` untouched. Returns true when a stamp was cleared.
 ///
-/// Ids are never reused, so clearing makes every stale id-keyed cache entry a
-/// permanent miss; the next resolve re-stamps from whatever record the live
-/// keys array has then.
+/// # TEST-ONLY since #8113
+///
+/// Production code must never clear a stamp. The descriptor is now the sole
+/// record of the live inline-slot bound, so an unstamped receiver reports a
+/// bound of ZERO — its payload stops being traced, rewritten, and writable.
+/// Every mutation that used to clear-then-re-mint is mint-then-stamp instead
+/// (`publish_object_live_slot_count`, `publish_object_shape_from`), which has no
+/// window at all. This survives only so tests can MANUFACTURE the unstamped
+/// state and assert what the runtime does with it.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHeader) -> bool {
     if is_shape_id((*obj).parent_class_id) {
@@ -1194,7 +1330,10 @@ mod c3c_tests {
                     descriptor.logical_key_count,
                     crate::array::js_array_length((*obj).keys_array)
                 );
-                assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
+                assert_eq!(
+                    descriptor.live_inline_slot_count,
+                    crate::object::object_live_slot_count(obj)
+                );
                 debug_assert_object_shape_parity(obj);
             }
 
@@ -1246,11 +1385,19 @@ mod c6804_tests {
         }
     }
 
-    /// #6804: `object_shape()` self-heals — an unstamped plain object gets
-    /// stamped at first observation, and the token equals the id every
-    /// sibling already carries (no pre/post-stamp token split).
+    /// #6804 wanted "no pre/post-stamp token split", and got it with a
+    /// self-heal inside `object_shape()`. #8113 removes the self-heal and keeps
+    /// the property, by a stronger route: **the split population is empty**,
+    /// because every allocator birth-stamps.
+    ///
+    /// The self-heal had to go because it derived the live inline-slot bound
+    /// from `ObjectHeader::field_count`. With that word deleted, healing an
+    /// unstamped receiver would publish a descriptor claiming a bound of ZERO —
+    /// a read-only observation silently truncating the object's traced and
+    /// writable payload. Missing closed costs a PIC miss; healing wrongly loses
+    /// fields.
     #[test]
-    fn object_shape_token_self_heals_to_shared_id() {
+    fn object_shape_token_is_birth_stamped_and_an_unstamped_one_misses_closed() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let packed = b"m6804_x\0m6804_y";
@@ -1261,20 +1408,38 @@ mod c6804_tests {
                 packed.len() as u32,
             );
             let birth_stamp = (*obj).parent_class_id;
-            assert!(is_shape_id(birth_stamp), "test premise: birth-stamped");
-
-            // Simulate a pre-#6804 / cleared-stamp object of the same shape.
-            (*obj).parent_class_id = 0;
-            let token = crate::typed_feedback::test_object_shape_token(obj as usize);
+            assert!(is_shape_id(birth_stamp), "every literal is birth-stamped");
             assert_eq!(
-                token, birth_stamp as usize,
-                "self-healed token must equal the shape's canonical id"
+                crate::typed_feedback::test_object_shape_token(obj as usize),
+                birth_stamp as usize,
+                "the observed token is the birth stamp — no split to heal"
+            );
+            assert_eq!(
+                shape_descriptor_by_id(birth_stamp)
+                    .expect("birth descriptor")
+                    .live_inline_slot_count,
+                2
+            );
+
+            // Manufacture the pre-#6804 unstamped state and prove observing it
+            // is INERT: no token, no descriptor, and — the part that matters —
+            // no rewritten live-slot bound.
+            (*obj).parent_class_id = 0;
+            assert_eq!(
+                crate::typed_feedback::test_object_shape_token(obj as usize),
+                0,
+                "an unstamped receiver must miss closed, not be re-stamped"
             );
             assert_eq!(
                 (*obj).parent_class_id,
-                birth_stamp,
-                "observation must re-stamp the object"
+                0,
+                "observation must not publish a descriptor for an unstamped receiver"
             );
+
+            // Restoring the birth stamp restores the exact bound, which is the
+            // proof that nothing was lost by refusing to heal.
+            (*obj).parent_class_id = birth_stamp;
+            assert_eq!(crate::object::object_live_slot_count(obj), 2);
         }
     }
 
@@ -1523,10 +1688,8 @@ mod descriptor_tests_8067 {
         let id = shape_descriptor_ensure(keys as *const ArrayHeader, 3, 2)
             .expect("shape range unexpectedly exhausted");
         let obj = crate::object::ObjectHeader {
-            object_type: 1,
             class_id: 0,
             parent_class_id: id,
-            field_count: 2,
             keys_array: keys as *mut ArrayHeader,
             meta: std::ptr::null_mut(),
         };

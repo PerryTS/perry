@@ -635,14 +635,15 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
-/// #7916: the per-object footprint accounting this issue is about, pinned as an
-/// executable fact rather than a comment.
+/// #7916 / #8113: the per-object footprint accounting this issue is about,
+/// pinned as an executable fact rather than a comment.
 ///
-/// A two-field object literal is `GcHeader (8) + ObjectHeader (32) + 8 *
-/// max(field_count, INLINE_SLOT_FLOOR)`. At `INLINE_SLOT_FLOOR = 4` that is
-/// **72 bytes to store 16 bytes of payload** and `gc-handoff/bench/retain.ts`
-/// writes 216 MB to hold 48 MB of doubles. Lowering the floor to 2 removes the
-/// two unusable slots.
+/// A two-field object literal is `GcHeader (8) + ObjectHeader (24) + 8 *
+/// max(live_inline_slot_count, INLINE_SLOT_FLOOR)`. It was 72 bytes at floor 4
+/// (#7916 took it to 56 by lowering the floor to 2) and #8113 took it to **48**
+/// by deleting the header's two derivable words. 48 bytes to store 16 bytes of
+/// payload; `gc-handoff/bench/retain.ts` writes 3x its data volume, down from
+/// 4.5x.
 ///
 /// This reads the size the ALLOCATOR recorded (`GcHeader::size`), not a
 /// recomputation of the same formula, so it fails if any allocation path
@@ -651,8 +652,10 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
 fn two_field_literal_footprint_is_exactly_accounted() {
     assert_eq!(
         std::mem::size_of::<ObjectHeader>(),
-        32,
-        "the ObjectHeader half of the accounting: 4 u32 + 2 pointers"
+        24,
+        "the ObjectHeader half of the accounting: 2 u32 + 2 pointers (#8113 \
+         removed `object_type` and `field_count`; either alone saved nothing \
+         because the struct re-padded, both together saved 8 bytes)"
     );
     assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
 
@@ -677,10 +680,11 @@ fn two_field_literal_footprint_is_exactly_accounted() {
         "a 2-field literal must occupy exactly {expected} bytes"
     );
     assert_eq!(
-        recorded, 56,
-        "#7916: the 2-field literal footprint is 56 bytes (was 72 at floor 4). \
-         Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 bytes of unusable slots \
-         to every small object"
+        recorded, 48,
+        "#8113: the 2-field literal footprint is 48 bytes (56 before the header \
+         shrink, 72 at floor 4). Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 \
+         bytes of unusable slots to every small object; re-adding a header word \
+         re-adds 8 to every object regardless of width"
     );
 }
 
@@ -688,11 +692,11 @@ fn two_field_literal_footprint_is_exactly_accounted() {
 /// `perry-codegen/src/target_layout.rs` (#7916).
 ///
 /// perry-codegen cannot depend on perry-runtime, so it carries its own copy of
-/// this constant and uses it BOTH to size the inline-`new` bump allocation and
-/// to emit `slot < max(field_count, FLOOR)` bounds checks around raw inline
-/// slot loads/stores. The two failure modes point in opposite directions
-/// (codegen too small under-allocates; codegen too large over-reads), so the
-/// values must be exactly equal — pin the number on both sides.
+/// this constant and uses it to size the inline-`new` bump allocation, which
+/// must match the floor every runtime bounds check applies. The two failure
+/// modes point in opposite directions (codegen too small under-allocates;
+/// codegen too large over-reads), so the values must be exactly equal — pin the
+/// number on both sides.
 #[test]
 fn inline_slot_floor_matches_codegen() {
     assert_eq!(
@@ -1493,9 +1497,12 @@ fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
 
 /// #7563: an ARRAY receiver must never be read back as a class instance.
 ///
-/// `ObjectHeader` is `{ object_type: u32, class_id: u32, … }` and `ArrayHeader`
-/// is `{ length: u32, capacity: u32 }`, so the two u32s at offset 4 alias — an
-/// array read as an `ObjectHeader` reports its **capacity** as a `class_id`.
+/// `ObjectHeader` is `{ class_id: u32, parent_class_id: u32, … }` and
+/// `ArrayHeader` is `{ length: u32, capacity: u32 }`, so the two u32s at offset
+/// 0 alias — an array read as an `ObjectHeader` reports its **length** as a
+/// `class_id`. (#8113 moved this from offset 4 / `capacity` when it deleted the
+/// leading `object_type` word. Note that makes the collision DENSER, not
+/// sparser: array lengths are small and consecutive, and so are class ids.)
 ///
 /// That mattered because `arr[Symbol.iterator]` resolves through
 /// `js_class_method_bind(arr, "values")`, whose receiver→class step used a bare
@@ -1509,11 +1516,13 @@ fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
 fn array_receiver_is_never_read_as_a_class_id() {
     let arr = crate::array::js_array_alloc(3);
     assert!(!arr.is_null());
+    crate::array::js_array_push(arr, crate::JSValue::from_bits(1.0f64.to_bits()));
     // Impersonate exactly the class id this array's bytes would have yielded.
-    let impersonated = unsafe { (*arr).capacity };
+    // #8113: that is `length`, at offset 0, not `capacity`.
+    let impersonated = unsafe { (*arr).length };
     assert_ne!(
         impersonated, 0,
-        "the test is vacuous unless the capacity is a non-zero (i.e. lookup-able) class id"
+        "the test is vacuous unless the length is a non-zero (i.e. lookup-able) class id"
     );
 
     let arr_value = crate::value::js_nanbox_pointer(arr as i64);
@@ -1654,4 +1663,128 @@ fn buffer_own_key_comes_from_the_expando_table_not_the_object_walk() {
         !obj_value_has_own_key(receiver, absent_key),
         "an unknown key is not an own key"
     );
+}
+// ---------------------------------------------------------------------------
+// #8113 — the trap this header shrink had to disarm.
+//
+// `ObjectHeader` used to open with `object_type: u32`, prefix-punned against
+// `error::ErrorHeader`'s first word, and NINE sites read raw offset 0 to answer
+// "is this an Error?". Deleting the word makes offset 0 `class_id` — and
+// `OBJECT_TYPE_ERROR` is **2**, while class ids are handed out from 1, densely,
+// in source-declaration order. So a surviving raw read reclassifies every
+// instance of the SECOND class a program declares as an `ErrorHeader` and reads
+// `message`/`name`/`stack`/`errors` out of its field slots: a silent wrong
+// answer of exactly the #8100 shape.
+//
+// These tests are SABOTAGE-SHAPED. Each first asserts that the confusable value
+// really is sitting at offset 0 — so a green run proves the GcHeader-kind test
+// fired, not that the fixture happened to look harmless.
+// ---------------------------------------------------------------------------
+
+/// The premise: an ordinary object CAN carry `class_id == OBJECT_TYPE_ERROR`,
+/// and that value really is the first word of its header.
+#[test]
+fn an_ordinary_object_can_carry_the_error_type_tag_as_its_class_id() {
+    let obj = js_object_alloc(crate::error::OBJECT_TYPE_ERROR, 2);
+    assert!(!obj.is_null());
+    unsafe {
+        assert_eq!((*obj).class_id, crate::error::OBJECT_TYPE_ERROR);
+        // Offset 0, read the way the retired discriminators read it.
+        let raw_word_0 = std::ptr::read(obj as *const u32);
+        assert_eq!(
+            raw_word_0,
+            crate::error::OBJECT_TYPE_ERROR,
+            "test premise: the pre-#8113 raw offset-0 read now yields \
+             OBJECT_TYPE_ERROR for an ordinary object"
+        );
+    }
+}
+
+/// `Error.isError()` must not be fooled by it. (`error.rs:750`.)
+#[test]
+fn error_is_error_rejects_an_object_whose_class_id_equals_the_error_tag() {
+    let obj = js_object_alloc(crate::error::OBJECT_TYPE_ERROR, 2);
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    assert_eq!(
+        crate::error::js_error_is_error(value).to_bits(),
+        crate::value::TAG_FALSE,
+        "class_id == OBJECT_TYPE_ERROR must not read as a native Error"
+    );
+
+    // Not over-narrowed: a real Error still answers true.
+    let real = crate::error::js_error_new_with_message(crate::string::js_string_from_bytes(
+        b"boom".as_ptr(),
+        4,
+    ));
+    let real_value = crate::value::js_nanbox_pointer(real as i64);
+    assert_eq!(
+        crate::error::js_error_is_error(real_value).to_bits(),
+        crate::value::TAG_TRUE,
+        "a genuine ErrorHeader must still classify as an Error"
+    );
+}
+
+/// `js_error_get_errors` must resolve `.errors` GENERICALLY for it rather than
+/// returning the fixed `ErrorHeader.errors` slot. (`error.rs:1542`; the doc
+/// there records the for-of corruption the fixed-slot read caused.)
+#[test]
+fn error_get_errors_does_not_read_a_fixed_slot_off_a_colliding_class_id() {
+    let obj = js_object_alloc(crate::error::OBJECT_TYPE_ERROR, 2);
+    unsafe {
+        assert_eq!((*obj).class_id, crate::error::OBJECT_TYPE_ERROR);
+        // Poison the slot the ErrorHeader layout would call `errors`.
+        let key = crate::string::js_string_from_bytes(b"errors".as_ptr(), 6);
+        let arr = crate::array::js_array_alloc(1);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::js_nanbox_pointer(arr as i64).to_bits()),
+        );
+        let got = crate::error::js_error_get_errors(obj as *mut crate::error::ErrorHeader);
+        assert_eq!(
+            got as usize, arr as usize,
+            "`.errors` on a class_id == 2 object must resolve as an ordinary \
+             own property, not as ErrorHeader's fixed slot"
+        );
+    }
+}
+
+/// `js_dynamic_object_keys` must return the object's real keys, not the Error
+/// triple. (`value/dynamic_object.rs:728`.)
+#[test]
+fn dynamic_object_keys_are_not_the_error_triple_for_a_colliding_class_id() {
+    let obj = js_object_alloc(crate::error::OBJECT_TYPE_ERROR, 2);
+    unsafe {
+        let key = crate::string::js_string_from_bytes(b"kk8113".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(obj, key, 1.0);
+        let keys = crate::value::js_dynamic_object_keys(obj as i64);
+        assert_eq!(
+            crate::array::js_array_length(keys),
+            1,
+            "a class_id == 2 object must enumerate its OWN keys, not \
+             [message, name, stack]"
+        );
+    }
+}
+
+/// The #6595 half: the store-plan gate must stay FALSE for a heap class object.
+/// `object_is_regular` is the replacement for the deleted
+/// `object_type == OBJECT_TYPE_REGULAR` read at `proxy.rs:1523`, and it is only
+/// a valid one because it means `descriptor.object_kind == Ordinary` — not the
+/// weaker "is an ObjectHeader".
+#[test]
+fn object_is_regular_excludes_a_heap_class_object() {
+    let obj = js_object_alloc(0x8113_0001, 1);
+    unsafe {
+        assert!(
+            crate::object::object_is_regular(obj),
+            "a fresh ordinary object is regular"
+        );
+        crate::object::class_registry::js_object_mark_class(obj as i64);
+        assert!(
+            !crate::object::object_is_regular(obj),
+            "#6595: a heap class object must NOT be 'regular' — the store-plan \
+             gate at proxy.rs keys off exactly this"
+        );
+    }
 }

@@ -556,7 +556,8 @@ fn lower_put_value_static_write_ic(
         .and(I16, &reserved, &WRITE_PIC_BLOCKING_FLAGS.to_string());
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
 
-    let class_addr = ctx.block().add(I64, &safe_target, "4");
+    // #8113: `class_id` moved from header offset 4 to 0.
+    let class_addr = ctx.block().add(I64, &safe_target, "0");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
     let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
@@ -572,7 +573,8 @@ fn lower_put_value_static_write_ic(
     let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
 
     // The write PIC uses the same single ShapeId token domain as the read PIC.
-    let shape_id_addr = ctx.block().add(I64, &safe_target, "8");
+    // #8113: the ShapeId word moved from header offset 8 to 4.
+    let shape_id_addr = ctx.block().add(I64, &safe_target, "4");
     let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
     let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
     let shape_id_rel = ctx.block().add(I32, &raw_shape_id, "-2147483648");
@@ -949,7 +951,8 @@ fn lower_put_value_dyn_ic_inline(
         .block()
         .and(I16, &reserved, &WRITE_PIC_BLOCKING_FLAGS.to_string());
     let flags_clear = ctx.block().icmp_eq(I16, &blocked, "0");
-    let class_addr = ctx.block().add(I64, &t_handle, "4");
+    // #8113: `class_id` moved from header offset 4 to 0.
+    let class_addr = ctx.block().add(I64, &t_handle, "0");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
     let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
@@ -960,7 +963,8 @@ fn lower_put_value_dyn_ic_inline(
         .and(I16, &reserved, &PLAIN_ORDINARY_OBJ_FLAG.to_string());
     let plain_ordinary = ctx.block().icmp_ne(I16, &plain_ordinary_bits, "0");
     let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
-    let shape_id_addr = ctx.block().add(I64, &t_handle, "8");
+    // #8113: the ShapeId word moved from header offset 8 to 4.
+    let shape_id_addr = ctx.block().add(I64, &t_handle, "4");
     let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
     let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
     let shape_id_rel = ctx.block().add(I32, &raw_shape_id, "-2147483648");
@@ -1009,18 +1013,21 @@ fn lower_put_value_dyn_ic_inline(
         I64,
         &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
     );
-    let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-    let header_words = (header_bytes / 8).to_string();
-    let slot_word = ctx.block().add(I64, &slot, &header_words);
+    // #8113: address the slot in BYTES rather than dividing the header size by
+    // 8 to get a word index. The quotient is exact today (24/8 and 16/8), but
+    // #8047's ILP32 header is 12 bytes and `12 / 8 == 1` truncates silently —
+    // the same class of bug as the stale header-size comments this rung fixed.
+    let header_bytes =
+        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let slot_bytes = ctx.block().shl(I64, &slot, "3");
+    let slot_off = ctx.block().add(I64, &slot_bytes, &header_bytes);
     let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
-    let slot_ptr = ctx
-        .block()
-        .gep_inbounds(I64, &obj_ptr, &[(I64, &slot_word)]);
+    let slot_ptr = ctx.block().gep_inbounds(I8, &obj_ptr, &[(I64, &slot_off)]);
     ctx.block()
         .cond_br(&v_scalar, &store_scalar_label, &store_ref_label);
 
     ctx.current_block = store_scalar_idx;
-    // GC_STORE_AUDIT(POINTER_FREE): the tag test above proved the value is
+    // GC_STORE_AUDIT(POINTER_FREE): the entry tag test proved the value is
     // not pointer/string/bigint — non-reference bits need no barrier.
     ctx.block().store(DOUBLE, v, &slot_ptr);
     ctx.block().br(&merge_label);

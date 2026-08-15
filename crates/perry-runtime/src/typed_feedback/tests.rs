@@ -1691,14 +1691,12 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
     let class_id = 0x7EED_8067;
     let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
     let expected_shape_id = shape_id(obj);
-    let original_field_count = unsafe { (*obj).field_count };
 
     unsafe {
-        // These are ABI mirrors retained until the later header-shrink issue.
-        // An authoritative guard must not consult either one.
+        // `keys_array` is the last ABI mirror (#8113 deleted `field_count`;
+        // #8047 removes this one). An authoritative guard must not consult it.
         // GC_STORE_AUDIT(POINTER_FREE): test sabotage removes the compatibility edge by storing null.
         (*obj).keys_array = std::ptr::null_mut();
-        (*obj).field_count = 0;
     }
     let passed = js_typed_feedback_class_field_get_guard(
         8067,
@@ -1717,7 +1715,6 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
             &(*obj).keys_array as *const _ as usize,
             original_keys as u64,
         );
-        (*obj).field_count = original_field_count;
     }
 
     assert_eq!(passed, 1, "guard must consume ShapeDescriptor facts");

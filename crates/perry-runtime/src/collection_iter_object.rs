@@ -86,8 +86,8 @@ unsafe fn map_iter_obj_raw(map: *const MapHeader, kind: i32) -> i64 {
     // #7570: these entries are reached from the DECLARED-type lowering of
     // `m.entries()`/`.keys()`/`.values()`, so `map` can be a `class X extends
     // Map` instance (a plain ObjectHeader) rather than a `MapHeader`. Every
-    // `next()` would then read `parent_class_id ‖ field_count` as the entries
-    // pointer. Resolve onto the hidden backing before the iterator captures it.
+    // `next()` would then read `keys_array` as the entries pointer (#8113 moved
+    // the confusable word; the hazard is unchanged). Resolve onto the hidden backing before the iterator captures it.
     // Unlike the `js_map_*` entries this is not a `clean_map_ptr` caller — it
     // stores the raw pointer into the iterator object, so the redirect has to
     // happen here.

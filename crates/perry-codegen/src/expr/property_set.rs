@@ -360,8 +360,8 @@ pub(crate) fn try_lower_sloppy_class_field_store(
         ctx.current_block = fast_idx;
         {
             // arm64_32 watchOS: the fields region starts at `size_of::<ObjectHeader>()`
-            // past the user pointer (24 on 64-bit, 20 on ILP32) — same derivation as
-            // the strict arm and the runtime setter.
+            // past the user pointer (24 on 64-bit, 16 on ILP32 since #8113) —
+            // same derivation as the strict arm and the runtime setter.
             let header_skip =
                 crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
             let blk = ctx.block();
@@ -1443,8 +1443,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let raw_stored_value = {
                                     // arm64_32 watchOS: the object fields region begins at
                                     // `size_of::<ObjectHeader>()` past the user pointer — 24 on
-                                    // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is
-                                    // 4 bytes there). A hardcoded 24 writes every class field 4
+                                    // 64-bit, 16 on ILP32 since #8113 (both trailing pointers are
+                                    // 4 bytes there). A hardcoded 24 writes every class field 8
                                     // bytes off on a 32-bit watch; the paired inline read
                                     // (`property_get`) and the runtime setter must agree, so
                                     // derive it from the target triple (no-op on 64-bit; see

@@ -614,7 +614,7 @@ can bypass part of the generic NaN-boxing overhead:
 
 ### `ObjectHeader` Layout
 
-Every heap object has: `object_type` (u32), `class_id` (u32), `field_count` (u32), `keys_array` pointer. Inline property slots follow immediately in memory.
+Every heap object has: `class_id` (u32), `parent_class_id` (u32, which carries the runtime `ShapeId` once stamped), `keys_array` pointer, `meta` pointer — 24 bytes on LP64, 16 on ILP32. Inline property slots follow immediately in memory. (#8113 removed the `object_type` and `field_count` words: the receiver kind comes from `GcHeader.obj_type` plus the ShapeId descriptor's `object_kind`, and the live inline-slot bound from the same descriptor's `live_inline_slot_count`.)
 
 - **Shape caching**: Objects with the same key set share a `keys_array` pointer.
 - **`KEYS_INDEX`**: FNV-1a hash map built when `keys_array.length > 32` for O(1) lookup.

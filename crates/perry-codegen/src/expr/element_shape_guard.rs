@@ -163,8 +163,8 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
 
     // (2) SUBCLASS BRAND (#7573/#7603). `class X extends Array` instances are
     // plain `ObjectHeader`s that overlay `ArrayHeader` field for field, so
-    // `length`/`capacity`/`elements[0]` would read `object_type`/`class_id`/
-    // `parent_class_id‖field_count`. The runtime's `array_gc_header` makes the
+    // `length`/`capacity`/`elements[0]` would read `class_id`/`parent_class_id`
+    // (the ShapeId)/`keys_array` (#8113). The runtime's `array_gc_header` makes the
     // same test, but it is repeated here so the raw pointer handed across the
     // call below is already branded, and so the emitted IR carries the brand
     // where a reviewer (and the IR census) can see it.
@@ -356,7 +356,8 @@ pub(crate) fn emit_element_shape_field_load(
         let hdr_masked = blk.and(I32, &hdr, ELEM_HEADER_MASK);
         let hdr_ok = blk.icmp_eq(I32, &hdr_masked, ELEM_HEADER_EXPECT);
 
-        let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "8")]);
+        // #8113: the ShapeId moved from header offset 8 to 4.
+        let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
         let shape_id = blk.load(I32, &sid_ptr);
         let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
 

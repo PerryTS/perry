@@ -1685,9 +1685,13 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     if jsval().is_pointer() {
         let obj = jsval().as_pointer::<ObjectHeader>();
 
-        // Validate this is an ObjectHeader, not some other heap type.
-        // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
-        // for static/const objects that don't have GcHeaders.
+        // Validate this is an ObjectHeader, not some other heap type, from the
+        // GcHeader. (The comment here used to promise an `ObjectHeader.object_type`
+        // fallback "for static/const objects that don't have GcHeaders". No such
+        // fallback was ever written — the read below is unconditional — and
+        // #8113 deleted the word it named. `NULL_OBJECT_BYTES`, the one
+        // GcHeader-less receiver, therefore classifies from whatever precedes it
+        // in `.data`; that was already true before this change.)
         // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
             return 0.0;

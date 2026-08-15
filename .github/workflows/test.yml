@@ -982,6 +982,26 @@ jobs:
             done
           fi
 
+      # #8113 — the perry-ffi <-> perry-runtime ABI mirror, which had NEVER
+      # EXECUTED. `perry_ffi::types::layout_tests` is
+      # `#[cfg(all(test, feature = "runtime-link"))]`, `runtime-link` was
+      # enabled nowhere in `.github/`, and the scope loop above runs
+      # `cargo test -p perry-ffi` with DEFAULT features — so the module never
+      # even compiled. Deleting a mirrored field still went red (an `offset_of!`
+      # on a missing field stops compiling), but a SIZE or PADDING divergence
+      # between the two structs was invisible, which is precisely the failure
+      # mode of a header-layout change.
+      #
+      # Unconditional, not scope-gated: perry-ffi's optional dependency on
+      # perry-runtime means a runtime-only diff need not pull perry-ffi into
+      # scope, and this is the one check that says the published ABI mirror
+      # still matches the runtime it mirrors.
+      - name: perry-ffi ABI mirror matches the runtime (#8113)
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: cargo test -p perry-ffi --features runtime-link --lib
+
   # ---------------------------------------------------------------------------
   # Scoped e2e: run the integration suites NAMED BY THE DIFF (#5960)
   #

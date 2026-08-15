@@ -43,8 +43,9 @@ pub(super) fn install_constructor(
 
     let ctor_value = js_nanbox_pointer(ctor as i64);
     // Generous inline capacity so installing methods plus an accessor getter and
-    // the toStringTag symbol never bumps `field_count` past the physical slot
-    // count (which would expose an overflow slot — keys_array.rs #4099).
+    // the toStringTag symbol never bumps the live inline-slot count past the
+    // physical slot count (which would expose an overflow slot —
+    // keys_array.rs #4099).
     let proto = js_object_alloc(0, 16);
     set_field(proto, "constructor", ctor_value);
     set_builtin_attrs(proto, "constructor", PropertyAttrs::new(true, false, true));

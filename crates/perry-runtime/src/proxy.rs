@@ -1525,7 +1525,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
                             // capture-carrying class materializes as,
-                            // `object_type == OBJECT_TYPE_CLASS`) shares its
+                            // `ShapeObjectKind::Class`) shares its
                             // template cid with its instances, and its own-data
                             // writes must reach the #6530
                             // `mirror_class_object_static_write` hook in
@@ -1542,8 +1542,17 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                     addr,
                                 )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
-                                && (*(addr as *const crate::ObjectHeader)).object_type
-                                    == crate::error::OBJECT_TYPE_REGULAR
+                                // #8113: this asks for ORDINARY specifically —
+                                // it must stay FALSE for a class object or
+                                // #6595 reopens. `object_is_regular` is exactly
+                                // `descriptor.object_kind == Ordinary` since
+                                // #8086, so it is the same predicate the
+                                // deleted `object_type == OBJECT_TYPE_REGULAR`
+                                // word expressed, not the weaker
+                                // "is an ObjectHeader" test.
+                                && crate::object::object_is_regular(
+                                    addr as *const crate::ObjectHeader,
+                                )
                                 && interned != 0;
                             let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)

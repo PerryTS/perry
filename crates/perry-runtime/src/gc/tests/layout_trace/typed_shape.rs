@@ -462,7 +462,7 @@ fn test_typed_shape_descriptor_growing_new_field_falls_back() {
     crate::object::js_object_set_field_by_name(obj, extra_key, 42.0);
 
     unsafe {
-        assert_eq!((*obj).field_count, 2);
+        assert_eq!(crate::object::object_live_slot_count(obj), 2);
     }
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), None);
 

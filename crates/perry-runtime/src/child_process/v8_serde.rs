@@ -589,7 +589,7 @@ impl Serializer {
             return 0;
         }
         let keys_len = (*keys_arr).length;
-        let num_fields = (*obj).field_count;
+        let num_fields = crate::object::object_live_slot_count(obj);
         let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
         let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const f64;
         let mut count = 0u64;

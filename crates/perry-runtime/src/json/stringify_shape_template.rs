@@ -241,7 +241,10 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
 /// above it live in overflow storage, not in the inline region.
 #[inline]
 unsafe fn object_alloc_limit(obj: *const crate::ObjectHeader) -> u32 {
-    std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32)
+    std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    )
 }
 
 /// Read shape-template field slot `f` of `obj`: inline when it fits in the

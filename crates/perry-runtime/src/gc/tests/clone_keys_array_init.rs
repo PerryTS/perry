@@ -3,7 +3,7 @@
 //!
 //! # The hazard
 //!
-//! Both branches set `object_type`, `class_id`, `parent_class_id`,
+//! Both branches set `class_id`, `parent_class_id`,
 //! `field_count` and `meta` immediately after allocation, then set
 //! `keys_array` only at the END, via `set_object_keys_array`. In between sits
 //! `crate::array::js_array_alloc`.

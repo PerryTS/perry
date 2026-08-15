@@ -33,7 +33,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         let new_keys = crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
         refresh_define_property_roots!();
         set_object_keys_array(obj, new_keys);
-        if (*obj).field_count == 0 {
+        if crate::object::object_live_slot_count(obj) == 0 {
             set_object_live_slot_count(obj, 1);
         }
         return;
@@ -147,9 +147,11 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     // getter here bumped field_count from 8 (the proto's physical capacity) to
     // 11, exposing the overflowed `values` slot and corrupting the boundary.
     let new_index = key_count as u32;
-    let inline_capacity =
-        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
-    if new_index < inline_capacity && new_index >= (*obj).field_count {
+    let inline_capacity = std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    );
+    if new_index < inline_capacity && new_index >= crate::object::object_live_slot_count(obj) {
         set_object_live_slot_count(obj, new_index + 1);
     }
 }

@@ -691,8 +691,8 @@ fn lower_new_impl_inner<'a>(
             {
                 // arm64_32 watchOS: the fields region starts at
                 // `size_of::<ObjectHeader>()` past the user pointer (24 on
-                // 64-bit, 20 on ILP32) — same derivation as every other packed
-                // slot access.
+                // 64-bit, 16 on ILP32 since #8113) — same derivation as every
+                // other packed slot access.
                 let header_skip =
                     crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
                 let blk = ctx.block();

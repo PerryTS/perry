@@ -129,7 +129,7 @@ fn recursive_materializer_reserves_exact_spill_per_object_depth() {
 
     unsafe {
         assert_eq!(
-            (*object).field_count,
+            crate::object::object_live_slot_count(object),
             crate::object::INLINE_SLOT_FLOOR as u32,
             "known width must not enlarge the primary object"
         );
@@ -140,7 +140,7 @@ fn recursive_materializer_reserves_exact_spill_per_object_depth() {
         assert_eq!((*spill).length, 3);
 
         assert_eq!(
-            (*nested).field_count,
+            crate::object::object_live_slot_count(nested),
             crate::object::INLINE_SLOT_FLOOR as u32
         );
         let nested_spill =
@@ -187,7 +187,7 @@ fn iterative_materializer_reserves_exact_spill_without_widening_object() {
     let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
     unsafe {
         assert_eq!(
-            (*object).field_count,
+            crate::object::object_live_slot_count(object),
             crate::object::INLINE_SLOT_FLOOR as u32
         );
         let spill =

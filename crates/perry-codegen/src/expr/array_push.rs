@@ -827,11 +827,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 // instance, which perry models as a plain `ObjectHeader` —
                 // reached the inline store below. `ObjectHeader` overlays
                 // `ArrayHeader` field for field, so `length` read
-                // `object_type` (= 1) and `capacity` read `class_id` (large):
+                // `class_id` and `capacity` read the ShapeId word (#8113; it
+                // was `object_type` (= 1) and `class_id` before):
                 // `1 < class_id` passed the in-bounds test and the value was
                 // stored at `handle + 8 + 1*8` — i.e. over `ObjectHeader
                 // .keys_array`, a live GC child edge — while `length + 1`
-                // overwrote `object_type`. The SECOND push then SIGSEGVed
+                // overwrote the first header word. The SECOND push then SIGSEGVed
                 // (exit 139) dereferencing `keys_array`, whose bytes were now
                 // the double `1.0` (fault address `0x3ff0000000000000`).
                 //

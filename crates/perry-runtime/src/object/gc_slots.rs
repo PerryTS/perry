@@ -31,11 +31,18 @@ pub(crate) unsafe fn gc_field_slot_range(
     if obj.is_null() {
         return None;
     }
+    // #8113: the descriptor is now the SOLE record of the live inline-slot
+    // bound — there is no header word left to fall back to. An unstamped
+    // receiver therefore traces zero payload slots, which is the fail-closed
+    // answer for the only population that can be unstamped: synthetic/raw test
+    // fixtures that bypass every runtime allocator, and which hold no heap
+    // edges. Every runtime allocator publishes a descriptor before its header
+    // escapes (`object/alloc.rs`), and every bound change is mint-then-stamp
+    // (`shapes::publish_object_live_slot_count`), so a live object is never
+    // observed here without one.
     let field_count = shapes::object_shape_descriptor(obj)
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        // Compatibility only for synthetic/raw test fixtures that bypass all
-        // runtime allocators. Published runtime objects are always stamped.
-        .unwrap_or((*obj).field_count as usize);
+        .unwrap_or(0);
     if field_count > 1_000_000 {
         return None;
     }

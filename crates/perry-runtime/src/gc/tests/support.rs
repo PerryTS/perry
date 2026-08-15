@@ -810,13 +810,25 @@ pub(super) fn tracked_malloc_headers_matching(headers: &[usize]) -> usize {
 pub(super) unsafe fn alloc_old_test_object(
     field_count: u32,
 ) -> (*mut crate::object::ObjectHeader, *mut u64) {
+    // #8113: the live inline-slot bound lives ONLY in the ShapeId descriptor,
+    // so a raw fixture has to publish one or the collector traces zero slots.
+    // Mint the id BEFORE the object exists: minting inserts into the shape
+    // table and can therefore collect, and this fixture holds no handle on the
+    // fresh header.
+    // A zero-slot fixture needs no descriptor at all — the derived bound is 0
+    // either way — and minting one would perturb the descriptor-count
+    // accounting that sibling tests assert on.
+    let shape_id = if field_count == 0 {
+        0
+    } else {
+        crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
+            .expect("shape id range exhausted in a test fixture")
+    };
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
-    (*obj).object_type = 1;
     (*obj).class_id = 0;
-    (*obj).parent_class_id = 0;
-    (*obj).field_count = field_count;
+    (*obj).parent_class_id = shape_id;
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     let fields =
@@ -830,13 +842,22 @@ pub(super) unsafe fn alloc_old_test_object(
 pub(super) unsafe fn alloc_nursery_test_object(
     field_count: u32,
 ) -> (*mut crate::object::ObjectHeader, *mut u64) {
+    // #8113: see `alloc_old_test_object` — mint the descriptor first, then
+    // stamp the fresh header with a plain store.
+    // A zero-slot fixture needs no descriptor at all — the derived bound is 0
+    // either way — and minting one would perturb the descriptor-count
+    // accounting that sibling tests assert on.
+    let shape_id = if field_count == 0 {
+        0
+    } else {
+        crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
+            .expect("shape id range exhausted in a test fixture")
+    };
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
     let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
-    (*obj).object_type = 1;
     (*obj).class_id = 0;
-    (*obj).parent_class_id = 0;
-    (*obj).field_count = field_count;
+    (*obj).parent_class_id = shape_id;
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     let fields =

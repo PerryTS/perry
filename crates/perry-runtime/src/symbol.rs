@@ -374,8 +374,10 @@ static SYMBOL_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
 /// **`false` is exact** — no symbol reads `false` — while `true` is merely
 /// "ask the registry". A non-symbol whose first word happens to equal
 /// `SYMBOL_MAGIC` (a `StringHeader` would need `utf16_len == 0x5359_4D42`, i.e.
-/// a 2.8 GB string; an `ObjectHeader`'s `object_type` is a small tag) simply
-/// pays the old probe and gets the old, correct answer.
+/// a 2.8 GB string; an `ObjectHeader`'s first word is `class_id`, and ids are
+/// handed out from 1 — #8113 deleted the `object_type` tag that used to sit
+/// there, which does not change this argument) simply pays the old probe and
+/// gets the old, correct answer.
 ///
 /// # Safety
 /// `ptr` must be readable for 4 bytes. Every caller is one that already

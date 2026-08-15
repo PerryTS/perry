@@ -511,8 +511,12 @@ pub(crate) fn print_uncaught(value: f64) {
     if top16 == 0x7FFD {
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if ptr >= 0x10000 {
-            let object_type = unsafe { *(ptr as *const u32) };
-            if object_type == crate::error::OBJECT_TYPE_ERROR {
+            // #8113: both discriminators come from the GC header / ShapeId
+            // descriptor now. Offset 0 is `class_id`, so the old raw
+            // `*(ptr as *const u32)` read would classify the second class a
+            // program declares (`class_id == 2 == OBJECT_TYPE_ERROR`) as an
+            // Error and print `name`/`message`/`stack` out of its field slots.
+            if unsafe { crate::error::ptr_is_native_error(ptr) } {
                 // ErrorHeader: object_type, error_kind, message, name, stack, cause, errors
                 let eh = ptr as *const crate::error::ErrorHeader;
                 let name_str = unsafe { string_header_to_string((*eh).name) };
@@ -551,7 +555,9 @@ pub(crate) fn print_uncaught(value: f64) {
                 }
                 return;
             }
-            if object_type == crate::error::OBJECT_TYPE_REGULAR {
+            if unsafe {
+                crate::object::object_is_regular(ptr as *const crate::object::ObjectHeader)
+            } {
                 // Probe for `.message` and `.stack` properties the way
                 // Node does for thrown non-Error objects. Users commonly
                 // throw custom error shapes like `{ message, stack }` or
