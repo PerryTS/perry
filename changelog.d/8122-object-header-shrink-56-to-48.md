@@ -115,6 +115,53 @@ emit `gep(I8, &p, &[(I64, "N")])` — so it now matches both spellings and requi
 each guard to be shown reading the ShapeId at all. Three new sabotage self-tests
 cover the new rules.
 
+#### Measured
+
+19-program corpus, both arms built from one worktree with `-p perry
+-p perry-runtime-static -p perry-stdlib-static`, `PERRY_RUNTIME_DIR` pinned per
+arm, the two `libperry_runtime.a` files `cmp`-verified to differ, all 19 stdout
+byte-compared against `expected/` and exit-checked in both arms:
+
+| prog | Δ instructions | Δ peak RSS |
+|---|---:|---:|
+| `retain` | +3.26% | **−9.10%** |
+| `retain1` | +7.99% | −5.29% |
+| `retain_wide` | +2.89% | −5.45% |
+| `retain_wide1` | +2.61% | −6.04% |
+| `tree` | +0.54% | **−12.79%** |
+| `tree_wide` | +0.44% | −6.30% |
+| `deeplist` | +8.20% | −4.19% |
+| `shapes` | +4.96% | −0.61% |
+| `churn_alloc` / `push_cls` | +4.3% | ~0 |
+| `fib40` / `push_num` / `churn_read` | ~0 | ~0 |
+
+The rows with no object population move by ~0 — that is the control. The
+instruction cost is the price of the change: the bound is a shape-table probe
+where it used to be a `u32` load.
+
+Two findings worth carrying forward, both from measuring rather than assuming:
+
+1. The first cut regressed instructions by up to **+30%** (`deeplist` +30.5%,
+   `cycles` +28.4%, `tree` +25.4%). Five GC-side sites already read the bound
+   descriptor-first with the header word as an `unwrap_or` fallback — and
+   **`unwrap_or` is eager**, so the substitution made each do *two* shape-table
+   probes, one of them (`gc/layout.rs`'s `layout_note_slot`) on every object
+   field store. Fixed, along with `weakref::is_weak_target_trace_slot` (three
+   probes per traced slot → one) and six write paths that read the bound twice.
+2. A 64-way direct-mapped `ShapeId → count` memo — sound without invalidation,
+   and the obvious recovery — **measured null and was deleted**: `retain` +4.26%
+   with it vs +3.26% without, `retain_wide` +4.46% vs +2.89%, better only on
+   `shapes`. Its first sabotage test was *vacuous* (two arbitrary shapes get
+   consecutive ids and so never share a memo way) and the sabotage run caught
+   that. The numbers survive as a doc comment so it is not rebuilt.
+
+GC canaries (`retain`/`tree`/`churn`/`shapes` × plain / `FORCE_EVACUATE` +
+`VERIFY_EVACUATION` / `FORCE_EVACUATE` + `PROTECT_FROMSPACE DEPTH=32`, all under
+`PERRY_GC_DIAG=1`): all exit 0 and byte-exact, with `copied_objects > 0` or
+`promoted_objects > 0` on every row (`retain` copies 368,635 and promotes 2.1 M),
+and the protect arm printing 8 `[gc-fromspace-protect]` lines against
+`copying_minors=8` — so no arm is vacuous.
+
 #### Also
 
 * `perry-ui-android/src/json.rs` deleted — 606 lines, every function private with
