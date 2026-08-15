@@ -51,4 +51,5 @@ mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
 mod triggers;
+mod typed_layout_intact_residual;
 mod weak_read_barrier;

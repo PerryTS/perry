@@ -65,7 +65,19 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 //                      either per-object in `TYPED_LAYOUTS` OR (the #6893 common
 //                      case) shared by shape in `SHAPE_LAYOUTS`, keyed by the
 //                      object's `keys_array`
-// holds at all times. (Before #6893 the descriptor was always the per-object
+// holds at all times.
+//
+// #7834 introduced ONE producer that sets the bit without installing a
+// descriptor: the inline `new`'s baked header constant
+// (`lower_call/new_alloc.rs`), for a class whose pointer mask is statically
+// empty. That is sound at birth — the collector's view of a
+// `GC_LAYOUT_POINTER_FREE` payload consults no map — but it made the invariant
+// hold only until the first store the descriptor path would have downgraded on.
+// #8115 closes that: `layout_note_slot` clears the bit the moment BOTH
+// descriptor maps answer `None`, which is the one point where the broken state
+// is observable. So the invariant above still holds *for every reader*, with
+// the bake as a birth-time exception that self-heals on its first contradicting
+// store. (Before #6893 the descriptor was always the per-object
 // `TYPED_LAYOUTS` entry; `shape_install_shared` now sets the bit while routing
 // same-shape objects through the shared map, so the bit no longer implies a
 // per-object entry — only that *some* descriptor is reachable.) The descriptor's
@@ -547,6 +559,27 @@ pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
     layout_typed_intact_for_user(user_ptr)
 }
 
+/// #8115 test probe: would [`layout_note_slot`]'s descriptor probe find a
+/// `TypedLayoutDescriptor` for `user_ptr` right now — asked of the two maps,
+/// never of the header bit?
+///
+/// [`layout_has_typed_descriptor`] above answers a similar question by reading
+/// `GC_OBJ_TYPED_LAYOUT_INTACT`, which is the very claim #8115 is about. A test
+/// that used it could not tell "the bit is honest" from "the bit lies", so the
+/// premise of every intact-bit test has to come from here instead.
+///
+/// Note this is the *shape*'s answer, not the object's licence: the shared
+/// `SHAPE_LAYOUTS` entry outlives one object's divergence on purpose (see
+/// `with_shape_shared_descriptor`), so after `layout_set_typed_unknown` this
+/// still reports `true` while the diverged object no longer claims it.
+#[cfg(test)]
+pub(in crate::gc) fn layout_descriptor_reachable(user_ptr: usize) -> bool {
+    if with_per_object_descriptor(user_ptr, |_| ()).is_some() {
+        return true;
+    }
+    unsafe { with_shape_shared_descriptor(user_ptr, |_| ()).is_some() }
+}
+
 pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: usize) {
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
     header_clear_typed_layout_intact(header);
@@ -629,9 +662,10 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // return `None` and fall through to the pointer-mask path below.
         // Skipping it removes the per-write TLS touch on the common dynamic-shape
         // / pointer-free object and array store path (#5094). The inner `if let`
-        // still tolerates a `None` defensively, so a transiently desynced bit
-        // can only cost an extra fall-through, never mis-track a slot.
-        if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+        // still tolerates a `None` defensively — see the #8115 clear below for
+        // what a `None` costs and why it is no longer merely a fall-through.
+        let claimed_intact = (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
+        if claimed_intact {
             // #5094: a plain, non-pointer-bearing double is representation-
             // compatible with every in-bounds typed object slot. A raw-f64
             // slot consumes the bits directly; a boxed slot consumes the same
@@ -706,6 +740,46 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 }
                 return;
             }
+        }
+        // #8115: reaching here with the bit still set means BOTH descriptor maps
+        // answered `None` — the probe above is exhaustive — so the object is
+        // INTACT and descriptor-less, and the invariant documented on
+        // [`GC_OBJ_TYPED_LAYOUT_INTACT`] ("intact ⟹ a canonical descriptor is
+        // reachable") is false for it. Restore the invariant here, at the one
+        // place that observes it broken.
+        //
+        // The state stores in the generic pointer-mask branch below CANNOT do
+        // it: `set_layout_state` masks `!(GC_LAYOUT_STATE_MASK |
+        // GC_LAYOUT_ALL_POINTERS)` = `!0xE000`, and this bit is `0x1000`. So
+        // before this clear the branch could publish `SIDE_MASK | INTACT`
+        // WITHOUT a descriptor — a state three separate consumers read as a
+        // proof they may skip a map:
+        //
+        // * `class_field_inline_guard` (codegen) tests this bit ALONE before
+        //   reading/writing a slot as a bare `double`;
+        // * `element_shape_guard`'s packed `0x1800_80FF` header test folds it
+        //   in for the same license;
+        // * `class_field_store_layout_note_is_conforming` (codegen
+        //   `expr/helpers.rs`) elides the layout note outright on
+        //   `_reserved & 0xD000 == 0x9000`, whose proof is "a descriptor built
+        //   from this class's mask globals is reachable".
+        //
+        // #7834's at-allocation bake is what made that reachable: it stamps
+        // `POINTER_FREE | INTACT` into the inline `new`'s header constant with
+        // no descriptor behind it, deliberately, on the argument that the
+        // generic branch below downgrades correctly. It does — for the
+        // collector. The bit it leaves behind is the half that was missing:
+        // `docs/engine-plan.md`'s construction-cost section, item 2, named this
+        // mechanism exactly — it used to forbid the bake outright, and now
+        // records the residual and this repair.
+        //
+        // Cost: one 16-bit store, only on the fall-through, which for a baked
+        // object is only ever a store the descriptor path would have called
+        // `layout_set_typed_unknown` for. Pre-#7834 that is precisely what it
+        // did — every pointer-free class carried a real descriptor, and any
+        // non-conforming store evicted it, bit included.
+        if claimed_intact {
+            header_clear_typed_layout_intact(header);
         }
         let pointer = layout_pointer_bearing_bits(value_bits);
         // A result array built by a runtime helper can declare that its live

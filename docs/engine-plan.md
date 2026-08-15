@@ -174,12 +174,14 @@ normalising two `(pointer, length)` pairs into slices only ever compared as
 integers, ~11 of `words_intersect` setup over two immutable globals, ~6
 recomputing the slot kind.
 
-### ⛔ Two remedies that look obvious and are wrong. Do not rebuild them.
+### One remedy that looks obvious and is wrong, and one that shipped
 
 An earlier revision of this section proposed inlining the hit path at the `new`
 site, reasoning that every argument but the object pointer is a compile-time
-constant and that this is the shape #7566 won 1.81× on. **Both halves of that
-were tested in #7586 and both are wrong.**
+constant and that this is the shape #7566 won 1.81× on. **The first half of that
+was tested in #7586 and is wrong. The second half shipped in #7834** — four days
+after this section was written to forbid it (`d2dca5823` 2026-08-07,
+`d04cc3f29` 2026-08-11), and the ⛔ stood over `main` until #8115.
 
 1. **Outlining/inlining the frame is not the lever — it is a regression.** The
    prologue does look like #7566's shape (`sub sp, sp, #0x150`, six `stp` pairs
@@ -192,27 +194,67 @@ were tested in #7586 and both are wrong.**
    more in register moves than the prologue saves. **This function is bound by
    instruction count, not frame size.**
 
-2. **⛔ Having codegen OR `GC_OBJ_TYPED_LAYOUT_INTACT` into the inline `new`'s
-   header word is a use-after-free factory.** It is seductive because it is
-   genuinely free — `declare`-path classes must have an empty pointer mask, so
-   since #7566 the inline `new` already writes its `GcHeader` as one i64
-   constant, and OR-ing one more bit costs +0 instructions and +0 bytes.
+2. **✅ Having codegen OR `GC_OBJ_TYPED_LAYOUT_INTACT` into the inline `new`'s
+   header word SHIPPED in #7834 (`d04cc3f29`), and is sound as of #8115.** It is
+   free — `declare`-path classes must have an empty pointer mask, so since #7566
+   the inline `new` already writes its `GcHeader` as one i64 constant, and OR-ing
+   one more bit costs +0 instructions and +0 bytes. It removed a per-instance
+   `js_gc_declare_typed_shape_layout` that was ~30% of `churn_alloc`/`push_cls`,
+   and it is covered by `lower_call/typed_shape_bake_tests.rs` — an IR census
+   with a negative control (a pointer-BEARING shape must still emit the declare).
 
-   It breaks the unwritten invariant **"intact ⟹ a descriptor is reachable"**,
-   which `layout_note_slot` silently depends on. On a contradicting store to an
-   object that is intact but descriptor-less, the probe resolves `None`;
-   `layout_set_typed_unknown` — the only thing that clears the intact bit — is
-   reached **only from the `Some(verdict)` arm** (`gc/layout.rs:782–788`), so
-   control falls through to the pointer-mask path and **the bit is never
-   cleared**. The object is thereafter `SIDE_MASK` to the collector and *intact*
-   to the class-field inline guard, which consults no map by design. The raw-store
-   fast path then writes a double over a pointer slot with no barrier and no
-   layout note, and the next collection walks it as a heap pointer.
+   **The hazard this entry used to forbid was real, and was live from #7834
+   until #8115.** It is kept in full, because the shape of it recurs. The bake
+   breaks the invariant **“intact ⟹ a descriptor is reachable”**, and nothing in
+   `layout_note_slot` used to repair it. On a contradicting store to an object
+   that is intact but descriptor-less the probe resolves `None`;
+   `layout_set_typed_unknown` — then the only thing that cleared the intact bit
+   — is reached **only from the `Some(verdict)` arm**, so control fell through to
+   the generic pointer-mask branch, whose `set_layout_state` masks
+   `!(GC_LAYOUT_STATE_MASK | GC_LAYOUT_ALL_POINTERS)` = `!0xE000` and therefore
+   **cannot** clear a `0x1000` bit. The object was thereafter `SIDE_MASK` to the
+   collector and *intact* to three codegen consumers that consult no map by
+   design: `class_field_inline_guard` (which tests this bit and no layout state
+   at all — there is no state test anywhere in that file),
+   `element_shape_guard`'s packed `0x1800_80FF` header compare, and
+   `class_field_store_layout_note_is_conforming`, which elides the layout note
+   outright on `_reserved & 0xD000 == 0x9000`.
 
-   Note the comment at `layout.rs:742` says a `None` verdict "can only cost an
-   extra fall-through, never mis-track a slot". That is true **only while the
-   invariant holds** — it is a consequence of it, not an independent guarantee,
-   and it reads like reassurance to anyone implementing this.
+   **What #8115 changed.** `layout_note_slot` clears the bit at the one point
+   where the broken state is observable — the fall-through past the descriptor
+   probe, reached only when BOTH maps answered `None`. The invariant therefore
+   holds for every *reader* again, with the bake as a birth-time exception that
+   self-heals on its first contradicting store. Pre-#7834 the descriptor existed
+   and any such store evicted it, bit included; this restores that outcome
+   without paying for the descriptor. Acceptance:
+   `perry-runtime/src/gc/tests/typed_layout_intact_residual.rs`, which reaches
+   `SIDE_MASK | INTACT` without a descriptor and then evaluates the codegen
+   predicate over the header the runtime actually produced — asserting the state
+   transition alone passes on an unfixed tree.
+
+   **Three things to carry forward.**
+
+   *The old severity was over-stated for what was reachable.* The lost-child
+   use-after-free needs the note elision, and its precondition (the class's
+   compile-time mask declares slot *k* a pointer) is mutually exclusive with the
+   bake's (`layout_pointer_free_at_allocation` requires the pointer mask to be
+   statically **empty**), so no single class satisfied both. What WAS reachable
+   is the raw-f64 read arm: once a pointer lands in a statically-all-`number`
+   slot — a runtime type violation, which Perry permits by design — the guard
+   read that slot as a bare `double` and handed the program a NaN where the boxed
+   fallback hands it the value. A wrong answer, not a collector fault.
+
+   *The reassuring comment was a consequence, not a guarantee.*
+   `layout_note_slot`'s probe used to say a `None` verdict “can only cost an
+   extra fall-through, never mis-track a slot”. True only while the invariant
+   held. It now points at the clear that makes it true.
+
+   *What the bake still rests on, unchanged.* Between allocation and its first
+   field store a baked instance claims raw-f64 slots that hold the allocator's
+   `TAG_UNDEFINED` fill. That is not new and is not #8115's: it is
+   `TypedShapeProof::FreshlyAllocated`, the same codegen-side proof the pre-#7834
+   `js_gc_declare_typed_shape_layout` path rested on (#7510/#7512). If you change
+   who may declare a layout at allocation, that is the contract to re-check.
 
 **A declared class is no longer slower than an object literal.** #7512 is
 **closed**: `churn_alloc` and `push_cls` both measure 0.75 s. The cause was not
