@@ -188,9 +188,14 @@ fn this_set_check(value: f64, side: &str) {
         // arrays, and old/malloc objects have differently-managed headers.
         return;
     }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let (obj_type, size, flags) =
-        unsafe { ((*header).obj_type, (*header).size, (*header).gc_flags) };
+    // Read the header through the centralized probe rather than re-typing the
+    // `addr - GC_HEADER_SIZE` cast: it repeats the band guard and additionally
+    // rejects the headerless small-buffer slab range, so no reachable input can
+    // turn this diagnostic into a wild read (`scripts/addr_class_inventory.py`).
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return;
+    };
+    let (obj_type, size, flags) = (header.obj_type, header.size, header.gc_flags);
     if crate::gc::header_incoherence_for_diagnostics(obj_type, size, flags).is_some() {
         eprintln!(
             "[gc-this-set-check] {side} value {bits:#018x} — target header \

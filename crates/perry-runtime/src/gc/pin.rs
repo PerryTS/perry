@@ -450,7 +450,17 @@ pub(super) fn pinned_young_move_report(
                 // Re-read the slot: the raw word says whether the value was
                 // NaN-boxed (and with which tag) or bare — the deref above
                 // only saw the masked address.
-                unsafe { *(context.slot_addr as *const u64) },
+                // Same hazard as the neighborhood dump below: a native
+                // root-slot context can name an unmapped address, and this
+                // report is printed on the way to an abort.
+                if matches!(
+                    crate::arena::classify_heap_space(context.slot_addr),
+                    crate::arena::HeapSpace::Unknown
+                ) {
+                    0
+                } else {
+                    unsafe { *(context.slot_addr as *const u64) }
+                },
             ));
         }
         None => out.push_str("  native root slot: (not visiting a native stack-map slot)\n"),
@@ -465,6 +475,32 @@ pub(super) fn pinned_young_move_report(
     let target_user = header_addr + super::types::GC_HEADER_SIZE;
     for delta in (-64i64..=88).step_by(8) {
         let addr = (header_addr as i64 + delta) as usize;
+        // This path is about to abort the process, so a diagnostic that
+        // SIGSEGVs destroys the very report it exists to print. `header_addr`
+        // is a SUSPECT address by construction — that is why we are here — and
+        // the neighborhood walks 64 bytes below it, so neither the address nor
+        // its neighborhood is known to be mapped. Classify against the arena's
+        // page metadata (a real mapping check, not a magnitude guess) and print
+        // a placeholder rather than dereferencing. A stale from-space address —
+        // the #7803 case this dump is FOR — still classifies into a live space,
+        // so the diagnostic keeps working where it matters.
+        let readable = !matches!(
+            crate::arena::classify_heap_space(addr),
+            crate::arena::HeapSpace::Unknown
+        );
+        if !readable {
+            out.push_str(&format!(
+                "    {}{:<4} (unmapped — not in any arena space){}\n",
+                if delta < 0 { "-" } else { "+" },
+                delta.abs(),
+                if delta == 0 {
+                    "   <-- reported header"
+                } else {
+                    ""
+                }
+            ));
+            continue;
+        }
         let bits = unsafe { *(addr as *const u64) };
         out.push_str(&format!(
             "    {}{:<4} {:#018x}{}\n",

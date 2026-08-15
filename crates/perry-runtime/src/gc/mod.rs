@@ -140,15 +140,19 @@ mod prefetch;
 
 mod copying;
 mod copying_first_cycle;
+mod copying_pointer_set;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
 mod sticky_remembered;
 use copying::*;
 use copying_first_cycle::*;
+// Named rather than glob-imported: a glob does not propagate through the
+// transitive re-exports the gc submodules reach these through.
+use copying_pointer_set::{plausible_gc_header, CopyingPointer, CopyingPointerKind};
 use sticky_remembered::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
 // pass in `crate::weakref` (#6182), which lives outside the gc module.
-pub(crate) use copying::CopyingPointerSet;
+pub(crate) use copying_pointer_set::CopyingPointerSet;
 // The hard ceiling every birth-generation threshold in `gc::types` must stay
 // under; asserted by `arena::tests::pointer_bearing_large_object_threshold_is_movable`.
 #[cfg(test)]

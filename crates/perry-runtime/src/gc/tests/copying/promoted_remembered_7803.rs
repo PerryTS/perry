@@ -144,17 +144,6 @@ fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
         "the freshly-stored child must still be young after the parent's \
          promotion; an old->old edge tests nothing"
     );
-    // TEMP PROBE
-    {
-        let inter = deref(js_shadow_slot_get(0));
-        eprintln!(
-            "[probe] inter={inter:#x} page_dirty={} | parent={parent_old:#x} page_dirty={} same_page={}",
-            old_page_dirty_for(crate::arena::generation_page_for_addr(inter)),
-            old_page_dirty_for(crate::arena::generation_page_for_addr(parent_old)),
-            crate::arena::generation_page_for_addr(inter)
-                == crate::arena::generation_page_for_addr(parent_old),
-        );
-    }
 
     // The exposing minor: the child moves again (survivor -> survivor).
     // Only a remembered-set entry for the drain-promoted parent lets this
