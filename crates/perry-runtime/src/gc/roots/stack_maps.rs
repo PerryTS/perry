@@ -187,6 +187,44 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
             return;
         }
         let context = super::super::pin::native_root_slot_context();
+        // Break the §40 contradiction: dump EVERY record `match_records`
+        // returns for this ip (the ±16 window can match several) and every
+        // slot value of each, resolving SP-relative addresses from the known
+        // victim slot (base = slot_addr - offset). A double-matched frame or
+        // a mis-attributed neighbor slot is visible here in one abort.
+        if let Some(ctx) = context {
+            let index = stack_maps();
+            let base = ctx.slot_addr.wrapping_sub(ctx.offset as usize);
+            for record in index.match_records(ctx.ip) {
+                eprintln!(
+                    "[gc-native-slot-verify]   record pc={:#x} (fn+{:#x}):",
+                    record.pc,
+                    record.pc.wrapping_sub(record.function_address),
+                );
+                for location in index.locations(record) {
+                    let addr = if location.offset < 0 {
+                        base.wrapping_sub(location.offset.unsigned_abs() as usize)
+                    } else {
+                        base.wrapping_add(location.offset as usize)
+                    };
+                    let word = if location.dwarf_reg == ctx.dwarf_reg && addr % 8 == 0 {
+                        format!("{:#018x}", *(addr as *const u64))
+                    } else {
+                        "<other base reg>".to_string()
+                    };
+                    eprintln!(
+                        "[gc-native-slot-verify]     reg={} offset={} addr={addr:#x} word={word}",
+                        location.dwarf_reg, location.offset,
+                    );
+                }
+                for entry in index.derived_locations(record) {
+                    eprintln!(
+                        "[gc-native-slot-verify]     DERIVED base_index={} reg={} offset={}",
+                        entry.base_index, entry.slot.dwarf_reg, entry.slot.offset,
+                    );
+                }
+            }
+        }
         panic!(
             "[gc-native-slot-verify] a native stack-map slot still names a from-space \
              address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
