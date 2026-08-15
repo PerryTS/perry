@@ -828,8 +828,31 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // compiled module self-registers into at init; `undefined` = not
         // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
         {{
-            const __perry_path_mod = __perry_require_path_module(specifier);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(specifier)) return __perry_path_mod;
+            // A runtime-COMPUTED *relative* specifier never matches that
+            // registry, which is keyed by absolute source path. Next's
+            // production webpack runtime does exactly this — `.next/server/
+            // webpack-runtime.js` calls `require("./chunks/" + g.u(a))` — so
+            // every lazy chunk missed and the App Route died at startup with
+            // `Cannot find module './chunks/2.js'` even though that chunk WAS
+            // compiled into the image. Statically-known relative specifiers are
+            // already handled by the cases above; only computed ones reach
+            // here, so join them against this module's own directory.
+            //
+            // The `./` prefix is stripped textually rather than left to
+            // `std::fs::canonicalize`: that only normalizes a path that exists
+            // on disk, and registration falls back to the raw string when it
+            // does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
+            // in exactly the deployed case where the sources are absent.
+            var __perry_path_spec = specifier;
+            if (specifier.charCodeAt(0) === 46) {{
+                if (specifier.charCodeAt(1) === 47) {{
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier.slice(2);
+                }} else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {{
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
+                }}
+            }}
+            const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
+            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_path_mod;
         }}
         // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
         // manifests this way: `require(this.middlewareManifestPath)`). Node's
