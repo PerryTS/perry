@@ -1,6 +1,7 @@
 use super::super::*;
 use super::support::*;
 use std::cell::Cell;
+mod arraylike_callbacks;
 mod callback_scanners;
 mod fs_options_object;
 mod generator_attach_prototype;
