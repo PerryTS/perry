@@ -516,3 +516,194 @@ fn an_array_buffer_receiver_is_not_treated_as_a_uint8array() {
         "a DataView receiver must not be served as a Uint8Array"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #8140: the `.values()` / `.keys()` / `.entries()` iterator entry points must
+// resolve a Buffer-backed `Uint8Array` receiver BEFORE the array-only funnel.
+//
+// The precondition is already pinned by
+// `a_new_uint8array_is_a_buffer_not_a_registry_typed_array` above: perry's
+// `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+// registry (so the #3148 `lookup_typed_array_kind` delegations never answer for
+// it) and nulled by `clean_arr_ptr` (so a post-clean branch is unreachable).
+// `buffer_alloc` stamps a real `GC_TYPE_BUFFER` GcHeader through
+// `arena_alloc_gc_old`, which is why #8041's "reject every TRACKED non-array"
+// catches it and its predecessor "reject GC_TYPE_OBJECT / GC_TYPE_CLOSURE"
+// did not.
+//
+// `array_iter_obj_raw` opens with that funnel, so EVERY branch below it — the
+// fs-dir arm, the Map/Set arm, and the iterator construction itself — was
+// unreachable for a Buffer receiver, and all three methods yielded an EMPTY
+// iterator. Measured against node v26.5.1 on `new Uint8Array([3,1,2])`:
+//
+//   method      node                    perry pre-fix
+//   .values()   [3,1,2]                 []
+//   .keys()     [0,1,2]                 []
+//   .entries()  [[0,3],[1,1],[2,2]]     []
+//
+// `keys` is the sharpest evidence this is a REGRESSION and not a standing gap:
+// it only ever reads `length`, so it answered correctly before #8041.
+//
+// Reachable from BOTH a property-read receiver (`holder.u.values()`, which
+// codegen fuses to `js_array_values_iter_obj`) and a fully dynamic one
+// (`opaque(u).values()`), so it is not a narrow static-typing corner.
+// ---------------------------------------------------------------------------
+
+/// Drive an iterator object returned by `js_array_*_iter_obj` to exhaustion,
+/// rendering each yielded value so the expectations below read as the node
+/// output they were taken from.
+fn drain_iter(iter: i64) -> Vec<String> {
+    let mut out = Vec::new();
+    unsafe {
+        let obj = iter as *mut crate::object::ObjectHeader;
+        assert!(!obj.is_null(), "iter_obj must return an iterator object");
+        for _ in 0..64 {
+            let result = crate::array::dispatch_array_iterator_method(obj, "next");
+            let robj =
+                crate::value::js_nanbox_get_pointer(result) as *mut crate::object::ObjectHeader;
+            assert!(!robj.is_null(), "next() must return a result object");
+            let value = crate::object::js_object_get_field(robj, 0);
+            let done = crate::object::js_object_get_field(robj, 1);
+            if done.bits() == crate::value::TAG_TRUE {
+                break;
+            }
+            out.push(render(f64::from_bits(value.bits())));
+        }
+    }
+    out
+}
+
+/// `3` for a number, `[0,3]` for a 2-element pair array — enough to tell the
+/// three iterator kinds apart, and to tell a correct element from a raw byte
+/// reinterpreted as an f64 (which renders as `1.5e-323`, never as `3`).
+fn render(v: f64) -> String {
+    let bits = v.to_bits();
+    if (bits >> 48) == 0x7FFD {
+        let inner = crate::value::js_nanbox_get_pointer(v) as *const ArrayHeader;
+        let cleaned = crate::array::header::clean_arr_ptr(inner);
+        if !cleaned.is_null() {
+            let n = unsafe { (*cleaned).length } as usize;
+            let parts: Vec<String> = (0..n)
+                .map(|i| render(crate::array::js_array_get_f64(cleaned, i as u32)))
+                .collect();
+            return format!("[{}]", parts.join(","));
+        }
+    }
+    let n = f64::from_bits(bits);
+    if n.is_finite() && n.fract() == 0.0 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n:?}")
+    }
+}
+
+#[test]
+fn js_array_values_iter_obj_yields_a_buffer_receivers_bytes() {
+    let _serialized = crate::array::test_serialize();
+    let buf = uint8_buffer(&[3.0, 1.0, 2.0]);
+    assert_eq!(
+        drain_iter(crate::array::js_array_values_iter_obj(buf)),
+        vec!["3", "1", "2"],
+        "node yields [3,1,2]; an EMPTY list is #8140 — the funnel nulled the \
+         receiver before the Buffer question was ever asked"
+    );
+}
+
+#[test]
+fn js_array_keys_iter_obj_yields_a_buffer_receivers_indices() {
+    let _serialized = crate::array::test_serialize();
+    let buf = uint8_buffer(&[3.0, 1.0, 2.0]);
+    assert_eq!(
+        drain_iter(crate::array::js_array_keys_iter_obj(buf)),
+        vec!["0", "1", "2"],
+        "node yields [0,1,2]. `keys` reads only `length`, so it was CORRECT \
+         before #8041 — this case is the proof that #8140 is a regression"
+    );
+}
+
+#[test]
+fn js_array_entries_iter_obj_yields_a_buffer_receivers_pairs() {
+    let _serialized = crate::array::test_serialize();
+    let buf = uint8_buffer(&[3.0, 1.0, 2.0]);
+    assert_eq!(
+        drain_iter(crate::array::js_array_entries_iter_obj(buf)),
+        vec!["[0,3]", "[1,1]", "[2,2]"],
+        "node yields [[0,3],[1,1],[2,2]]"
+    );
+}
+
+#[test]
+fn a_typed_array_receiver_still_yields_element_typed_values() {
+    let _serialized = crate::array::test_serialize();
+    // The pre-existing #3148 arm must survive the reordering. `70000 & 0xFFFF`
+    // is 4464, so a raw-f64 reinterpretation cannot produce this answer.
+    let ta = typed(UINT16, &[70000.0, 2.0]);
+    assert_eq!(
+        drain_iter(crate::array::js_array_values_iter_obj(as_array(ta))),
+        vec!["4464", "2"],
+        "the typed-array materialization must still run element-typed reads"
+    );
+}
+
+#[test]
+fn a_plain_array_iterator_never_probes_the_typed_array_registry() {
+    let _serialized = crate::array::test_serialize();
+    let mut arr = js_array_alloc(3);
+    for v in [7.0, 8.0, 9.0] {
+        arr = js_array_push_f64(arr, v);
+    }
+
+    // Prime anything built lazily on first touch, then measure ONLY the
+    // receiver-resolution call. `drain_iter`/`render` read elements through
+    // `js_array_get_f64`, which runs its own #8109 typed-array probe once per
+    // element — measuring across the drain counts those and says nothing about
+    // the subject. (Measured: it reports exactly +1 per element, so a naive
+    // window would have "failed" here for the wrong reason.)
+    let _ = drain_iter(crate::array::js_array_values_iter_obj(arr));
+    let before = crate::typedarray::test_typed_array_registry_probe_count();
+    let iter = crate::array::js_array_values_iter_obj(arr);
+    let after = crate::typedarray::test_typed_array_registry_probe_count();
+
+    assert_eq!(
+        drain_iter(iter),
+        vec!["7", "8", "9"],
+        "the control receiver must keep iterating its own elements"
+    );
+    assert_eq!(
+        after, before,
+        "a GC_TYPE_ARRAY receiver must never reach lookup_typed_array_kind — \
+         delete the receiver-tag gate at the top of `typed_array_iter_arr` and \
+         this is what fails, even though the ANSWER above stays correct"
+    );
+}
+
+#[test]
+fn an_array_buffer_or_data_view_receiver_gets_no_element_iterator() {
+    let _serialized = crate::array::test_serialize();
+    // `ArrayBuffer` / `SharedArrayBuffer` / `DataView` have no
+    // %TypedArray%.prototype, so node throws `… is not a function` rather than
+    // answering elements. The Buffer arm must decline them and leave the
+    // pre-existing behaviour untouched, exactly as
+    // `buffer_receiver_as_uint8_typed_array` does.
+    let ab = crate::buffer::buffer_alloc(4);
+    unsafe { (*ab).length = 4 };
+    crate::buffer::mark_as_array_buffer(ab as usize);
+    assert!(
+        drain_iter(crate::array::js_array_values_iter_obj(
+            ab as *mut ArrayHeader
+        ))
+        .is_empty(),
+        "an ArrayBuffer receiver must not be served a Uint8Array iterator"
+    );
+
+    let dv = crate::buffer::buffer_alloc(4);
+    unsafe { (*dv).length = 4 };
+    crate::buffer::mark_as_data_view(dv as usize);
+    assert!(
+        drain_iter(crate::array::js_array_values_iter_obj(
+            dv as *mut ArrayHeader
+        ))
+        .is_empty(),
+        "a DataView receiver must not be served a Uint8Array iterator"
+    );
+}

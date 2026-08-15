@@ -197,18 +197,58 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
     js_nanbox_get_pointer(nanboxed)
 }
 
-/// #3148: materialize a TypedArray receiver to a plain Array (element-typed
-/// reads) before building the iterator object, so `int32arr.values()` /
-/// `.keys()` / `.entries()` yield the numeric elements rather than the raw
-/// byte buffer reinterpreted as f64.
+/// #3148/#8140: materialize a %TypedArray% *or* Buffer-backed `Uint8Array`
+/// receiver to a plain Array (element-typed reads) before building the iterator
+/// object, so `int32arr.values()` / `.keys()` / `.entries()` yield the numeric
+/// elements rather than the raw byte buffer reinterpreted as f64.
+///
+/// **This MUST stay above `array_iter_obj_raw`**, which opens with
+/// `clean_arr_ptr`. Since #8041 that funnel returns null for every *tracked*
+/// non-`GC_TYPE_ARRAY` allocation, and `buffer_alloc` stamps `GC_TYPE_BUFFER`
+/// through `arena_alloc_gc_old` — so a Buffer receiver is nulled exactly as a
+/// `GC_TYPE_TYPED_ARRAY` one is, and every branch below that funnel (including
+/// its own Map/Set arm) is unreachable for it. The observable was an EMPTY
+/// iterator: `u8.values()`, `.keys()` and `.entries()` all yielded nothing.
+/// `keys` in particular was *correct* before #8041 — it only ever reads
+/// `length` — so this is a regression, not a standing gap.
+///
+/// Perry's `new Uint8Array([…])` is a `BufferHeader`, not a
+/// `TypedArrayHeader` (`buffer::js_uint8array_new`), so it is absent from the
+/// typed-array registry and `lookup_typed_array_kind` never answers for it.
+/// That is the same registry gap `buffer_receiver_as_uint8_typed_array`
+/// documents for `sort`/`with`/`toSorted`/`toReversed`; here the plain-array
+/// materialization the typed-array arm already performs is the natural answer,
+/// so no `TypedArrayHeader` copy is needed.
+///
+/// `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are deliberately excluded:
+/// none has `%TypedArray%.prototype`, so node throws
+/// `… is not a function` rather than answering elements, and routing them here
+/// would invent an iterator node does not have.
+///
+/// Receiver-tag gated with the #7765 idiom (`js_array_get_f64`, and #8130's
+/// `collection_foreach_reroute`): an ordinary array is excluded by one
+/// already-warm GC-header byte and reaches NEITHER registry — strictly fewer
+/// probes than before this change, which asked `lookup_typed_array_kind`
+/// unconditionally. The registries remain the layout proof for everything else.
 #[inline]
 fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        crate::typedarray::typed_array_to_array(arr as *const crate::typedarray::TypedArrayHeader)
-            as *const ArrayHeader
-    } else {
-        arr
+    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_ARRAY {
+        return arr;
     }
+    let addr = arr as usize;
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        return crate::typedarray::typed_array_to_array(
+            arr as *const crate::typedarray::TypedArrayHeader,
+        ) as *const ArrayHeader;
+    }
+    if crate::buffer::is_registered_buffer(addr)
+        && !crate::buffer::is_any_array_buffer(addr)
+        && !crate::buffer::is_data_view(addr)
+    {
+        return crate::buffer::buffer_to_array(addr as *const crate::buffer::BufferHeader)
+            as *const ArrayHeader;
+    }
+    arr
 }
 
 /// `%TypedArray%.prototype.values/keys/entries` begin with `ValidateTypedArray`

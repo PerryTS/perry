@@ -350,10 +350,31 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     crate::typedarray_props::typed_array_clear_no_extend(owner);
 }
 
+#[cfg(test)]
+thread_local! {
+/// Every entry into [`lookup_typed_array_kind`], i.e. every caller that could
+/// not rule a typed array out more cheaply. Mirrors
+/// `map::TEST_MAP_REGISTRY_PROBES` (#7765) and exists for the same reason: the
+/// receiver-tag gates that let a `GC_TYPE_ARRAY` receiver skip this probe are
+/// asserted against it, so deleting a gate fails a test even though the ANSWER
+/// stays correct. A fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: the registry is thread-local and `cargo test`
+/// runs each case on its own thread in one process.
+    static TEST_TA_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_typed_array_registry_probe_count() -> u64 {
+    TEST_TA_REGISTRY_PROBES.with(|c| c.get())
+}
+
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
 #[inline]
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
+    #[cfg(test)]
+    TEST_TA_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // Nothing has ever been registered ⟹ nothing to find. Checked ahead of the
     // #5525 cache because it is the only arm that costs neither a cache-slot
     // load nor a negative-entry write-back: a program with no typed arrays runs
