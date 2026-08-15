@@ -1726,8 +1726,29 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
     );
 }
 
+/// #8150 flips exactly ONE of this test's expectations, and leaves the
+/// soundness guard it was really protecting untouched.
+///
+/// Unchanged: a reassignment still drops the DECLARATION-derived proof — the
+/// `LocalSet` f64 record is still absent. `ty: Type::Number` is not a runtime
+/// fact and Perry does no runtime type validation (#7773: a wrong-typed value
+/// passes through arithmetic unchanged), so that negative must keep holding
+/// and it does.
+///
+/// Changed: `binary_f64_count` is no longer 0. The local below is seeded from
+/// a literal and reassigned only from `local + literal`, making it a Number
+/// **by construction** — a fact about the values actually written, not about
+/// what the declaration claims. #8150 proves that separately and lets the
+/// reads lower to raw `fmul`/`fadd` instead of `js_dynamic_*` (-87.6%
+/// instructions on `15_mandelbrot`).
+///
+/// The limit is pinned elsewhere, not here: a local seeded from a PARAMETER,
+/// or written from a STRING, still keeps the dynamic helper — see
+/// `a_reassigned_local_seeded_from_a_parameter_keeps_the_dynamic_helper` and
+/// `a_reassigned_local_written_from_a_string_keeps_the_dynamic_helper` in
+/// `type_analysis/numeric/tests.rs`.
 #[test]
-fn representation_first_numeric_reassignment_drops_local_f64_proof() {
+fn representation_first_numeric_reassignment_keeps_a_by_construction_f64_proof() {
     let add_total = Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(local(1)),
@@ -1794,8 +1815,10 @@ fn representation_first_numeric_reassignment_drops_local_f64_proof() {
         })
         .count();
     assert!(
-        binary_f64_count == 0,
-        "operations that read the reassigned local must stay off raw f64 lowering:\n{artifact:#}"
+        binary_f64_count > 0,
+        "operations reading a by-construction numeric local must lower to raw \
+         f64 rather than the dynamic helper — this is #8150's win (-87.6% \
+         instructions on 15_mandelbrot):\n{artifact:#}"
     );
     let materialized: Vec<_> = records
         .iter()
