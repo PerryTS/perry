@@ -2337,3 +2337,32 @@ before mid-cycle blocks can appear? Compare against how
 Instrument ready for the confirmation: `PERRY_GC_NATIVE_SLOT_VERIFY=1`
 aborts at the creation cycle in ~2 minutes; add a page-provenance print
 (when was the target's page registered, by whom) to close it in one run.
+
+## 43. The widened poll-capable set does not cost the dep-native arm its budget
+
+#8134 (merged to main) lists five buffer/typed-array constructors in
+`POLL_CAPABLE_RUNTIME`. Widening that set is one-sided — it can only make
+windows VISIBLE that `--moving-only` previously dropped — so the open
+question was whether a gated arm newly exceeds its budget. Measured here
+after the fact, on this branch's dep-native corpus with the merged checker:
+
+```
+=== checked 12909 functions / 81 modules
+=== safepoints: 52322  with a live bundle: 39355  relocates: 445204
+=== statepoint hazards: 2  (unrooted: 2, stale: 0)     [budget --max-unrooted 3]
+=== seeded statepoint violations: 40 planted, 40 caught, 0 MISSED
+exit 0
+```
+
+Subject-liveness is asserted by the seeded arm (40/40), so this is a real
+pass, not an empty one. The two residuals are the read-only sinks named in
+§40 (`schemas_ts__185` rel_ge, `util_ts__121` pad/coerce) — i.e. the
+post-spread-fix floor, and the basis for tightening the budget 3 → 2. That
+tightening is deliberately NOT taken here: the curated arm's number has not
+been re-measured on this tree, and a budget lowered on one arm's evidence is
+how a gate goes red for the wrong reason.
+
+Note on method: the first attempt at this measurement reported `gate-exit=124`
+— my own 40-minute `timeout`, not a verdict. Re-run with a real budget it is
+exit 0. A wrapper's exit code is not the subject's; this file now has three
+instances of that.
