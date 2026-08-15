@@ -114,6 +114,25 @@ def resolve_benchmark_runs(args: argparse.Namespace) -> int:
     return runs
 
 
+# The in-process LLVM backend runs no `clang` subprocess, so the compile plan
+# records this placeholder where a driver path would go. It is not a path, and
+# `or`-style fallbacks do not catch it because a non-empty string is truthy.
+IN_PROCESS_CLANG = "(in-process)"
+
+
+def _executable_clang(recorded: str | None, fallback: str) -> str:
+    """The driver to re-run analysis with, given what the compile plan recorded.
+
+    The analysis re-compile needs a real executable. Under the clang path the
+    recorded value is one. Under the in-process backend it is `IN_PROCESS_CLANG`,
+    and passing that to `subprocess.run` raises FileNotFoundError — which is how
+    every workload failed once that backend became the default.
+    """
+    if not recorded or recorded == IN_PROCESS_CLANG:
+        return fallback
+    return recorded
+
+
 def _compile_env(clang: str, *, enable_gc_trace: bool = False) -> dict[str, str]:
     env = {**os.environ, "PERRY_LLVM_KEEP_IR": "1", "PERRY_NO_CACHE": "1"}
     env["PERRY_LLVM_CLANG"] = clang
@@ -316,7 +335,7 @@ def capture(args: argparse.Namespace) -> int:
         or parse_target_triple(ir_before)
         or "x86_64-unknown-linux-gnu"
     )
-    compile_clang = compile_metadata.get("clang_path") or clang
+    compile_clang = _executable_clang(compile_metadata.get("clang_path"), clang)
     compile_clang_args = list(compile_metadata.get("clang_args") or [])
     analysis_args = _analysis_args_from_metadata(compile_metadata, analysis_extra_clang_args)
 
