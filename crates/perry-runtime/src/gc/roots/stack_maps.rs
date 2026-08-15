@@ -206,15 +206,19 @@ impl StackMapIndexStore {
 
 static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
 
-/// #7803 creation-cycle verifier (diagnostic, `PERRY_GC_NATIVE_SLOT_VERIFY=1`).
-///
-/// Runs a SECOND, non-rewriting native-slot walk after the rewrite passes of
-/// a copying minor, while from-space is still classifiable, and aborts on the
-/// FIRST slot still naming a from-space address. A stale native slot whose
-/// target later becomes unclassifiable is skipped silently by every ordinary
-/// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
-/// never printed anything — this names it, with the owning frame from the
-/// pin-latch context.
+// #7803 creation-cycle verifier (diagnostic, `PERRY_GC_NATIVE_SLOT_VERIFY=1`).
+//
+// Runs a SECOND, non-rewriting native-slot walk after the rewrite passes of
+// a copying minor, while from-space is still classifiable, and aborts on the
+// FIRST slot still naming a from-space address. A stale native slot whose
+// target later becomes unclassifiable is skipped silently by every ordinary
+// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
+// never printed anything — this names it, with the owning frame from the
+// pin-latch context.
+//
+// `//` not `///`: rustdoc discards a doc comment on a macro invocation, and
+// `rustc-warnings` runs with `-D warnings`, so `///` here is a hard error in
+// that job (#8176). The text is worth keeping, so keep it as a plain comment.
 crate::perry_thread_local! {
     /// The rewrite walk's stats for the CURRENT cycle, published so the
     /// #7803 native-slot verifier can compare its own traversal against the
