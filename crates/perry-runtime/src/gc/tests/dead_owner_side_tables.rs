@@ -80,10 +80,10 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
         std::mem::size_of::<crate::object::ObjectHeader>(),
         GC_TYPE_OBJECT,
     ) as *mut crate::object::ObjectHeader;
-    (*obj).object_type = 1;
     (*obj).class_id = 0;
+    // #8113: zero live slots, so no descriptor is needed — the derived bound
+    // for an unstamped receiver is 0, which is the right answer here.
     (*obj).parent_class_id = 0;
-    (*obj).field_count = 0;
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     obj

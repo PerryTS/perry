@@ -59,7 +59,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
     module.declare_function("js_object_coerce", DOUBLE, &[DOUBLE]);
     // #1789: stamp a class-expression's heap object as a class object
-    // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
+    // (ShapeObjectKind::Class) so typeof → "function" and
     // new/instanceof read class_id from it.
     module.declare_function("js_object_mark_class", VOID, &[I64]);
     // #6438: pin a per-evaluation class object's own parent edge.

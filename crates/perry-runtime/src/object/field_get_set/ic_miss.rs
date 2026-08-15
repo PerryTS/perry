@@ -621,9 +621,10 @@ pub extern "C" fn js_object_get_field_ic_miss(
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
         // (*obj).keys_array — otherwise an Array/String/Buffer/etc. receiver
-        // (whose `object_type` byte at offset 0 happens to be 1, matching
-        // OBJECT_TYPE_REGULAR for a length-1 array) would be treated as
-        // cacheable and seed the per-site PIC with garbage from element[1].
+        // (whose word at offset 0 collides with a real `class_id` — since
+        // #8113 that is an array's `length`, so ANY length-N array impersonates
+        // class N) would be treated as cacheable and seed the per-site PIC with
+        // garbage from element[1].
         // The codegen guard funnels non-OBJECT receivers here too, so this
         // belt-and-braces check keeps the cache from being primed with
         // values that would survive into the inline hot path.

@@ -239,7 +239,6 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/has_property.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/attr_variants.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/fetch_globals.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/typed_array.rs | 1

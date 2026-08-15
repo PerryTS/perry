@@ -124,7 +124,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // js_object_alloc_class_with_keys use exactly field_count slots.
         // We use a generous limit of max(field_count, 8) to avoid false positives from
         // js_object_alloc_with_shape's extra padding while still catching real overflows.
-        let stored_field_count = (*obj).field_count;
+        let stored_field_count = crate::object::object_live_slot_count(obj);
         let alloc_limit =
             std::cmp::max(stored_field_count, crate::object::INLINE_SLOT_FLOOR as u32);
         if field_index >= alloc_limit {
@@ -162,7 +162,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // is undefined-initialized at allocation (`object/alloc.rs`), so
         // widening here can only ever expose non-pointer sentinels ahead of
         // the store that is about to fill this one in.
-        if field_index >= (*obj).field_count {
+        if field_index >= crate::object::object_live_slot_count(obj) {
             set_object_live_slot_count(obj, field_index + 1);
         }
         crate::gc::runtime_store_jsvalue_slot(

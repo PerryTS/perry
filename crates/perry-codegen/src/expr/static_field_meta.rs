@@ -436,7 +436,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj =
                 ctx.block()
                     .call(I64, "js_object_alloc", &[(I32, &tcid_str), (I32, &nfields)]);
-            // #1789: mark it as a class object (object_type = OBJECT_TYPE_CLASS)
+            // #1789: mark it as a class object (ShapeObjectKind::Class)
             // so `typeof` reports "function" and `new`/`instanceof` read the
             // class_id from this object rather than treating it as an instance.
             ctx.block()

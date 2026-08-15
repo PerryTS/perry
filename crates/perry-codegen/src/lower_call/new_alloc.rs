@@ -246,19 +246,28 @@ fn emit_instance_alloc_inner(
     //    store offset      (1)
     //    load data + gep   (2)
     //    write GcHeader    (1)  — packed i64 store
-    //    write ObjectHeader×2 (2) — packed i64 stores
+    //    write ObjectHeader (1)  — one packed i64 store (#8113)
     //    write keys_ptr    (1)
-    //  total: ~13 cycles vs ~140 cycles for the function-call path.
+    //  total: ~12 cycles vs ~140 cycles for the function-call path.
     //
     // Layout assumption: GcHeader is 8 bytes
     //    {obj_type:u8, gc_flags:u8, _reserved:u16, size:u32}
-    // and ObjectHeader is 24 bytes
-    //    {object_type:u32, class_id:u32, parent_class_id:u32,
-    //     field_count:u32, keys_array:*ptr}
-    // followed by `max(field_count, 8)` 8-byte field slots. The user
-    // pointer the rest of the codegen sees is `raw + 8` (i.e. the
-    // ObjectHeader address) — same as what
+    // and ObjectHeader is 24 bytes on LP64 / 16 on ILP32 (#8113)
+    //    {class_id:u32, parent_class_id:u32, keys_array:*ptr, meta:*ptr}
+    // followed by `max(field_count, INLINE_SLOT_FLOOR)` 8-byte field
+    // slots. The user pointer the rest of the codegen sees is `raw + 8`
+    // (i.e. the ObjectHeader address) — same as what
     // `js_object_alloc_class_inline_keys` returns.
+    //
+    // #8113 note on the SHAPE WORD: `parent_class_id` carries the
+    // module-init ShapeId, and that descriptor is now the ONLY record of
+    // the object's live inline-slot bound. The `descriptor_facts_exact`
+    // gate below is therefore load-bearing, not an optimization: an
+    // inline allocation whose slot bound differs from the id's descriptor
+    // would publish an object the runtime bounds-checks against the WRONG
+    // number. Mismatches take the outlined
+    // `js_object_alloc_class_inline_keys_stamped` entry point, which
+    // installs an exact local descriptor.
     //
     // Layout constants are duplicated here from the runtime; if
     // `GcHeader` or `ObjectHeader` ever change in
@@ -377,8 +386,8 @@ fn emit_instance_alloc_inner(
         } else {
             // Compile-time layout constants.
             const GC_HEADER_SIZE: u64 = 8;
-            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit but
-            // 20 on ILP32 (4-byte `keys_array` pointer). Derive from the target
+            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit
+            // but 16 on ILP32 (two 4-byte pointers). Derive from the target
             // triple so the inline alloc size and field-region base match the
             // target-compiled runtime (no-op on 64-bit; see `target_layout`).
             let object_header_size: u64 =
@@ -410,7 +419,6 @@ fn emit_instance_alloc_inner(
             /// a raw-f64 slot directly. Runtime-side name:
             /// `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
             const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
-            const OBJECT_TYPE_REGULAR: u64 = 1;
 
             // #7834: when this class's canonical layout is declarable at
             // allocation AND its pointer mask is statically empty, the state
@@ -559,28 +567,24 @@ fn emit_instance_alloc_inner(
             // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
             blk.store(I64, &gc_packed.to_string(), &raw);
 
-            // Write ObjectHeader at raw + 8.
-            // First 8 bytes: object_type (u32, low) | class_id (u32, high)
-            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
-            let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
-            blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
-
-            // Second 8 bytes: ShapeId (u32, low) | field_count (u32, high).
+            // Write ObjectHeader at raw + 8. #8113 collapsed the two packed
+            // words into one: `class_id` (u32, low) | ShapeId (u32, high).
             // The module-init runtime call either publishes a usable ShapeId
             // or fail-stops on exhaustion; there is no pointer-token fallback.
-            let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
+            // The deleted `object_type` was a constant and the deleted
+            // `field_count` is now the ShapeId descriptor's
+            // `live_inline_slot_count`, which the `descriptor_facts_exact`
+            // gate above proved equals this site's `field_count`.
+            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
             let shape_word64 = blk.zext(I32, &shape_id, I64);
-            let oh_word_2 = blk.or(
-                I64,
-                &shape_word64,
-                &((field_count as u64) << 32).to_string(),
-            );
-            blk.store(I64, &oh_word_2, &oh_addr_2);
+            let oh_shifted = blk.shl(I64, &shape_word64, "32");
+            let oh_word_1 = blk.or(I64, &oh_shifted, &(cid as u64).to_string());
+            blk.store(I64, &oh_word_1, &oh_addr_1);
 
-            // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
+            // Second 8 bytes: keys_array pointer. The keys_ptr we loaded
             // above is an i64 (carries the ArrayHeader address); store as
             // i64 since the underlying memory is 8 bytes either way.
-            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
+            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "16")]);
             // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
             blk.store(I64, &keys_ptr, &oh_addr_3);
 
@@ -603,8 +607,10 @@ fn emit_instance_alloc_inner(
             // read-before-write — or a GC that scans the still-constructing instance —
             // observed stale arena bytes. When those bytes were a previously-freed
             // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
-            // crashed with "Cannot read properties of undefined". Slots start at
-            // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
+            // crashed with "Cannot read properties of undefined". Slots start
+            // at raw + GcHeader(8) + ObjectHeader(24) = raw + 32 on LP64
+            // (#8113; it was raw + 40 while the header carried the two deleted
+            // words).
             for i in 0..alloc_field_count {
                 let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);

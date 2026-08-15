@@ -376,7 +376,7 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
         // Field 0 is the weak target for both: WeakRef's referent and a
         // WeakMap/WeakSet entry's key.
         CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY => {
-            (*obj).field_count > 0 && slot == object_field_slot(obj, 0)
+            crate::object::object_live_slot_count(obj) > 0 && slot == object_field_slot(obj, 0)
         }
         // A finalization record's target (field 0) AND its unregister token
         // (field 1) are both weak. The spec's [[UnregisterToken]] is an
@@ -384,8 +384,9 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
         // `registry.register(obj, held, obj)` pin the target immortal
         // (2026-07-09 GC audit).
         CLASS_ID_FINALIZATION_RECORD => {
-            ((*obj).field_count > 0 && slot == object_field_slot(obj, 0))
-                || ((*obj).field_count > 1 && slot == object_field_slot(obj, 1))
+            (crate::object::object_live_slot_count(obj) > 0 && slot == object_field_slot(obj, 0))
+                || (crate::object::object_live_slot_count(obj) > 1
+                    && slot == object_field_slot(obj, 1))
         }
         _ => false,
     }

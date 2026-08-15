@@ -93,6 +93,15 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+mod live_slots;
+mod null_stub;
+pub(crate) use live_slots::set_object_live_slot_count;
+pub use live_slots::{
+    js_object_live_slot_count, object_inline_alloc_limit, object_live_slot_count,
+    perry_object_header_abi_revision,
+};
+pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
+pub(crate) use null_stub::{NullObjectBytes, NULL_OBJECT_BYTES};
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 mod namespace_create;
@@ -584,70 +593,6 @@ pub(crate) fn call_method_depth_savepoint() -> u32 {
 pub(crate) fn call_method_depth_restore(depth: u32) {
     CALL_METHOD_DEPTH.with(|d| d.set(depth));
 }
-
-/// Static "null object" used as a safe return value when the depth guard triggers.
-/// Instead of returning undefined (which callers may dereference as a null pointer),
-/// we return a pointer to this valid-but-empty object so downstream code doesn't crash.
-///
-/// Uses a raw byte array with matching layout to avoid Sync issues with raw pointers.
-#[repr(C, align(8))]
-struct NullObjectBytes {
-    object_type: u32,     // 1 = OBJECT_TYPE_REGULAR
-    class_id: u32,        // 0
-    parent_class_id: u32, // 0
-    field_count: u32,     // 0
-    keys_array: u64,      // 0 (null pointer as u64)
-}
-// Safety: this is a read-only zero-initialized struct with no interior mutability
-unsafe impl Sync for NullObjectBytes {}
-
-/// Issue #629: namespace imports for unresolved modules
-/// (`import * as fsp from "node:fs/promises"` when the module isn't
-/// implemented) used to fall back to `TAG_TRUE` at the codegen
-/// catch-all, which made `typeof fsp === "boolean"` and every
-/// `fsp.method` access return undefined silently — confusing because
-/// the user sees `(boolean).method is not a function`. Returning a
-/// stable empty-object stub makes `typeof === "object"` (matches
-/// Node's module-namespace shape) and property access cleanly returns
-/// undefined via the existing object-field path.
-#[no_mangle]
-pub extern "C" fn js_unresolved_namespace_stub() -> f64 {
-    let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-    f64::from_bits(crate::JSValue::pointer(null_obj_ptr).bits())
-}
-
-/// Issue #692: default-import calls against unresolved modules
-/// (`import jwt from "jsonwebtoken"; jwt.sign(...)` when no perry-stdlib
-/// binding matched the method, or `import sanitizeHtml from
-/// "sanitize-html"; sanitizeHtml(x)` when sanitize-html doesn't resolve
-/// to a NativeCompiled module) used to lower to an LLVM extern named
-/// literally `default`, which the system linker can't resolve —
-/// surfaced as `undefined reference to 'default'`. Route those calls
-/// here so the binary links; the runtime stub prints a one-shot
-/// diagnostic and returns NaN-boxed undefined. The user gets a clear
-/// signal at first call rather than a cryptic link error.
-#[no_mangle]
-pub extern "C" fn js_unresolved_default_call() -> f64 {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if !WARNED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "perry: called a default-imported binding from an unresolved module \
-             (returns undefined). The module's default export was not found in \
-             perry-stdlib or perry.compilePackages — run `perry --print-api-manifest` \
-             to see what's supported."
-        );
-    }
-    f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-}
-
-static NULL_OBJECT_BYTES: NullObjectBytes = NullObjectBytes {
-    object_type: 1,
-    class_id: 0,
-    parent_class_id: 0,
-    field_count: 0,
-    keys_array: 0,
-};
 
 /// Fast direct-mapped inline cache for class shape keys arrays.
 /// Indexed by `shape_id mod CACHE_SIZE`. Each slot stores
@@ -1682,19 +1627,27 @@ pub fn overflow_fields_is_empty() -> bool {
 pub(crate) use crate::value::addr_class::is_valid_obj_ptr;
 
 /// Object header - precedes the fields in memory
+///
+/// # #8113: two derivable words are gone
+///
+/// The header used to open with `object_type: u32` (an ABI mirror of
+/// `error::ErrorHeader`'s first word) and carry `field_count: u32` (the live
+/// inline-slot bound). Both were derivable and neither alone saved a byte — the
+/// struct re-padded — so they went together: 32 bytes to 24, and a two-slot
+/// object from 56 to 48. The kind now comes from `GcHeader.obj_type` plus
+/// [`shapes::ShapeObjectKind`] ([`object_is_regular`],
+/// [`crate::error::ptr_is_native_error`]); the bound from
+/// [`object_live_slot_count`]. See `object/live_slots.rs` for the consequence
+/// every allocator has to honour.
 #[repr(C)]
 pub struct ObjectHeader {
-    /// Type tag to distinguish from Error objects (must be first field!)
-    /// Uses OBJECT_TYPE_REGULAR (1) for regular objects
-    pub object_type: u32,
-    /// Class ID for this object (used for instanceof, vtable lookup)
+    /// Class ID for this object (used for instanceof, vtable lookup).
+    /// MUST stay first: codegen guards load it at header offset 0.
     pub class_id: u32,
     /// Compatibility word: the parent class ID during allocation, then the
     /// runtime `ShapeId` after shape stamping. Parent lookup must use the class
     /// registry; direct reads of this word are not authoritative parent data.
     pub parent_class_id: u32,
-    /// Number of fields in this object
-    pub field_count: u32,
     /// Pointer to array of key strings (for Object.keys() support).
     ///
     /// A class instance HAS one: `object_alloc_class_inline_keys_impl` installs
@@ -1707,7 +1660,7 @@ pub struct ObjectHeader {
     pub keys_array: *mut ArrayHeader,
     /// #6759 Phase B: per-object metadata record — null for ordinary
     /// objects (the common case). MUST stay the LAST field: codegen reads
-    /// the earlier header fields at fixed offsets (0/4/8/12/16), and the
+    /// the earlier header fields at fixed offsets (0/4/8), and the
     /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
     /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
     /// See [`ObjectMeta`].
@@ -1778,8 +1731,10 @@ pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
 /// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
 /// and heap class-expression values carry their kind in the immutable ShapeId
-/// descriptor. The legacy `ObjectHeader::object_type` word is only an ABI
-/// mirror pending #8047.
+/// descriptor. #8113 deleted the legacy `ObjectHeader::object_type` ABI mirror,
+/// so this is the ONLY spelling of "is an ordinary object" — note it is FALSE
+/// for a class object (`ShapeObjectKind::Class`), which is exactly what the
+/// retired `object_type == OBJECT_TYPE_REGULAR` test meant (#6595).
 #[inline]
 pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     if obj.is_null() {
@@ -1870,16 +1825,40 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
+    let live = object_live_slot_count(obj);
+    set_object_keys_array_with_live(obj, keys_array, live);
+}
+
+/// `set_object_keys_array` for a receiver whose live inline-slot bound is not
+/// yet published — i.e. the allocators, which used to write
+/// `(*ptr).field_count` before installing the keys edge (#8113). Passing the
+/// birth count here keeps the published descriptor identical to the pre-#8113
+/// one; deriving it from the (absent) predecessor instead would mint a
+/// spurious `live = 0` intermediate for every allocation.
+#[inline]
+unsafe fn set_object_keys_array_with_live(
+    obj: *mut ObjectHeader,
+    keys_array: *mut ArrayHeader,
+    live_inline_slot_count: u32,
+) {
     // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
-    // described the OLD keys array — clear it on a pointer CHANGE so no stale
-    // id is visible while the authoritative header changes. A same-pointer
-    // append is versioned by `synchronize_object_shape_descriptor` below; an
-    // immutable old descriptor is never silently changed in place.
+    // describes the OLD keys array on a pointer CHANGE. A same-pointer append is
+    // versioned inside the publication helper; an immutable old descriptor is
+    // never silently changed in place.
+    //
+    // #8113 MINT-THEN-STAMP — this used to CLEAR the stamp here and re-mint
+    // after the header store. That is no longer legal: the descriptor is the
+    // only record of the live inline-slot bound, so an unstamped window is a
+    // window in which the collector traces ZERO payload slots, and the window
+    // contains both a write barrier and a `HashMap` insert. Instead the
+    // successor descriptor for the NEW edge is published FIRST (the predecessor
+    // still describes the header's current edge across every allocation inside),
+    // and the header store follows with nothing allocating in between.
     //
     // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
-    // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
-    // tests exactly that, so an instance still carrying its allocation-time
-    // `parent_class_id` (never in the ShapeId range) is left alone.
+    // `is_shape_id` says so, for class instances too, so an instance still
+    // carrying its allocation-time `parent_class_id` (never in the ShapeId
+    // range) is left alone.
     let predecessor = shapes::object_shape_descriptor(obj);
     let keys_changed = (*obj).keys_array != keys_array;
     if keys_changed {
@@ -1895,8 +1874,11 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         // lookup publish an Ordinary descriptor for a class object; the
         // structural synchronization below then inherited the wrong kind.
         mark_object_dynamic_shape_unknown(obj);
-        shapes::clear_object_shape_stamp(obj);
     }
+    // #8067/#8113: every visible ShapeId resolves to the exact rooted
+    // ordered-keys/live-slot descriptor. Same-pointer appends are versioned
+    // inside the helper.
+    shapes::publish_object_shape_from(obj, predecessor, keys_array, live_inline_slot_count);
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
     crate::gc::runtime_write_barrier_slot(
@@ -1904,28 +1886,6 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         &(*obj).keys_array as *const _ as usize,
         keys_array as u64,
     );
-    // #8067: the old header edge remains authoritative, but every visible
-    // ShapeId must now resolve to the exact rooted ordered-keys/live-slot
-    // descriptor. Same-pointer appends are versioned inside the helper.
-    shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
-}
-
-/// Publish a new authoritative live-inline-slot bound without ever exposing a
-/// ShapeId whose descriptor disagrees with `ObjectHeader.field_count`.
-///
-/// Callers growing the traced range must invoke this before publishing the
-/// pointer-bearing field value (#7154): old stamp clear → header count write →
-/// complete descriptor install → new stamp → value-slot store.
-#[inline]
-pub(super) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
-    if (*obj).field_count != field_count {
-        let predecessor = shapes::object_shape_descriptor(obj);
-        shapes::clear_object_shape_stamp(obj);
-        (*obj).field_count = field_count;
-        shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
-    } else {
-        shapes::debug_assert_object_shape_parity(obj);
-    }
 }
 
 #[inline]

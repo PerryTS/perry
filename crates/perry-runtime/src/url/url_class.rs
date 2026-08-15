@@ -447,7 +447,9 @@ pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {
         return false;
     }
     unsafe {
-        if !is_gc_object_header(url) || (*url).class_id != 0 || (*url).field_count < URL_FIELD_COUNT
+        if !is_gc_object_header(url)
+            || (*url).class_id != 0
+            || crate::object::object_live_slot_count(url) < URL_FIELD_COUNT
         {
             return false;
         }

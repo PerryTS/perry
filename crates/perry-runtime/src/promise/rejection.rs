@@ -177,9 +177,10 @@ fn describe_rejection_reason(v: f64) -> String {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
-        if crate::value::addr_class::is_plausible_heap_addr(ptr)
-            && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR
-        {
+        // #8113: `GcHeader.obj_type == GC_TYPE_ERROR`, not a raw offset-0 read.
+        // Offset 0 is `class_id` now, and `OBJECT_TYPE_ERROR` is 2 — an
+        // ordinary user class id.
+        if unsafe { crate::error::ptr_is_native_error(ptr) } {
             let eh = ptr as *const crate::error::ErrorHeader;
             let stack = unsafe { crate::exception::string_header_to_string((*eh).stack) };
             return format!("error(0x{ptr:x}) stack={stack:?}");
@@ -460,9 +461,9 @@ fn print_unhandled_diagnostic(reason: f64) {
         // band — `fetch().then(r => { throw r })` uncaught) — the old bare
         // `>= 0x10000` deref'd the id as memory instead of printing the
         // fallback line.
-        if crate::value::addr_class::is_plausible_heap_addr(ptr)
-            && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR
-        {
+        // #8113: `GcHeader.obj_type == GC_TYPE_ERROR` (which subsumes the
+        // band+plausibility gate above), not a raw offset-0 read.
+        if unsafe { crate::error::ptr_is_native_error(ptr) } {
             let eh = ptr as *const crate::error::ErrorHeader;
             let stack_str = unsafe { crate::exception::string_header_to_string((*eh).stack) };
             if !stack_str.is_empty() {

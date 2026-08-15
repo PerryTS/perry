@@ -27,7 +27,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             .unwrap_or((*obj).keys_array);
         let live_inline_slot_count = descriptor
             .map(|facts| facts.live_inline_slot_count)
-            .unwrap_or((*obj).field_count);
+            .unwrap_or(crate::object::object_live_slot_count(obj));
         if old_keys.is_null() {
             Some((obj, 0, 0, live_inline_slot_count))
         } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)

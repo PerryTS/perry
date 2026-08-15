@@ -4,17 +4,36 @@
 
 use crate::string::{js_string_from_bytes, StringHeader};
 
-/// Object type tag for runtime type discrimination
-pub const OBJECT_TYPE_REGULAR: u32 = 1;
+/// `ErrorHeader`'s own leading discriminator. #8113 removed the punned
+/// `ObjectHeader::object_type` word, so this is no longer an ObjectHeader tag —
+/// it is only `ErrorHeader`'s first field, and NOTHING may read it off an
+/// untyped pointer. Use [`ptr_is_native_error`] to ask the question.
 pub const OBJECT_TYPE_ERROR: u32 = 2;
-/// #1789: a heap "class object" — the value a class EXPRESSION evaluates to
-/// (a regular object stamped with the compile-time template's `class_id`,
-/// carrying per-evaluation static fields as own properties). Marks the value
-/// as the CLASS itself (vs an instance) so `typeof` is "function", and
-/// `new`/`instanceof` read `class_id` from the object. Own-field get/set
-/// treat it like OBJECT_TYPE_REGULAR (the get/set paths are gated on
-/// `gc_type`/`class_id`, not on this tag).
-pub const OBJECT_TYPE_CLASS: u32 = 3;
+
+/// The authoritative "is this a native `ErrorHeader`?" test.
+///
+/// # Why this exists (#8113)
+///
+/// `ObjectHeader` used to open with an `object_type: u32` prefix-punned against
+/// `ErrorHeader`'s, so seven sites answered this question with a raw
+/// `*(ptr as *const u32) == OBJECT_TYPE_ERROR` on an untyped pointer. Deleting
+/// that word makes offset 0 `class_id`, and `OBJECT_TYPE_ERROR` is **2** — an
+/// ordinary user class id. The raw read would therefore reclassify the second
+/// class a program declares as an `ErrorHeader` and read `message` / `name` /
+/// `stack` / `errors` out of its field slots: a silent type confusion of
+/// exactly the #8100 shape.
+///
+/// Every `ErrorHeader` is arena-allocated with `GC_TYPE_ERROR` (`alloc_error`,
+/// the only allocation site), and no other cell uses that kind, so the GC
+/// header discriminates exactly. This is the same move #8086 made for
+/// `object_is_regular`.
+#[inline]
+pub(crate) unsafe fn ptr_is_native_error(addr: usize) -> bool {
+    crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_ERROR
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    })
+}
 
 /// Error subclass discriminator (stored in `error_kind`).
 /// Used by `instanceof TypeError` etc. to check kind without name string compare.
@@ -747,8 +766,7 @@ pub extern "C" fn js_error_is_error(value: f64) -> f64 {
         if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
-        let object_type = std::ptr::read(ptr as *const u32);
-        if object_type == OBJECT_TYPE_ERROR {
+        if ptr_is_native_error(ptr as usize) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
     }
@@ -1512,8 +1530,8 @@ pub extern "C" fn js_error_get_cause(error: *mut ErrorHeader) -> f64 {
 /// re-applies `POINTER_TAG` to the result. That is only sound when `obj` is a
 /// genuine native error: the `errors` field lives at a fixed byte offset in
 /// `ErrorHeader`, so applying it to a *regular* user object reads an unrelated
-/// property slot. Observed in the wild: a plain object (`object_type ==
-/// OBJECT_TYPE_REGULAR`) whose `+48` slot held NaN-boxed `undefined`
+/// property slot. Observed in the wild: a plain object whose `+48` slot held
+/// NaN-boxed `undefined`
 /// (`0x7FFC_0000_0000_0001`); codegen OR-ed `POINTER_TAG` onto it to produce
 /// `0x7FFD_0000_0000_0001` — a handle-band id (`raw = 1`), not a heap array —
 /// which `for…of` then mis-iterated ("Iterator result is not an object").
@@ -1536,11 +1554,10 @@ pub extern "C" fn js_error_get_errors(error: *mut ErrorHeader) -> *mut crate::ar
         if !crate::value::addr_class::is_plausible_heap_addr(addr) {
             return std::ptr::null_mut();
         }
-        // Native error objects carry `object_type == OBJECT_TYPE_ERROR` in
-        // their first u32; only those have the `errors` field at a fixed
-        // offset. (Matches the validation in `js_error_is_error`.)
-        let object_type = std::ptr::read(error as *const u32);
-        if object_type == OBJECT_TYPE_ERROR {
+        // Native error objects are the `GC_TYPE_ERROR` cells `alloc_error`
+        // makes; only those have the `errors` field at a fixed offset.
+        // (Matches the validation in `js_error_is_error`.)
+        if ptr_is_native_error(error as usize) {
             return (*error).errors;
         }
         // Not a native error — resolve `.errors` as an ordinary own property

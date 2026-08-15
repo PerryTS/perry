@@ -132,11 +132,11 @@ pub fn array_subclass_has_iterator_override(value: f64) -> bool {
 // perry models as a plain `ObjectHeader`. The two headers overlay field for
 // field:
 //
-//     ArrayHeader.length   (u32 @0)  <- ObjectHeader.object_type (= 1)
-//     ArrayHeader.capacity (u32 @4)  <- ObjectHeader.class_id
-//     elements[0]          (@8)      <- parent_class_id || field_count
-//     elements[1]          (@16)     <- keys_array   (a *mut ArrayHeader)
-//     elements[2]          (@24)     <- meta         (a *mut ObjectMeta)
+//     ArrayHeader.length   (u32 @0)  <- ObjectHeader.class_id        (#8113)
+//     ArrayHeader.capacity (u32 @4)  <- ObjectHeader.parent_class_id  (ShapeId)
+//     elements[0]          (@8)      <- keys_array   (a *mut ArrayHeader)
+//     elements[1]          (@16)     <- meta         (a *mut ObjectMeta)
+//     elements[2]          (@24)     <- inline field slot 0
 //
 // so element WRITES overwrite two live GC child edges with arbitrary doubles —
 // the collector then traces whatever the mutator stored. `a.push(1); a.push(2)`

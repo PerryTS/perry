@@ -1389,7 +1389,7 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
         let count = if !keys.is_null() {
             crate::array::js_array_length(keys) as usize
         } else {
-            (*obj).field_count as usize
+            crate::object::object_live_slot_count(obj) as usize
         };
         let result = crate::array::js_array_alloc(count as u32);
 
@@ -1579,7 +1579,7 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         let count = if !keys.is_null() {
             crate::array::js_array_length(keys) as usize
         } else {
-            (*obj).field_count as usize
+            crate::object::object_live_slot_count(obj) as usize
         };
         let result = crate::array::js_array_alloc(count as u32);
 

@@ -279,6 +279,7 @@ pub use buffer::BufferHeader;
 pub use closure::ClosureHeader;
 pub use map::MapHeader;
 pub use object::ObjectHeader;
+pub use object::{object_live_slot_count, perry_object_header_abi_revision};
 pub use promise::Promise;
 pub use regex::RegExpHeader;
 pub use set::SetHeader;

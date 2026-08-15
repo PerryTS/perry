@@ -98,7 +98,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         let keys_arr = (*obj).keys_array;
         let keys_len = (*keys_arr).length;
         let keys_cap = (*keys_arr).capacity;
-        let field_count = (*obj).field_count;
+        let field_count = crate::object::object_live_slot_count(obj);
         // keys_len is authoritative — the logical property count. field_count
         // can be EITHER less than keys_len (parser-built objects with ≥9
         // fields cap field_count at the inline alloc_limit; closes #307;
@@ -972,7 +972,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     }
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = (*obj).field_count;
+    let num_fields = crate::object::object_live_slot_count(obj);
 
     // Templated fast path (#64 follow-up): if this object's shape has been
     // seen before in this stringify call, emit via the cached prefix table
@@ -1661,7 +1661,7 @@ pub(crate) unsafe fn estimate_json_size(value: f64, type_hint: u32) -> usize {
         }
         if type_hint == TYPE_OBJECT || is_object_pointer(ptr) {
             let obj = ptr as *const crate::ObjectHeader;
-            let fields = (*obj).field_count as usize;
+            let fields = crate::object::object_live_slot_count(obj) as usize;
             return (fields * 200).max(256);
         }
     }

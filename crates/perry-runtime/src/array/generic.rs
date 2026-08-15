@@ -147,7 +147,8 @@ fn to_length(v: f64) -> i64 {
 /// not `clean_arr_ptr` alone — must gate the array fast path: `clean_arr_ptr`
 /// accepts an object pointer whose leading `ObjectHeader` words happen to pass
 /// its `length <= capacity` bound, then `(*arr).length` / the element buffer
-/// read `field_count` / inline slots as garbage (see `normalize_array_receiver`).
+/// read `ObjectHeader`'s words / inline slots as garbage (see
+/// `normalize_array_receiver`).
 #[inline]
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     let b = recv.to_bits();

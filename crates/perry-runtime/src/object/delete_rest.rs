@@ -294,7 +294,7 @@ pub extern "C" fn js_object_delete_field(
         // `Object.entries`, `for-in` etc. all still saw the deleted
         // property. Bun and Node remove the property entirely; we
         // match that.
-        let field_count = (*obj).field_count;
+        let field_count = crate::object::object_live_slot_count(obj);
         let alloc_limit = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let new_count = key_count - 1;
 
@@ -411,8 +411,23 @@ pub extern "C" fn js_object_delete_field(
         //    IN PLACE (which is what the comment above describes and what
         //    `shape_slot_lookup`'s shrink check already anticipates), so
         //    deleting it would silently make that path wrong.
-        crate::object::shapes::clear_object_shape_stamp(obj);
-        crate::object::shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
+        // #8113: no `clear_object_shape_stamp` here any more. The stamp is now
+        // the ONLY record of the live inline-slot bound, so clearing it — even
+        // for the two statements it used to be cleared across — makes the
+        // object's payload untraceable if a collection lands in between (the
+        // publication below inserts into the shape table and can allocate). The
+        // republication is mint-then-stamp, which subsumes what the clear was
+        // for: the successor descriptor is minted while the predecessor is
+        // still installed, and the receiver's shape changes at the single
+        // `parent_class_id` store.
+        // The bound is the POST-compaction one published in step 3 above;
+        // `predecessor` contributes only semantic lineage (class kind /
+        // generation), never structural facts.
+        crate::object::shapes::synchronize_object_shape_descriptor_from(
+            obj,
+            predecessor,
+            crate::object::object_live_slot_count(obj),
+        );
 
         1
     }
@@ -692,7 +707,10 @@ mod shape_transition_tests_6759 {
                 .expect("delete must publish a by-id descriptor");
             assert_eq!(descriptor.keys, (*obj).keys_array as u64);
             assert_eq!(descriptor.logical_key_count, 2);
-            assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
+            assert_eq!(
+                descriptor.live_inline_slot_count,
+                crate::object::object_live_slot_count(obj)
+            );
         }
     }
 
@@ -769,7 +787,10 @@ mod shape_transition_tests_6759 {
                 .expect("class delete must publish a by-id descriptor");
             assert_eq!(descriptor.keys, (*obj).keys_array as u64);
             assert_eq!(descriptor.logical_key_count, 2);
-            assert_eq!(descriptor.live_inline_slot_count, (*obj).field_count);
+            assert_eq!(
+                descriptor.live_inline_slot_count,
+                crate::object::object_live_slot_count(obj)
+            );
 
             // Still true, and still what the guard compares until rung 3.
             assert_ne!(

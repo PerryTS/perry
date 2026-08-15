@@ -246,7 +246,7 @@ impl<'scope> RuntimeHandle<'scope> {
     /// ```ignore
     /// let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();
     /// let found = class_instance_has_member(class_id, "size");  // ALLOCATES
-    /// (*obj).field_count                                        // from-space
+    /// crate::object::object_live_slot_count(obj)                                        // from-space
     /// ```
     ///
     /// The defect is not a missing root. It is that `obj` is still *nameable*
@@ -257,7 +257,7 @@ impl<'scope> RuntimeHandle<'scope> {
     /// let (found, obj) = obj_h.across_mut::<ObjectHeader, _>(
     ///     || class_instance_has_member(class_id, "size"),
     /// );
-    /// (*obj).field_count                                        // post-collection
+    /// crate::object::object_live_slot_count(obj)                                        // post-collection
     /// ```
     ///
     /// # What it does NOT do

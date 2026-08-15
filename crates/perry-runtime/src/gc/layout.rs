@@ -218,7 +218,7 @@ unsafe fn with_shape_shared_descriptor<R>(
     let object = user_ptr as *const crate::object::ObjectHeader;
     let field_count = crate::object::shapes::object_shape_descriptor(object)
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        .unwrap_or((*object).field_count as usize);
+        .unwrap_or(crate::object::object_live_slot_count(object) as usize);
     let map = hot_shape_layouts().borrow();
     let desc = map.get(&keys)?.as_ref()?;
     if desc.slot_count != field_count {
@@ -690,7 +690,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 let object = parent_user as *const crate::object::ObjectHeader;
                 let live_slots = crate::object::shapes::object_shape_descriptor(object)
                     .map(|descriptor| descriptor.live_inline_slot_count as usize)
-                    .unwrap_or((*object).field_count as usize);
+                    .unwrap_or(crate::object::object_live_slot_count(object) as usize);
                 if slot_index < live_slots {
                     return;
                 }
@@ -1030,7 +1030,7 @@ unsafe fn init_typed_shape_layout(
     let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
     let object_slot_count = shape_descriptor
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        .unwrap_or((*obj_header).field_count as usize);
+        .unwrap_or(crate::object::object_live_slot_count(obj_header) as usize);
     if object_slot_count != slot_count {
         layout_set_typed_unknown(header, user_ptr);
         return;

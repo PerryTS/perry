@@ -36,7 +36,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
     unsafe {
         // Bounds check: check inline fields first, then overflow map
-        let fc = (*obj).field_count;
+        let fc = crate::object::object_live_slot_count(obj);
         if field_index >= fc {
             // Check overflow map for fields that didn't fit in inline storage
             return match overflow_get(obj as usize, field_index as usize) {
@@ -58,7 +58,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
                 obj,
                 field_index,
                 (*obj).class_id,
-                (*obj).field_count
+                crate::object::object_live_slot_count(obj)
             );
             return JSValue::undefined();
         }
@@ -94,8 +94,10 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key_count > 65536 {
         return None;
     }
-    let alloc_limit =
-        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit = std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    ) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         // #1781: accept inline SSO short keys — `is_string()` is

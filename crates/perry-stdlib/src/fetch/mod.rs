@@ -356,7 +356,7 @@ pub extern "C" fn js_fetch_response_count() -> i64 {
 /// rejection. Pre-fix (#236) every fetch error site NaN-boxed a bare
 /// `*StringHeader` with `POINTER_TAG` (0x7FFD), which the uncaught-exception
 /// printer in `perry-runtime/src/exception.rs` then read as an
-/// `*ObjectHeader.object_type` u32 — `byte_len` of the message string is
+/// the first `ObjectHeader` u32 (`class_id` since #8113) — `byte_len` of the message string is
 /// neither `OBJECT_TYPE_ERROR` (2) nor `OBJECT_TYPE_REGULAR` (1), so the
 /// printer fell through to the generic stringifier which printed
 /// `Uncaught exception: [object Object]`. Allocating a real

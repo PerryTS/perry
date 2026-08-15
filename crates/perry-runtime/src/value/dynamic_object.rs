@@ -408,11 +408,14 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     };
 
     // #7930: TypedArrayHeader starts with `length: u32`, at the same payload
-    // offset where ObjectHeader stores its object-type word. Classify the
-    // receiver through the authoritative side table before any header-shaped
-    // dispatch below: a two-element typed array otherwise reads as
-    // `OBJECT_TYPE_ERROR == 2`, so `.length` / `.byteLength` enter the Error
-    // branch and return `undefined` even though construction was correct.
+    // offset where ObjectHeader used to store its object-type word. Classify
+    // the receiver through the authoritative side table before any
+    // header-shaped dispatch below: a two-element typed array otherwise read as
+    // `OBJECT_TYPE_ERROR == 2`, so `.length` / `.byteLength` entered the Error
+    // branch and returned `undefined` even though construction was correct.
+    // (#8113 replaced that raw read with a `GcHeader` kind test, which no
+    // longer confuses the two — but the side-table classification below is
+    // still what gives the typed array its property semantics.)
     //
     // Delegate to the normal by-name typed-array path rather than duplicating
     // its property semantics here. It gives an own expando/accessor precedence
@@ -434,7 +437,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // Check if this is a ClosureHeader (CLOSURE_MAGIC at offset 12).
     // ClosureHeader layout: func_ptr (8B), capture_count u32 (4B), type_tag u32 (4B), captures at 16+
-    // ObjectHeader layout: object_type u32 (4B), class_id u32 (4B), parent_class_id u32 (4B), field_count u32 (4B), keys_array (8B), ...
+    // ObjectHeader layout (#8113): class_id u32 (4B), parent_class_id u32 (4B), keys_array (8B), meta (8B)
     // Without this check, the closure's capture[0] at offset 16 would be read as keys_array → crash.
     if crate::closure::is_closure_ptr(ptr as usize) {
         return crate::closure::closure_get_dynamic_prop(ptr as usize, property_name);
@@ -537,8 +540,12 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         }
     }
 
-    // Check the object type tag (first u32 field of both ObjectHeader and ErrorHeader)
-    let object_type = *(ptr as *const u32);
+    // #8113: `GcHeader.obj_type == GC_TYPE_ERROR`. This used to read the punned
+    // `object_type` word at offset 0; offset 0 is `class_id` now, so the raw
+    // read would classify every object whose class id happens to be
+    // `OBJECT_TYPE_ERROR` (= 2) as an Error and hand its field slots to
+    // `ErrorHeader`'s accessors.
+    let is_native_error = crate::error::ptr_is_native_error(ptr as usize);
 
     // Handle native module namespace objects (e.g., `const fn = fs.lstatSync`)
     // Create a bound method closure so the method reference can be called
@@ -555,7 +562,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     }
 
     // Handle Error objects specially
-    if object_type == crate::error::OBJECT_TYPE_ERROR {
+    if is_native_error {
         // An own expando / accessor property (installed via defineProperty, or a
         // reassigned `message`/`stack`) lives in the exotic side tables and wins
         // over the builtin slot. The compiled member-get path consults these,
@@ -734,11 +741,9 @@ pub unsafe extern "C" fn js_dynamic_object_keys(ptr: i64) -> *mut crate::array::
         return crate::array::js_array_alloc(0);
     }
 
-    // Check the object type tag (first u32 field of both ObjectHeader and ErrorHeader)
-    let object_type = *(ptr as *const u32);
-
+    // #8113: `GcHeader.obj_type == GC_TYPE_ERROR` — see `js_dynamic_get_property`.
     // Handle Error objects specially - they have fixed keys
-    if object_type == crate::error::OBJECT_TYPE_ERROR {
+    if crate::error::ptr_is_native_error(ptr as usize) {
         // Error objects have keys: "message", "name", "stack"
         let keys = crate::array::js_array_alloc(3);
 

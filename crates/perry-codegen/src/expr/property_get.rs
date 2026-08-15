@@ -1448,11 +1448,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `js_object_get_field_by_name_f64` runtime helper which
                 // hashes the property name + walks the keys array. The
                 // ObjectHeader layout (`#[repr(C)]` in
-                // `crates/perry-runtime/src/object.rs:591`) is 24 bytes
-                // followed by the inline field array of f64-sized slots:
+                // `crates/perry-runtime/src/object/mod.rs`) is 24 bytes on
+                // LP64 / 16 on ILP32 (#8113) followed by the inline field
+                // array of f64-sized slots:
                 //
-                //   offset  0..24:  ObjectHeader (object_type, class_id,
-                //                   parent_class_id, field_count, keys_array)
+                //   offset  0..24:  ObjectHeader (class_id, parent_class_id
+                //                   [= ShapeId], keys_array, meta)
                 //   offset 24..32:  field 0
                 //   offset 32..40:  field 1
                 //   ...
@@ -1734,8 +1735,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.current_block = fast_idx;
                         // arm64_32 watchOS: the object fields region begins at
                         // `size_of::<ObjectHeader>()` past the user pointer — 24 on
-                        // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is 4
-                        // bytes there). A hardcoded 24 reads every class field 4 bytes
+                        // 64-bit, 16 on ILP32 since #8113 (both trailing pointers are
+                        // 4 bytes there). A hardcoded 24 reads every class field 8 bytes
                         // off on a 32-bit watch, so this inline class-field load
                         // disagreed with the generic-PIC load / runtime setter (both
                         // target-aware) and typed-object string fields came back as

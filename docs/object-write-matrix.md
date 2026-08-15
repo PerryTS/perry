@@ -22,8 +22,11 @@ lack of benefit.
    `proxy/put_value.rs::js_put_value_set_ic_miss`): static (interned/const)
    key, target ≡ receiver expression, safepoint-free RHS, heap object,
    non-forwarded, blocking flags clear (frozen/sealed/no-extend/descriptors/
-   typed-intact), `object_type == REGULAR`, **`class_id != 0`**, shape-token
-   match (id-or-keys discriminated), slot in bounds.
+   typed-intact), **`class_id != 0`** OR the runtime's plain-ordinary birth flag
+   (#8098), shape-token match on the ShapeId, slot in bounds. (The
+   `object_type == REGULAR` term this list used to carry was already stale — the
+   emitted precheck reads `class_id` and the ShapeId, never offset 0 — and #8113
+   deleted the word.)
 3. **Runtime fast path** (header-first classification + existing-own-data
    overwrite routing in `js_object_set_field_by_name` / `put_value_set`):
    everything else that is still an ordinary data write.

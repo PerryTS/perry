@@ -291,7 +291,7 @@ fn test_ffi_index_field_set_widens_field_count_7164() {
     // Mirrors `perry_ffi::alloc_object()` exactly: class_id=0, field_count=0.
     let obj = crate::object::js_object_alloc(0, 0);
     assert_eq!(
-        unsafe { (*obj).field_count },
+        unsafe { crate::object::object_live_slot_count(obj) },
         0,
         "test setup: alloc_object()'s field_count starts at 0"
     );
@@ -324,7 +324,7 @@ fn test_ffi_index_field_set_widens_field_count_7164() {
          the whole payload range empty, so the mask is never consulted)"
     );
     assert_eq!(
-        unsafe { (*obj).field_count },
+        unsafe { crate::object::object_live_slot_count(obj) },
         1,
         "#7164: js_object_set_field must widen field_count to cover the \
          written index, mirroring field_set_by_name/tail.rs's publication order"

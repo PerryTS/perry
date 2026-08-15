@@ -782,7 +782,8 @@ fn map_receiver_identity(map: *const MapHeader) -> *const MapHeader {
 ///   redirected onto that backing (#7570);
 /// * a plain object that was merely *annotated* `Map<K, V>` — resolved to
 ///   null, so every entry point degrades through its existing null branch
-///   instead of reading `parent_class_id ‖ field_count` as `entries`.
+///   instead of reading `ObjectHeader.keys_array` as `entries` (#8113 moved
+///   which word lands there; the hazard is unchanged).
 ///
 /// Anything with no readable `GcHeader` (handle-band ids, tag remnants,
 /// non-pointer garbage) is passed through unchanged: that is exactly the

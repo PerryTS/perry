@@ -311,7 +311,7 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
             let fc = unsafe {
                 crate::object::shapes::object_shape_descriptor(obj)
                     .map(|descriptor| descriptor.live_inline_slot_count as usize)
-                    .unwrap_or((*obj).field_count as usize)
+                    .unwrap_or(crate::object::object_live_slot_count(obj) as usize)
             };
             if fc <= 10_000 {
                 (

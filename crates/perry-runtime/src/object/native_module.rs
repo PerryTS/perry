@@ -1485,7 +1485,7 @@ pub(super) fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
             }
             // #7563: the closure guard above fixed ONE instance of that type
             // confusion; a bare `(*obj).class_id` read has it for every other
-            // non-object allocation too. `ObjectHeader` is `{ object_type: u32,
+            // non-object allocation too. `ObjectHeader` is `{ class_id: u32,
             // class_id: u32, … }` while `ArrayHeader` is `{ length: u32,
             // capacity: u32 }`, so the `class_id` slot of an ARRAY overlays its
             // **capacity** — an N-capacity array literal was read back as

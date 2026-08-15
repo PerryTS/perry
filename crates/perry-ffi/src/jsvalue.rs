@@ -326,6 +326,14 @@ extern "C" {
     /// shape declared them).
     pub fn js_object_get_field(obj: *const ObjectHeader, field_index: u32) -> JsValue;
 
+    /// Number of LIVE inline field slots on `obj` — the exclusive upper bound
+    /// for [`js_object_get_field`].
+    ///
+    /// #8113: this used to be readable as `(*obj).field_count`. The word is
+    /// gone (the authoritative bound is the object's ShapeId descriptor), so
+    /// ask the runtime instead of reading the header.
+    pub fn js_object_live_slot_count(obj: *const ObjectHeader) -> u32;
+
     /// Write the field at `field_index`.
     pub fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, value: JsValue);
 

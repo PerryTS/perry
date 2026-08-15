@@ -835,7 +835,9 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
     if cleaned.is_null() {
         // #7574: `a.length = n` on a `class X extends Array` instance reached
         // here through the `is_array_expr`-keyed `property_set` lowering and
-        // wrote `ObjectHeader.object_type`. Perform the Array-exotic
+        // wrote the first `ObjectHeader` word (`class_id` since #8113 — i.e.
+        // the write corrupts class identity, not an inert tag). Perform the
+        // Array-exotic
         // `Set(O, "length", n, true)` on the object instead.
         if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
             crate::array::subclass::array_object_set_length(recv, new_length);
