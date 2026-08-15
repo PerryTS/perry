@@ -835,18 +835,22 @@ fn lower_put_value_dyn_ic_inline(
     let is_ptr = ctx.block().icmp_eq(I64, &t_tag, "32765");
     let above = ctx.block().icmp_ugt(I64, &t_handle, "1048575");
     // Value tag: reference-creating stores (pointer 0x7FFD, string 0x7FFF,
-    // bigint 0x7FFA) leave the inline path before any store.
+    // bigint 0x7FFA) need the layout note / string-alias / write-barrier
+    // bookkeeping, so they SELECT the barriered store arm below rather than
+    // gating entry. #8108: they used to leave the inline path here, which sent
+    // every `o.k = <reference>` through the outlined helper — one cross-crate
+    // call per write that re-validated, in Rust, exactly the guards this block
+    // has already proved.
     let v_tag = ctx.block().lshr(I64, &v_bits, "48");
     let v_not_obj = ctx.block().icmp_ne(I64, &v_tag, "32765");
     let v_not_str = ctx.block().icmp_ne(I64, &v_tag, "32767");
     let v_not_big = ctx.block().icmp_ne(I64, &v_tag, "32762");
+    let mut v_scalar = ctx.block().and(I1, &v_not_obj, &v_not_str);
+    v_scalar = ctx.block().and(I1, &v_scalar, &v_not_big);
     // Zero key bits are the empty-way sentinel (and the JS number 0):
     // they must never reach the way compares.
     let k_nonzero = ctx.block().icmp_ne(I64, &k_bits, "0");
     let mut entry_ok = ctx.block().and(I1, &is_ptr, &above);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_obj);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_str);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_big);
     entry_ok = ctx.block().and(I1, &entry_ok, &k_nonzero);
 
     let guard_idx = ctx.new_block("put.dynic.guard");
@@ -854,6 +858,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_idx = ctx.new_block("put.dynic.way1");
     let way2_idx = ctx.new_block("put.dynic.way2");
     let store_idx = ctx.new_block("put.dynic.store");
+    let store_scalar_idx = ctx.new_block("put.dynic.store.scalar");
+    let store_ref_idx = ctx.new_block("put.dynic.store.ref");
     let slow_idx = ctx.new_block("put.dynic.slow");
     let merge_idx = ctx.new_block("put.dynic.merge");
     let guard_label = ctx.block_label(guard_idx);
@@ -861,6 +867,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_label = ctx.block_label(way1_idx);
     let way2_label = ctx.block_label(way2_idx);
     let store_label = ctx.block_label(store_idx);
+    let store_scalar_label = ctx.block_label(store_scalar_idx);
+    let store_ref_label = ctx.block_label(store_ref_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&entry_ok, &guard_label, &slow_label);
@@ -942,17 +950,44 @@ fn lower_put_value_dyn_ic_inline(
         I64,
         &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
     );
-    let header_words =
-        (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
+    let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header_words = (header_bytes / 8).to_string();
     let slot_word = ctx.block().add(I64, &slot, &header_words);
     let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
     let slot_ptr = ctx
         .block()
         .gep_inbounds(I64, &obj_ptr, &[(I64, &slot_word)]);
-    // GC_STORE_AUDIT(POINTER_FREE): the entry tag test proved the value is
+    ctx.block()
+        .cond_br(&v_scalar, &store_scalar_label, &store_ref_label);
+
+    ctx.current_block = store_scalar_idx;
+    // GC_STORE_AUDIT(POINTER_FREE): the tag test above proved the value is
     // not pointer/string/bigint — non-reference bits need no barrier.
     ctx.block().store(DOUBLE, v, &slot_ptr);
     ctx.block().br(&merge_label);
+
+    // #8108: the reference arm. Byte-for-byte the static write PIC's
+    // pointer-capable store (`lower_put_value_static_write_ic`'s hit block),
+    // reached under STRICTLY STRONGER conditions: the guards above are that
+    // PIC's guards, and this block additionally knows the value carries a
+    // reference tag, which the PIC only knows statically or not at all.
+    //
+    // No new rooting obligation. `t` is materialised BELOW every operand that
+    // can collect (see the call site's evaluation-order note), and the three
+    // bookkeeping helpers are `gc-leaf-function`, so nothing between the
+    // re-read and the store is a collection point.
+    ctx.current_block = store_ref_idx;
+    {
+        let slot_i32 = ctx.block().trunc(I64, &slot, I32);
+        let slot_offset = ctx.block().shl(I64, &slot, "3");
+        let fields_base = ctx.block().add(I64, &t_handle, &header_bytes.to_string());
+        let slot_addr = ctx.block().add(I64, &fields_base, &slot_offset);
+        let blk = ctx.block();
+        emit_jsvalue_slot_store_scalar_aware_on_block(
+            blk, &slot_ptr, v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        );
+        blk.br(&merge_label);
+    }
 
     ctx.current_block = slow_idx;
     let slow_result = ctx.block().call(
@@ -969,9 +1004,14 @@ fn lower_put_value_dyn_ic_inline(
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    let result = ctx
-        .block()
-        .phi(DOUBLE, &[(v, &store_label), (&slow_result, &slow_label)]);
+    let result = ctx.block().phi(
+        DOUBLE,
+        &[
+            (v, &store_scalar_label),
+            (v, &store_ref_label),
+            (&slow_result, &slow_label),
+        ],
+    );
     Ok(result)
 }
 

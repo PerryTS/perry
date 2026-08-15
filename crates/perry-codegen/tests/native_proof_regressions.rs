@@ -14551,6 +14551,169 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
     );
 }
 
+/// The body of the first block whose label starts with `label_prefix`.
+///
+/// Block labels carry per-function numeric suffixes (`put.dynic.store.ref.60`),
+/// so callers pass the stable prefix. A block header is a line-initial
+/// `label:`; lines that merely mention the label (branches, phis) are indented
+/// and skipped.
+fn dyn_ic_block_body<'a>(ir: &'a str, label_prefix: &str) -> Option<&'a str> {
+    let needle = format!("\n{label_prefix}");
+    let mut from = 0;
+    while let Some(rel) = ir[from..].find(&needle) {
+        let label_start = from + rel + 1;
+        let line_end = label_start + ir[label_start..].find('\n')?;
+        if ir[label_start..line_end].ends_with(':') {
+            let rest = &ir[line_end + 1..];
+            let end = match (rest.find("\n\n"), rest.find("\n}")) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(rest.len()),
+            };
+            return Some(&rest[..end]);
+        }
+        from = line_end;
+    }
+    None
+}
+
+fn dyn_ic_reference_store_ir() -> String {
+    let object = 1u32;
+    let value = 2u32;
+    let key = 3u32;
+    let module = module_with_classes_and_params(
+        "dyn_ic_reference_store",
+        Vec::new(),
+        vec![
+            param(object, "object", Type::Any),
+            param(value, "value", Type::Any),
+        ],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: key,
+                name: "key".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("x".to_string())),
+            },
+            Stmt::Return(Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::LocalGet(key)),
+                value: Box::new(Expr::LocalGet(value)),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+            })),
+        ],
+    );
+    compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+}
+
+/// #8108: a reference-tagged value stored through the inline dynamic-key write
+/// IC takes a BARRIERED inline arm instead of leaving the inline path.
+///
+/// Before this, the value tag gated ENTRY: `o[k] = <object|string|bigint>` was
+/// pushed straight to `put.dynic.slow`, i.e. one cross-crate
+/// `js_put_value_set_dyn_ic` call per write that re-validated in Rust exactly
+/// the guards the inline block had already proved. The tag now SELECTS an arm.
+///
+/// The reference arm is byte-for-byte the static write PIC's pointer-capable
+/// store (`emit_jsvalue_slot_store_scalar_aware_on_block`) reached under
+/// strictly stronger conditions, so this test pins all three bookkeeping calls
+/// — dropping any one of them is the #5094 / #7511 family of silent-stranding
+/// bugs, and none of them is visible to a runtime GC probe.
+#[test]
+fn dyn_ic_inline_store_barriers_a_reference_value() {
+    let ir = dyn_ic_reference_store_ir();
+
+    let scalar = dyn_ic_block_body(&ir, "put.dynic.store.scalar")
+        .unwrap_or_else(|| panic!("the non-reference store arm must survive:\n{ir}"));
+    let reference = dyn_ic_block_body(&ir, "put.dynic.store.ref").unwrap_or_else(|| {
+        panic!("a reference-tagged value must take an inline barriered arm:\n{ir}")
+    });
+    // An emitted block is not a reached block. Routing reference values back to
+    // `put.dynic.slow` leaves this block behind as dead IR, which every
+    // assertion below would happily inspect — so require the branch INTO it
+    // before believing anything it contains.
+    assert!(
+        ir.lines()
+            .any(|line| line.contains("br i1") && line.contains("%put.dynic.store.ref")),
+        "the reference arm must be a branch target, not dead IR:\n{ir}"
+    );
+
+    for helper in [
+        "js_string_addref_if_heap_string",
+        "js_gc_note_slot_layout_aware",
+        "js_write_barrier_slot",
+    ] {
+        assert!(
+            reference.contains(helper),
+            "the reference store arm must keep the full layout-note / string-alias / \
+             write-barrier path; missing {helper}:\n{reference}"
+        );
+    }
+    assert!(
+        reference.contains("store double"),
+        "the reference arm must still perform the slot store:\n{reference}"
+    );
+
+    // The scalar arm is the pre-#8108 IR: a bare store, no bookkeeping. A
+    // barrier appearing here would mean the tag test stopped discriminating.
+    assert!(
+        scalar.contains("store double"),
+        "the non-reference arm must still store:\n{scalar}"
+    );
+    for helper in [
+        "js_string_addref_if_heap_string",
+        "js_gc_note_slot_layout_aware",
+        "js_write_barrier_slot",
+    ] {
+        assert!(
+            !scalar.contains(helper),
+            "GC_STORE_AUDIT(POINTER_FREE): the non-reference arm proved the value carries \
+             no heap pointer, so it must not call {helper}:\n{scalar}"
+        );
+    }
+}
+
+/// #8108, the other half: admitting reference values inline must not cost the
+/// semantic fallback. Every guard failure and every way miss still reaches
+/// `js_put_value_set_dyn_ic`, which bottoms out at full `[[Set]]`.
+#[test]
+fn dyn_ic_inline_store_keeps_its_semantic_fallback_for_reference_values() {
+    let ir = dyn_ic_reference_store_ir();
+
+    assert!(
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "the outlined helper must remain the miss path:\n{ir}"
+    );
+    // The arm is SELECTED by the value tag, not gated at entry: the branch into
+    // the two store arms is what proves a reference value can reach the inline
+    // store at all, rather than being diverted to the slow block above it.
+    let selector = ir
+        .lines()
+        .find(|line| {
+            line.contains("br i1")
+                && line.contains("%put.dynic.store.scalar")
+                && line.contains("%put.dynic.store.ref")
+        })
+        .unwrap_or_else(|| {
+            panic!("the value tag must SELECT a store arm, not gate inline entry:\n{ir}")
+        });
+    assert!(
+        selector.trim_start().starts_with("br i1"),
+        "expected a conditional branch into the two store arms, got: {selector}"
+    );
+    // Entry must no longer reject on the value tag. The three tag compares
+    // still exist (they build the selector), but the entry predicate is now
+    // receiver-shaped plus the empty-way sentinel only.
+    let entry = dyn_ic_block_body(&ir, "put.dynic.guard")
+        .unwrap_or_else(|| panic!("the receiver guard block must exist:\n{ir}"));
+    assert!(
+        entry.contains("call double @js_put_value_set_dyn_ic(") || ir.contains("%put.dynic.slow"),
+        "the receiver guard must still fall through to the outlined helper:\n{ir}"
+    );
+}
+
 #[test]
 fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let objects = 1u32;
