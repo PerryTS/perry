@@ -334,7 +334,49 @@ fn payload_preview(r: &FromSpaceRef) -> String {
     let payload = (r.owner_header + GC_HEADER_SIZE) as *const u64;
     let stale_word = r.slot_offset / 8;
     let words = stale_word.saturating_add(3).min(24);
-    let mut out = String::from("\n    payload:");
+    let mut out = String::new();
+    // The owner's GC flags plus, for an array owner, its length/capacity and
+    // whether it is one of the specially-marked arrays (arguments object,
+    // shared keys array). "Which array is this?" is the question that turns an
+    // offending address into a code path, and it is not answerable from the
+    // address alone.
+    unsafe {
+        let header = r.owner_header as *const GcHeader;
+        out.push_str(&format!(
+            "\n    owner_hdr: obj_type={} size={} flags={:#x}",
+            (*header).obj_type,
+            (*header).size,
+            (*header).gc_flags
+        ));
+        if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            let arr = (r.owner_header + GC_HEADER_SIZE) as *const crate::array::ArrayHeader;
+            out.push_str(&format!(
+                " array_len={} capacity={} stale_element={}",
+                (*arr).length,
+                (*arr).capacity,
+                stale_word.saturating_sub(std::mem::size_of::<crate::array::ArrayHeader>() / 8),
+            ));
+        }
+        // What does the STALE TARGET look like? A keys array of strings, a
+        // data array, a closure — this is what names the producing code path.
+        let target_header = (r.target - GC_HEADER_SIZE) as *const GcHeader;
+        out.push_str(&format!(
+            "\n    target_hdr: obj_type={} size={} flags={:#x}",
+            (*target_header).obj_type,
+            (*target_header).size,
+            (*target_header).gc_flags
+        ));
+        if (*target_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            let arr = r.target as *const crate::array::ArrayHeader;
+            let len = (*arr).length;
+            out.push_str(&format!(" len={} capacity={} first:", len, (*arr).capacity));
+            let elems = (r.target + std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+            for i in 0..(len as usize).min(4) {
+                out.push_str(&format!(" {:#x}", elems.add(i).read()));
+            }
+        }
+    }
+    out.push_str("\n    payload:");
     for i in 0..words {
         let w = unsafe { payload.add(i).read() };
         let kind = match w >> 48 {
