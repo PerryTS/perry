@@ -73,10 +73,30 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
 /// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
 /// reads as "unknown" at every call site.
 ///
-/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
-/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
-/// are allocator bookkeeping and can read as any value. Use the answer only
-/// where a wrong tag is harmless:
+/// A non-zero tag is NOT proof that a real header exists — but the reason is
+/// narrower than this comment used to claim, and getting it wrong in either
+/// direction has cost this file a recurring bug family (#8137/#8138, swept in
+/// `gc-handoff/ARRAY-SWEEP-NOTES.md`).
+///
+/// `Buffer` and `TypedArray` receivers come in BOTH backings:
+///
+/// * **arena-backed** — `buffer/header.rs`'s `arena_alloc_gc_old(…,
+///   GC_TYPE_BUFFER)` and `typedarray/mod.rs`'s `GC_TYPE_TYPED_ARRAY` site.
+///   These carry a genuine `GcHeader` with a correct `obj_type`; they are
+///   pinned rather than movable, which is a different property from being
+///   untracked. This is the population #8041 started nulling.
+/// * **external** — `EXTERNAL_BUFFER_REGISTRY` /
+///   `EXTERNAL_UINT8ARRAY_REGISTRY` addresses, plus
+///   `shared_sab::alloc_shared_sab`'s `alloc_zeroed`. For these the eight
+///   bytes below the payload really are allocator bookkeeping and can read
+///   as any value.
+///
+/// So the tag is authoritative only once the address is known to be
+/// arena-backed. `typedarray::arena_payload_has_gc_type` is the predicate
+/// that does it properly: it range-checks, rejects `HeapSpace::Unknown` for
+/// the HEADER address specifically, and validates via `gc_type_info` before
+/// trusting the byte. Do not open-code a floor instead. Use a bare tag read
+/// only where a wrong tag is harmless:
 ///
 /// * to *skip* a registry probe whose answer for that receiver would have been
 ///   `false` anyway — the caller must already have routed real buffers and
