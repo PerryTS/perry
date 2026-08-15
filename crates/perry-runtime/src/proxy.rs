@@ -1530,6 +1530,12 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                     addr,
                                 )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
+                                // #8113: `interned != 0` is a free compare and
+                                // moves AHEAD of the descriptor probe below —
+                                // an un-interned key can never be plan-eligible,
+                                // so there is no reason to pay for the receiver
+                                // test first.
+                                && interned != 0
                                 // #8113: this asks for ORDINARY specifically —
                                 // it must stay FALSE for a class object or
                                 // #6595 reopens. `object_is_regular` is exactly
@@ -1538,10 +1544,16 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 // deleted `object_type == OBJECT_TYPE_REGULAR`
                                 // word expressed, not the weaker
                                 // "is an ObjectHeader" test.
-                                && crate::object::object_is_regular(
+                                //
+                                // `_with_header` because `header` above IS this
+                                // receiver's `GcHeader`: re-deriving it here
+                                // cost a band/heap-range/slab classification
+                                // plus a reload, once per allocated object,
+                                // measured by a per-callsite counter.
+                                && crate::object::object_is_regular_with_header(
+                                    header,
                                     addr as *const crate::ObjectHeader,
-                                )
-                                && interned != 0;
+                                );
                             let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)
                             {
