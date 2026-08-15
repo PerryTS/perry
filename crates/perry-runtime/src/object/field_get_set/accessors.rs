@@ -58,7 +58,7 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
                 obj,
                 field_index,
                 (*obj).class_id,
-                crate::object::object_live_slot_count(obj)
+                fc
             );
             return JSValue::undefined();
         }

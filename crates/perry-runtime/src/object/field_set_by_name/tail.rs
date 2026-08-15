@@ -454,10 +454,10 @@ pub(super) fn set_field_by_name_object_tail(
                 };
                 set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                 super::mark_object_dynamic_shape_unknown(obj);
-                let alloc_limit = std::cmp::max(
-                    crate::object::object_live_slot_count(obj),
-                    crate::object::INLINE_SLOT_FLOOR as u32,
-                ) as usize;
+                // #8113: one bound probe, reused.
+                let live_slots = crate::object::object_live_slot_count(obj);
+                let alloc_limit =
+                    std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
                     // validated (GC header read, type check, closure
@@ -469,7 +469,7 @@ pub(super) fn set_field_by_name_object_tail(
                     let slot = fields_ptr.add(slot_idx as usize);
                     // Publish the expanded traced range and its exact
                     // descriptor before the pointer-bearing slot value.
-                    if slot_idx >= crate::object::object_live_slot_count(obj) {
+                    if slot_idx >= live_slots {
                         set_object_live_slot_count(obj, slot_idx + 1);
                     }
                     crate::gc::runtime_store_jsvalue_slot(

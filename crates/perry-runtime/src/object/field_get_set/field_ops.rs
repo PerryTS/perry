@@ -162,7 +162,12 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // is undefined-initialized at allocation (`object/alloc.rs`), so
         // widening here can only ever expose non-pointer sentinels ahead of
         // the store that is about to fill this one in.
-        if field_index >= crate::object::object_live_slot_count(obj) {
+        //
+        // #8113: `stored_field_count` is reused rather than re-read. The bound
+        // is a shape-table probe now, not a header word, and nothing between
+        // the read above and here can change it (the null-pointer guard only
+        // substitutes the VALUE).
+        if field_index >= stored_field_count {
             set_object_live_slot_count(obj, field_index + 1);
         }
         crate::gc::runtime_store_jsvalue_slot(

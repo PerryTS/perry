@@ -216,9 +216,13 @@ unsafe fn with_shape_shared_descriptor<R>(
     // Defense-in-depth: both descriptor families must agree on the exact live
     // bound. The ObjectHeader count is only an ABI mirror pending #8047.
     let object = user_ptr as *const crate::object::ObjectHeader;
+    // #8113: 0, not a second descriptor probe. `unwrap_or` is EAGER, so
+    // re-deriving the bound cost a whole extra shape-table lookup on every
+    // call — and the bound has no other source now, so the fallback could only
+    // ever have returned 0 anyway.
     let field_count = crate::object::shapes::object_shape_descriptor(object)
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        .unwrap_or(crate::object::object_live_slot_count(object) as usize);
+        .unwrap_or(0);
     let map = hot_shape_layouts().borrow();
     let desc = map.get(&keys)?.as_ref()?;
     if desc.slot_count != field_count {
@@ -688,9 +692,11 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 && (*header).obj_type == GC_TYPE_OBJECT
             {
                 let object = parent_user as *const crate::object::ObjectHeader;
+                // #8113: 0, not a second (eager) descriptor probe. This is
+                // `layout_note_slot`, i.e. every object field store.
                 let live_slots = crate::object::shapes::object_shape_descriptor(object)
                     .map(|descriptor| descriptor.live_inline_slot_count as usize)
-                    .unwrap_or(crate::object::object_live_slot_count(object) as usize);
+                    .unwrap_or(0);
                 if slot_index < live_slots {
                     return;
                 }
@@ -1028,9 +1034,10 @@ unsafe fn init_typed_shape_layout(
     }
     let obj_header = user_ptr as *const crate::object::ObjectHeader;
     let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
+    // #8113: 0, not a second (eager) descriptor probe.
     let object_slot_count = shape_descriptor
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        .unwrap_or(crate::object::object_live_slot_count(obj_header) as usize);
+        .unwrap_or(0);
     if object_slot_count != slot_count {
         layout_set_typed_unknown(header, user_ptr);
         return;

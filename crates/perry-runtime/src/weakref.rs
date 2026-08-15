@@ -372,11 +372,22 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
-    match (*obj).class_id {
+    let class_id = (*obj).class_id;
+    if !matches!(
+        class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+    ) {
+        return false;
+    }
+    // #8113: ONE bound lookup. This runs per traced slot, and the bound is a
+    // shape-table probe now rather than a header word, so the three separate
+    // reads the arms below used to make were three probes.
+    let live_slots = crate::object::object_live_slot_count(obj);
+    match class_id {
         // Field 0 is the weak target for both: WeakRef's referent and a
         // WeakMap/WeakSet entry's key.
         CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY => {
-            crate::object::object_live_slot_count(obj) > 0 && slot == object_field_slot(obj, 0)
+            live_slots > 0 && slot == object_field_slot(obj, 0)
         }
         // A finalization record's target (field 0) AND its unregister token
         // (field 1) are both weak. The spec's [[UnregisterToken]] is an
@@ -384,9 +395,8 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
         // `registry.register(obj, held, obj)` pin the target immortal
         // (2026-07-09 GC audit).
         CLASS_ID_FINALIZATION_RECORD => {
-            (crate::object::object_live_slot_count(obj) > 0 && slot == object_field_slot(obj, 0))
-                || (crate::object::object_live_slot_count(obj) > 1
-                    && slot == object_field_slot(obj, 1))
+            (live_slots > 0 && slot == object_field_slot(obj, 0))
+                || (live_slots > 1 && slot == object_field_slot(obj, 1))
         }
         _ => false,
     }
