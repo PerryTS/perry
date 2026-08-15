@@ -889,8 +889,12 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     // a typed array is appended as ONE element because `IsArray` is false for
     // it.
     let raw_before_clean = crate::array::array_receiver_addr(src as *mut ArrayHeader);
-    if crate::typedarray::lookup_typed_array_kind(raw_before_clean).is_some()
-        || crate::buffer::is_registered_buffer(raw_before_clean)
+    // `array_receiver_addr` only strips the NaN-box tag, and neither registry
+    // helper validates what it is handed, so filter the handle band with the
+    // canonical predicate first rather than open-coding a floor here.
+    if crate::value::addr_class::is_plausible_heap_addr(raw_before_clean)
+        && (crate::typedarray::lookup_typed_array_kind(raw_before_clean).is_some()
+            || crate::buffer::is_registered_buffer(raw_before_clean))
     {
         return None;
     }
