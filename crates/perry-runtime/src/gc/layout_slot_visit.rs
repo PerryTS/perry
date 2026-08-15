@@ -27,7 +27,11 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             .unwrap_or((*obj).keys_array);
         let live_inline_slot_count = descriptor
             .map(|facts| facts.live_inline_slot_count)
-            .unwrap_or(crate::object::object_live_slot_count(obj));
+            // #8113: 0, not a second descriptor probe. `unwrap_or` is EAGER,
+            // so re-deriving the bound here cost a whole extra shape-table
+            // lookup on every call — and the bound has no other source now, so
+            // the fallback could only ever have returned 0 anyway.
+            .unwrap_or(0);
         if old_keys.is_null() {
             Some((obj, 0, 0, live_inline_slot_count))
         } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)

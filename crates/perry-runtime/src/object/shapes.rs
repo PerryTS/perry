@@ -1184,6 +1184,11 @@ pub(crate) fn test_shape_descriptor_count() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_clear_shape_table() {
+    // #8113: the live-slot memo is keyed by ShapeId and needs no invalidation
+    // in production (ids are never reused). A test that wipes the table and
+    // re-mints from the same id space is exactly the case that breaks that
+    // premise, so drop it here.
+    crate::object::test_clear_live_slot_memo();
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     inner.indices.clear();
     inner.descriptors.clear();
@@ -1193,6 +1198,8 @@ pub(crate) fn test_clear_shape_table() {
 
 #[cfg(test)]
 pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
+    // #8113: see `test_clear_shape_table`.
+    crate::object::test_clear_live_slot_memo();
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let stale = inner
         .ids_by_keys

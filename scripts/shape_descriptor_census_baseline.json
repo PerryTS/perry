@@ -60,7 +60,7 @@
     "crates/perry-runtime/src/gc/tests/shape_descriptor_authority.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 1,
     "crates/perry-runtime/src/gc/tests/shape_descriptor_authority.rs|keys_array|access|assert_eq!((*obj).keys_array as u64, descriptor.keys);": 1,
     "crates/perry-runtime/src/gc/tests/support.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 2,
-    "crates/perry-runtime/src/json/mod.rs|keys_array|access|(value, crate::object::object_live_slot_count(obj), (*(*obj).keys_array).length)": 1,
+    "crates/perry-runtime/src/json/mod.rs|keys_array|access|(*(*obj).keys_array).length,": 1,
     "crates/perry-runtime/src/json/mod.rs|keys_array|access|assert!(crate::object::object_live_slot_count(obj) >= (*(*obj).keys_array).length);": 1,
     "crates/perry-runtime/src/json/mod.rs|keys_array|access|assert!(unsafe { (*empty).keys_array.is_null() });": 1,
     "crates/perry-runtime/src/json/mod.rs|keys_array|access|assert_eq!((*(*nested).keys_array).length, 1);": 1,
