@@ -20,9 +20,11 @@
 //! The personality routine and LSDA walk are a port of Rust std's
 //! `rust_eh_personality` / `sys::personality::dwarf` (MIT OR Apache-2.0),
 //! trimmed to the encodings LLVM emits for Perry's targets and with the
-//! type-table/filter logic dropped (Perry handler landing pads are always
-//! `catch ptr null` — catch-all; cleanup-only pads have a zero call-site
-//! action and filters are never emitted).
+//! type-table/filter logic dropped. Perry pads are catch-alls in BOTH LSDA
+//! spellings: `catch ptr null` (non-zero action) where the pad's payload is
+//! used, and `landingpad token cleanup` (ZERO action — #7982's statepoint
+//! retype of unused catch-alls, the shape every default native-roots build
+//! emits). The walk therefore never discriminates on the action value.
 
 #![allow(non_upper_case_globals)]
 
@@ -196,6 +198,15 @@ pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
 /// the deliberate semantic for throws escaping a frame with no enclosing
 /// `try`; the C++ personality would `terminate` here instead).
 ///
+/// `PERRY_EH_TRACE=1` prints one line per personality invocation (phase,
+/// owning function, ip offset, decoded pad). Diagnostic-only: it changes no
+/// verdict, and the env probe is a cached `OnceLock` so the throw path pays
+/// one branch.
+fn eh_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_EH_TRACE").is_some())
+}
+
 /// # Safety
 /// Called by the system unwinder with a live unwind context.
 #[no_mangle]
@@ -211,30 +222,60 @@ pub unsafe extern "C" fn perry_eh_personality(
     }
     let lpad = match find_landing_pad(context) {
         Ok(l) => l,
-        Err(()) => return _URC_FATAL_PHASE1_ERROR,
+        Err(()) => {
+            if eh_trace_enabled() {
+                eprintln!(
+                    "[perry-eh] personality actions={:#x} region={:#x}: LSDA parse FAILED",
+                    actions,
+                    _Unwind_GetRegionStart(context) as usize,
+                );
+            }
+            return _URC_FATAL_PHASE1_ERROR;
+        }
     };
+    if eh_trace_enabled() {
+        let mut before: c_int = 0;
+        let ip = _Unwind_GetIPInfo(context, &mut before) as usize;
+        let region = _Unwind_GetRegionStart(context) as usize;
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        let sym = if libc::dladdr(region as *const libc::c_void, &mut info) != 0
+            && !info.dli_sname.is_null()
+        {
+            std::ffi::CStr::from_ptr(info.dli_sname)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::from("?")
+        };
+        eprintln!(
+            "[perry-eh] personality actions={:#x} region={:#x} ({sym}) ip=+{:#x} lpad={:?}",
+            actions,
+            region,
+            ip.wrapping_sub(region),
+            lpad,
+        );
+    }
+    // Every Perry pad is the JS catch its frame armed, REGARDLESS of the
+    // LSDA action value: `retype_landing_pads_for_statepoints` (#7982)
+    // rewrites the catch-all pads whose `{ptr, i32}` payload is unused into
+    // `landingpad token cleanup` for RS4GC, and LLVM emits a ZERO call-site
+    // action for a cleanup clause. Discriminating on the action here (an
+    // earlier revision of this function did) makes phase one skip every
+    // statepoint-built catch, and a plain `try { throw } catch` aborts with
+    // "no landing pad" under the default native-roots build.
     if actions & _UA_SEARCH_PHASE != 0 {
         match lpad {
-            Some(LandingPad::Handler(_)) => _URC_HANDLER_FOUND,
-            Some(LandingPad::Cleanup(_)) | None => _URC_CONTINUE_UNWIND,
+            Some(_) => _URC_HANDLER_FOUND,
+            None => _URC_CONTINUE_UNWIND,
         }
     } else {
         match lpad {
-            Some(LandingPad::Handler(lpad)) => {
+            Some(LandingPad::Handler(lpad)) | Some(LandingPad::Cleanup(lpad)) => {
                 // W1 diff mode (#7302 follow-up): the owned walker predicted
                 // where this throw lands before the raise; the system
                 // unwinder is the oracle. Any mismatch is a walker bug —
                 // fail loudly here, where both answers are in hand.
                 crate::eh_walker::verify_prediction(lpad as u64, _Unwind_GetCFA(context) as u64);
-                _Unwind_SetGR(context, UNWIND_DATA_REG.0, exception_object as usize);
-                _Unwind_SetGR(context, UNWIND_DATA_REG.1, 0);
-                _Unwind_SetIP(context, lpad);
-                _URC_INSTALL_CONTEXT
-            }
-            Some(LandingPad::Cleanup(lpad)) => {
-                // A cleanup is an intermediate stop, not the handler the
-                // owned walker predicts. Let phase two run it without
-                // consuming the pending handler prediction.
                 _Unwind_SetGR(context, UNWIND_DATA_REG.0, exception_object as usize);
                 _Unwind_SetGR(context, UNWIND_DATA_REG.1, 0);
                 _Unwind_SetIP(context, lpad);
@@ -325,18 +366,19 @@ unsafe fn find_landing_pad_action_in_lsda(
     Ok(None)
 }
 
-/// Handler-only LSDA query used by the owned single-phase walker. It jumps
-/// directly to the catch selected by Perry's handler stack and deliberately
-/// skips cleanup-only pads, matching the savepoint restoration performed by
-/// `js_throw` before transport begins.
+/// LSDA query used by the owned single-phase walker. It jumps directly to
+/// the catch selected by Perry's handler stack. Pads whose call-site action
+/// is zero are included: #7982's statepoint retype makes every unused
+/// catch-all pad a `cleanup`-clause pad, so a zero action is still Perry's
+/// catch (see `perry_eh_personality`).
 pub(crate) unsafe fn find_landing_pad_in_lsda(
     lsda: *const u8,
     ip: usize,
     func_start: usize,
 ) -> Result<Option<usize>, ()> {
     find_landing_pad_action_in_lsda(lsda, ip, func_start).map(|landing| match landing {
-        Some(LandingPad::Handler(address)) => Some(address),
-        Some(LandingPad::Cleanup(_)) | None => None,
+        Some(LandingPad::Handler(address)) | Some(LandingPad::Cleanup(address)) => Some(address),
+        None => None,
     })
 }
 
@@ -532,13 +574,20 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_lpad_is_not_a_handler() {
+    fn action_zero_pad_is_still_perrys_catch() {
+        // #7982's `retype_landing_pads_for_statepoints` turns every unused
+        // catch-all pad into `landingpad token cleanup`, and LLVM emits a
+        // ZERO call-site action for a cleanup clause — so under the default
+        // native-roots build EVERY JS `try`'s pad arrives here with action 0.
+        // An earlier revision skipped these as "not a handler" and broke
+        // every statepoint-built `try { throw } catch` with a FATAL
+        // "no landing pad" abort. The walker must claim them.
         let lsda = synth_lsda(&[(0x10, 0x8, 0x40, 0)]);
         let base = 0x2000usize;
         let landing = unsafe { find_landing_pad_action_in_lsda(lsda.as_ptr(), base + 0x12, base) };
         assert_eq!(landing.unwrap(), Some(LandingPad::Cleanup(base + 0x40)));
         let handler = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), base + 0x12, base) };
-        assert_eq!(handler.unwrap(), None);
+        assert_eq!(handler.unwrap(), Some(base + 0x40));
     }
 
     #[test]
