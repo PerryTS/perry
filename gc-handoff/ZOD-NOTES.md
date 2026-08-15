@@ -2300,3 +2300,40 @@ environment artifacts, not branch regressions:
   parity_fail -> pass`.
 
 Re-run on a QUIET host before undrafting, per the standing rule.
+
+## 42. The seed-3 residual: the victim's target sits at a CONSTANT arena offset the snapshot cannot classify
+
+The record-dump verifier (one run) printed all five slots of 138's +0xEA0
+record at the creation cycle:
+
+```
++16  0x7ffd_02af46e2_9bd0   ← healthy: current to-space, rewritten
++24  0x7ffd_02af46e2_50c0   ← healthy
++32  0x7ffd_02af46e2_9c30   ← healthy
++40  0x7ffd_02af46_8004c0   ← VICTIM
++48  0x7ffd_02af46e2_9c68   ← healthy
+```
+
+Across EVERY failing run tonight — different ASLR bases 0x247bb…,
+0x2de97…, 0x3513e…, 0x2af46… — the victim's low bits are the constant
+**`…8004C0`**: a FIXED offset from the arena base, in the survivor region
+(global classify says Survivor1 = the from-survivor). Its page is in no
+cycle's `CopyingPointers` snapshot (`collector_classify=None` — the
+`plausible_gc_header`/page filter rejects it), so the rewrite walk skips it
+silently every cycle while the surrounding slots track to-space normally.
+The bytes at target-8 read as boxed strings = whatever currently occupies
+that fixed survivor offset.
+
+**Working hypothesis, one code question away**: a survivor-side allocation
+path (mid-cycle overflow block? bootstrap-era survivor block?) produces
+blocks whose pages are missing from — or mis-tagged for — the classifier
+snapshot the copying minor builds, so any root pointing into them is
+unmaintainable. Check: `arena_alloc_gc_survivor` → `arena_cell_alloc`'s
+NEW-BLOCK path (arena/allocators.rs:370–) — are the block's pages entered
+into the page-generation map the snapshot reads, and is the snapshot taken
+before mid-cycle blocks can appear? Compare against how
+`copying_prepare_to_space` registers the prepared to-space blocks.
+
+Instrument ready for the confirmation: `PERRY_GC_NATIVE_SLOT_VERIFY=1`
+aborts at the creation cycle in ~2 minutes; add a page-provenance print
+(when was the target's page registered, by whom) to close it in one run.
