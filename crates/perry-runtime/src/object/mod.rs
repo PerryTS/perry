@@ -97,8 +97,7 @@ mod live_slots;
 mod null_stub;
 pub(crate) use live_slots::set_object_live_slot_count;
 pub use live_slots::{
-    js_object_live_slot_count, object_inline_alloc_limit, object_live_slot_count,
-    perry_object_header_abi_revision,
+    js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 pub(crate) use null_stub::{NullObjectBytes, NULL_OBJECT_BYTES};

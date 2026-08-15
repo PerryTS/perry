@@ -9,7 +9,6 @@
 
 use super::shapes;
 use super::ObjectHeader;
-use super::INLINE_SLOT_FLOOR;
 
 /// Revision of the [`ObjectHeader`] ABI, paired with
 /// `perry_ffi::OBJECT_HEADER_ABI_REVISION`.
@@ -68,17 +67,6 @@ pub unsafe extern "C" fn js_object_live_slot_count(obj: *const ObjectHeader) -> 
         return 0;
     }
     object_live_slot_count(obj)
-}
-
-/// The OOB bound every by-index field write is checked against:
-/// `max(live_inline_slot_count, INLINE_SLOT_FLOOR)`. Every allocator reserves
-/// at least `INLINE_SLOT_FLOOR` physical slots (`object/alloc.rs`), and
-/// `live_inline_slot_count` is a fixed point of the same expression — the
-/// by-name append path only ever bumps it for a slot it placed inline — so this
-/// can never exceed the physical slot count.
-#[inline]
-pub unsafe fn object_inline_alloc_limit(obj: *const ObjectHeader) -> u32 {
-    std::cmp::max(object_live_slot_count(obj), INLINE_SLOT_FLOOR as u32)
 }
 
 /// Publish a new authoritative live-inline-slot bound.
