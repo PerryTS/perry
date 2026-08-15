@@ -202,6 +202,8 @@ mod ordinary_param_guard_tests;
 mod param_guard;
 mod spec_abi;
 mod spec_return_proof;
+#[cfg(test)]
+mod spec_self_recursion_tests;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;

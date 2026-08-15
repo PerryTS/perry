@@ -288,11 +288,12 @@ mod tests {
     #[test]
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [&str; 5] = [
+        let allowed: [&str; 6] = [
             "codegen/spec_abi.rs",                   // naming + this test
             "codegen/function.rs",                   // entry emission
             "codegen/mod.rs",                        // eligibility/budget loop
             "codegen/ordinary_param_guard_tests.rs", // structural assertion only
+            "codegen/spec_self_recursion_tests.rs",  // structural assertion only
             "lower_call/func_ref.rs",                // direct-call dispatch
         ];
         let mut offenders: Vec<String> = Vec::new();

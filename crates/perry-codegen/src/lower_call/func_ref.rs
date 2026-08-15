@@ -54,6 +54,9 @@ fn try_emit_spec_static_call(
     }
     let mut raw_plan: Vec<RawArg> = Vec::with_capacity(args.len());
     let mut ta_locals: Vec<u32> = Vec::new();
+    // Slots whose value is a proven exact integer but whose static window
+    // leaves the 32-bit range: they take the fast entry behind one range test.
+    let mut range_checked: Vec<usize> = Vec::new();
     for (i, (rep, arg)) in plan.reps.iter().zip(args.iter()).enumerate() {
         match rep {
             SpecParamRep::Boxed => raw_plan.push(RawArg::Double(i)),
@@ -68,7 +71,23 @@ fn try_emit_spec_static_call(
                 Expr::LocalGet(id) if ctx.integer_locals.contains(id) => {
                     raw_plan.push(RawArg::I32Value(i))
                 }
-                _ => return None,
+                // #8170: a value DERIVED from this entry's own raw-i32
+                // parameters. Without this, a self-recursive call inside a
+                // specialized clone always re-enters the generic public
+                // symbol, so the clone runs once per top-level call and every
+                // recursive step pays dynamic dispatch.
+                _ => match spec_i32_derived_window(ctx, arg, 0)? {
+                    (lo, hi) if lo >= I32_MIN_I64 && hi <= I32_MAX_I64 => {
+                        raw_plan.push(RawArg::I32Value(i))
+                    }
+                    // No overlap with the slot at all: a range test could only
+                    // ever fail, so keep the boxed path and emit no diamond.
+                    (lo, hi) if hi < I32_MIN_I64 || lo > I32_MAX_I64 => return None,
+                    _ => {
+                        range_checked.push(i);
+                        raw_plan.push(RawArg::I32Value(i));
+                    }
+                },
             },
             SpecParamRep::TaPtr { kind, const_len } => {
                 let Expr::LocalGet(id) = arg else {
@@ -94,30 +113,116 @@ fn try_emit_spec_static_call(
     }
 
     let spec_name = crate::codegen::spec_function_name(fname, &plan.reps);
-    let mut raw_args_storage: Vec<(crate::types::LlvmType, String)> =
-        Vec::with_capacity(raw_plan.len());
-    for entry in &raw_plan {
-        match entry {
-            RawArg::Double(i) => raw_args_storage.push((DOUBLE, lowered[*i].clone())),
-            RawArg::I32Const(n) => raw_args_storage.push((I32, n.to_string())),
-            RawArg::I32Value(i) => {
-                let raw = ctx.block().fptosi(DOUBLE, &lowered[*i], I32);
-                raw_args_storage.push((I32, raw));
-            }
-            RawArg::TaPtr(i) => {
-                let blk = ctx.block();
-                let bits = blk.bitcast_double_to_i64(&lowered[*i]);
-                let raw = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-                raw_args_storage.push((I64, raw));
+    let tuple_note: Vec<String> = plan.reps.iter().map(|r| r.label()).collect();
+
+    // Emit the raw argument vector and the specialized call. Factored out so
+    // the guard-free and range-checked shapes below cannot drift apart.
+    fn emit_raw_args(
+        ctx: &mut FnCtx<'_>,
+        raw_plan: &[RawArg],
+        lowered: &[String],
+    ) -> Vec<(crate::types::LlvmType, String)> {
+        let mut raw_args_storage: Vec<(crate::types::LlvmType, String)> =
+            Vec::with_capacity(raw_plan.len());
+        for entry in raw_plan {
+            match entry {
+                RawArg::Double(i) => raw_args_storage.push((DOUBLE, lowered[*i].clone())),
+                RawArg::I32Const(n) => raw_args_storage.push((I32, n.to_string())),
+                RawArg::I32Value(i) => {
+                    let raw = ctx.block().fptosi(DOUBLE, &lowered[*i], I32);
+                    raw_args_storage.push((I32, raw));
+                }
+                RawArg::TaPtr(i) => {
+                    let blk = ctx.block();
+                    let bits = blk.bitcast_double_to_i64(&lowered[*i]);
+                    let raw = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+                    raw_args_storage.push((I64, raw));
+                }
             }
         }
+        raw_args_storage
     }
+
+    if !range_checked.is_empty() {
+        // One diamond for the whole call: every range-checked slot's test is
+        // ANDed, so the fast arm is entered only when EVERY raw slot's
+        // contract holds. The fallback is the permanent boxed ABI, which is
+        // what this site would have emitted without the specialization.
+        let mut guard: Option<String> = None;
+        for i in &range_checked {
+            let value = lowered[*i].clone();
+            let blk = ctx.block();
+            let ge = blk.fcmp("oge", &value, &double_literal(f64::from(i32::MIN)));
+            let le = blk.fcmp("ole", &value, &double_literal(f64::from(i32::MAX)));
+            let ok = blk.and(I1, &ge, &le);
+            guard = Some(match guard {
+                Some(prev) => ctx.block().and(I1, &prev, &ok),
+                None => ok,
+            });
+        }
+        let guard = guard?;
+        let fast_idx = ctx.new_block("spec_i32_call.fast");
+        let fallback_idx = ctx.new_block("spec_i32_call.fallback");
+        let merge_idx = ctx.new_block("spec_i32_call.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let fallback_label = ctx.block_label(fallback_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&guard, &fast_label, &fallback_label);
+
+        ctx.current_block = fast_idx;
+        let raw_args_storage = emit_raw_args(ctx, &raw_plan, lowered);
+        let call_args: Vec<(crate::types::LlvmType, &str)> = raw_args_storage
+            .iter()
+            .map(|(ty, v)| (*ty, v.as_str()))
+            .collect();
+        let fast_value = ctx.block().call(DOUBLE, &spec_name, &call_args);
+        let after_fast = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+
+        ctx.current_block = fallback_idx;
+        let boxed_args: Vec<(crate::types::LlvmType, &str)> =
+            lowered.iter().map(|v| (DOUBLE, v.as_str())).collect();
+        let fallback_value = ctx.block().call(DOUBLE, fname, &boxed_args);
+        let after_fallback = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+
+        ctx.current_block = merge_idx;
+        let result = ctx.block().phi(
+            DOUBLE,
+            &[
+                (fast_value.as_str(), after_fast.as_str()),
+                (fallback_value.as_str(), after_fallback.as_str()),
+            ],
+        );
+        ctx.record_lowered_value(
+            "Call",
+            None,
+            "spec_abi_range_checked_call",
+            &LoweredValue::js_value(result.clone()),
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![
+                format!("spec_call=range_checked; symbol={spec_name}; boxed_fallback={fname}"),
+                format!("tuple={}", tuple_note.join(",")),
+                format!("range_checked_slots={range_checked:?}"),
+            ],
+        );
+        return Some(result);
+    }
+
+    let raw_args_storage = emit_raw_args(ctx, &raw_plan, lowered);
     let call_args: Vec<(crate::types::LlvmType, &str)> = raw_args_storage
         .iter()
         .map(|(ty, v)| (*ty, v.as_str()))
         .collect();
     let result = ctx.block().call(DOUBLE, &spec_name, &call_args);
-    let tuple_note: Vec<String> = plan.reps.iter().map(|r| r.label()).collect();
     ctx.record_lowered_value(
         "Call",
         None,
@@ -134,6 +239,61 @@ fn try_emit_spec_static_call(
         ],
     );
     Some(result)
+}
+
+const I32_MIN_I64: i64 = i32::MIN as i64;
+const I32_MAX_I64: i64 = i32::MAX as i64;
+
+/// Beyond this magnitude a `double` can no longer hold every integer, so the
+/// JS `Number` the caller actually computes stops equalling the integer this
+/// proof reasons about.
+const SPEC_I32_EXACT_INTEGER_LIMIT: i64 = (1i64 << 53) - 1;
+
+/// Static value window of a call argument built ONLY from integer literals
+/// and parameters that the ENCLOSING specialized entry binds as a raw LLVM
+/// `i32`, composed with `+` and `-`.
+///
+/// The obligation is the raw-`I32` slot's contract, which
+/// `js_typed_i32_arg_guard` (`perry-runtime/src/native_abi.rs`) states
+/// exactly: finite, INTEGRAL, inside the signed 32-bit range, and **not
+/// `-0`**. This shape discharges three of the four statically:
+///
+/// * *finite and integral* — an `i32` parameter is an exact integer, an
+///   `Expr::Integer` literal is an exact integer, and `+`/`-` over exact
+///   integers whose magnitudes stay under 2^53 is exact in `double`, which
+///   the window cap below enforces at every node.
+/// * *not `-0`* — `sitofp` of an `i32` is never `-0` and an integer literal
+///   is never `-0`, and IEEE-754 round-to-nearest yields `-0` from `x + y`
+///   only when both operands are `-0`, and from `x - y` only when `x` is
+///   `-0` and `y` is `+0`. No leaf is `-0`, so by induction no node is.
+///
+/// The fourth — the 32-bit range — is what the returned window ANSWERS, and
+/// it is precisely where "it is an integer, ship it" would be wrong:
+/// `n - 1` for `n: i32` is `[-2^31 - 1, 2^31 - 2]`, one value wider than the
+/// slot. The caller either proves containment or emits a range test.
+///
+/// Multiplication is deliberately absent. `n * 0` with `n < 0` is `-0`, which
+/// the slot contract rejects, and a product of two `i32`s leaves the
+/// exact-integer window — both would need their own arguments.
+fn spec_i32_derived_window(ctx: &FnCtx<'_>, expr: &Expr, depth: usize) -> Option<(i64, i64)> {
+    if depth > 32 {
+        return None;
+    }
+    let (lo, hi) = match expr {
+        Expr::Integer(n) => (*n, *n),
+        Expr::LocalGet(id) if ctx.spec_i32_params.contains(id) => (I32_MIN_I64, I32_MAX_I64),
+        Expr::Binary { op, left, right } => {
+            let (llo, lhi) = spec_i32_derived_window(ctx, left, depth + 1)?;
+            let (rlo, rhi) = spec_i32_derived_window(ctx, right, depth + 1)?;
+            match op {
+                perry_hir::BinaryOp::Add => (llo.checked_add(rlo)?, lhi.checked_add(rhi)?),
+                perry_hir::BinaryOp::Sub => (llo.checked_sub(rhi)?, lhi.checked_sub(rlo)?),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    (lo >= -SPEC_I32_EXACT_INTEGER_LIMIT && hi <= SPEC_I32_EXACT_INTEGER_LIMIT).then_some((lo, hi))
 }
 
 /// Phase 2, Tier B: only a call site whose current facts prove every

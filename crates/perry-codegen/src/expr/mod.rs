@@ -1050,6 +1050,15 @@ pub(crate) struct FnCtx<'a> {
     /// sites it dominates; closure bodies get their own (empty) set.
     pub spec_ta_ready: std::collections::HashSet<u32>,
 
+    /// Parameters of THIS body that the specialized entry binds as a raw
+    /// LLVM `i32` (`SpecParamRep::I32`). Their JS value is an exact integer
+    /// inside the signed 32-bit range by calling convention — never
+    /// fractional, never `-0`, never NaN — which is the leaf fact
+    /// `lower_call/func_ref.rs` composes into a raw-`i32` argument proof for
+    /// a (typically self-recursive) call back into the same entry. Empty in
+    /// the generic body, in module init, and in every closure.
+    pub spec_i32_params: std::collections::HashSet<u32>,
+
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
     /// compatibility shadow for existing lowering paths, but typed consumers

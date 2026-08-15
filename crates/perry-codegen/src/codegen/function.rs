@@ -1016,6 +1016,7 @@ pub(super) fn compile_function(
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
+        spec_i32_params: spec_i32_params.clone(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
