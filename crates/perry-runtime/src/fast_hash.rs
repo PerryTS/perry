@@ -204,13 +204,13 @@ mod tests {
     fn u32_keys_take_the_multiplicative_fast_path() {
         use std::hash::Hash;
         for n in [0u32, 1, 0x8000_0000, 0x8000_02ff, u32::MAX] {
-            let mut viaHash = PtrHasher.build_hasher();
-            n.hash(&mut viaHash);
-            let mut viaU64 = PtrHasher.build_hasher();
-            viaU64.write_u64(n as u64);
+            let mut via_hash = PtrHasher.build_hasher();
+            n.hash(&mut via_hash);
+            let mut via_u64 = PtrHasher.build_hasher();
+            via_u64.write_u64(n as u64);
             assert_eq!(
-                viaHash.finish(),
-                viaU64.finish(),
+                via_hash.finish(),
+                via_u64.finish(),
                 "u32 key {n:#x} fell into the byte-stream fallback"
             );
         }
