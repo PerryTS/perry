@@ -196,12 +196,13 @@ pub struct HttpPendingRequest {
     /// dispatch loop doesn't need to re-borrow the server handle.
     pub request_listeners: Vec<i64>,
     pub handler: i64,
-    /// #5080 — `'checkContinue'` listeners snapshotted at request time.
-    /// When `is_check_continue` is set these fire *instead of* the
-    /// `'request'` listeners + handler (Node dispatches an
+    /// #5080 — routing only: when set, the `'checkContinue'` listeners fire
+    /// *instead of* the `'request'` listeners + handler (Node dispatches an
     /// `Expect: 100-continue` request to `'checkContinue'` when a listener
-    /// exists, and only emits `'request'` otherwise).
-    pub check_continue_listeners: Vec<i64>,
+    /// exists, and only emits `'request'` otherwise). The listener ADDRESSES
+    /// are deliberately not carried here: a snapshot parked in the channel
+    /// goes stale across a moving collection, so the dispatcher re-reads them
+    /// from the server handle (#8082).
     /// #5080 — route this request to `'checkContinue'` rather than the
     /// normal `'request'` path.
     pub is_check_continue: bool,
@@ -1274,7 +1275,6 @@ async fn handle_request(
         h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
-        check_continue_listeners,
         is_check_continue,
     };
 

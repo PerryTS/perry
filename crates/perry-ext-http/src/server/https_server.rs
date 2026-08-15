@@ -405,7 +405,6 @@ async fn handle_https_request(
         h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
-        check_continue_listeners,
         is_check_continue,
     };
     if request_tx.send(pending).await.is_err() {
