@@ -173,6 +173,13 @@ pub fn lower_native_module_dispatch(
             }
         }
     }
+    // `findPackageJSON()` distinguishes a missing first argument from an
+    // explicitly supplied `undefined`, although both otherwise lower to the
+    // same NaN-box value. Preserve the source call arity for the runtime.
+    if sig.runtime == "js_module_find_package_json" {
+        llvm_args.push((DOUBLE, double_literal(args.len() as f64)));
+        arg_types.push(DOUBLE);
+    }
 
     // Determine return type for the declare
     let ret_type = match sig.ret {

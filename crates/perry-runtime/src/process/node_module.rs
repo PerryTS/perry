@@ -6,13 +6,16 @@
 //! move — no behavior change.
 
 use super::*;
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
-};
+use crate::closure::{js_closure_get_capture_f64, js_closure_set_capture_f64};
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
+
+mod source_map;
+pub use source_map::{
+    js_module_find_source_map, js_module_source_map_new, module_source_map_attach_constructor,
+};
 
 pub fn scan_process_module_loader_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     MODULE_LOADER_HOOKS.with(|hooks| {
@@ -33,6 +36,7 @@ pub fn scan_process_module_loader_roots_mut(visitor: &mut crate::gc::RuntimeRoot
             cell.set(callback);
         }
     });
+    source_map::scan_roots(visitor);
 }
 
 /// `module.builtinModules` — Node exposes this as an Array of builtin module
@@ -40,11 +44,7 @@ pub fn scan_process_module_loader_roots_mut(visitor: &mut crate::gc::RuntimeRoot
 /// shape should still match Node's module API.
 #[no_mangle]
 pub extern "C" fn js_module_builtin_modules() -> f64 {
-    let arr = crate::array::js_array_alloc_with_length(MODULE_BUILTIN_MODULES.len() as u32);
-    for (i, name) in MODULE_BUILTIN_MODULES.iter().enumerate() {
-        crate::array::js_array_set_f64(arr, i as u32, module_string_value(name));
-    }
-    f64::from_bits(JSValue::array_ptr(arr).bits())
+    crate::object::module_builtin_modules_value()
 }
 
 /// Minimal `module.constants` shape. The compile-cache status values are not
@@ -52,25 +52,40 @@ pub extern "C" fn js_module_builtin_modules() -> f64 {
 /// stable process state for feature detection.
 #[no_mangle]
 pub extern "C" fn js_module_constants() -> f64 {
-    let constants = crate::object::js_object_alloc(0, 1);
-    let compile_cache_status = crate::object::js_object_alloc(0, 4);
-    module_set_field(compile_cache_status, "FAILED", 0.0);
-    module_set_field(compile_cache_status, "ENABLED", 1.0);
-    module_set_field(compile_cache_status, "ALREADY_ENABLED", 2.0);
-    module_set_field(compile_cache_status, "DISABLED", 3.0);
-    module_set_field(
-        constants,
-        "compileCacheStatus",
-        module_object_value(compile_cache_status),
-    );
-    module_object_value(constants)
+    crate::object::module_constants_value()
 }
 
 extern "C" fn module_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _specifier: f64,
+    specifier: f64,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    js_module_instance_require(specifier)
+}
+
+pub(crate) fn js_module_instance_require(specifier: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let specifier = scope.root_nanbox_f64(specifier);
+    let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {
+        module_throw_plain_type_error("Module.prototype.require called on incompatible receiver");
+    };
+    let filename = module_get_named_field(
+        module_object_ptr(receiver.get_nanbox_f64()).unwrap(),
+        "filename",
+    );
+    let filename = scope.root_nanbox_f64(if module_value_to_string(filename).is_some() {
+        filename
+    } else {
+        module_get_named_field(module_object_ptr(receiver.get_nanbox_f64()).unwrap(), "id")
+    });
+    let require = scope.root_nanbox_f64(crate::module_require::js_module_create_require(
+        filename.get_nanbox_f64(),
+    ));
+    crate::closure::js_closure_call1(
+        crate::value::js_nanbox_get_pointer(require.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader,
+        specifier.get_nanbox_f64(),
+    )
 }
 
 fn module_null() -> f64 {
@@ -81,46 +96,95 @@ fn module_null() -> f64 {
 /// execute CJS modules through this object yet; this mirrors Node's observable
 /// constructor fields and leaves loading to the resolver helpers below.
 #[no_mangle]
-pub extern "C" fn js_module_module_new(id: f64) -> f64 {
+pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
     let id_string = module_value_to_string(id).unwrap_or_default();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent = scope.root_nanbox_f64(parent);
     let keys = b"id\0path\0exports\0filename\0loaded\0children\0parent\0require\0";
-    let obj =
-        crate::object::js_object_alloc_with_shape(0xC0_00_4D, 8, keys.as_ptr(), keys.len() as u32);
-    let exports = crate::object::js_object_alloc(0, 0);
-    let children = crate::array::js_array_alloc_with_length(0);
+    let obj = scope.root_nanbox_f64(module_object_value(
+        crate::object::js_object_alloc_with_shape(
+            super::MODULE_CJS_CLASS_ID,
+            8,
+            keys.as_ptr(),
+            keys.len() as u32,
+        ),
+    ));
+    unsafe {
+        (*(crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader))
+            .class_id = super::MODULE_CJS_CLASS_ID;
+    }
+    let exports = scope.root_nanbox_f64(module_object_value(crate::object::js_object_alloc(0, 0)));
+    let children = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::array_ptr(crate::array::js_array_alloc_with_length(0)).bits(),
+    ));
+    let obj_ptr = || {
+        crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader
+    };
+    let id = scope.root_nanbox_f64(module_string_value(&id_string));
     crate::object::js_object_set_field(
-        obj,
+        obj_ptr(),
         0,
-        JSValue::from_bits(module_string_value(&id_string).to_bits()),
+        JSValue::from_bits(id.get_nanbox_f64().to_bits()),
     );
+    let path = scope.root_nanbox_f64(module_string_value(&module_cjs_dirname(&id_string)));
     crate::object::js_object_set_field(
-        obj,
+        obj_ptr(),
         1,
-        JSValue::from_bits(module_string_value(&module_cjs_dirname(&id_string)).to_bits()),
+        JSValue::from_bits(path.get_nanbox_f64().to_bits()),
     );
     crate::object::js_object_set_field(
-        obj,
+        obj_ptr(),
         2,
-        JSValue::from_bits(module_object_value(exports).to_bits()),
+        JSValue::from_bits(exports.get_nanbox_f64().to_bits()),
     );
-    crate::object::js_object_set_field(obj, 3, JSValue::from_bits(module_null().to_bits()));
+    crate::object::js_object_set_field(obj_ptr(), 3, JSValue::from_bits(module_null().to_bits()));
     crate::object::js_object_set_field(
-        obj,
+        obj_ptr(),
         4,
         JSValue::from_bits(module_bool_value(false).to_bits()),
     );
     crate::object::js_object_set_field(
-        obj,
+        obj_ptr(),
         5,
-        JSValue::from_bits(JSValue::array_ptr(children).bits()),
+        JSValue::from_bits(children.get_nanbox_f64().to_bits()),
     );
-    crate::object::js_object_set_field(obj, 6, JSValue::from_bits(module_null().to_bits()));
+    let has_parent = module_object_ptr(parent.get_nanbox_f64()).is_some();
     crate::object::js_object_set_field(
-        obj,
-        7,
-        JSValue::from_bits(module_function1("require", module_require_thunk, 1).to_bits()),
+        obj_ptr(),
+        6,
+        JSValue::from_bits(if has_parent {
+            parent.get_nanbox_f64().to_bits()
+        } else {
+            module_null().to_bits()
+        }),
     );
-    module_object_value(obj)
+    let require = scope.root_nanbox_f64(module_function1("require", module_require_thunk, 1));
+    crate::object::js_object_set_field(
+        obj_ptr(),
+        7,
+        JSValue::from_bits(require.get_nanbox_f64().to_bits()),
+    );
+    let value = obj.get_nanbox_f64();
+    if has_parent {
+        let parent_obj = module_object_ptr(parent.get_nanbox_f64()).unwrap() as *mut _;
+        let parent_children = crate::object::js_object_get_field(parent_obj, 5);
+        if parent_children.is_pointer() {
+            let children = parent_children.as_pointer::<crate::array::ArrayHeader>() as *mut _;
+            let children = crate::array::js_array_push_f64(children, value);
+            crate::object::js_object_set_field(
+                module_object_ptr(parent.get_nanbox_f64()).unwrap() as *mut _,
+                5,
+                JSValue::from_bits(JSValue::array_ptr(children).bits()),
+            );
+        }
+    }
+    crate::object::js_object_set_prototype_of(
+        obj.get_nanbox_f64(),
+        crate::object::module_cjs_prototype_for_instance(),
+    );
+    obj.get_nanbox_f64()
 }
 
 fn module_cjs_dirname(path: &str) -> String {
@@ -372,309 +436,54 @@ pub extern "C" fn js_module_load(request: f64, _parent: f64, _is_main: f64) -> f
     module_undefined()
 }
 
-/// Constructor for `new module.SourceMap(payload)`. Preserves the payload
-/// object and exposes working `findEntry`/`findOrigin` lookups. The bound
-/// method closures capture the payload (slot 0) so the lookup thunks can
-/// decode its `mappings`/`sources`/`names` without a separate `this` channel
-/// (mirrors the dgram socket-method pattern). #3675.
-#[no_mangle]
-pub extern "C" fn js_module_source_map_new(payload: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(obj, "payload", payload);
-    module_set_field(
-        obj,
-        "findEntry",
-        source_map_method(payload, "findEntry", source_map_find_entry_thunk),
-    );
-    module_set_field(
-        obj,
-        "findOrigin",
-        source_map_method(payload, "findOrigin", source_map_find_origin_thunk),
-    );
-    module_object_value(obj)
-}
-
-type SourceMapThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
-
-/// Build a bound SourceMap method closure that captures `payload` in slot 0
-/// and packs all call arguments into a single rest array.
-fn source_map_method(payload: f64, name: &str, thunk: SourceMapThunk) -> f64 {
-    let func_ptr = thunk as *const u8;
-    let closure = js_closure_alloc(func_ptr, 1);
-    js_closure_set_capture_f64(closure, 0, payload);
-    crate::closure::js_register_closure_rest(func_ptr, 0);
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-/// Decode a base64 VLQ alphabet byte to its 0–63 value.
-fn source_map_b64(c: u8) -> Option<i64> {
-    match c {
-        b'A'..=b'Z' => Some((c - b'A') as i64),
-        b'a'..=b'z' => Some((c - b'a' + 26) as i64),
-        b'0'..=b'9' => Some((c - b'0' + 52) as i64),
-        b'+' => Some(62),
-        b'/' => Some(63),
-        _ => None,
-    }
-}
-
-/// Decode one comma-delimited segment's VLQ fields.
-fn source_map_decode_segment(seg: &[u8]) -> Vec<i64> {
-    let mut out = Vec::new();
-    let mut value: i64 = 0;
-    let mut shift: u32 = 0;
-    for &b in seg {
-        let Some(digit) = source_map_b64(b) else {
-            continue;
-        };
-        let cont = (digit & 0x20) != 0;
-        value += (digit & 0x1f) << shift;
-        if cont {
-            shift += 5;
-        } else {
-            let negative = (value & 1) != 0;
-            let decoded = value >> 1;
-            out.push(if negative { -decoded } else { decoded });
-            value = 0;
-            shift = 0;
-        }
-    }
-    out
-}
-
-#[derive(Clone, Copy)]
-struct SourceMapEntry {
-    generated_line: i64,
-    generated_column: i64,
-    // `None` for genCol-only (1-field) segments that mark an unmapped position.
-    // The inner name index is `Some` only for segments that carried an explicit
-    // 5th VLQ field (a named mapping).
-    original: Option<(i64, i64, i64, Option<i64>)>, // (source_index, line, column, name_index)
-}
-
-/// Decode the full `mappings` string into ordered entries with cumulative
-/// source/line/column/name indices per the Source Map v3 grammar. `name_index`
-/// is attached only to genuinely-named (5-field) segments, matching how a
-/// position with no explicit name resolves (Node returns no `name` for the
-/// names-less mapping in the issue repro).
-fn source_map_decode(mappings: &str) -> Vec<SourceMapEntry> {
-    let mut entries = Vec::new();
-    let (mut src_idx, mut src_line, mut src_col, mut name_idx) = (0i64, 0i64, 0i64, 0i64);
-    for (gen_line, line) in mappings.split(';').enumerate() {
-        let mut gen_col = 0i64;
-        for seg in line.split(',') {
-            if seg.is_empty() {
-                continue;
-            }
-            let fields = source_map_decode_segment(seg.as_bytes());
-            if fields.is_empty() {
-                continue;
-            }
-            gen_col += fields[0];
-            let original = if fields.len() >= 4 {
-                src_idx += fields[1];
-                src_line += fields[2];
-                src_col += fields[3];
-                let name = if fields.len() >= 5 {
-                    name_idx += fields[4];
-                    Some(name_idx)
-                } else {
-                    None
-                };
-                Some((src_idx, src_line, src_col, name))
-            } else {
-                None
-            };
-            entries.push(SourceMapEntry {
-                generated_line: gen_line as i64,
-                generated_column: gen_col,
-                original,
-            });
-        }
-    }
-    entries
-}
-
-/// Read `payload.<field>` as a raw JSValue f64 (undefined when absent or when
-/// the payload is not a heap object).
-fn source_map_field(payload: f64, field: &str) -> f64 {
-    let p = JSValue::from_bits(payload.to_bits());
-    if !p.is_pointer() {
-        return undefined_value();
-    }
-    let obj = crate::value::js_nanbox_get_pointer(payload) as *const crate::object::ObjectHeader;
-    if obj.is_null() {
-        return undefined_value();
-    }
-    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
-    let v = crate::object::js_object_get_field_by_name(obj, key);
-    f64::from_bits(v.bits())
-}
-
-/// Read `payload.<field>` as a Rust string, if it is a string value.
-fn source_map_field_string(payload: f64, field: &str) -> Option<String> {
-    let value = JSValue::from_bits(source_map_field(payload, field).to_bits());
-    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let bytes = unsafe { crate::string::js_string_key_bytes(value, &mut sso) }?;
-    Some(String::from_utf8_lossy(bytes).into_owned())
-}
-
-/// Read `payload.<arrayField>[index]` as a raw JSValue f64 (undefined when out
-/// of range or not an array).
-fn source_map_array_element(payload: f64, field: &str, index: i64) -> f64 {
-    if index < 0 {
-        return undefined_value();
-    }
-    let arr_value = source_map_field(payload, field);
-    let av = JSValue::from_bits(arr_value.to_bits());
-    if !av.is_pointer() {
-        return undefined_value();
-    }
-    let arr = crate::value::js_nanbox_get_pointer(arr_value) as *const crate::array::ArrayHeader;
-    if arr.is_null() {
-        return undefined_value();
-    }
-    let len = crate::array::js_array_length(arr);
-    if index as u32 >= len {
-        return undefined_value();
-    }
-    crate::array::js_array_get_f64(arr, index as u32)
-}
-
-fn source_map_collect_args(rest: f64) -> Vec<f64> {
-    let rv = JSValue::from_bits(rest.to_bits());
-    if !rv.is_pointer() {
-        return Vec::new();
-    }
-    let arr = crate::value::js_nanbox_get_pointer(rest) as *const crate::array::ArrayHeader;
-    if arr.is_null() {
-        return Vec::new();
-    }
-    let len = crate::array::js_array_length(arr);
-    (0..len)
-        .map(|i| crate::array::js_array_get_f64(arr, i))
-        .collect()
-}
-
-/// Coerce call argument `idx` to a finite number, if it is one.
-fn source_map_arg_number(args: &[f64], idx: usize) -> Option<f64> {
-    args.get(idx)
-        .map(|v| JSValue::from_bits(v.to_bits()).to_number())
-        .filter(|n| n.is_finite())
-}
-
-fn source_map_arg_i64(args: &[f64], idx: usize) -> i64 {
-    source_map_arg_number(args, idx)
-        .map(|n| n as i64)
-        .unwrap_or(0)
-}
-
-/// Decode the payload's `mappings` and return the greatest entry whose
-/// generated position is `<=` (line, column). Entries are emitted in
-/// non-decreasing order, so the last non-exceeding one wins.
-fn source_map_lookup(payload: f64, line: i64, col: i64) -> Option<SourceMapEntry> {
-    let mappings = source_map_field_string(payload, "mappings")?;
-    let mut best = None;
-    for entry in source_map_decode(&mappings) {
-        if (entry.generated_line, entry.generated_column) <= (line, col) {
-            best = Some(entry);
-        } else {
-            break;
-        }
-    }
-    best
-}
-
-/// Build the `{ name?, fileName, lineNumber, columnNumber }` shape Node's
-/// `findOrigin` echoes (name/fileName from the matched entry; line/column from
-/// the call arguments). Insertion order matches Node for byte-identical JSON.
-fn source_map_origin_object(
-    payload: f64,
-    entry: Option<SourceMapEntry>,
-    line: Option<f64>,
-    col: Option<f64>,
-) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 4);
-    if let Some(SourceMapEntry {
-        original: Some((source_index, _, _, name_index)),
-        ..
-    }) = entry
-    {
-        if let Some(name_index) = name_index {
-            let name = source_map_array_element(payload, "names", name_index);
-            if JSValue::from_bits(name.to_bits()).is_string() {
-                module_set_field(obj, "name", name);
-            }
-        }
-        module_set_field(
-            obj,
-            "fileName",
-            source_map_array_element(payload, "sources", source_index),
-        );
-    }
-    let null = f64::from_bits(crate::value::TAG_NULL);
-    module_set_field(obj, "lineNumber", line.map_or(null, |n| n));
-    module_set_field(obj, "columnNumber", col.map_or(null, |n| n));
-    module_object_value(obj)
-}
-
-/// `SourceMap#findEntry(lineNumber, columnNumber)` — return the greatest
-/// decoded entry whose generated position is `<=` the query, shaped like
-/// Node's `{ generatedLine, generatedColumn, originalSource, originalLine,
-/// originalColumn, name? }`. Returns `{}` when no entry precedes the query.
-extern "C" fn source_map_find_entry_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
-    let payload = js_closure_get_capture_f64(closure, 0);
-    let args = source_map_collect_args(rest);
-    let query_line = source_map_arg_i64(&args, 0);
-    let query_col = source_map_arg_i64(&args, 1);
-
-    let Some(entry) = source_map_lookup(payload, query_line, query_col) else {
-        return module_object_value(crate::object::js_object_alloc(0, 0));
+pub extern "C" fn js_module_instance_load(filename: f64) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {
+        module_throw_plain_type_error("Module.prototype.load called on incompatible receiver");
     };
-
-    let obj = crate::object::js_object_alloc(0, 6);
-    module_set_field(obj, "generatedLine", entry.generated_line as f64);
-    module_set_field(obj, "generatedColumn", entry.generated_column as f64);
-    if let Some((source_index, original_line, original_column, name_index)) = entry.original {
-        module_set_field(
-            obj,
-            "originalSource",
-            source_map_array_element(payload, "sources", source_index),
-        );
-        module_set_field(obj, "originalLine", original_line as f64);
-        module_set_field(obj, "originalColumn", original_column as f64);
-        if let Some(name_index) = name_index {
-            let name = source_map_array_element(payload, "names", name_index);
-            if JSValue::from_bits(name.to_bits()).is_string() {
-                module_set_field(obj, "name", name);
-            }
-        }
-    }
-    module_object_value(obj)
-}
-
-/// `SourceMap#findOrigin(lineNumber, columnNumber)`. Node echoes the queried
-/// coordinates (as `lineNumber`/`columnNumber`, or `null` when an argument is
-/// not a finite number) and tags on the `name`/`fileName` of the entry at that
-/// generated position. The lone special case is a numeric `(0, 0)` query, for
-/// which Node returns an empty object.
-extern "C" fn source_map_find_origin_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
-    let payload = js_closure_get_capture_f64(closure, 0);
-    let args = source_map_collect_args(rest);
-    let line = source_map_arg_number(&args, 0);
-    let col = source_map_arg_number(&args, 1);
-
-    if line == Some(0.0) && col == Some(0.0) {
-        return module_object_value(crate::object::js_object_alloc(0, 0));
-    }
-
-    let entry = source_map_lookup(
-        payload,
-        line.map(|n| n as i64).unwrap_or(0),
-        col.map(|n| n as i64).unwrap_or(0),
+    let loaded_key = js_string_from_bytes(b"loaded".as_ptr(), 6);
+    let loaded = JSValue::from_bits(
+        crate::object::js_object_get_field_by_name_f64(
+            module_object_ptr(receiver.get_nanbox_f64()).unwrap(),
+            loaded_key,
+        )
+        .to_bits(),
     );
-    source_map_origin_object(payload, entry, line, col)
+    if loaded.is_bool() && loaded.as_bool() {
+        crate::fs::validate::throw_error_with_code(
+            "Module did not self-register",
+            "ERR_INTERNAL_ASSERTION",
+        );
+    }
+    let Some(filename_string) = module_value_to_string(filename) else {
+        crate::fs::validate::throw_type_error_with_code(
+            "The \"filename\" argument must be of type string",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    let filename_value = scope.root_nanbox_f64(module_string_value(&filename_string));
+    let exports = scope.root_nanbox_f64(crate::module_require::js_require_path_module(
+        filename_value.get_nanbox_f64(),
+    ));
+    let cache = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
+    let key = js_string_from_bytes(filename_string.as_ptr(), filename_string.len() as u32);
+    crate::object::js_object_delete_field(
+        module_object_ptr(cache.get_nanbox_f64()).unwrap_or(std::ptr::null()) as *mut _,
+        key,
+    );
+    module_set_field(
+        module_object_ptr(receiver.get_nanbox_f64()).unwrap() as *mut _,
+        "exports",
+        exports.get_nanbox_f64(),
+    );
+    module_set_field(
+        module_object_ptr(receiver.get_nanbox_f64()).unwrap() as *mut _,
+        "loaded",
+        module_bool_value(true),
+    );
+    module_undefined()
 }
 
 /// Module.isBuiltin(id) -> boolean
@@ -713,12 +522,10 @@ pub extern "C" fn js_module_is_builtin(id: f64) -> f64 {
 ///     `TypeError [ERR_INVALID_ARG_TYPE]`
 ///   * no enclosing `package.json` → `undefined`
 #[no_mangle]
-pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64) -> f64 {
+pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64, arg_count: f64) -> f64 {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
 
-    // `specifier` is required and must be a string (Perry covers the
-    // local-path/file-URL specifier shape).
-    if specifier.to_bits() == crate::value::TAG_UNDEFINED {
+    if arg_count == 0.0 {
         crate::fs::validate::throw_error_with_code(
             "The \"specifier\" argument must be specified",
             "ERR_MISSING_ARGS",
@@ -729,13 +536,24 @@ pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64) -> f64 
     let Some(spec_bytes) =
         (unsafe { crate::string::js_string_key_bytes(spec_value, &mut sso_buf) })
     else {
-        let message = format!(
-            "The \"specifier\" argument must be of type string. Received {}",
-            crate::fs::validate::describe_received(specifier)
+        crate::fs::validate::throw_error_with_code(
+            "Cannot find package for the supplied specifier",
+            "ERR_MODULE_NOT_FOUND",
         );
-        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     };
     let specifier_str = String::from_utf8_lossy(spec_bytes).into_owned();
+    if specifier_str.is_empty() {
+        crate::fs::validate::throw_error_with_code(
+            "Cannot find package for the supplied specifier",
+            "ERR_MODULE_NOT_FOUND",
+        );
+    }
+    if specifier_str.starts_with("node:") {
+        crate::fs::validate::throw_type_error_with_code(
+            "The URL must be of scheme file",
+            "ERR_INVALID_URL_SCHEME",
+        );
+    }
 
     // Resolve `base` to a directory. A missing/undefined base anchors at the
     // current working directory (Node requires a base for relative specifiers,
@@ -782,6 +600,35 @@ fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
     };
+
+    let is_bare = !matches!(specifier, "." | "..")
+        && !Path::new(specifier).is_absolute()
+        && !specifier.starts_with("./")
+        && !specifier.starts_with("../");
+    if is_bare {
+        let mut parts = specifier.split('/');
+        let first = parts.next()?;
+        let package_name = if first.starts_with('@') {
+            format!("{first}/{}", parts.next()?)
+        } else {
+            first.to_string()
+        };
+        let mut dir = base_dir;
+        loop {
+            let candidate = dir
+                .join("node_modules")
+                .join(&package_name)
+                .join("package.json");
+            if candidate.is_file() {
+                let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+                return Some(canonical.to_string_lossy().into_owned());
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent.to_path_buf(),
+                None => return None,
+            }
+        }
+    }
 
     let resolved = if Path::new(specifier).is_absolute() {
         PathBuf::from(specifier)
@@ -1175,10 +1022,70 @@ fn module_loader_result_url(result: f64, fallback: f64) -> f64 {
     }
 }
 
+extern "C" fn module_loader_hook_chain(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    context: f64,
+) -> f64 {
+    let callback = js_closure_get_capture_f64(closure, 0);
+    let next = js_closure_get_capture_f64(closure, 1);
+    let args = [value, context, next];
+    unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) }
+}
+
+fn module_loader_hook_chain_function(callback: f64, next: f64, name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let next = scope.root_nanbox_f64(next);
+    let func_ptr = module_loader_hook_chain as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    crate::closure::js_register_closure_length(func_ptr, 2);
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 2));
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        js_closure_set_capture_f64(c, 0, callback.get_nanbox_f64());
+    });
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        js_closure_set_capture_f64(c, 1, next.get_nanbox_f64());
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::object::set_bound_native_closure_name(closure, name);
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::object::set_builtin_closure_length(closure as usize, 2);
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
+}
+
+fn module_loader_build_hook_chain(
+    entries: &[ModuleLoaderHookEntry],
+    terminal: f64,
+    resolve: bool,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let chain = scope.root_nanbox_f64(terminal);
+    for entry in entries {
+        let callback = if resolve { entry.resolve } else { entry.load };
+        if !is_function_value(callback) {
+            continue;
+        }
+        let callback = scope.root_nanbox_f64(callback);
+        let wrapper = module_loader_hook_chain_function(
+            callback.get_nanbox_f64(),
+            chain.get_nanbox_f64(),
+            if resolve { "nextResolve" } else { "nextLoad" },
+        );
+        chain.set_nanbox_f64(wrapper);
+    }
+    chain.get_nanbox_f64()
+}
+
 /// Apply active synchronous `module.registerHooks()` callbacks to a dynamic
 /// import known to Perry's compile-time graph. This supports observable
 /// resolve/load callback participation and deregistration; arbitrary new
-/// runtime-loaded modules remain outside Perry's static import model.
+/// runtime-loaded modules and load-hook source replacement remain outside
+/// Perry's static import model.
 #[no_mangle]
 pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let entries = MODULE_LOADER_HOOKS.with(|hooks| {
@@ -1194,61 +1101,52 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
-    let mut current = specifier;
-    for entry in entries {
-        if is_function_value(entry.resolve) {
-            let current_handle = scope.root_nanbox_f64(current);
-            let callback_handle = scope.root_nanbox_f64(entry.resolve);
-            let context_handle = scope.root_nanbox_f64(module_loader_resolve_context());
-            let next_handle = scope.root_nanbox_f64(module_loader_callback(
-                &MODULE_LOADER_NEXT_RESOLVE,
-                "nextResolve",
-                module_loader_next_resolve,
-            ));
-            let args = [
-                current_handle.get_nanbox_f64(),
-                context_handle.get_nanbox_f64(),
-                next_handle.get_nanbox_f64(),
-            ];
-            let result = unsafe {
-                crate::closure::js_native_call_value(
-                    callback_handle.get_nanbox_f64(),
-                    args.as_ptr(),
-                    args.len(),
-                )
-            };
-            let result_handle = scope.root_nanbox_f64(result);
-            current = module_loader_result_url(
-                result_handle.get_nanbox_f64(),
-                current_handle.get_nanbox_f64(),
-            );
-        }
+    let specifier = scope.root_nanbox_f64(specifier);
+    let resolve_context = scope.root_nanbox_f64(module_loader_resolve_context());
+    let resolve_terminal = module_loader_callback(
+        &MODULE_LOADER_NEXT_RESOLVE,
+        "nextResolve",
+        module_loader_next_resolve,
+    );
+    let resolve_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
+        &entries,
+        resolve_terminal,
+        true,
+    ));
+    let resolve_args = [specifier.get_nanbox_f64(), resolve_context.get_nanbox_f64()];
+    let resolved = unsafe {
+        crate::closure::js_native_call_value(
+            resolve_chain.get_nanbox_f64(),
+            resolve_args.as_ptr(),
+            resolve_args.len(),
+        )
+    };
+    let current = scope.root_nanbox_f64(module_loader_result_url(
+        resolved,
+        specifier.get_nanbox_f64(),
+    ));
 
-        if is_function_value(entry.load) {
-            let current_handle = scope.root_nanbox_f64(current);
-            let callback_handle = scope.root_nanbox_f64(entry.load);
-            let context_handle = scope.root_nanbox_f64(module_loader_load_context());
-            let next_handle = scope.root_nanbox_f64(module_loader_callback(
-                &MODULE_LOADER_NEXT_LOAD,
-                "nextLoad",
-                module_loader_next_load,
-            ));
-            let args = [
-                current_handle.get_nanbox_f64(),
-                context_handle.get_nanbox_f64(),
-                next_handle.get_nanbox_f64(),
-            ];
-            unsafe {
-                crate::closure::js_native_call_value(
-                    callback_handle.get_nanbox_f64(),
-                    args.as_ptr(),
-                    args.len(),
-                );
-            }
-        }
+    let load_context = scope.root_nanbox_f64(module_loader_load_context());
+    let load_terminal = module_loader_callback(
+        &MODULE_LOADER_NEXT_LOAD,
+        "nextLoad",
+        module_loader_next_load,
+    );
+    let load_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
+        &entries,
+        load_terminal,
+        false,
+    ));
+    let load_args = [current.get_nanbox_f64(), load_context.get_nanbox_f64()];
+    unsafe {
+        crate::closure::js_native_call_value(
+            load_chain.get_nanbox_f64(),
+            load_args.as_ptr(),
+            load_args.len(),
+        );
     }
 
-    current
+    current.get_nanbox_f64()
 }
 
 fn module_register_invalid_specifier(specifier: &str) -> bool {
@@ -1293,6 +1191,177 @@ fn module_word_at(bytes: &[u8], index: usize, word: &[u8]) -> bool {
     !before.is_some_and(module_is_ident_byte) && !after.is_some_and(module_is_ident_byte)
 }
 
+fn module_regex_can_start(bytes: &[u8], index: usize, previous: Option<u8>) -> bool {
+    if previous.is_none_or(|byte| {
+        matches!(
+            byte,
+            b'(' | b'['
+                | b'{'
+                | b'='
+                | b':'
+                | b','
+                | b';'
+                | b'!'
+                | b'?'
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'%'
+                | b'&'
+                | b'|'
+                | b'^'
+                | b'~'
+                | b'<'
+                | b'>'
+        )
+    }) {
+        return true;
+    }
+    let mut end = index;
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && module_is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    matches!(
+        &bytes[start..end],
+        b"return"
+            | b"throw"
+            | b"case"
+            | b"delete"
+            | b"void"
+            | b"typeof"
+            | b"instanceof"
+            | b"in"
+            | b"new"
+            | b"yield"
+            | b"await"
+    )
+}
+
+fn module_typescript_code_mask(bytes: &[u8]) -> Vec<bool> {
+    const CODE: u8 = 0;
+    const SINGLE: u8 = 1;
+    const DOUBLE: u8 = 2;
+    const TEMPLATE: u8 = 3;
+    const LINE_COMMENT: u8 = 4;
+    const BLOCK_COMMENT: u8 = 5;
+    const REGEX: u8 = 6;
+
+    let mut mask = vec![false; bytes.len()];
+    let mut state = CODE;
+    let mut template_depths = Vec::<usize>::new();
+    let mut regex_class = false;
+    let mut previous_code = None;
+    let mut index = 0;
+    while index < bytes.len() {
+        match state {
+            CODE => match bytes[index] {
+                b'}' if template_depths.last() == Some(&1) => {
+                    template_depths.pop();
+                    state = TEMPLATE;
+                }
+                b'{' if !template_depths.is_empty() => {
+                    *template_depths.last_mut().unwrap() += 1;
+                    mask[index] = true;
+                    previous_code = Some(b'{');
+                }
+                b'}' if !template_depths.is_empty() => {
+                    *template_depths.last_mut().unwrap() -= 1;
+                    mask[index] = true;
+                    previous_code = Some(b'}');
+                }
+                b'\'' => state = SINGLE,
+                b'"' => state = DOUBLE,
+                b'`' => state = TEMPLATE,
+                b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                    state = LINE_COMMENT;
+                    index += 1;
+                }
+                b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                    state = BLOCK_COMMENT;
+                    index += 1;
+                }
+                b'/' if module_regex_can_start(bytes, index, previous_code) => {
+                    state = REGEX;
+                    regex_class = false;
+                }
+                byte => {
+                    mask[index] = true;
+                    if !byte.is_ascii_whitespace() {
+                        previous_code = Some(byte);
+                    }
+                }
+            },
+            SINGLE | DOUBLE => {
+                if bytes[index] == b'\\' {
+                    index += 1;
+                } else if (state == SINGLE && bytes[index] == b'\'')
+                    || (state == DOUBLE && bytes[index] == b'"')
+                {
+                    state = CODE;
+                    previous_code = Some(b'x');
+                }
+            }
+            TEMPLATE => {
+                if bytes[index] == b'\\' {
+                    index += 1;
+                } else if bytes[index] == b'`' {
+                    state = CODE;
+                    previous_code = Some(b'x');
+                } else if bytes[index] == b'$' && bytes.get(index + 1) == Some(&b'{') {
+                    template_depths.push(1);
+                    state = CODE;
+                    index += 1;
+                    previous_code = Some(b'{');
+                }
+            }
+            REGEX => {
+                if bytes[index] == b'\\' {
+                    index += 1;
+                } else if bytes[index] == b'[' {
+                    regex_class = true;
+                } else if bytes[index] == b']' {
+                    regex_class = false;
+                } else if bytes[index] == b'/' && !regex_class {
+                    while bytes
+                        .get(index + 1)
+                        .is_some_and(|byte| byte.is_ascii_alphabetic())
+                    {
+                        index += 1;
+                    }
+                    state = CODE;
+                    previous_code = Some(b'x');
+                }
+            }
+            LINE_COMMENT => {
+                if matches!(bytes[index], b'\n' | b'\r') {
+                    state = CODE;
+                    mask[index] = true;
+                }
+            }
+            BLOCK_COMMENT => {
+                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    state = CODE;
+                    index += 1;
+                }
+            }
+            _ => unreachable!(),
+        }
+        index += 1;
+    }
+    mask
+}
+
+fn module_word_at_code(bytes: &[u8], mask: &[bool], index: usize, word: &[u8]) -> bool {
+    module_word_at(bytes, index, word)
+        && mask
+            .get(index..index + word.len())
+            .is_some_and(|span| span.iter().all(|is_code| *is_code))
+}
+
 fn module_is_ident_byte(byte: u8) -> bool {
     byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
 }
@@ -1312,10 +1381,10 @@ fn module_space_span(bytes: &mut [u8], start: usize, end: usize) {
     }
 }
 
-fn module_strip_interfaces(bytes: &mut [u8]) {
+fn module_strip_interfaces(bytes: &mut [u8], mask: &[bool]) {
     let mut index = 0;
     while index < bytes.len() {
-        if !module_word_at(bytes, index, b"interface") {
+        if !module_word_at_code(bytes, mask, index, b"interface") {
             index += 1;
             continue;
         }
@@ -1324,7 +1393,16 @@ fn module_strip_interfaces(bytes: &mut [u8]) {
         while cursor < bytes.len() && module_is_ident_byte(bytes[cursor]) {
             cursor += 1;
         }
-        cursor = module_skip_ws(bytes, cursor);
+        // Interfaces may have generic parameters and an `extends` clause.
+        // Find their body rather than requiring `{` immediately after the name.
+        while cursor < bytes.len()
+            && !(mask[cursor] && bytes[cursor] == b'{')
+            && bytes[cursor] != b';'
+            && bytes[cursor] != b'\n'
+            && bytes[cursor] != b'\r'
+        {
+            cursor += 1;
+        }
         if cursor >= bytes.len() || bytes[cursor] != b'{' {
             index += 1;
             continue;
@@ -1333,6 +1411,7 @@ fn module_strip_interfaces(bytes: &mut [u8]) {
         let mut end = cursor;
         while end < bytes.len() {
             match bytes[end] {
+                _ if !mask[end] => {}
                 b'{' => depth += 1,
                 b'}' => {
                     depth = depth.saturating_sub(1);
@@ -1350,10 +1429,137 @@ fn module_strip_interfaces(bytes: &mut [u8]) {
     }
 }
 
-fn module_strip_type_annotations(bytes: &mut [u8]) {
+fn module_strip_type_aliases(bytes: &mut [u8], mask: &[bool]) {
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] != b':' {
+        let type_start = if module_word_at_code(bytes, mask, index, b"type") {
+            index
+        } else if module_word_at_code(bytes, mask, index, b"import")
+            || module_word_at_code(bytes, mask, index, b"export")
+        {
+            let type_start = module_skip_ws(
+                bytes,
+                index
+                    + if bytes[index] == b'i' {
+                        "import".len()
+                    } else {
+                        "export".len()
+                    },
+            );
+            if !module_word_at_code(bytes, mask, type_start, b"type") {
+                index += 1;
+                continue;
+            }
+            let mut cursor = type_start + "type".len();
+            let mut depth = 0usize;
+            while cursor < bytes.len() {
+                if mask[cursor] {
+                    match bytes[cursor] {
+                        b'{' | b'[' | b'(' => depth += 1,
+                        b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+                        b';' if depth == 0 => {
+                            cursor += 1;
+                            break;
+                        }
+                        b'\n' | b'\r' if depth == 0 => break,
+                        _ => {}
+                    }
+                }
+                cursor += 1;
+            }
+            module_space_span(bytes, index, cursor);
+            index = cursor;
+            continue;
+        } else {
+            index += 1;
+            continue;
+        };
+        let mut cursor = module_skip_ws(bytes, type_start + "type".len());
+        if cursor >= bytes.len() || !module_is_ident_byte(bytes[cursor]) {
+            index += 1;
+            continue;
+        }
+        while cursor < bytes.len()
+            && !(mask[cursor] && matches!(bytes[cursor], b'=' | b'\n' | b'\r' | b';'))
+        {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'=' {
+            index += 1;
+            continue;
+        }
+        let mut depth = 0usize;
+        while cursor < bytes.len() {
+            if mask[cursor] {
+                match bytes[cursor] {
+                    b'{' | b'[' | b'(' => depth += 1,
+                    b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+                    b';' | b'\n' | b'\r' if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            cursor += 1;
+        }
+        if cursor < bytes.len() && bytes[cursor] == b';' {
+            cursor += 1;
+        }
+        module_space_span(bytes, index, cursor);
+        index = cursor;
+    }
+}
+
+fn module_is_import_export_alias(bytes: &[u8], mask: &[bool], index: usize) -> bool {
+    let statement_start = (0..index)
+        .rev()
+        .find(|position| mask[*position] && bytes[*position] == b';')
+        .map_or(0, |position| position + 1);
+    let mut cursor = statement_start;
+    while cursor < index && (!mask[cursor] || bytes[cursor].is_ascii_whitespace()) {
+        cursor += 1;
+    }
+    if module_word_at_code(bytes, mask, cursor, b"import") {
+        return true;
+    }
+    if !module_word_at_code(bytes, mask, cursor, b"export") {
+        return false;
+    }
+    cursor += "export".len();
+    while cursor < index && (!mask[cursor] || bytes[cursor].is_ascii_whitespace()) {
+        cursor += 1;
+    }
+    matches!(bytes.get(cursor), Some(b'{' | b'*'))
+}
+
+fn module_strip_type_clause(bytes: &mut [u8], mask: &[bool], keyword: &[u8]) {
+    let mut index = 0;
+    while index < bytes.len() {
+        if !module_word_at_code(bytes, mask, index, keyword)
+            || (keyword == b"as" && module_is_import_export_alias(bytes, mask, index))
+        {
+            index += 1;
+            continue;
+        }
+        let mut cursor = module_skip_ws(bytes, index + keyword.len());
+        let mut angle_depth = 0usize;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                _ if !mask[cursor] => {}
+                b'<' => angle_depth += 1,
+                b'>' => angle_depth = angle_depth.saturating_sub(1),
+                b';' | b',' | b')' | b']' | b'\n' | b'\r' if angle_depth == 0 => break,
+                _ => {}
+            }
+            cursor += 1;
+        }
+        module_space_span(bytes, index, cursor);
+        index = cursor;
+    }
+}
+
+fn module_strip_type_annotations(bytes: &mut [u8], mask: &[bool]) {
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b':' || !mask[index] {
             index += 1;
             continue;
         }
@@ -1391,14 +1597,19 @@ fn module_strip_type_annotations(bytes: &mut [u8]) {
 
 fn module_strip_type_syntax(source: &str) -> String {
     let mut bytes = source.as_bytes().to_vec();
-    module_strip_interfaces(&mut bytes);
-    module_strip_type_annotations(&mut bytes);
+    let mask = module_typescript_code_mask(&bytes);
+    module_strip_type_aliases(&mut bytes, &mask);
+    module_strip_interfaces(&mut bytes, &mask);
+    module_strip_type_annotations(&mut bytes, &mask);
+    module_strip_type_clause(&mut bytes, &mask, b"satisfies");
+    module_strip_type_clause(&mut bytes, &mask, b"as");
     String::from_utf8(bytes).unwrap_or_else(|_| source.to_string())
 }
 
 fn module_contains_enum(source: &str) -> bool {
     let bytes = source.as_bytes();
-    (0..bytes.len()).any(|index| module_word_at(bytes, index, b"enum"))
+    let mask = module_typescript_code_mask(bytes);
+    (0..bytes.len()).any(|index| module_word_at_code(bytes, &mask, index, b"enum"))
 }
 
 fn module_invalid_option_received(value: f64) -> String {

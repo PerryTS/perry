@@ -1790,6 +1790,16 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // CommonJS Module instances inherit an intrinsic constructor accessor.
+        // Resolve it to the exact shared ESM/callable identity after own-field
+        // lookup, preserving ordinary shadowing while avoiding a rebound
+        // function value from the generic inherited-accessor path.
+        if (*obj).class_id == crate::process::MODULE_CJS_CLASS_ID && key_bytes == b"constructor" {
+            return JSValue::from_bits(
+                crate::object::module_constructor_identity_value().to_bits(),
+            );
+        }
+
         // #2820: before giving up, walk an explicit `Object.setPrototypeOf`
         // prototype chain recorded for this object so inherited property reads
         // (`obj.x` where `x` is an own property of the set prototype) resolve.

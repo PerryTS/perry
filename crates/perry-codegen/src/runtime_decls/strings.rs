@@ -934,7 +934,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
     module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_module_find_package_json",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_module_find_source_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_module_source_map_new", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_module_register", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_module_register_hooks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);

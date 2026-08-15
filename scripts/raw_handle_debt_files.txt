@@ -79,7 +79,6 @@
 2 crates/perry-runtime/src/json/stringify_shape_template.rs
 21 crates/perry-runtime/src/json_tape.rs
 26 crates/perry-runtime/src/map.rs
-2 crates/perry-runtime/src/module_require.rs
 7 crates/perry-runtime/src/node_stream/async_iterator.rs
 2 crates/perry-runtime/src/node_stream_dispatch.rs
 8 crates/perry-runtime/src/node_stream_iter_helpers.rs

@@ -73,14 +73,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     if let ast::Expr::Ident(callee_ident) = callee_expr {
-        let is_module_constructor = ctx
+        let module_constructor = ctx
             .lookup_native_module(callee_ident.sym.as_ref())
             .map(|(module_name, method)| {
-                module_name == "module"
-                    && matches!(method.as_deref(), Some("Module") | Some("default"))
+                (module_name == "module"
+                    && matches!(
+                        method.as_deref(),
+                        Some("Module") | Some("SourceMap") | Some("default")
+                    ))
+                .then(|| {
+                    if method.as_deref() == Some("SourceMap") {
+                        "SourceMap"
+                    } else {
+                        "Module"
+                    }
+                })
             })
-            .unwrap_or(false);
-        if is_module_constructor {
+            .flatten();
+        if let Some(method) = module_constructor {
             let args = new_expr
                 .args
                 .as_ref()
@@ -95,7 +105,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 module: "module".to_string(),
                 class_name: None,
                 object: None,
-                method: "Module".to_string(),
+                method: method.to_string(),
                 args,
             });
         }
@@ -514,13 +524,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
-                if matches!((module_name, method_name), ("module", Some("Module"))) {
+                if module_name == "module"
+                    && matches!(method_name, Some("Module") | Some("SourceMap"))
+                {
+                    let method = method_name.unwrap_or("Module").to_string();
                     let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                     return Ok(Expr::NativeMethodCall {
                         module: "module".to_string(),
                         class_name: None,
                         object: None,
-                        method: "Module".to_string(),
+                        method,
                         args,
                     });
                 }
