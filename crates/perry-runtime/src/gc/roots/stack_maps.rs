@@ -158,7 +158,10 @@ pub(in crate::gc) fn publish_rewrite_walk_stats(stats: &NativeStackWalkStats) {
     });
 }
 
-pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
+pub(in crate::gc) fn verify_native_slots_post_walk(
+    untraced: bool,
+    classify: &dyn Fn(usize) -> String,
+) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     if !*ON.get_or_init(|| {
@@ -189,10 +192,12 @@ pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
              address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
              target={target:#x} target_space={:?} untraced_cycle={untraced} \
              rewrite_walk(frames,records,locations)={rewrite_stats:?} \
+             collector_classify={} \
              context={context:?} — this is the CREATION cycle of the stale slot the \
              pin-latch only catches many cycles later (#7803)",
             slot.ptr as usize,
             crate::arena::classify_heap_space(target),
+            classify(target),
         );
     });
     let _ = (verify_frames, verify_stats);
