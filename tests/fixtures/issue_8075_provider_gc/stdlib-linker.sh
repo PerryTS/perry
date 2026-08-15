@@ -87,6 +87,22 @@ if [[ -n "$original_version_script" ]]; then
     {
       echo '{ global:'
       printf '  %s;\n' "${stdlib_provider_exports[@]}"
+      # The runtime's own symbols must stay GLOBAL here, exactly as the
+      # Mach-O branch above re-exports them.
+      #
+      # This provider statically links the runtime rlib as well as loading the
+      # runtime .so, so it carries its own definition of `js_gc_init` and
+      # friends. `local: *` binds those internally and makes them
+      # non-preemptible, so the stdlib stops resolving stateful runtime calls
+      # to the image the host loaded first — which is the exact thing this
+      # fixture exists to detect, and it reported it as
+      # "stdlib provider is bound to a different runtime image" (#8089).
+      # `-D`: the DYNAMIC symbol table. This branch is ELF-only, and what
+      # governs preemption is what the dynamic linker sees, not the static
+      # symtab a stripped .so need not carry at all. (The Mach-O branch's
+      # plain `nm -gU` is right for its format, where the dylib's table is
+      # what plain nm reads.)
+      nm -D --defined-only "$runtime_library" | awk 'NF >= 3 { printf "  %s;\n", $3 }'
       echo 'local: *; };'
     } > "$custom_version_script"
     arguments+=("-Wl,--version-script=$custom_version_script")
