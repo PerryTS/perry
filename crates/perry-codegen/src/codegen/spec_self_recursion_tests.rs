@@ -1,4 +1,4 @@
-//! #8170 — a specialized entry must be able to re-enter ITSELF.
+//! #8167 — a specialized entry must be able to re-enter ITSELF.
 //!
 //! Before this, the only raw-`i32` argument shapes a call site could prove
 //! were an `i32` literal and a bare `LocalGet` of an integer local. A

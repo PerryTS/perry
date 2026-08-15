@@ -71,7 +71,7 @@ fn try_emit_spec_static_call(
                 Expr::LocalGet(id) if ctx.integer_locals.contains(id) => {
                     raw_plan.push(RawArg::I32Value(i))
                 }
-                // #8170: a value DERIVED from this entry's own raw-i32
+                // #8167: a value DERIVED from this entry's own raw-i32
                 // parameters. Without this, a self-recursive call inside a
                 // specialized clone always re-enters the generic public
                 // symbol, so the clone runs once per top-level call and every
