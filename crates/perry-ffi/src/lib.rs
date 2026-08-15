@@ -78,10 +78,12 @@ pub use jsvalue::{
 };
 
 mod closure;
+mod transient_roots;
 pub use closure::{
     alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64, JsClosure,
     RawClosureHeader,
 };
+pub use transient_roots::{TransientRootScope, TransientRootedAddr, TransientRootedNanbox};
 
 mod bigint;
 pub use bigint::{alloc_bigint_from_str, read_bigint_limbs};

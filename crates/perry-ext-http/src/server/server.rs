@@ -983,9 +983,12 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905).
     signal_connections_close(server_handle, true);
+    // #8082: `callback` crosses the close-listener emits, which run JS.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback_rooted = scope.root_addr(callback);
     emit_no_arg_to_listeners(&close_listeners);
-    if callback != 0 {
-        let raw = callback as *const RawClosureHeader;
+    if callback_rooted.get() != 0 {
+        let raw = callback_rooted.get() as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
             let _ = closure.call0();
@@ -1527,11 +1530,15 @@ where
     };
     let this_val = handle_to_pointer_f64(server_handle);
     let mut fired = 0i32;
-    for cb in cbs {
-        if cb == 0 {
+    // #8082: the drained snapshot crosses each callback — root it.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let rooted = scope.root_addrs(&cbs);
+    for cb in &rooted {
+        let addr = cb.get();
+        if addr == 0 {
             continue;
         }
-        let raw = cb as *const RawClosureHeader;
+        let raw = addr as *const RawClosureHeader;
         let closure = unsafe { JsClosure::from_raw(raw) };
         if !closure.is_null() {
             with_implicit_this(this_val, || {
@@ -1782,13 +1789,42 @@ fn process_pending(pending: HttpPendingRequest) {
     // listener fires that listener *instead of* `'request'` + the handler
     // (Node's dispatch). The listener calls `res.writeContinue()` and then
     // drives the exchange itself.
+    // #8082: `pending` is a snapshot built at REQUEST time on the hyper task
+    // and parked in an mpsc channel until this tick — the handler and
+    // listener addresses inside it are copies no scanner rewrites, so any
+    // moving collection between arrival and dispatch leaves them stale (the
+    // forced gate faulted on them at the microtask-pump safepoint minors).
+    // Re-read them from the server handle, whose side tables the registered
+    // scanner DOES rewrite; the routing decision (`is_check_continue`) keeps
+    // the arrival-time snapshot semantics. Then root the refreshed values,
+    // because each callback below can itself run a moving collection.
+    // (`req_f64`/`res_f64`/`server_this` are small handle ids — no move.)
+    let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
+        match get_handle::<HttpServer>(pending.server_handle) {
+            Some(s) => (
+                s.listeners.get("request").cloned().unwrap_or_default(),
+                s.listeners
+                    .get("checkContinue")
+                    .cloned()
+                    .unwrap_or_default(),
+                s.handler,
+            ),
+            // Server gone: nothing safe to dispatch to.
+            None => (Vec::new(), Vec::new(), 0),
+        };
+    let scope = perry_ffi::TransientRootScope::enter();
+    let check_continue_rooted = scope.root_addrs(&fresh_check_continue_listeners);
+    let request_rooted = scope.root_addrs(&fresh_request_listeners);
+    let handler_rooted = scope.root_addr(fresh_handler);
+
     if pending.is_check_continue {
-        for cb in &pending.check_continue_listeners {
-            if *cb == 0 {
+        for cb in &check_continue_rooted {
+            let addr = cb.get();
+            if addr == 0 {
                 continue;
             }
             unsafe {
-                let raw = *cb as *const RawClosureHeader;
+                let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
                     with_implicit_this(server_this, || {
@@ -1802,12 +1838,13 @@ fn process_pending(pending: HttpPendingRequest) {
         return;
     }
 
-    for cb in &pending.request_listeners {
-        if *cb == 0 {
+    for cb in &request_rooted {
+        let addr = cb.get();
+        if addr == 0 {
             continue;
         }
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -1827,9 +1864,9 @@ fn process_pending(pending: HttpPendingRequest) {
     // tick of the codegen-emitted main loop. The
     // `synthesize_default_response_if_needed` safety net below
     // catches the case where neither path completed in time.
-    if pending.handler != 0 {
+    if handler_rooted.get() != 0 {
         unsafe {
-            let raw = pending.handler as *const RawClosureHeader;
+            let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
