@@ -144,6 +144,18 @@ pub(super) unsafe fn buffer_own_key_present(
     let Some(key_name) = string_header_as_str(key) else {
         return false;
     };
+    // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a registered
+    // buffer with NO integer-indexed own properties, so
+    // `Object.prototype.hasOwnProperty.call(dv, "0")` is `false` in node. Asked
+    // ABOVE the bounds test, which answers `true` for every in-range index. An
+    // index STORE does create an ordinary own property, so consult the expando
+    // table rather than answering a flat `false`.
+    if crate::buffer::is_non_indexed_buffer_view(buf as usize) {
+        return crate::buffer::buffer_has_own_prop(buf as usize, key_name);
+    }
+    if crate::buffer::buffer_has_own_prop(buf as usize, key_name) {
+        return true;
+    }
     let Some(index) = super::canonical_array_index(key_name) else {
         return false;
     };

@@ -1120,6 +1120,24 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             );
             return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
         }
+        // #8149: a registered BUFFER receiver the arm above did not claim — a
+        // node `Buffer` (never `mark_as_uint8array`-tagged, so absent from the
+        // typed-array owner set), an `ArrayBuffer`, or a `DataView`. Without
+        // this the generic walk below reads a `BufferHeader` as an
+        // `ObjectHeader`; `Object.getOwnPropertyNames(Buffer.from([1,2,3]))`
+        // answered `[]` where node lists the byte indices.
+        if obj_jv.is_pointer() {
+            let addr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if let Some(keys) = super::field_get_set::enumeration::registered_buffer_own_keys(addr)
+            {
+                let mut out = crate::array::js_array_alloc(keys.len().max(1) as u32);
+                for name in keys {
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    out = crate::array::js_array_push(out, crate::value::JSValue::string_ptr(key));
+                }
+                return f64::from_bits((out as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
         // Date / RegExp / Error exotic instances: expando keys (including
         // non-enumerable ones) + per-kind builtin own slots.
         if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(obj_value) {

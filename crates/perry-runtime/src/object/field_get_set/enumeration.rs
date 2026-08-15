@@ -826,11 +826,129 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
     false
 }
 
+/// The raw heap address behind a possibly still-NaN-boxed `ObjectHeader`
+/// pointer, as the enumeration entry points receive it.
+#[inline]
+fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
+    let bits = obj as u64;
+    let top16 = bits >> 48;
+    if top16 == 0x7FFD || top16 >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    }
+}
+
+/// #8149: the own property keys of a REGISTERED BUFFER receiver, in
+/// `OrdinaryOwnPropertyKeys` order — canonical array indices ascending, then
+/// the string keys.
+///
+/// `None` when `addr` is not a registered buffer at all, so the caller keeps
+/// its ordinary walk. `Some` for all four buffer-backed types, and the four do
+/// NOT answer the same thing:
+///
+/// * a node `Buffer` / `Uint8Array` IS an integer-indexed exotic object, so its
+///   byte indices are own properties — `Object.keys(Buffer.from([1,2,3]))` is
+///   `["0","1","2"]`;
+/// * an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` has NONE — only
+///   whatever the user assigned (`dv.foo = 1`, or `dv[0] = 7`, which creates an
+///   ordinary property rather than writing a byte).
+///
+/// Before this arm existed the enumeration paths had no registered-buffer case
+/// and fell through to the generic `ObjectHeader` walk, reading buffer payload
+/// bytes as the `keys_array` pointer. That answered `[]` when those bytes
+/// happened to be zero — which is why `Object.keys(Buffer)` looked merely wrong
+/// — and SIGBUS'd in `js_array_length` when they did not, e.g.
+/// `Object.keys(new DataView(new ArrayBuffer(8)))` in any program that had also
+/// allocated a `Buffer`.
+///
+/// Expando ordering among the non-index keys is alphabetical, not insertion
+/// order: `buffer::own_props` is a `HashMap`, so insertion order was never
+/// recorded. Node uses insertion order. Deterministic-but-different beats the
+/// previous nondeterministic-and-crashing.
+pub(crate) fn registered_buffer_own_keys(addr: usize) -> Option<Vec<String>> {
+    if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
+        return None;
+    }
+    let mut indices: Vec<u32> = Vec::new();
+    if crate::buffer::is_byte_indexed_buffer(addr) {
+        let len = crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader);
+        indices.extend(0..len.max(0) as u32);
+    }
+    let mut names: Vec<String> = Vec::new();
+    for name in crate::buffer::buffer_own_prop_names(addr) {
+        match canonical_array_index(&name) {
+            Some(idx) if !indices.contains(&idx) => indices.push(idx),
+            Some(_) => {}
+            None => names.push(name),
+        }
+    }
+    indices.sort_unstable();
+    let mut keys: Vec<String> = indices.into_iter().map(|i| i.to_string()).collect();
+    keys.append(&mut names);
+    Some(keys)
+}
+
+/// The value each key of [`registered_buffer_own_keys`] names: the byte for an
+/// in-bounds index of a byte-indexed buffer, else the stored own property.
+pub(crate) fn registered_buffer_own_value(addr: usize, key: &str) -> f64 {
+    if let Some(v) = crate::buffer::buffer_get_own_prop(addr, key) {
+        return v;
+    }
+    if crate::buffer::is_byte_indexed_buffer(addr) {
+        if let Some(idx) = canonical_array_index(key) {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            if (idx as i32) < crate::buffer::js_buffer_length(buf) {
+                return f64::from(crate::buffer::js_buffer_get(buf, idx as i32));
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Build the `Object.keys` / `.values` / `.entries` answer for a registered
+/// buffer from [`registered_buffer_own_keys`].
+fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
+    let keys = registered_buffer_own_keys(addr)?;
+    let mut out = crate::array::js_array_alloc(keys.len().max(1) as u32);
+    for key in keys {
+        let key_str = || crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        match what {
+            MapSetEnum::Keys => {
+                out = crate::array::js_array_push(out, JSValue::string_ptr(key_str()));
+            }
+            MapSetEnum::Values => {
+                out = crate::array::js_array_push_f64(out, registered_buffer_own_value(addr, &key));
+            }
+            MapSetEnum::Entries => {
+                let pair = crate::array::js_array_alloc(2);
+                let pair = crate::array::js_array_push(pair, JSValue::string_ptr(key_str()));
+                let pair =
+                    crate::array::js_array_push_f64(pair, registered_buffer_own_value(addr, &key));
+                out = crate::array::js_array_push(
+                    out,
+                    JSValue::from_bits(JSValue::pointer(pair as *const u8).bits()),
+                );
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Get the keys of an object as an array of strings.
 /// If any key has a per-property descriptor with `enumerable: false`, that key is filtered out.
 /// Otherwise (the common case), this returns the stored keys array directly.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    // #8149: a registered BUFFER receiver — node `Buffer`, `Uint8Array`,
+    // `ArrayBuffer`, `SharedArrayBuffer` or `DataView`. Asked FIRST, above the
+    // `is_valid_obj_ptr` guard: a `BufferHeader` is not an `ObjectHeader`, and
+    // the generic walk below reads its payload bytes as `keys_array` — `[]`
+    // when they are zero, SIGBUS in `js_array_length` when they are not.
+    // See `registered_buffer_own_keys`.
+    if let Some(result) = registered_buffer_enum(strip_nanbox_addr(obj), MapSetEnum::Keys) {
+        return result;
+    }
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         // Issue #893: defensive sibling of `js_object_entries`'s
         // is_valid_obj_ptr filter — `Object.keys(undefined)` /
@@ -1182,6 +1300,15 @@ pub(crate) unsafe fn descriptor_marks_non_enumerable(
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    // #8149: a registered BUFFER receiver — node `Buffer`, `Uint8Array`,
+    // `ArrayBuffer`, `SharedArrayBuffer` or `DataView`. Asked FIRST, above the
+    // `is_valid_obj_ptr` guard: a `BufferHeader` is not an `ObjectHeader`, and
+    // the generic walk below reads its payload bytes as `keys_array` — `[]`
+    // when they are zero, SIGBUS in `js_array_length` when they are not.
+    // See `registered_buffer_own_keys`.
+    if let Some(result) = registered_buffer_enum(strip_nanbox_addr(obj), MapSetEnum::Values) {
+        return result;
+    }
     let stripped = {
         let bits = obj as u64;
         let top16 = bits >> 48;
@@ -1331,6 +1458,15 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
 /// Returns an array where each element is a 2-element array [key, value]
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    // #8149: a registered BUFFER receiver — node `Buffer`, `Uint8Array`,
+    // `ArrayBuffer`, `SharedArrayBuffer` or `DataView`. Asked FIRST, above the
+    // `is_valid_obj_ptr` guard: a `BufferHeader` is not an `ObjectHeader`, and
+    // the generic walk below reads its payload bytes as `keys_array` — `[]`
+    // when they are zero, SIGBUS in `js_array_length` when they are not.
+    // See `registered_buffer_own_keys`.
+    if let Some(result) = registered_buffer_enum(strip_nanbox_addr(obj), MapSetEnum::Entries) {
+        return result;
+    }
     let stripped = {
         let bits = obj as u64;
         let top16 = bits >> 48;

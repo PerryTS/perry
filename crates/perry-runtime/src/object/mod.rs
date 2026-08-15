@@ -72,7 +72,7 @@ mod delete_rest;
 mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
-mod field_get_set;
+pub(crate) mod field_get_set;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;

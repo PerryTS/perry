@@ -106,8 +106,18 @@ pub(crate) unsafe fn registered_buffer_index_own_property_present(
     // `typedarray_props` registry — returning `Some(false)` for them would
     // shadow that check (`typed_array_has_own_property`) and wrongly report
     // a defined own property as absent. Fall through with `None` instead.
-    let idx = super::super::has_own_helpers::str_from_string_header(key_str)
-        .and_then(super::super::canonical_array_index)?;
+    let name = super::super::has_own_helpers::str_from_string_header(key_str)?;
+    let idx = super::super::canonical_array_index(name)?;
+    // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` has NO
+    // integer-indexed own properties — `Object.prototype.hasOwnProperty
+    // .call(dv, "0")` and `getOwnPropertyDescriptor(dv, "0")` are `false` /
+    // `undefined` in node. Asked ABOVE the bounds test, which answers `true`
+    // for every in-range index. An index STORE does create an ordinary own
+    // property, so consult the expando table rather than answering a flat
+    // `false`.
+    if crate::buffer::is_non_indexed_buffer_view(raw_buffer_addr) {
+        return Some(crate::buffer::buffer_has_own_prop(raw_buffer_addr, name));
+    }
     let buf = raw_buffer_addr as *const crate::buffer::BufferHeader;
     Some(idx < (*buf).length)
 }

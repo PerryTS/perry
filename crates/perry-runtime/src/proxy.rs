@@ -995,6 +995,16 @@ fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> bool {
     let Some(raw) = raw_ptr_from_value(target) else {
         return false;
     };
+    // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
+    // buffers, but they are NOT integer-indexed exotic objects — `dv[0] = 7`
+    // creates an ORDINARY own property in node and leaves the byte at 0.
+    // Answering `false` here hands the write back to `js_put_value_set`'s
+    // ordinary `[[Set]]` walk, which would bit-cast the `BufferHeader`, so
+    // store the expando directly and claim the write.
+    if crate::buffer::is_non_indexed_buffer_view(raw) {
+        crate::buffer::buffer_set_own_prop(raw, &index.to_string(), value);
+        return true;
+    }
     if crate::buffer::is_registered_buffer(raw) {
         crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
         return true;

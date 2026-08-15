@@ -256,7 +256,15 @@ pub(crate) fn get_field_by_name_object_tail(
                 if let Some(value) = crypto_key_property_value(obj as usize, key_bytes) {
                     return value;
                 }
-                if key_bytes == b"length" || key_bytes == b"byteLength" {
+                // #8149: `length` is a `%TypedArray%` slot. An `ArrayBuffer` /
+                // `SharedArrayBuffer` / `DataView` has only `byteLength`, so
+                // node answers `undefined` for `dv.length` / `ab.length`. Asked
+                // ABOVE the shared arm, which answers the byte count for both
+                // spellings.
+                if key_bytes == b"byteLength"
+                    || (key_bytes == b"length"
+                        && !crate::buffer::is_non_indexed_buffer_view(obj as usize))
+                {
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }

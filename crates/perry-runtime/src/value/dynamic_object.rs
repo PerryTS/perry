@@ -446,6 +446,16 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     if crate::buffer::is_registered_buffer(ptr as usize) {
         let buf = ptr as *const crate::buffer::BufferHeader;
         match property_name {
+            // #8149: `length` is a `%TypedArray%` slot. An `ArrayBuffer` /
+            // `SharedArrayBuffer` / `DataView` exposes only `byteLength`, so
+            // node answers `undefined` for `dv.length` and `ab.length`. Asked
+            // ABOVE the shared arm, which answers the byte count for both
+            // spellings. (`js_value_length_f64`, the deliberately-numeric
+            // sibling above, is left alone: its callers feed the result through
+            // `ToLength`, where `undefined` and `0` are the same answer.)
+            "length" if crate::buffer::is_non_indexed_buffer_view(ptr as usize) => {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
             "length" | "byteLength" => {
                 return (*buf).length as f64;
             }

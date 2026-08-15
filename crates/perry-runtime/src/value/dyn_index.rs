@@ -271,6 +271,20 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             index,
         );
     }
+    // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a registered
+    // buffer too, but it is NOT an integer-indexed exotic object — node answers
+    // `undefined` for `dv[0]`, never the byte. Ask that ABOVE the byte arm: the
+    // arm below answers unconditionally, so a re-check placed after it is dead
+    // code. An index STORE created an ordinary own property (see
+    // `js_object_set_index_polymorphic`), so consult it before giving up.
+    if crate::buffer::is_registered_buffer(raw_ptr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_ptr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            return crate::buffer::buffer_get_own_prop(raw_ptr, &key)
+                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+        }
+    }
     if crate::buffer::is_registered_buffer(raw_ptr) {
         let buf = raw_ptr as *const crate::buffer::BufferHeader;
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
@@ -612,6 +626,18 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
             value,
         );
         return value;
+    }
+    // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` creates an ORDINARY own property — `dv[0] = 7` leaves the byte
+    // at 0, and `Object.keys(dv)` afterwards is `["0"]`. Asked above the
+    // byte-store arm, which writes unconditionally.
+    if crate::buffer::is_registered_buffer(raw_ptr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_ptr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            crate::buffer::buffer_set_own_prop(raw_ptr, &key, value);
+            return value;
+        }
     }
     if crate::buffer::is_registered_buffer(raw_ptr) {
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {

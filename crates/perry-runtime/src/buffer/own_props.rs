@@ -76,6 +76,31 @@ pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
         .map(f64::from_bits)
 }
 
+/// Every own dynamic prop key recorded for `addr`, in insertion-independent
+/// (sorted) order.
+///
+/// #8149: `Object.keys` / `getOwnPropertyNames` / `for…in` need these. Before,
+/// the enumeration paths had no registered-buffer arm at all and walked a
+/// `BufferHeader` as an `ObjectHeader` — reading payload bytes as the
+/// `keys_array` pointer, which returned `[]` when those bytes happened to be
+/// zero and SIGBUS'd in `js_array_length` when they did not.
+///
+/// Integer-index keys come back as the canonical decimal strings they were
+/// stored under (`buffer::canonical_index_key`); the caller is responsible for
+/// the ECMA-262 ordering rule that puts array indices first, ascending.
+pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
+    if addr == 0 || !buffer_own_props_possible() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = buffer_props()
+        .lock()
+        .ok()
+        .and_then(|props| props.get(&addr).map(|m| m.keys().cloned().collect()))
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 /// Whether the buffer carries any own dynamic prop under `prop`.
 pub fn buffer_has_own_prop(addr: usize, prop: &str) -> bool {
     buffer_get_own_prop(addr, prop).is_some()

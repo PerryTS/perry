@@ -1101,7 +1101,28 @@ pub unsafe fn dispatch_buffer_method(
         "valueOf" => f64::from_bits(JSValue::pointer(addr as *mut u8).bits()),
         // `buf.toLocaleString()` — Node delegates to toString() with no
         // args, which yields the utf8 decode. Match that.
-        "toLocaleString" => {
+        //
+        // #8139: `Buffer.prototype.toLocaleString` is an OWN override on
+        // `Buffer`. A plain `Uint8Array` inherits
+        // `%TypedArray%.prototype.toLocaleString`, which is the element JOIN —
+        // `new Uint8Array([3,1,2]).toLocaleString()` is `"3,1,2"` in node, not
+        // the three raw bytes. Perry backs both with the same `BufferHeader`,
+        // so this arm claimed the plain `Uint8Array` too. Ask the
+        // receiver-kind question ABOVE the arm by declining here: the catch-all
+        // then delegates to `dispatch_uint8_buffer_method`, whose
+        // `toLocaleString` is already `uint8_join` (correct for bytes, which
+        // are all below the first digit-grouping boundary).
+        //
+        // `is_uint8array_buffer` is the mark the `Uint8Array` CONSTRUCTOR path
+        // sets and `Buffer.from` does not. It is not a perfect brand — the
+        // `KeyObject.export()` arm below marks its *Buffer* result so
+        // `instanceof Uint8Array` holds — so `secretKey.export()
+        // .toLocaleString()` now joins where node decodes. That is the
+        // Buffer-vs-`Uint8Array` identity conflation #8139 also names for
+        // `toString`; splitting it properly needs a real `Buffer` brand, which
+        // is deliberately NOT attempted here. Before this change the same call
+        // answered `"[object Uint8Array]"`, so no spelling regressed.
+        "toLocaleString" if !crate::buffer::is_uint8array_buffer(addr) => {
             let str_ptr = crate::buffer::js_buffer_to_string(buf_ptr, 0);
             f64::from_bits(JSValue::string_ptr(str_ptr).bits())
         }

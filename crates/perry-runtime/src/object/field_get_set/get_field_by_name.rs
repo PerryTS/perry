@@ -658,6 +658,13 @@ pub extern "C" fn js_object_get_field_by_name(
                 } else {
                     let buf = addr as *const crate::buffer::BufferHeader;
                     match key_bytes {
+                        // #8149: `length` is a `%TypedArray%` slot. An
+                        // `ArrayBuffer` / `SharedArrayBuffer` / `DataView`
+                        // exposes only `byteLength`, so node answers
+                        // `undefined` for `dv.length` / `ab.length`.
+                        b"length" if crate::buffer::is_non_indexed_buffer_view(addr) => {
+                            return JSValue::undefined();
+                        }
                         b"length" | b"byteLength" => {
                             return JSValue::number(crate::buffer::js_buffer_length(buf) as f64);
                         }

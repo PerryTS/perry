@@ -21,6 +21,9 @@ mod string_methods;
 mod dispatch_arg_coercion_tests;
 #[cfg(test)]
 mod probe_dispatch_tests;
+#[cfg(test)]
+/// #8139: `toLocaleString` on an array / typed-array / buffer receiver.
+mod to_locale_string_tests;
 mod typed_array;
 
 use disposal::{

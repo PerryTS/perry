@@ -193,6 +193,19 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     {
         return value;
     }
+    // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
+    // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own
+    // properties — node answers `undefined` for `dv[0]`. Asked ABOVE the byte
+    // arm, which answers unconditionally. An index store put an ordinary own
+    // property there (`js_object_set_index_polymorphic`), so read that first.
+    if crate::buffer::is_registered_buffer(raw as usize)
+        && crate::buffer::is_non_indexed_buffer_view(raw as usize)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(idx) {
+            return crate::buffer::buffer_get_own_prop(raw as usize, &key)
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+    }
     if crate::buffer::is_registered_buffer(raw as usize) {
         let Some(index) = numeric_key_i32_index(idx) else {
             // A NON-numeric computed key on a Buffer (`buf[k]` where `k` is a
@@ -383,6 +396,19 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         }
     }
 
+    // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` creates an ordinary own property in node — `dv[0] = 7` leaves
+    // the byte at 0 and makes `Object.keys(dv)` report `"0"`. Asked ABOVE the
+    // byte-store arm for the same reason the read side is: that arm writes
+    // unconditionally.
+    if crate::buffer::is_registered_buffer(raw as usize)
+        && crate::buffer::is_non_indexed_buffer_view(raw as usize)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(idx) {
+            crate::buffer::buffer_set_own_prop(raw as usize, &key, value);
+            return;
+        }
+    }
     if crate::buffer::is_registered_buffer(raw as usize) {
         if let Some(index) = numeric_key_i32_index(idx) {
             crate::buffer::js_buffer_set(

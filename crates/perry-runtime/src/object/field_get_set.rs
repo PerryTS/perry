@@ -257,7 +257,7 @@ pub(crate) use accessors::scan_accessor_receiver_override_root_mut;
 mod buffer_own_prop;
 mod class_object_props;
 mod crypto_key;
-mod enumeration;
+pub(crate) mod enumeration;
 mod field_ops;
 mod get_field_by_name;
 #[cfg(test)]

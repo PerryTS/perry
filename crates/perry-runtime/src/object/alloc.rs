@@ -1506,6 +1506,42 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         return target_f64;
     }
 
+    // #8149: a registered BUFFER source — a node `Buffer` / `Uint8Array` (whose
+    // own enumerable properties ARE its byte indices, so
+    // `{...Buffer.from([1,2,3])}` is `{"0":1,"1":2,"2":3}` in node), or an
+    // `ArrayBuffer` / `DataView` (which own only whatever the user assigned).
+    // A `BufferHeader` is not an `ObjectHeader`; the walk below reached the
+    // `try_read_gc_header` triage and answered `{}` for an arena-backed buffer,
+    // and an EXTERNAL one has no `GcHeader` at all, so the byte it reads there
+    // is allocator bookkeeping that can classify as anything. Enumerate through
+    // the shared buffer own-key helper instead.
+    if let Some(keys) =
+        crate::object::field_get_set::enumeration::registered_buffer_own_keys(src_raw)
+    {
+        // The key string and the write funnel both allocate, so the target can
+        // move on every iteration: read it through the handle AT the call
+        // (`with_mut_ptr`) rather than binding a pre-loop copy.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        for name in keys {
+            let value = crate::object::field_get_set::enumeration::registered_buffer_own_value(
+                src_raw, &name,
+            );
+            let value_h = scope.root_nanbox_f64(value);
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
+                object_assign_set_string_key(
+                    tgt,
+                    target_is_array,
+                    key_ptr,
+                    value_h.get_nanbox_f64(),
+                )
+            });
+        }
+        return tgt_h
+            .with_mut_ptr::<ObjectHeader, _>(|tgt| crate::value::js_nanbox_pointer(tgt as i64));
+    }
+
     // A function/closure source is NOT an `ObjectHeader`: reading `keys_array`
     // off it dereferences a bogus field, yielding a garbage `key_count` and a
     // runaway copy loop. Enumerate the closure's own *enumerable* dynamic props
