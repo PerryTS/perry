@@ -205,7 +205,7 @@ after this section was written to forbid it (`d2dca5823` 2026-08-07,
 
    **The hazard this entry used to forbid was real, and was live from #7834
    until #8115.** It is kept in full, because the shape of it recurs. The bake
-   breaks the invariant **“intact ⟹ a descriptor is reachable”**, and nothing in
+   breaks the invariant **"intact ⟹ a descriptor is reachable"**, and nothing in
    `layout_note_slot` used to repair it. On a contradicting store to an object
    that is intact but descriptor-less the probe resolves `None`;
    `layout_set_typed_unknown` — then the only thing that cleared the intact bit
@@ -244,9 +244,22 @@ after this section was written to forbid it (`d2dca5823` 2026-08-07,
    read that slot as a bare `double` and handed the program a NaN where the boxed
    fallback hands it the value. A wrong answer, not a collector fault.
 
+   Even that did not reproduce from TypeScript, and the reason is worth knowing:
+   the pointer arrives by name (the inline store arm refuses a non-finite value
+   for a raw-f64 field), and every by-name store calls
+   `mark_object_dynamic_shape_unknown` first. #8115's issue read its early-return
+   guard — `state != SIDE_MASK && !layout_has_typed_descriptor(obj)` — as firing
+   on a baked instance. It does not: `layout_has_typed_descriptor` answers by
+   reading `GC_OBJ_TYPED_LAYOUT_INTACT`, the bit the bake set, so the guard is
+   skipped and `layout_mark_unknown` heals the object. **The stale claim was its
+   own antidote** — one inaccuracy masking another, which is not a property to
+   ship on. `the_bake_healed_itself_only_because_the_descriptor_probe_reads_the_same_bit`
+   pins the coupling; after #8115 nothing depends on it, because healing happens
+   in `layout_note_slot` itself.
+
    *The reassuring comment was a consequence, not a guarantee.*
-   `layout_note_slot`'s probe used to say a `None` verdict “can only cost an
-   extra fall-through, never mis-track a slot”. True only while the invariant
+   `layout_note_slot`'s probe used to say a `None` verdict "can only cost an
+   extra fall-through, never mis-track a slot". True only while the invariant
    held. It now points at the clear that makes it true.
 
    *What the bake still rests on, unchanged.* Between allocation and its first
