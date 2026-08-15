@@ -1179,6 +1179,18 @@ def is_collecting(callee):
 #          count and are deliberately NOT folded in here — same reasoning as
 #          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
+    # #8117 follow-up: the checker's own poll-reach audit derived these five
+    # from real intra-runtime call edges and exited 2 asking for them. Each
+    # matches ALLOC_RE (its result is a heap value the checker must track) AND
+    # calls something already listed here, so a window whose only collection
+    # point is one of them classified `MOVING: no` and was DROPPED from every
+    # `--moving-only` arm -- which is every gated arm in all four modes. The
+    # gate was silently not checking those windows. That is #7616's shape.
+    "js_buffer_alloc_fill_value",     # -> js_buffer_from_value
+    "js_buffer_from_array",           # -> js_array_get_f64 (can run a getter)
+    "js_buffer_from_value",           # -> js_buffer_from_array
+    "js_typed_array_new_from_array",  # -> js_array_get_f64
+    "js_uint8array_new",              # -> js_typed_array_get, js_uint8array_from_array
     "js_call_function",
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
