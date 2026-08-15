@@ -192,12 +192,14 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
              address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
              target={target:#x} target_space={:?} untraced_cycle={untraced} \
              rewrite_walk(frames,records,locations)={rewrite_stats:?} \
-             collector_classify={} \
+             collector_classify={} raw_header={:#018x} payload0={:#018x} \
              context={context:?} — this is the CREATION cycle of the stale slot the \
              pin-latch only catches many cycles later (#7803)",
             slot.ptr as usize,
             crate::arena::classify_heap_space(target),
             classify(target),
+            *((target - 8) as *const u64),
+            *(target as *const u64),
         );
     });
     let _ = (verify_frames, verify_stats);
