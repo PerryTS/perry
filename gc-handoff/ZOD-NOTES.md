@@ -2212,3 +2212,70 @@ Validation pending at the time of writing: seed 2/3/5 flip on the v4 binary
 (pre-fix arms: seed 3 = 2/2 abort, seed 2 = 2/3, seed 5 = 1/1 on the same
 tree minus the fix), full gap suite (the map change touches every compiled
 binary), perry-codegen + perry-runtime suites.
+
+## 40. v4 flips seeds 1/2/5; the seed-3 residual, characterized to the slot
+
+### The flip (same tree, pre-fix arms recorded in §35–§39)
+
+| seed | pre-v4 | v4 binary |
+|---|---|---|
+| 1 | 1/3 abort | 0/1 |
+| 2 | 2/3 abort (fixed ordinal 58281) | **0/3** |
+| 3 | 2/2–3/3 abort (ordinals 21547/52836) | **3/3 abort — residual** |
+| 5 | 1/1 abort | 0/2 |
+
+All passing runs assert `copying_minors>0 moved_objects>0 loop_polls=63936`.
+perry-runtime and perry-codegen lib suites green; the emitter round-trip
+(always-on, per module) passed over all 81 corpus modules.
+
+### The residual window, pinned by the instrument chain
+
+Chain (each step one run): the two-sided this-set trap → the per-cycle
+native-slot verifier (`PERRY_GC_NATIVE_SLOT_VERIFY=1`, abort at the CREATION
+cycle) → cycle-kind/space enrichment → rewrite-walk stats → collector-
+classification → raw-header dump. Established, all on seed 3, always the
+same site:
+
+* Victim slot: SP+40 of `schemas_ts__138` at its `+0xEA0` `js_closure_call1`
+  statepoint (the this-save around that call). Map record exists and lists
+  the slot; NO derived entries in 138 (the v4 rewrite is exonerated — the
+  identical failure predates v4, seed 3 was 2/2 pre-v4).
+* Creation: scheduled collection #186 (safepoints=1698), an ORDINARY traced,
+  preflight-skipped copy-minor (`untraced_cycle=false`).
+* The rewrite walk DID traverse (frames=20, records=7, locations=36) in the
+  same pause where the verifier then finds the slot bad.
+* The slot's value at creation: a boxed POINTER_TAG word whose target's
+  "header" reads as TWO BOXED STRINGS (`raw_header=0x7fff…`,
+  `payload0=0x7fff…`) — an interior pointer into a strings array (the
+  schema-keys array shape from §39), NOT a stale-recycled pattern.
+* `collector_classify=None` (plausible_gc_header fails on the interior) vs
+  global `target_space=Survivor1` (= the cycle's FROM-survivor): the rewrite
+  closure silently skips (`decode→classify→None`), the value never changes,
+  and the pin-latch trips whole minutes later when the bytes happen to look
+  pinned.
+* The two-sided trap proves the interior value enters the slot BETWEEN the
+  save and the restore WITHOUT passing through `js_implicit_this_set`
+  (incoming fires at the restore; outgoing never fires at the save). In that
+  window the only writers are the collector's walks — yet the interior is
+  present already at the FIRST verifier-visible cycle of the suspension.
+
+Open contradiction for the next session: a value the mutator saved coherent,
+in a slot the walk visits, reads as a boxed interior at the first
+in-suspension collection — either the SAVE path stores a different register
+than the map's slot claims at that pc (slot/liveness attribution at +0xEA0),
+or a pre-#186 walk of an EARLIER suspension record rewrote this stack
+address under a different (base? derived? other-frame?) interpretation.
+Next instrument: on the creation cycle, dump ALL 5 slot values of the
++0xEA0 record (16/24/32/40/48) plus the raw record list for the pc actually
+matched (match_records can return several records within the ±16 window —
++0xfd4/+0xfd8-style adjacent pairs exist in this function).
+
+### Kept fixes (all real, all sabotage- or checker-backed)
+
+1. gc_map v4 derived pairs + walker rewrite (`ed1b9bb27` lineage) — the
+   seeds 1/2/5 flip.
+2. Spread-new/super-spread bundle rooting (`af4a26762`) — IR-ordering tests.
+3. Remembered-set rebuild after the drain (`ab558bf5e`).
+4. From-space scan array-slack bound; latch owner/target identification;
+   this-set trap; native-slot verifier — the instrument shelf that made each
+   step one run instead of a sweep.
