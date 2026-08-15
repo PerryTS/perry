@@ -109,3 +109,39 @@ fn mapped_arguments_params(params: &[Param]) -> Vec<(u32, u32)> {
         .flat_map(|meta| meta.mapped_parameter_ids.iter().copied())
         .collect()
 }
+
+/// Resolve `property` against `class_name`'s ancestry and report how the callee
+/// expects its TRAILING parameters to be filled, as
+/// `(has_synthesized_arguments, has_user_rest)`.
+///
+/// #8040. Both a user `...rest` and the `arguments` slot synthesized by #677 are
+/// lowered as `Param { is_rest: true }`, so a single `has_rest` bit cannot tell
+/// a call site which one it is filling — and they are filled from different
+/// offsets. Only the synthesized slot carries `arguments_object`, which is the
+/// bit this reads. Returns `(false, false)` for a class the current module does
+/// not have HIR for (an imported class), leaving those call sites on the
+/// pre-existing `method_has_rest` behavior.
+pub(crate) fn resolve_method_trailing_shape(
+    ctx: &crate::expr::FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> (bool, bool) {
+    let mut walk = Some(class_name.to_string());
+    while let Some(cur) = walk {
+        let class = ctx.classes.get(&cur);
+        if let Some(f) = class.and_then(|c| c.methods.iter().find(|m| m.name == *property)) {
+            let synth = f
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
+            let user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            return (synth, user_rest);
+        }
+        walk = class.and_then(|c| c.extends_name.clone());
+    }
+    (false, false)
+}

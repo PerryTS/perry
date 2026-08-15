@@ -16,14 +16,17 @@
   `js_array_mark_arguments_object`. The freestanding-function path
   (`lower_call/func_ref.rs`) has always emitted the correct shape, and
   `lower_call/property_get/static_dispatch.rs` was fixed for its own slice in
-  #5703; the instance-method path
-  (`lower_call/property_get/dynamic_dispatch.rs`) and the `StaticMethodCall` path
-  (`expr/static_method.rs`) were not. Runtime dynamic dispatch (`o[name](…)`,
+  #5703. Four sites were not: the guarded direct call and the per-implementor
+  subclass arm (both `lower_call/property_get/dynamic_dispatch.rs` — the second
+  is the one a call made from inside another class method reaches), the
+  `StaticMethodCall` path (`expr/static_method.rs`), and `super.m(…)`
+  (`expr/super_method.rs`), which passed every argument positionally so the
+  callee's trailing array slot received a raw scalar. Runtime dynamic dispatch (`o[name](…)`,
   `.call`, `.apply`) was already correct, because the runtime method table
   carries a separate `has_synth_args` flag — so the bug reproduced only through
   compile-time-resolved calls.
 
-  Both sites now resolve the trailing-parameter shape from the callee's own HIR
+  All four now resolve the trailing-parameter shape from the callee's own HIR
   (`arguments_object` is present on the synthesized parameter and on nothing
   else) and emit accordingly, including the case where a method has both a real
   `...rest` and an `arguments` read — two bundles over the same argument list at

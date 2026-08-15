@@ -62,6 +62,25 @@ class Base {
 // the parent's declared arity.
 class Derived extends Base {}
 
+// (10) `super.m(…)` reaches the parent body through its own call site, which
+// passed every argument POSITIONALLY — so the parent's trailing array slot
+// received a raw scalar rather than an array.
+class Override extends Base {
+  two(a: number, b: number) {
+    return `own=${arguments.length} super=${super.two(1, 2, 3)}`;
+  }
+  fromSibling() {
+    return super.two(1, 2, 3);
+  }
+}
+
+// (11) generator methods lower through yet another body transform.
+class Gen {
+  *g(a: number, b: number) {
+    yield arguments.length;
+  }
+}
+
 const b = new Base();
 console.log("(1) two(1,2,3):", (b as any).two(1, 2, 3));
 console.log("(1) two(1):", (b as any).two(1));
@@ -106,6 +125,10 @@ class ProxyTracer {
 const tracer = new ProxyTracer(new NoopTracer());
 // Three arguments against four declared params — the exact Next.js call.
 console.log("(9) startActiveSpan:", (tracer as any).startActiveSpan("span", {}, () => "CALLBACK-RAN"));
+
+console.log("(10) Override.two(9):", (new Override() as any).two(9));
+console.log("(10) Override.fromSibling():", new Override().fromSibling());
+console.log("(11) Gen.g(1,2,3):", (new Gen() as any).g(1, 2, 3).next().value);
 
 (async () => {
   console.log("(5) asy(1,2,3):", await (b as any).asy(1, 2, 3));
