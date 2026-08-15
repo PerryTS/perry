@@ -707,16 +707,19 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
             continue; // preserve holes
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        let mapped = js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
-            v,
-            k as f64,
-            recv_h.get_nanbox_f64(),
-        );
-        // Re-derive the element pointer AFTER the callback: the collection it
-        // may have triggered moves the result array (#8082 — this exact write
-        // landed in mprotect-poisoned from-space under the forced gate).
-        let result = result_h.get_raw_mut_ptr::<ArrayHeader>();
+        // `across_mut` runs the callback and hands back the result array's
+        // POST-collection address: the callback can allocate, and #8082 caught
+        // this exact write landing in mprotect-poisoned from-space when the
+        // element pointer was derived before it. The pre-call address is never
+        // bound, so there is nothing stale to reach for.
+        let (mapped, result) = result_h.across_mut::<ArrayHeader, _>(|| {
+            js_closure_call3(
+                callable(cb_h.get_nanbox_f64()),
+                v,
+                k as f64,
+                recv_h.get_nanbox_f64(),
+            )
+        });
         let elems =
             unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
         unsafe {
@@ -725,7 +728,9 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
             note_array_slot(result, k as usize, mapped.to_bits());
         }
     }
-    nanbox_arr(result_h.get_raw_mut_ptr::<ArrayHeader>())
+    // Scoped argument to a non-allocating operation: `nanbox_arr` only tags the
+    // pointer, so the address cannot go stale inside the call.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
 #[no_mangle]
@@ -756,14 +761,18 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
             recv_h.get_nanbox_f64(),
         );
         if crate::value::js_is_truthy(keep) != 0 {
-            let grown = js_array_push_f64(
-                result_h.get_raw_mut_ptr::<ArrayHeader>(),
-                v_h.get_nanbox_f64(),
-            );
+            // `js_array_push_f64` is self-rooting for the array it is handed
+            // (its grow path roots and re-reads it) and returns the current
+            // address, so a scoped argument is the right shape here. The value
+            // is read from its handle first, exactly as before.
+            let value = v_h.get_nanbox_f64();
+            let grown =
+                result_h.with_mut_ptr::<ArrayHeader, _>(|arr| js_array_push_f64(arr, value));
             result_h.set_raw_mut_ptr(grown);
         }
     }
-    nanbox_arr(result_h.get_raw_mut_ptr::<ArrayHeader>())
+    // Scoped argument to a non-allocating operation — see `js_arraylike_map`.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
 #[no_mangle]

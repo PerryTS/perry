@@ -40,10 +40,9 @@
   surface onto the runtime's transient-handle stack, so ext crates can root
   the table snapshots they hold across JS callbacks.
 
-- Instruments: the whole-heap from-space scan bounds array walks by live
-  length (capacity slack was producing false MISSING-REWRITE aborts) and
-  appends a classified payload preview to each offender so the owner
-  identifies itself; `PERRY_GC_STACKMAP_TRACE=1` prints every frame the
+- Instruments: the whole-heap from-space scan appends a classified payload
+  preview to each offender, so the owner identifies itself instead of being
+  an anonymous address; `PERRY_GC_STACKMAP_TRACE=1` prints every frame the
   native stack-map walk visits; `PERRY_EH_TRACE=1` prints per-frame
   personality decisions.
 
