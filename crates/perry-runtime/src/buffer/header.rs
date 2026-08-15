@@ -754,6 +754,22 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     // through the hook it installs at startup. The callback only removes a
     // HashMap entry — no allocation, so it is safe to run inside the sweep.
     notify_crypto_key_death(addr);
+    // The own-property table (`buf.foo = v`, #6406) was missing from this list.
+    // It is the same shape as every table above — a plain address-keyed map that
+    // does not root the `BufferHeader` — but it had only ONE clear site,
+    // `register_buffer`, so an entry was dropped only when the recycled address
+    // was re-issued to another *buffer*. Two consequences, both real:
+    //
+    //  * an unbounded leak — one permanent entry per property-carrying
+    //    Buffer/DataView ever created — made worse than the registries above by
+    //    the fact that `scan_buffer_own_props_roots_mut` TRACES the stored
+    //    values in every GC phase, so a dead buffer's expando closure (and
+    //    everything it captures) stayed reachable for the life of the process;
+    //  * the #6080 ABA class this function exists to prevent. The surviving
+    //    entry's key is a dead address that the scanner keeps handing to
+    //    `visit_metadata_usize_slot`, which resolves it against whatever now
+    //    occupies those bytes and rewrites the key to the new tenant's address.
+    super::own_props::clear_buffer_own_props(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
 }
