@@ -39,17 +39,33 @@
   chunk still constructs the local's value.
 
   Found while triaging #8040 (a production Next.js App Route serving empty
-  bodies). Next 16 ships this shape in the webpack chunk that inlines
-  `@opentelemetry/api`: the module IIFE declares `var g,h,i,j,…` and an inner
-  factory declares
+  bodies with `TypeError: active is not a function`). Next 16 ships this shape
+  in the webpack chunk that inlines `@opentelemetry/api`: the module IIFE
+  declares `var g,h,i,j,…` and later assigns each of them a module-exports
+  object, while an inner factory declares
   `class i { static getInstance(){ return this._instance || (this._instance = new i), this._instance } active(){ … } }`.
-  `getInstance()` threw, the module factory aborted mid-initialization, and the
-  webpack module cache then handed the tracer a `{}` for
-  `@opentelemetry/api` — so `context` never got its `active()`.
+  `new i` constructed the outer `i` — a plain exports object — so
+  `js_new_function_construct` fell back to a `class_id = 0` empty object.
+  `context` was therefore a non-null object with no prototype at all, which is
+  why the tracer's `(context == null ? void 0 : context.active())` guard let it
+  through and the request died on `active`.
 
-  Validation: `cargo test -p perry-hir` — 312 lib tests + every integration
-  suite green. Sabotage: with the new guard forced off, the regression test
-  fails with the exact defect, `NewDynamic { callee: LocalGet(0) }` in the
-  static method's body. The companion test (`factory_local_still_shadows_…`)
-  passes either way by design — it exists to catch over-triggering, not to
-  detect this bug.
+  The same file shows why the symptom looked like a prototype bug and moved
+  under unrelated edits: the collision rename accidentally immunised every
+  DUPLICATE single-letter class (`i$0`, `i$1`, … match no local), so only the
+  first `class <letter>` of each name was affected. In that bundle
+  `ContextAPI` (`class i`) and `PropagationAPI` (`class l`) were broken while
+  `TraceAPI` (`class j`, renamed) worked.
+
+  Validation: `cargo test -p perry-hir` — 314 lib tests plus every integration
+  suite, exit 0. Sabotage: with the guard forced off, both regression tests
+  fail with the exact defect (`NewDynamic { callee: LocalGet(…) }` in the
+  static method's body); the two over-trigger guards pass either way, which is
+  their job.
+
+  End-to-end: a harness built from the fixture's own
+  `.next/server/chunks/2.js` reproduces `TypeError: active is not a function`
+  and, with only the compiler swapped and the runtime archives held fixed,
+  flips to node's output — `context`/`propagation`/`trace`/`diag`/`metrics` all
+  carry their prototypes, `getTracePropagationData()`, `isOpenTelemetryEnabled()`
+  and `trace()` all return node's values.

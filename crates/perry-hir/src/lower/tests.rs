@@ -852,3 +852,112 @@ fn factory_local_still_shadows_module_scope_class_in_new() {
          the same name for `new`: {body}"
     );
 }
+
+/// #8040, the shape the minified `@opentelemetry/api` bundle actually has: a
+/// file with MANY same-named single-letter classes over one outer `var i`.
+///
+/// The collision rename accidentally immunised every duplicate — `i$0`, `i$1`,
+/// … match no local, so `lookup_local` missed and the reroute never fired for
+/// them. Only the FIRST `class i`, the one that keeps the bare name, was
+/// broken. That asymmetry is why the bundle's `trace` API worked while its
+/// `context` and `propagation` APIs did not, and why a symptom that looks like
+/// "prototype methods are missing" moves when unrelated code is added to the
+/// file. All three must construct their own class.
+#[test]
+fn first_of_several_same_named_nested_classes_constructs_itself() {
+    let source = r#"
+        function t(n: string, f: () => any): void {
+            try { console.log(n + ": " + String(f())); } catch (e) { console.log(String(e)); }
+        }
+        var i: any;
+        const f1 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "one"; }
+            }
+            return i;
+        };
+        const f2 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "two"; }
+            }
+            return i;
+        };
+        const f3 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "three"; }
+            }
+            return i;
+        };
+        t("f1", () => f1().mk().m());
+        t("f2", () => f2().mk().m());
+        t("f3", () => f3().mk().m());
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    // The first `class i` keeps the bare name; the duplicate is renamed.
+    let first = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "i")
+        .expect("the first class keeps the bare name `i`");
+    let mk = first
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        !body.contains("NewDynamic"),
+        "`new i()` inside i's own method must not construct through the \
+         enclosing binding's slot: {body}"
+    );
+    assert!(
+        body.contains("class_name: \"i\""),
+        "`new i()` inside i's own method must construct class i: {body}"
+    );
+}
+
+/// Over-trigger guard: a binding declared in the METHOD's own scope still wins.
+/// `m() { const C = Other; return new C(); }` constructs `Other`, not the
+/// enclosing class — `lookup_local_in_current_scope` is what keeps that true.
+#[test]
+fn method_local_shadowing_the_class_name_still_wins_in_new() {
+    let source = r#"
+        class Other {
+            tag(): string { return "other"; }
+        }
+        const g = () => {
+            class C {
+                static mk(): any {
+                    const C: any = Other;
+                    return new C();
+                }
+            }
+            return C;
+        };
+        const out: any = g().mk();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let mk = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "C")
+        .expect("class C is lowered")
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        body.contains("NewDynamic"),
+        "a method-scope local named after the class must still win for `new`: {body}"
+    );
+}
