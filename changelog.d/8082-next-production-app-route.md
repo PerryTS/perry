@@ -35,3 +35,23 @@
   dylib` artifacts to the shared shadow stack predated #8081's loaded-image
   stack-map indexing and would leave provider apps running a lowering
   production never ships.
+
+- Root runtime and FFI callback loops across their collection points, all
+  caught by the forced-moving gate under from-space protection: the generic
+  array-like callback helpers (`forEach`/`map`/`filter`/`some`/`every`/
+  `find*`/`reduce*` held receiver, callback, and result raw across
+  `js_closure_call*` — map wrote a mapped element through a pre-collection
+  pointer into poisoned from-space), the `Function.prototype.call`/`.apply`
+  arms and `js_put_value_set`'s subclass-length note, and perry-ext-http's
+  listener snapshots and channel-parked pending-request dispatch. A new
+  extern transient-root surface (`perry_ffi::TransientRootScope` over the
+  runtime-handle stack) makes the ext-crate rooting possible; a
+  deterministic `js_arraylike_map` regression forces a moving minor inside
+  every callback (sabotage-verified).
+
+- Sharpen the moving-GC instruments: the whole-heap from-space scan bounds
+  array walks by live length (capacity slack produced false
+  MISSING-REWRITE aborts) and appends a classified payload preview to each
+  offender; `PERRY_GC_STACKMAP_TRACE=1` prints each frame the native
+  stack-map walk visits; `PERRY_EH_TRACE=1` prints per-frame personality
+  decisions.
