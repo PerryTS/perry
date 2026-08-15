@@ -2279,3 +2279,24 @@ matched (match_records can return several records within the ±16 window —
 4. From-space scan array-slack bound; latch owner/target identification;
    this-set trap; native-slot verifier — the instrument shelf that made each
    step one run instead of a sweep.
+
+## 41. Gap suite on the v4 tree: gate green; status chatter is host noise
+
+`PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh` on this tree (Node 26.5.1,
+load ~30): **exit 0 — the gate passed.** The report listed
+`test_gap_zlib_4917_level: pass -> compile_fail` and seven
+`node_fail -> parity_fail` status changes; both classes spot-checked as
+environment artifacts, not branch regressions:
+
+* `test_gap_zlib_4917_level` compiles AND runs correctly by hand on the same
+  binaries (all-true output; only the known-benign ext-zlib duplicate-alloc
+  ld warnings). The suite's compile_fail was a load-30 timeout/artifact.
+* `test_gap_enum_in_function_body`'s oracle still fails by design (`node
+  --experimental-strip-types` cannot strip enums — triggerUncaughtException,
+  §28's class); the node_fail→parity_fail flips are oracle-environment
+  classification drift, the same local-flake family as
+  `flaky_gap_oracle_threadpool`.
+* Improvement recorded by the harness: `test_gap_iterator_helpers_2874:
+  parity_fail -> pass`.
+
+Re-run on a QUIET host before undrafting, per the standing rule.
