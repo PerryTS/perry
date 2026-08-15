@@ -12,6 +12,8 @@ use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
 #[cfg(test)]
+mod boxed_slot_no_root_tests;
+#[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
 mod element_shape_loop;

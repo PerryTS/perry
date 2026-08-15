@@ -483,6 +483,16 @@ NONCOLLECTING = {
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
     "js_box_set_bits", "js_box_get_bits",           # box.rs:317 raw cell write
     "js_i32_box_set", "js_bool_box_set",
+    "js_i32_box_get", "js_bool_box_get",            # registry check + raw read, no TDZ
+    # Box allocators (#8132): `std::alloc::alloc` + a TLS registry insert.
+    # A raw Rust allocation arms no Perry GC trigger (the malloc-count
+    # trigger counts MALLOC_STATE GC objects), so the call cannot enter the
+    # collector. The premise is machine-checked: IMMOVABLE_SOURCES' "box"
+    # probes below fail if box.rs ever arena-allocates or grows a free path,
+    # and these entries must be removed with them. Required here for the
+    # one-way containment `gc_call_effects.rs` documents (its CannotCollect
+    # set must stay a subset of this one).
+    "js_box_alloc_bits", "js_i32_box_alloc", "js_bool_box_alloc",
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
