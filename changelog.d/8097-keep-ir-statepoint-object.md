@@ -19,3 +19,12 @@ changing what is kept.
 false`, so the arm serving every statepoint target had no coverage;
 `keep_ir_retains_the_whole_scratch_dir_under_native_roots` now runs the same
 contract through it.
+
+With the report restored the gate failed one step later, the same way and for
+the same reason: the compile plan records `clang_path` for the analysis
+re-compile to reuse, and the in-process backend records the string
+`(in-process)` where a driver path would go. The harness's fallback was written
+for a MISSING value, and a non-empty placeholder is truthy, so it went straight
+to `subprocess.run` — `FileNotFoundError: '(in-process)'`. The harness now
+treats the placeholder as "no driver recorded" and falls back to the clang it
+already resolved; a genuinely recorded driver still wins.
