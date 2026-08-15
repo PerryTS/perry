@@ -22,6 +22,20 @@ pub extern "C" fn js_array_reduce_right(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
+    // #8137: a Buffer-backed `Uint8Array` receiver reads as an `ArrayHeader`
+    // below — correct `length`, GARBAGE elements. `reduceRight` is the widest
+    // case in the family: it is wrong even for a STATICALLY typed
+    // `const u = new Uint8Array([3,1,2])`, because codegen folds that call
+    // straight to this helper rather than routing it through
+    // `dispatch_buffer_method`. Measured `z|6.36e-314|5.09e-315|4.29e-315`
+    // against node's `z|2|1|3`.
+    //
+    // An ABSENT initial value must stay absent — see `js_array_reduce`.
+    let reduce_args = [crate::array::callback_arg(callback), initial];
+    let reduce_args = &reduce_args[..if has_initial != 0 { 2 } else { 1 }];
+    if let Some(result) = crate::array::buffer_receiver_dispatch(arr, "reduceRight", reduce_args) {
+        return result;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         if has_initial != 0 {

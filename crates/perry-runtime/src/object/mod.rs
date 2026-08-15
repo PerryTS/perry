@@ -148,7 +148,7 @@ mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
 mod typed_array_define;
-mod typed_array_proto_thunks;
+pub(crate) mod typed_array_proto_thunks;
 mod util_types;
 mod weakref_proto_thunks;
 mod websocket_global;

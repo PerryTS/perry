@@ -733,7 +733,7 @@ fn is_arena_backed_addr(addr: usize) -> bool {
 }
 
 #[inline]
-unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
+pub(crate) unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
     if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return false;
     }

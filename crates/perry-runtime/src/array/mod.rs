@@ -1,5 +1,6 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
+mod buffer_receiver;
 mod concat_reverse;
 mod element_shape;
 mod fill_extend;
@@ -45,6 +46,9 @@ pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
     js_array_from_arraylike_holey_value, js_array_from_f64,
+};
+pub(crate) use self::buffer_receiver::{
+    buffer_receiver_dispatch, callback_arg, dispatch_result_as_array,
 };
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_generic,

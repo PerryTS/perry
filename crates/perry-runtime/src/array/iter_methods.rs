@@ -153,6 +153,21 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     if collection_foreach_reroute(arr, callback) {
         return;
     }
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if crate::array::buffer_receiver_dispatch(
+        arr,
+        "forEach",
+        &[crate::array::callback_arg(callback)],
+    )
+    .is_some()
+    {
+        return;
+    }
     // #7574: `normalize_array_receiver` materializes an array-like OBJECT
     // receiver — a `class X extends Array` instance among them — into a fresh
     // dense snapshot. The spec passes the RECEIVER as the callback's 3rd
@@ -219,6 +234,17 @@ pub extern "C" fn js_array_map(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) =
+        crate::array::buffer_receiver_dispatch(arr, "map", &[crate::array::callback_arg(callback)])
+    {
+        return crate::array::dispatch_result_as_array(result);
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
@@ -312,6 +338,23 @@ pub extern "C" fn js_array_map(
 /// effects without allocating or filling the result array.
 #[no_mangle]
 pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const ClosureHeader) {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    // `forEach`, not `map`: this entry point exists precisely to preserve
+    // callback evaluation order and side effects WITHOUT allocating a result.
+    if crate::array::buffer_receiver_dispatch(
+        arr,
+        "forEach",
+        &[crate::array::callback_arg(callback)],
+    )
+    .is_some()
+    {
+        return;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
@@ -373,6 +416,19 @@ pub extern "C" fn js_array_filter(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) = crate::array::buffer_receiver_dispatch(
+        arr,
+        "filter",
+        &[crate::array::callback_arg(callback)],
+    ) {
+        return crate::array::dispatch_result_as_array(result);
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
@@ -446,6 +502,17 @@ pub extern "C" fn js_array_filter(
 /// Returns the element as f64, or undefined if not found.
 #[no_mangle]
 pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) =
+        crate::array::buffer_receiver_dispatch(arr, "find", &[crate::array::callback_arg(callback)])
+    {
+        return result;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -488,6 +555,20 @@ pub extern "C" fn js_array_findIndex(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> i32 {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) = crate::array::buffer_receiver_dispatch(
+        arr,
+        "findIndex",
+        &[crate::array::callback_arg(callback)],
+    ) {
+        // The dispatcher answers a raw f64 index (or `-1.0`), never a NaN-box.
+        return result as i32;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
@@ -650,6 +731,18 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
 pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) =
+        crate::array::buffer_receiver_dispatch(arr, "some", &[crate::array::callback_arg(callback)])
+    {
+        // Already a NaN-boxed boolean, the same shape this function returns.
+        return result;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
@@ -696,6 +789,19 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
 pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    if let Some(result) = crate::array::buffer_receiver_dispatch(
+        arr,
+        "every",
+        &[crate::array::callback_arg(callback)],
+    ) {
+        return result;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_TRUE);
@@ -814,6 +920,22 @@ pub extern "C" fn js_array_reduce(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
+    // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
+    // registry, so the `lookup_typed_array_kind` re-dispatch below never
+    // answers for it and the `BufferHeader` is read as an `ArrayHeader` —
+    // correct `length`, GARBAGE elements. Asked above the funnel; see
+    // `array::buffer_receiver`.
+    // An ABSENT initial value must stay absent: the dispatcher distinguishes
+    // `args.len() >= 2` (seed supplied) from a one-element list (seed is the
+    // first element), and a seedless reduce over an empty receiver must THROW
+    // rather than answer `undefined`. Passing `initial` unconditionally would
+    // silently turn every seedless reduce into a seeded one.
+    let reduce_args = [crate::array::callback_arg(callback), initial];
+    let reduce_args = &reduce_args[..if has_initial != 0 { 2 } else { 1 }];
+    if let Some(result) = crate::array::buffer_receiver_dispatch(arr, "reduce", reduce_args) {
+        return result;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         if has_initial != 0 {
