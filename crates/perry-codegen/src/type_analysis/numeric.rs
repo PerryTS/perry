@@ -152,6 +152,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     ctx.stable_local_type_proof(id),
                     Some(HirType::Number) | Some(HirType::Int32)
                 )
+                // #8105: the reassignment-tolerant proof. Every arm above
+                // either needs the local to be write-once
+                // (`stable_local_type_proof` answers `None` the moment it is
+                // reassigned) or is an integer-range fact, so a plain
+                // fractional accumulator — `let x = 0.0; … x = x * x - y * y
+                // + cx` — had NO numeric proof and every `x * x` bailed to
+                // the BigInt-aware `js_dynamic_mul`. This set proves the
+                // value is a Number from the WRITES, so reassignment is fine.
+                || ctx.number_by_construction_locals.contains(id)
         }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle

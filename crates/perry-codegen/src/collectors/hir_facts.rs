@@ -73,6 +73,20 @@ pub(crate) struct RepresentationFacts {
     /// `collectors/repsel_benefit.rs` for the +14.87% `15_mandelbrot`
     /// measurement that motivates it.
     pub unprofitable_canonical_i32_locals: HashSet<u32>,
+    /// #8105: locals whose value is a JS **Number by construction** — every
+    /// write (the `let` initialiser and every later assignment) is an
+    /// expression the spec guarantees evaluates to a Number.
+    ///
+    /// This is the reassignment-tolerant counterpart to
+    /// `FnCtx::stable_local_type_proof`, which answers `None` for any local
+    /// that is ever written again. `let x = 0.0; … x = x * x - y * y + cx;`
+    /// therefore had NO numeric proof at all, so every `x * x` bailed to the
+    /// BigInt-aware `js_dynamic_mul` — six opaque calls per iteration of
+    /// `15_mandelbrot`'s inner loop.
+    ///
+    /// The proof is structural, never a declared type (Perry does not enforce
+    /// annotations): see `collect_number_by_construction_locals`.
+    pub number_by_construction_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +216,10 @@ impl TypeFacts {
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
         &self.representation.not_bigint_locals
+    }
+
+    pub(crate) fn number_by_construction_locals(&self) -> &HashSet<u32> {
+        &self.representation.number_by_construction_locals
     }
 
     pub(crate) fn array_kind(&self, local_id: u32) -> ArrayKindFact {
@@ -492,6 +510,15 @@ pub(crate) fn collect_type_facts(
     integer_locals.extend(loop_bounded_i32_locals.iter().copied());
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
+    // #8105: locals that hold a JS Number by construction. Computed here, not
+    // inside the `Ptr<Shape>` pass, so the fact does not vanish under
+    // `PERRY_PTR_SHAPE_LOCALS=0` — `is_numeric_expr` is not a repsel consumer.
+    let number_by_construction_locals = super::collect_number_by_construction_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        &not_bigint_locals,
+    );
     let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
     // #7469: at-allocation all-pointer element-layout declaration candidates.
@@ -628,6 +655,7 @@ pub(crate) fn collect_type_facts(
             int_valued_ta_locals,
             loop_bounded_i32_locals,
             unprofitable_canonical_i32_locals,
+            number_by_construction_locals,
         },
         arrays: array_facts,
         effect: effect_facts,

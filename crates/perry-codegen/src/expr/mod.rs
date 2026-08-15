@@ -733,6 +733,20 @@ pub(crate) struct FnCtx<'a> {
     /// lowering keeps the NaN-safe guarded `toint32_wrap` for these.
     pub not_bigint_locals: &'a std::collections::HashSet<u32>,
 
+    /// #8105: LocalIds proven to hold a JS **Number by construction** — every
+    /// write into the local is an expression the spec guarantees evaluates to
+    /// a Number. Unlike [`FnCtx::stable_local_type_proof`], this survives
+    /// reassignment, which is the whole point: `let x = 0.0; … x = x * x - …`
+    /// had no numeric proof at all, so every `x * x` bailed to the
+    /// BigInt-aware `js_dynamic_mul`.
+    ///
+    /// A JS Number's Perry representation IS its raw double (numbers carry no
+    /// NaN-box tag), so membership licenses both halves of the numeric fast
+    /// path: skipping the dynamic helper AND skipping the residual
+    /// `js_number_coerce`. Structural, never a declared type — see
+    /// `collectors::collect_number_by_construction_locals`.
+    pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
+
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`

@@ -101,6 +101,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_STRING_INIT_CHUNK_SIZE",
     "PERRY_TA_PARAM_F64_READ",
     "PERRY_WATCHOS_ARM64_32",
+    // #8105 — number-by-construction locals (see the collector of the same
+    // name); `=0` empties the fact and changes every affected function's IR.
+    "PERRY_NUMBER_BY_CONSTRUCTION",
 ];
 
 /// #7183: codegen env vars that deliberately do NOT key the build cache.

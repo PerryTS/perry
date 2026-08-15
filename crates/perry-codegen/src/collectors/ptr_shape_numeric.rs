@@ -423,7 +423,7 @@ pub(super) fn prove_group_numeric_fields<'a>(
 /// short-circuits on the running assumption, and a TDZ self-reference
 /// (`let x = x`) is vacuously sound — the read throws, so no value is ever
 /// stored or observed.
-pub(super) fn collect_numeric_by_construction_locals<'a>(
+pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     stmts: &'a [Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
