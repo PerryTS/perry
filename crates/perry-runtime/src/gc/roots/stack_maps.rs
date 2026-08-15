@@ -1114,7 +1114,11 @@ mod unwind {
 
     fn walk_trace_enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ON.get_or_init(|| std::env::var_os("PERRY_GC_STACKMAP_TRACE").is_some())
+        // `env_flag_enabled`, not `var_os(..).is_some()`: presence-testing makes
+        // `PERRY_GC_STACKMAP_TRACE=0` ENABLE the trace, which is the opposite of
+        // what every other GC knob does and what anyone typing `=0` means. The
+        // shared parser fails toward the knob's documented default (OFF here).
+        *ON.get_or_init(|| crate::gc::env_flag_enabled("PERRY_GC_STACKMAP_TRACE"))
     }
 
     unsafe extern "C" fn walk_frame<F: FnMut(ResolvedRoot)>(
