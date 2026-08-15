@@ -96,8 +96,6 @@ mod instanceof;
 mod live_slots;
 mod null_stub;
 pub(crate) use live_slots::set_object_live_slot_count;
-#[cfg(test)]
-pub(crate) use live_slots::test_clear_live_slot_memo;
 pub use live_slots::{
     js_object_live_slot_count, object_inline_alloc_limit, object_live_slot_count,
     perry_object_header_abi_revision,
