@@ -81,7 +81,10 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass};
+pub use call_sites::{
+    producers_with_fuse_sites, rewrite_call_sites_in_stmts,
+    rewrite_call_sites_in_stmts_with_local_pass,
+};
 pub use detect::{
     analyze_producer, body_has_closure, body_has_super, detect_producers, stmt_contains_return,
 };
@@ -114,7 +117,40 @@ pub struct ProducerInfo {
 /// the consume loop. Functions that don't match the producer shape
 /// are left unchanged; modules with no matching functions are no-ops.
 pub fn run(module: &mut Module) {
-    let producers = detect_producers(module);
+    let mut producers = detect_producers(module);
+    if producers.is_empty() {
+        return;
+    }
+
+    // #8104 — PROFITABILITY. Only the consumer-fuse call site removes work:
+    // `let X = f(args); for (j) outer.push(X[j]);` becomes `outer = f(args,
+    // outer);`, deleting a copy loop and leaving one array where there were
+    // two. The other two rewrites are pure cost, and the value-binding one is
+    // actively harmful — `const arr = f(n)` becomes `let arr = []; arr = f(n,
+    // arr);`, which allocates exactly as many arrays as before and costs the
+    // binding its write-once proof, taking `Ptr<NumArray>`, the element-shape
+    // versioned clone, and every other representation fact keyed on a stable
+    // local with it.
+    //
+    // Measured on the three programs in the corpus whose emitted object
+    // changes at all — none of which has a fuse site, so all three were paying
+    // the cost for nothing (macOS arm64, `--profile perry-dev` compiler and
+    // runtime, `PERRY_RUNTIME_DIR` pinned, `/usr/bin/time -l`, medians,
+    // identical output on both arms):
+    //
+    // | program                       | instructions | peak RSS |
+    // |-------------------------------|-------------:|---------:|
+    // | `batch`                       |       ±0.0%  |    ±0.0% |
+    // | `shapes`                      |       +4.4%  |    ±0.0% |
+    // | `bench_numeric_array_numeric` |     +2926%   |   +103%  |
+    //
+    // The last one is 7.7 G → 232.7 G instructions and 21.7 MB → 44.1 MB peak
+    // footprint, for a transform that removed nothing.
+    //
+    // A producer with a fuse site keeps the rewrite at ALL of its sites: the
+    // signature gains the accumulator parameter, so every call must pass one.
+    let fused = producers_with_fuse_sites(module, &producers);
+    producers.retain(|id, _| fused.contains(id));
     if producers.is_empty() {
         return;
     }
