@@ -7,3 +7,9 @@ The result was that every lazy chunk was unreachable at runtime even though it h
 Computed relative specifiers are now joined against the requiring module's own directory before the registry lookup. The `./` prefix is stripped textually rather than left to `std::fs::canonicalize`, which only normalizes paths that exist on disk while registration falls back to the raw string when they do not — relying on it would work from a source tree and silently fail in the deployed case the dylib packaging exists for.
 
 Refs #8040, #5438.
+
+A second defect sat behind the first. Even with the correct absolute key, the lookup missed: `perry_module_init` ran every eager module init *before* recording the path→init addresses, so a module performing a runtime path-require during its own init — which is exactly when Next's `webpack-runtime` loads a chunk — queried an init registry that was still empty. The addresses it needed were recorded a few instructions later.
+
+Recording is pure bookkeeping (no init runs at that point), so it now happens before the eager-init loop.
+
+Both defects had to be fixed to get past startup; either alone still fails, which is why the first fix alone showed no improvement.

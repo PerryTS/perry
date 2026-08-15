@@ -630,12 +630,14 @@ pub(super) fn compile_module_entry(
             if !nextjs_path_inits.is_empty() {
                 blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             }
-            for prefix in non_entry_module_prefixes {
-                if cross_module.deferred_module_prefixes.contains(prefix) {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", prefix), &[]);
-            }
+            // #8040: record the path->init addresses BEFORE the eager init
+            // loop below. Recording is pure bookkeeping — "No init runs here,
+            // only the address is recorded" — but a module that performs a
+            // runtime path-require DURING its own eager init (Next's
+            // webpack-runtime loads chunk 2 while initializing) previously hit
+            // an empty init registry and died with MODULE_NOT_FOUND, even
+            // though the chunk was compiled and its init address was about to
+            // be recorded a few instructions later.
             // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
             // module's `__init` address under its absolute path so a runtime
             // `require(absolutePath)` (turbopack page/chunk loading) can trigger
@@ -654,6 +656,12 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
+            }
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                blk.call_void(&format!("{}__init", prefix), &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
