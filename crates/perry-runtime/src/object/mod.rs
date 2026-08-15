@@ -1695,8 +1695,15 @@ pub struct ObjectHeader {
     pub parent_class_id: u32,
     /// Number of fields in this object
     pub field_count: u32,
-    /// Pointer to array of key strings (for Object.keys() support)
-    /// NULL for class instances (keys are defined by the class)
+    /// Pointer to array of key strings (for Object.keys() support).
+    ///
+    /// A class instance HAS one: `object_alloc_class_inline_keys_impl` installs
+    /// the per-class array that codegen builds once at module init
+    /// (`js_build_class_keys_array`). The note that used to sit here claiming
+    /// the opposite outlived the compact-instance layout it described, and cost
+    /// #8099 a wrong premise — the guard descriptor refused every class-typed
+    /// parameter on the strength of it. Null means genuinely keyless, not
+    /// "class instance".
     pub keys_array: *mut ArrayHeader,
     /// #6759 Phase B: per-object metadata record — null for ordinary
     /// objects (the common case). MUST stay the LAST field: codegen reads

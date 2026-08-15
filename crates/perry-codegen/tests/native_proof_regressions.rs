@@ -14139,6 +14139,30 @@ fn static_name_spread_method_fallback_uses_method_id_wrapper() {
     );
 }
 
+/// The text of the `define` block whose signature line contains `marker`,
+/// through to the start of the next one. A guarded function (#8094) puts its
+/// public trampoline, its specialized clone and its generic sibling in one
+/// module, and the assertions below differ per body.
+fn ir_function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
+    let start = ir
+        .match_indices("define ")
+        .find(|(index, _)| {
+            let line_end = ir[*index..]
+                .find('\n')
+                .map(|offset| index + offset)
+                .unwrap_or(ir.len());
+            ir[*index..line_end].contains(marker)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| panic!("no `define` line containing {marker:?} in:\n{ir}"));
+    let rest = &ir[start..];
+    let end = rest[1..]
+        .find("\ndefine ")
+        .map(|offset| offset + 1)
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 #[test]
 fn annotated_class_method_value_uses_generic_lookup() {
     let mut calc = class(209, "Calc", Vec::new());
@@ -14171,14 +14195,30 @@ fn annotated_class_method_value_uses_generic_lookup() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    // (#8033) An erased annotation is never a proof, so the body reachable
+    // WITHOUT a validated argument must keep generic lookup. (#8099) A
+    // class-typed parameter is now additionally admitted into the #8094
+    // runtime-guarded clone, where the direct bind ABI is legal because
+    // `js_param_type_guard` established the receiver's class identity. Assert
+    // both halves: the interesting failure is the direct ABI appearing in the
+    // fallback, which is the exact regression #8033 exists to prevent.
+    let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
-        ir.contains("call double @js_object_get_field_ic_miss"),
-        "an annotation-only class receiver should preserve generic property lookup:\n{ir}"
+        generic.contains("call double @js_object_get_field_ic_miss"),
+        "an annotation-only class receiver must preserve generic property \
+         lookup in the unguarded body:\n{generic}"
     );
     assert!(
-        !ir.contains("call double @js_class_method_bind_by_id")
-            && !ir.contains("call double @js_class_method_bind(double"),
-        "an annotation-only class receiver must not select a direct class-method bind ABI:\n{ir}"
+        !generic.contains("call double @js_class_method_bind_by_id")
+            && !generic.contains("call double @js_class_method_bind(double"),
+        "the unguarded body must not select a direct class-method bind ABI:\n{generic}"
+    );
+    let specialized = ir_function_body(&ir, "__probe$spec_b(");
+    assert!(
+        specialized.contains("call double @js_class_method_bind_by_id")
+            || specialized.contains("call double @js_class_method_bind(double"),
+        "the guarded clone is what the validated annotation buys — if it stops \
+         selecting the direct bind, the assertions above pass vacuously:\n{specialized}"
     );
 }
 

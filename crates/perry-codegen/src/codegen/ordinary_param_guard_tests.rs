@@ -565,3 +565,182 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         "the recursive walker must stay on the unguarded body:\n{recursive}"
     );
 }
+
+/// #8099: a CLASS-typed parameter is guarded exactly like an interface-typed
+/// one, and the pair of bodies is the subject.
+///
+/// The refusal this replaces (`param_guard.rs::build_named`) said compact class
+/// instances expose no `keys_array` to validate declared fields against. They
+/// do — `object_alloc_class_inline_keys_impl` installs a per-class array built
+/// once at module init — so the same by-name field validation that serves
+/// interfaces serves classes, plus a `class_chain_reaches` identity check no
+/// structural type can satisfy.
+///
+/// The `Named("Label")` receiver in the clone is what turns the dynamic add
+/// into a string concat. Identity WITHOUT the fields was tried first and
+/// reverted: with an empty field list the clone came out structurally
+/// identical to the `$generic` sibling it routes around (same line count, same
+/// call multiset), because a class-annotated receiver already reaches the
+/// class-field guard path without any parameter proof. Asserting the two
+/// bodies DIFFER is therefore not decoration — it is the only thing that
+/// distinguishes this from a clone that costs a guard call and buys nothing.
+#[test]
+fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
+    let label = perry_hir::Class {
+        id: 41,
+        name: "Label".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![
+            perry_hir::ClassField {
+                name: "label".to_string(),
+                key_expr: None,
+                ty: Type::String,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            },
+            perry_hir::ClassField {
+                name: "count".to_string(),
+                key_expr: None,
+                ty: Type::Number,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            },
+        ],
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+        aliases: Vec::new(),
+    };
+    let render = Function {
+        id: 42,
+        name: "renderLabel".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 420,
+            name: "payload".to_string(),
+            ty: Type::Named("Label".to_string()),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        // `result` is `any` and reassigned, so it carries no proof of its own
+        // and the ADD is what the parameter proof has to reach through. A
+        // simpler `payload.label + "!"` is measurably vacuous here: the
+        // class-field typed-feedback path already resolves that one without
+        // any parameter evidence, and the two bodies come out identical.
+        body: vec![
+            Stmt::Let {
+                id: 421,
+                name: "result".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(420)),
+                    property: "label".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                421,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(421)),
+                        right: Box::new(Expr::String(":".to_string())),
+                    }),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(420)),
+                        property: "count".to_string(),
+                        byte_offset: 0,
+                    }),
+                }),
+            )),
+            Stmt::Return(Some(Expr::LocalGet(421))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("class_param_guard.ts");
+    module.classes.push(label);
+    module.functions.push(render);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(42)),
+        args: vec![Expr::Undefined],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+
+    let public = function_ir(&ir, "@perry_fn_class_param_guard_ts__renderLabel(");
+    assert!(public.contains("call i32 @js_param_type_guard("));
+    assert!(public.contains("renderLabel$spec_b("));
+    assert!(public.contains("renderLabel$generic("));
+
+    // The descriptor must carry a NON-ZERO class id. Codegen emitted a literal
+    // zero for every object node before this, which left the runtime's
+    // `class_chain_reaches` branch (`param_type_guard.rs`) with no caller at
+    // all — the descriptor byte after opcode 11 is that id.
+    let descriptor = ir
+        .lines()
+        .find(|line| line.contains("@perry_param_guard_class_param_guard_ts_42_0 ="))
+        .expect("the parameter descriptor must be emitted as rodata");
+    assert!(
+        !descriptor.contains("\\0B\\00\\00\\00\\00"),
+        "the object node's class id must not be zero, or the runtime identity \
+         check stays dead:\n{descriptor}"
+    );
+
+    let specialized = function_ir(&ir, "renderLabel$spec_b(");
+    let generic = function_ir(&ir, "renderLabel$generic(");
+    assert!(
+        specialized.contains("js_string_concat_value")
+            || specialized.contains("js_string_concat_box")
+            || specialized.contains("js_get_string_pointer_unified"),
+        "the clone must consume the guarded string-field proof:\n{specialized}"
+    );
+    assert!(
+        !specialized.contains("js_dynamic_string_or_number_add"),
+        "the clone must not fall back to the dynamic add:\n{specialized}"
+    );
+    assert!(
+        generic.contains("js_dynamic_string_or_number_add"),
+        "the unguarded body must keep the dynamic add — if it does not, the \
+         clone above is buying nothing and this test is vacuous:\n{generic}"
+    );
+}

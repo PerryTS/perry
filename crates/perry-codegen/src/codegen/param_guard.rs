@@ -98,6 +98,76 @@ impl<'a> GuardGraphBuilder<'a> {
             .collect()
     }
 
+    /// Every declared instance field on `name`'s inheritance chain, in
+    /// root-to-leaf declaration order, with the most-derived declaration
+    /// winning a shadowed name.
+    ///
+    /// Returns `None` — keeping the parameter generic — for any class whose
+    /// declared field set is not the whole truth about its instances:
+    ///
+    /// * generic (unsubstituted `T`-typed fields),
+    /// * a native, dynamic, or unresolvable base, whose fields HIR cannot see,
+    /// * a computed-key field, whose `name` is a synthetic placeholder rather
+    ///   than the runtime key,
+    /// * a private field, which is not an ordinary own key,
+    /// * an accessor anywhere on the chain that shares a field's name, since
+    ///   the read the proof licenses would then run user code.
+    ///
+    /// Cycle-guarded like every other chain walk in this crate: same-named
+    /// classes pulled across modules into one name-keyed table can form a
+    /// parent cycle (`type_analysis_class_fields.rs` carries the same note).
+    fn class_chain_fields(&mut self, name: &str) -> Option<Vec<GuardField>> {
+        let mut chain: Vec<&perry_hir::Class> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut current = Some(name.to_string());
+        while let Some(class_name) = current {
+            if chain.len() > 64 || !seen.insert(class_name.clone()) {
+                return None;
+            }
+            let class = self.classes.get(class_name.as_str()).copied()?;
+            if !class.type_params.is_empty()
+                || class.native_extends.is_some()
+                || class.extends_expr.is_some()
+            {
+                return None;
+            }
+            chain.push(class);
+            current = class.extends_name.clone();
+        }
+        // Root first, so a subclass's redeclaration overwrites its parent's.
+        chain.reverse();
+        let mut order: Vec<String> = Vec::new();
+        let mut declared: HashMap<String, Type> = HashMap::new();
+        let mut accessors: HashSet<&str> = HashSet::new();
+        for class in &chain {
+            for (accessor, _) in class.getters.iter().chain(class.setters.iter()) {
+                accessors.insert(accessor.as_str());
+            }
+            for field in &class.fields {
+                if field.key_expr.is_some() || field.is_private {
+                    return None;
+                }
+                if declared
+                    .insert(field.name.clone(), field.ty.clone())
+                    .is_none()
+                {
+                    order.push(field.name.clone());
+                }
+            }
+        }
+        if order.iter().any(|field| accessors.contains(field.as_str())) {
+            return None;
+        }
+        let fields: Vec<(String, Type, bool)> = order
+            .into_iter()
+            .map(|field| {
+                let ty = declared.get(&field).cloned()?;
+                Some((field, ty, false))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        self.build_fields(fields)
+    }
+
     fn build_named(&mut self, name: &str) -> Option<u32> {
         if let Some(id) = self.named.get(name) {
             return if self.building_named.contains(name) {
@@ -132,12 +202,42 @@ impl<'a> GuardGraphBuilder<'a> {
                 class_id: None,
                 fields,
             }
-        } else if self.classes.contains_key(name) && self.class_ids.contains_key(name) {
-            // Class identity alone cannot prove mutable field values, while
-            // compact instances do not expose the ordinary `keys_array`
-            // needed for read-only field validation. Keep class parameters on
-            // the generic path until a layout-aware field guard exists.
-            return None;
+        } else if let Some(class_id) = self.class_ids.get(name).copied().filter(|id| *id != 0) {
+            // (#8099) A class parameter is validated exactly like an interface
+            // one — every declared field on the inheritance chain, by name —
+            // plus a `class_chain_reaches` identity check that no structural
+            // type can supply. The identity half is what gives
+            // `param_type_guard.rs`'s class branch its first caller.
+            //
+            // The refusal this replaces claimed compact class instances have
+            // no `keys_array` to validate against. They do:
+            // `object_alloc_class_inline_keys_impl` installs a per-class array
+            // built once at module init, so `own_data_field` resolves a class
+            // instance's fields the same way it resolves a literal's. The
+            // stale claim came from the doc comment on
+            // `ObjectHeader::keys_array`, corrected alongside this.
+            //
+            // Identity ALONE was measured and rejected: with `fields` empty the
+            // emitted clone comes out structurally identical to the `$generic`
+            // sibling it routes around — same line count, same call multiset,
+            // `js_typed_feedback_class_field_get_guard` already present in both
+            // — so a class-annotated receiver reaches the class-field guard
+            // path with no parameter evidence at all. It bought nothing and
+            // cost one guard call per invocation: -51% on `tree`, -30% on
+            // `tree_wide`. The field VALUE facts are the whole payload, which
+            // is why they are not optional here.
+            //
+            // Cost is bounded by #8094's existing rule rather than a new one:
+            // a field-bearing descriptor claims heap CONTENTS, so a
+            // reference-typed parameter carrying one is refused in any body
+            // that contains a call. A recursive class (`Tree.left: Tree`)
+            // therefore cannot be guarded in the recursive walker that would
+            // make its validation O(nodes x depth).
+            let fields = self.class_chain_fields(name)?;
+            GuardNode::Object {
+                class_id: Some(class_id),
+                fields,
+            }
         } else {
             self.building_named.remove(name);
             self.named.remove(name);
@@ -539,6 +639,195 @@ mod tests {
             is_strict: true,
         })];
         assert!(!body_contains_await(&nested));
+    }
+
+    fn class(
+        id: u32,
+        name: &str,
+        extends: Option<&str>,
+        fields: Vec<(&str, Type)>,
+    ) -> perry_hir::Class {
+        perry_hir::Class {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: extends.map(str::to_string),
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: fields
+                .into_iter()
+                .map(|(field, ty)| perry_hir::ClassField {
+                    name: field.to_string(),
+                    key_expr: None,
+                    ty,
+                    init: None,
+                    is_private: false,
+                    is_readonly: false,
+                    decorators: Vec::new(),
+                })
+                .collect(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+            aliases: Vec::new(),
+        }
+    }
+
+    fn class_descriptor(root: &str, classes: &[perry_hir::Class]) -> Option<Vec<u8>> {
+        let table: HashMap<String, &perry_hir::Class> =
+            classes.iter().map(|c| (c.name.clone(), c)).collect();
+        let ids: HashMap<String, u32> = classes.iter().map(|c| (c.name.clone(), c.id)).collect();
+        descriptor_for_type(
+            &Type::Named(root.to_string()),
+            &HashMap::new(),
+            &HashMap::new(),
+            &table,
+            &ids,
+        )
+    }
+
+    /// #8099: a class parameter carries BOTH halves — the non-zero class id
+    /// that `param_type_guard.rs`'s `class_chain_reaches` branch consumes (its
+    /// only caller; codegen emitted a literal 0 there until this landed), and
+    /// the declared field types, which are the half that actually buys a
+    /// lowering. Identity alone was measured and reverted: the clone came out
+    /// structurally identical to the `$generic` sibling it routed around.
+    #[test]
+    fn a_class_descriptor_carries_its_class_id_and_its_declared_fields() {
+        let descriptor = class_descriptor(
+            "Label",
+            &[class(
+                7,
+                "Label",
+                None,
+                vec![("label", Type::String), ("count", Type::Number)],
+            )],
+        )
+        .expect("a plain class is guardable");
+        // OP_OBJECT is opcode 11, then class_id: u32, then field_count: u32.
+        let object = descriptor
+            .windows(9)
+            .find(|window| window[0] == 11)
+            .expect("an object node");
+        assert_eq!(
+            u32::from_le_bytes(object[1..5].try_into().unwrap()),
+            7,
+            "the class id must reach the descriptor, or the runtime's identity \
+             check stays dead: {descriptor:?}"
+        );
+        assert_eq!(
+            u32::from_le_bytes(object[5..9].try_into().unwrap()),
+            2,
+            "both declared fields must be validated: {descriptor:?}"
+        );
+        assert!(
+            descriptor.windows(5).any(|w| w == b"label"),
+            "field names are validated by name against `keys_array`: {descriptor:?}"
+        );
+    }
+
+    /// Inherited fields belong to the instance, so a proof that names only the
+    /// leaf's own fields would license a parent field's declared type without
+    /// having validated it.
+    #[test]
+    fn a_subclass_descriptor_validates_the_whole_inheritance_chain() {
+        let descriptor = class_descriptor(
+            "Derived",
+            &[
+                class(3, "Base", None, vec![("base", Type::String)]),
+                class(4, "Derived", Some("Base"), vec![("own", Type::Number)]),
+            ],
+        )
+        .expect("a subclass with a resolvable base is guardable");
+        let object = descriptor
+            .windows(9)
+            .find(|window| window[0] == 11)
+            .expect("an object node");
+        assert_eq!(u32::from_le_bytes(object[1..5].try_into().unwrap()), 4);
+        assert_eq!(
+            u32::from_le_bytes(object[5..9].try_into().unwrap()),
+            2,
+            "the inherited field must be validated too: {descriptor:?}"
+        );
+    }
+
+    /// A base HIR cannot see means the declared field set is not the whole
+    /// truth about the instance, so the parameter stays generic.
+    #[test]
+    fn a_class_whose_base_is_unresolvable_stays_generic() {
+        assert!(
+            class_descriptor(
+                "Orphan",
+                &[class(
+                    5,
+                    "Orphan",
+                    Some("SomeImportedThing"),
+                    vec![("x", Type::Number)]
+                )],
+            )
+            .is_none(),
+            "an unresolvable parent must refuse the descriptor"
+        );
+    }
+
+    /// An accessor that shares a field's name owns that property for normal JS
+    /// semantics, so validating it as a data field would license a read that
+    /// runs user code.
+    #[test]
+    fn a_class_with_an_accessor_shadowing_a_field_stays_generic() {
+        let mut shadowed = class(6, "Shadowed", None, vec![("value", Type::Number)]);
+        shadowed.getters.push((
+            "value".to_string(),
+            perry_hir::Function {
+                id: 60,
+                name: "get_value".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: Type::Number,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ));
+        assert!(
+            class_descriptor("Shadowed", &[shadowed]).is_none(),
+            "an accessor shadowing a declared field must refuse the descriptor"
+        );
+    }
+
+    /// A generic class's fields are still `T`, so nothing about them is
+    /// validatable until monomorphization has substituted them.
+    #[test]
+    fn a_generic_class_stays_generic() {
+        let mut generic = class(8, "Holder", None, vec![("item", Type::Number)]);
+        generic.type_params.push(perry_hir::types::TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        });
+        assert!(
+            class_descriptor("Holder", &[generic]).is_none(),
+            "an unsubstituted generic class must refuse the descriptor"
+        );
     }
 
     #[test]

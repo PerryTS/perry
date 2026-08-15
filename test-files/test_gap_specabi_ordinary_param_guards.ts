@@ -258,3 +258,127 @@ function survivePrimitiveGuardedGc(tag: string, rounds: number): string {
 
 console.log("moving-primitive", survivePrimitiveGuardedGc("live", 1200000));
 console.log("moving-primitive-lie", survivePrimitiveGuardedGc(7 as any, 1200000));
+
+// #8099: CLASS-typed parameters. Two facts drive these rows.
+//
+// A class instance DOES carry an ordinary `keys_array` (built once per class at
+// module init), so its declared fields validate by name exactly like an
+// interface's — and the descriptor additionally carries the class id, which is
+// the identity check no structural type can satisfy.
+//
+// Identity WITHOUT the field types was measured and rejected: the clone came
+// out structurally identical to the generic body it routes around, so it cost
+// a guard call per invocation and bought nothing (-51% on `tree`). The field
+// facts are the payload, which is why every row below turns on a field type.
+class Sized {
+  label: string;
+  count: number;
+  constructor(label: string, count: number) {
+    this.label = label;
+    this.count = count;
+  }
+}
+
+// `result` is `any` and reassigned, so it carries no proof of its own: the add
+// can only be lowered from the parameter's guarded field types.
+function describeSized(payload: Sized): any {
+  let result: any = payload.label;
+  result = result + ":" + payload.count;
+  return result;
+}
+
+console.log("class-fields-good", describeSized(new Sized("items", 3)));
+// Right class, lying fields — the descriptor rejects it and the generic body
+// must produce JavaScript's answer, not the specialized one.
+const lyingSized = new Sized("x", 1);
+(lyingSized as any).label = 9;
+(lyingSized as any).count = "many";
+console.log("class-fields-lie", describeSized(lyingSized));
+// A structurally identical object literal is NOT an instance of the class.
+// `class_chain_reaches` is what rejects it, and the fallback still runs.
+console.log("class-structural", describeSized({ label: "lit", count: 7 } as any));
+
+// A subclass IS admitted: `class_chain_reaches` walks the parent chain, and a
+// subclass keeps its parent's field slots.
+class SizedPlus extends Sized {
+  extra: string;
+  constructor(label: string, count: number, extra: string) {
+    super(label, count);
+    this.extra = extra;
+  }
+}
+
+console.log("class-subclass", describeSized(new SizedPlus("sub", 5, "e")));
+
+// A getter that is NOT also a declared field simply is not in the descriptor:
+// the class stays guardable on its real fields, and the accessor read still
+// runs user code through the ordinary path exactly once. (A class declaring
+// BOTH a field and a same-named accessor is refused outright, but TypeScript
+// rejects that source, so it is pinned at the HIR level instead —
+// `param_guard.rs::a_class_with_an_accessor_shadowing_a_field_stays_generic`.)
+let sizedGetterHits = 0;
+
+class Accessed {
+  count: number;
+  constructor(count: number) {
+    this.count = count;
+  }
+  get label(): string {
+    sizedGetterHits++;
+    return "from-getter";
+  }
+}
+
+function describeAccessed(payload: Accessed): any {
+  let result: any = payload.label;
+  result = result + ":" + payload.count;
+  return result;
+}
+
+console.log("class-accessor", describeAccessed(new Accessed(2)), sizedGetterHits);
+
+// The `tree` shape from #8099: a RECURSIVE class walked recursively. The body
+// contains a call, so #8094's aliasing rule refuses the descriptor — which is
+// also what stops the guard from walking the whole reachable graph on every
+// one of these calls. It must simply stay correct on the generic path.
+class Chain {
+  next: Chain | null;
+  weight: number;
+  constructor(next: Chain | null, weight: number) {
+    this.next = next;
+    this.weight = weight;
+  }
+}
+
+function chainTotal(node: Chain): number {
+  if (node.next === null) return node.weight;
+  return node.weight + chainTotal(node.next);
+}
+
+console.log(
+  "class-recursive",
+  chainTotal(new Chain(new Chain(new Chain(null, 3), 2), 1)),
+);
+
+// A class parameter reached by unknown code through an alias the caller
+// arranged first — the (c) case above, with a class receiver. The descriptor
+// claims field CONTENTS, so it is refused here for the same reason the
+// interface one is, and the printed answer must be JavaScript's.
+let chainStash: any = null;
+
+function poisonSized(): void {
+  chainStash.count = "lie";
+}
+
+function describeThroughGlobal(payload: Sized): string {
+  const before = payload.count + 1;
+  poisonSized();
+  return (
+    "before=" + before + " after=" + (payload.count + 1) + " typeof=" +
+    typeof payload.count
+  );
+}
+
+const stashedSized = new Sized("s", 41);
+chainStash = stashedSized;
+console.log("class-alias-global", describeThroughGlobal(stashedSized));
