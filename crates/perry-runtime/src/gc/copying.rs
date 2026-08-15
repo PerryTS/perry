@@ -1651,7 +1651,7 @@ pub(super) fn run_copied_minor_attempt(
     // #7803: PERRY_GC_NATIVE_SLOT_VERIFY=1 — abort on the cycle that leaves a
     // native slot naming from-space, instead of many cycles later at the
     // pin-latch. Placed after every rewrite pass, before the from-space flip.
-    super::roots::stack_maps_native_slot_verify();
+    super::roots::stack_maps_native_slot_verify(untraced);
     trace_phase_record(trace, "copying_nursery", phase_start);
 
     // #7937: the attempt's own trace has finished, so the ratio it was missing

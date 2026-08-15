@@ -138,7 +138,7 @@ static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 /// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
 /// never printed anything — this names it, with the owning frame from the
 /// pin-latch context.
-pub(in crate::gc) fn verify_native_slots_post_walk() {
+pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     if !*ON.get_or_init(|| {
@@ -164,9 +164,11 @@ pub(in crate::gc) fn verify_native_slots_post_walk() {
         panic!(
             "[gc-native-slot-verify] a native stack-map slot still names a from-space \
              address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
-             target={target:#x} context={context:?} — this is the CREATION cycle of the \
-             stale slot the pin-latch only catches many cycles later (#7803)",
+             target={target:#x} target_space={:?} untraced_cycle={untraced} \
+             context={context:?} — this is the CREATION cycle of the stale slot the \
+             pin-latch only catches many cycles later (#7803)",
             slot.ptr as usize,
+            crate::arena::classify_heap_space(target),
         );
     });
 }
