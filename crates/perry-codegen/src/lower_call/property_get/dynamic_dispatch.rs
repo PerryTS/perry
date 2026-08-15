@@ -24,6 +24,42 @@ use crate::lower_call::method_override::{
 /// call it replaces — so past this width the site keeps the single-arm guard.
 const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
 
+/// Resolve `property` against `class_name`'s ancestry and report how the callee
+/// expects its TRAILING parameters to be filled, as
+/// `(has_synthesized_arguments, has_user_rest)`.
+///
+/// #8040. Both a user `...rest` and the `arguments` slot synthesized by #677 are
+/// lowered as `Param { is_rest: true }`, so a single `has_rest` bit cannot tell
+/// a call site which one it is filling — and they are filled from different
+/// offsets. Only the synthesized slot carries `arguments_object`, which is the
+/// bit this reads. Returns `(false, false)` for a class the current module does
+/// not have HIR for (an imported class), leaving those call sites on the
+/// pre-existing `method_has_rest` behavior.
+fn resolve_method_trailing_shape(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> (bool, bool) {
+    let mut walk = Some(class_name.to_string());
+    while let Some(cur) = walk {
+        let class = ctx.classes.get(&cur);
+        if let Some(f) = class.and_then(|c| c.methods.iter().find(|m| m.name == *property)) {
+            let synth = f
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
+            let user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            return (synth, user_rest);
+        }
+        walk = class.and_then(|c| c.extends_name.clone());
+    }
+    (false, false)
+}
+
 /// A declared class may select the direct-method guard, but never prove the
 /// direct call. The guard validates the live class id, keys token, own
 /// override, and resolved method pointer; every miss uses dynamic dispatch.
@@ -250,10 +286,15 @@ pub(crate) fn try_lower_instance_method_call(
         // C's parent chain and find the FIRST class that has `property`
         // in `ctx.methods`. Register (C's id → that ancestor's fn_name).
         let mut implementors: Vec<(u32, String)> = Vec::new();
-        // #5437: (has_rest, decl_param_count) per implementor, aligned 1:1 with
-        // `implementors`, so each case block can build its own per-arity args
-        // without rescanning `ctx.methods`.
-        let mut impl_meta: Vec<(bool, usize)> = Vec::new();
+        // #5437: (has_rest, decl_param_count, synth_arguments, user_rest) per
+        // implementor, aligned 1:1 with `implementors`, so each case block can
+        // build its own per-arity args without rescanning `ctx.methods`.
+        //
+        // #8040: the last two split what `has_rest` alone cannot. A user
+        // `...rest` and the `arguments` slot #677 synthesizes are both
+        // `Param { is_rest: true }`, but a user rest takes the args PAST the
+        // declared params while the synthesized array must hold every one.
+        let mut impl_meta: Vec<(bool, usize, bool, bool)> = Vec::new();
         // #7142: aligned 1:1 with `implementors` — `Some(class)` exactly when
         // the receiver class of this case DECLARES `property` itself (the walk
         // stopped at its own entry). That is the condition a proven-`this`
@@ -288,9 +329,12 @@ pub(crate) fn try_lower_instance_method_call(
                         // method resolved, so its arity metadata is available now.
                         let has_rest = matches!(ctx.method_has_rest.get(&key), Some(&true));
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                        // `c` is the DEFINING class, so the shape is read off the
+                        // body this case actually calls.
+                        let (synth, user_rest) = resolve_method_trailing_shape(ctx, &c, property);
                         impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
                         implementors.push((start_cid, fname));
-                        impl_meta.push((has_rest, decl));
+                        impl_meta.push((has_rest, decl, synth, user_rest));
                     }
                     break;
                 }
@@ -507,13 +551,21 @@ pub(crate) fn try_lower_instance_method_call(
             }
 
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for (case_no, ((((_, fname), &case_idx), &(impl_has_rest, impl_decl_count)), owner)) in
-                implementors
-                    .iter()
-                    .zip(case_idxs.iter())
-                    .zip(impl_meta.iter())
-                    .zip(impl_owner.iter())
-                    .enumerate()
+            for (
+                case_no,
+                (
+                    (
+                        ((_, fname), &case_idx),
+                        &(impl_has_rest, impl_decl_count, impl_synth, impl_user_rest),
+                    ),
+                    owner,
+                ),
+            ) in implementors
+                .iter()
+                .zip(case_idxs.iter())
+                .zip(impl_meta.iter())
+                .zip(impl_owner.iter())
+                .enumerate()
             {
                 ctx.current_block = case_idx;
                 // #1758: a `perry_static_*` implementor is a STATIC method on a
@@ -564,7 +616,11 @@ pub(crate) fn try_lower_instance_method_call(
                     let mut case_args: Vec<String> = Vec::with_capacity(impl_decl_count + 1);
                     case_args.push(recv_box.clone());
                     if impl_has_rest {
-                        let fixed_user = impl_decl_count.saturating_sub(1);
+                        // #8040: with BOTH a user rest and a synthesized
+                        // `arguments`, the tail is two params (`[a, rest,
+                        // arguments]`), so two slots come off the declared count.
+                        let trailing_slots = if impl_synth && impl_user_rest { 2 } else { 1 };
+                        let fixed_user = impl_decl_count.saturating_sub(trailing_slots);
                         for i in 0..fixed_user {
                             case_args.push(
                                 static_user_args
@@ -573,19 +629,40 @@ pub(crate) fn try_lower_instance_method_call(
                                     .unwrap_or_else(|| undefined_lit.clone()),
                             );
                         }
-                        let rest_count = static_user_args.len().saturating_sub(fixed_user);
-                        let cap = (rest_count as u32).to_string();
-                        let mut rest_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                        for v in static_user_args.iter().skip(fixed_user) {
-                            let blk = ctx.block();
-                            rest_arr = blk.call(
-                                I64,
-                                "js_array_push_f64",
-                                &[(I64, &rest_arr), (DOUBLE, v)],
-                            );
+                        // (from, to, mark_as_arguments_object), in callee param
+                        // order. `static_user_args` is the RAW user list — no
+                        // receiver, no `undefined` padding — so a synthesized
+                        // `arguments` built from it reports the count the caller
+                        // really passed.
+                        let mut bundles: Vec<(usize, usize, bool)> = Vec::new();
+                        if impl_user_rest || !impl_synth {
+                            bundles.push((fixed_user, static_user_args.len(), false));
                         }
-                        let rest_box = nanbox_pointer_inline(ctx.block(), &rest_arr);
-                        case_args.push(rest_box);
+                        if impl_synth {
+                            bundles.push((0, static_user_args.len(), true));
+                        }
+                        for (from, to, mark) in bundles {
+                            let cap = (to.saturating_sub(from) as u32).to_string();
+                            let mut rest_arr =
+                                ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                            for v in static_user_args.iter().take(to).skip(from) {
+                                let blk = ctx.block();
+                                rest_arr = blk.call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &rest_arr), (DOUBLE, v)],
+                                );
+                            }
+                            if mark {
+                                let blk = ctx.block();
+                                rest_arr = blk.call(
+                                    I64,
+                                    "js_array_mark_arguments_object",
+                                    &[(I64, &rest_arr)],
+                                );
+                            }
+                            case_args.push(nanbox_pointer_inline(ctx.block(), &rest_arr));
+                        }
                     } else {
                         for v in &static_user_args {
                             case_args.push(v.clone());
@@ -871,6 +948,26 @@ pub(crate) fn try_lower_instance_method_call(
                 }
                 rest_walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
             }
+            // #8040: `method_has_rest` is TRUE for a method that has no user
+            // `...rest` at all. `arguments`-synthesis (#677) appends a HIDDEN
+            // trailing parameter to any method whose body reads `arguments`,
+            // and marks it `is_rest` so it arrives as one array — but the two
+            // are filled from DIFFERENT offsets. A user rest takes the args
+            // PAST the declared params; the synthesized `arguments` array must
+            // hold EVERY passed arg. Conflated, `m(a, b) { arguments }` called
+            // as `m(1, 2, 3)` bound `arguments` to `[3]`, so
+            // `arguments.length === 1` and `arguments[0] === 3`. The
+            // freestanding-function path (`func_ref.rs`) has always split these
+            // two cases; only the class-method call sites did not.
+            //
+            // Next.js bundles OpenTelemetry's `NoopTracer.startActiveSpan`,
+            // which opens `if (arguments.length < 2) return;` — under the
+            // conflation that guard fired on every well-formed 3-arg call, so
+            // `tracer.trace()` returned `undefined` without ever invoking its
+            // callback and a production App Route resolved its handler without
+            // entering `routeModule.handle` (empty 200, #8040).
+            let (method_synth_arguments, method_user_rest) =
+                resolve_method_trailing_shape(ctx, &class_name, property);
             // Collapse a rest-bearing virtual dispatch HERE, before the rest
             // array is materialized below — the by-name dispatch takes the raw
             // `fallback_user_args` and does its own rest-bundling, so the bundle
@@ -890,8 +987,20 @@ pub(crate) fn try_lower_instance_method_call(
             if method_has_rest {
                 // user-visible fixed param count = decl - 1 (the
                 // last param is the rest). lowered_args[0] is
-                // `this`, [1..] are user args.
-                let fixed_user = method_decl_count.saturating_sub(1);
+                // `this`, [1..] are user args. When a user rest AND a
+                // synthesized `arguments` are both present the tail is TWO
+                // params (`[a, rest, arguments]`), so two slots come off.
+                let trailing_slots = if method_synth_arguments && method_user_rest {
+                    2
+                } else {
+                    1
+                };
+                let fixed_user = method_decl_count.saturating_sub(trailing_slots);
+                // #8040: snapshot the real user-arg count BEFORE the padding
+                // below. The synthesized `arguments` array is built from these
+                // same registers, and padded `undefined`s are not arguments —
+                // folding them in would report `m(1)` as `arguments.length === 2`.
+                let real_user_count = lowered_args.len() - 1;
                 // Pad missing fixed args first.
                 while lowered_args.len() - 1 < fixed_user {
                     lowered_args.push(undefined_lit.clone());
@@ -899,16 +1008,37 @@ pub(crate) fn try_lower_instance_method_call(
                 // Bundle remaining trailing args into a fresh
                 // js_array. Index in lowered_args: 1 + fixed_user.
                 let split_at = 1 + fixed_user;
-                let rest_count = lowered_args.len().saturating_sub(split_at);
-                let cap = (rest_count as u32).to_string();
-                let mut rest_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                for v in &lowered_args[split_at..] {
-                    let blk = ctx.block();
-                    rest_arr = blk.call(I64, "js_array_push_f64", &[(I64, &rest_arr), (DOUBLE, v)]);
+                // (from, to, mark_as_arguments_object), in callee param order.
+                let mut bundles: Vec<(usize, usize, bool)> = Vec::new();
+                if method_user_rest || !method_synth_arguments {
+                    bundles.push((split_at, lowered_args.len(), false));
                 }
-                let rest_box = nanbox_pointer_inline(ctx.block(), &rest_arr);
+                if method_synth_arguments {
+                    bundles.push((1, 1 + real_user_count, true));
+                }
+                let mut bundle_boxes: Vec<String> = Vec::with_capacity(bundles.len());
+                for (from, to, mark) in bundles {
+                    let count = to.saturating_sub(from);
+                    let cap = (count as u32).to_string();
+                    let mut rest_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for idx in from..to {
+                        let v = lowered_args[idx].clone();
+                        let blk = ctx.block();
+                        rest_arr =
+                            blk.call(I64, "js_array_push_f64", &[(I64, &rest_arr), (DOUBLE, &v)]);
+                    }
+                    if mark {
+                        // Same marking the freestanding path emits: without it
+                        // the callee's `arguments` is an ordinary Array and
+                        // `Object.prototype.toString` / `util.types` disagree.
+                        let blk = ctx.block();
+                        rest_arr =
+                            blk.call(I64, "js_array_mark_arguments_object", &[(I64, &rest_arr)]);
+                    }
+                    bundle_boxes.push(nanbox_pointer_inline(ctx.block(), &rest_arr));
+                }
                 lowered_args.truncate(split_at);
-                lowered_args.push(rest_box);
+                lowered_args.extend(bundle_boxes);
             } else {
                 let target_total = max_explicit_arity + 1; // +1 for `this`
                 while lowered_args.len() < target_total {

@@ -101,12 +101,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // in the rest slot — `arguments.length` then reads garbage
                 // or hits the codegen-fallback undefined.
                 let has_rest = ctx.method_has_rest.get(&key).copied().unwrap_or(false);
+                // #8040: `has_rest` cannot distinguish a user `...rest` from the
+                // `arguments` slot #677 synthesizes for a body that reads
+                // `arguments` — both lower to `Param { is_rest: true }`, but the
+                // synthesized one must be filled from argument 0, not from
+                // `declared - 1`. `C.m(1, 2, 3)` on `static m(a, b) { arguments }`
+                // bundled only `[3]`, so `arguments.length === 1`. The sibling
+                // `C.m()` path in `lower_call/property_get/static_dispatch.rs`
+                // has split these since #5703; this one had not.
+                let synth_arguments = ctx
+                    .classes
+                    .get(class_name)
+                    .and_then(|c| c.static_methods.iter().find(|m| m.name == *method_name))
+                    .and_then(|m| m.params.last())
+                    .map(|p| p.arguments_object.is_some())
+                    .unwrap_or(false);
                 if has_rest {
                     let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                     if declared_count > 0 {
                         let fixed = declared_count.saturating_sub(1);
                         if lowered.len() >= fixed {
-                            let trailing: Vec<String> = lowered.split_off(fixed);
+                            // The synthesized `arguments` array holds EVERY
+                            // passed arg, so it is built from the full `lowered`
+                            // list and the leading params keep their own copies.
+                            let trailing: Vec<String> = if synth_arguments {
+                                lowered.clone()
+                            } else {
+                                lowered.split_off(fixed)
+                            };
+                            if synth_arguments {
+                                lowered.truncate(fixed);
+                            }
                             let arr_handle = ctx.block().call(
                                 I64,
                                 "js_array_alloc",
@@ -120,6 +145,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     I64,
                                     "js_array_push_f64",
                                     &[(I64, &handle_cur), (DOUBLE, v)],
+                                );
+                            }
+                            if synth_arguments {
+                                handle_cur = ctx.block().call(
+                                    I64,
+                                    "js_array_mark_arguments_object",
+                                    &[(I64, &handle_cur)],
                                 );
                             }
                             let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);

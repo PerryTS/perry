@@ -36,6 +36,8 @@ mod buffer_access;
 mod buffer_views;
 mod channel;
 #[cfg(test)]
+mod class_method_arguments_object_tests;
+#[cfg(test)]
 mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
