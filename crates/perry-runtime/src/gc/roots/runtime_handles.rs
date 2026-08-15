@@ -426,3 +426,71 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
         state.cursor >= stack.len()
     })
 }
+
+// ---------------------------------------------------------------------------
+// FFI transient roots (#8082).
+// ---------------------------------------------------------------------------
+//
+// Extern surface over the transient-handle stack for ext crates (perry-ffi
+// consumers). Their handle-struct side tables are rewritten by registered
+// mutable-root scanners, but a SNAPSHOT of those tables held in a Rust local
+// across a JS callback is a copy the collector cannot see — the #8082 forced
+// gate faulted on exactly that shape in the http server's pending-request
+// pump. These entry points let FFI code park such copies in slots the
+// existing runtime-handle scanner marks AND rewrites, then re-read the
+// post-collection values. Scopes must strictly nest: `enter` snapshots the
+// depth, `exit` truncates back to it (the JS-exception savepoint machinery
+// above already restores this stack across throws).
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_scope_enter() -> usize {
+    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+}
+
+/// Root a raw heap ADDRESS (e.g. an `i64` closure pointer from an ext
+/// listener table). Returns the slot index for [`js_ffi_root_get_heap_addr`].
+#[no_mangle]
+pub extern "C" fn js_ffi_root_push_heap_addr(addr: u64) -> usize {
+    let slot = RuntimeHandleSlot::HeapWord(addr);
+    runtime_handle_slot_write_barrier(slot);
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let index = stack.len();
+        stack.push(slot);
+        index
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
+    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+        Some(RuntimeHandleSlot::HeapWord(bits)) => *bits,
+        _ => 0,
+    })
+}
+
+/// Root a NaN-boxed VALUE (string/buffer/object handed to callbacks).
+#[no_mangle]
+pub extern "C" fn js_ffi_root_push_nanbox(bits: u64) -> usize {
+    let slot = RuntimeHandleSlot::Nanbox(bits);
+    runtime_handle_slot_write_barrier(slot);
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let index = stack.len();
+        stack.push(slot);
+        index
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_get_nanbox(index: usize) -> u64 {
+    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+        Some(RuntimeHandleSlot::Nanbox(bits)) => *bits,
+        _ => 0,
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_scope_exit(base: usize) {
+    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow_mut().truncate(base));
+}
