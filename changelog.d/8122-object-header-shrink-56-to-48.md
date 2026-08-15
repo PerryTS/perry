@@ -139,7 +139,26 @@ The rows with no object population move by ~0 — that is the control. The
 instruction cost is the price of the change: the bound is a shape-table probe
 where it used to be a `u32` load.
 
-Two findings worth carrying forward, both from measuring rather than assuming:
+**Where the residual actually is.** A per-callsite counter (`#[track_caller]` +
+`libc::atexit`, on `tls_hot.rs::maybe_install_stats_hook`'s pattern) over every
+shape-table entry point found it is **one site**: `proxy.rs`'s #6595 store-plan
+gate, which this rung changed from `object_type == OBJECT_TYPE_REGULAR` (a free
+`u32` compare) to `object_is_regular` — a `GcHeader` re-derivation plus a
+shape-table probe, firing **exactly once per allocated object** (3,000,000 on
+`retain`, 20,000,002 on `churn`, and still 1.00 per object on `retain_wide`'s
+8-field literals, which is the per-object/flat-in-width signature the corpus
+showed). Reducing it means weakening a predicate #6595 constrains, so it is
+tracked separately with the counts attached; the obvious "free" repair was tried
+here and reverted (see below).
+
+The same counter established something that matters more for anyone optimising
+this later: **`object_live_slot_count` — the bound derivation this rung
+introduces — is called ZERO times on every hot row.** Not once, across all nine
+programs measured. Two separate memo attempts in front of it measured null
+because they were caching a function that never runs on the measured path. Check
+the call count before reaching for a memo there.
+
+Three findings worth carrying forward, all from measuring rather than assuming:
 
 1. The first cut regressed instructions by up to **+30%** (`deeplist` +30.5%,
    `cycles` +28.4%, `tree` +25.4%). Five GC-side sites already read the bound
@@ -154,6 +173,16 @@ Two findings worth carrying forward, both from measuring rather than assuming:
    `shapes`. Its first sabotage test was *vacuous* (two arbitrary shapes get
    consecutive ids and so never share a memo way) and the sabotage run caught
    that. The numbers survive as a doc comment so it is not rebuilt.
+
+3. The counter-guided repair for the site above — pass the `GcHeader` the caller
+   already holds, hoist a free compare ahead of the probe — is semantically
+   identical and strictly less work, and **measured as a reproducible
+   regression**: `interp` +0.29% -> **+9.59%**, `pipeline` +0.34% -> +4.43%,
+   while doing nothing for `retain` (+3.26% -> +3.04%, noise). Implemented,
+   measured, reverted. The mechanism is codegen/inlining rather than semantics
+   and is not established. "Semantically identical and strictly less work" is an
+   argument about the source; only the corpus can make it a claim about the
+   binary.
 
 GC canaries (`retain`/`tree`/`churn`/`shapes` × plain / `FORCE_EVACUATE` +
 `VERIFY_EVACUATION` / `FORCE_EVACUATE` + `PROTECT_FROMSPACE DEPTH=32`, all under
