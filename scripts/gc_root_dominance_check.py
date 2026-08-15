@@ -1203,6 +1203,25 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
     "js_array_reduce", "js_json_stringify",
+    # Buffer / typed-array construction FROM another collection. Each of these
+    # is matched by ALLOC_RE (its result is a heap value the checker tracks)
+    # AND reaches an element read that is already poll-capable, so `--audit-
+    # poll-reach` reported the pair and refused to let a window whose only
+    # collection point is one of them classify `MOVING: no`:
+    #
+    #   js_uint8array_new            -> js_typed_array_get, js_uint8array_from_array
+    #   js_typed_array_new_from_array-> js_array_get_f64
+    #   js_buffer_from_array         -> js_array_get_f64
+    #   js_buffer_from_value         -> js_buffer_from_array
+    #   js_buffer_alloc_fill_value   -> js_buffer_from_value
+    #
+    # The reads are the reach proof: a source element can be an accessor or a
+    # Proxy `get` trap, i.e. user JS, and the per-element loop allocates the
+    # destination as it goes. `Buffer.from(arr)` / `new Uint8Array(arr)` are
+    # therefore collection points like any other element-reading builtin.
+    "js_uint8array_new", "js_typed_array_new_from_array",
+    "js_buffer_from_array", "js_buffer_from_value",
+    "js_buffer_alloc_fill_value",
     "js_string_replace_regex_fn", "js_string_replace_string_fn",
     "js_string_replace_all_regex_fn", "js_string_replace_all_string_fn",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",
