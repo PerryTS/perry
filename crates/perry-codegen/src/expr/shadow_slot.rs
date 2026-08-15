@@ -236,6 +236,29 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #8132: a boxed local's alloca never holds a GC-heap value, so rooting it
+    // protects nothing and (under the RS4GC lowering) costs a relocation of
+    // the box pointer at EVERY statepoint it is live across. Every store site
+    // routes through the same `boxed_vars && !module_globals` test
+    // (`stmt/mod.rs` prealloc, `let_stmt.rs`'s boxed arm,
+    // `codegen/arguments.rs::store_param_slot`, `lower_call/new_ctor_args.rs`),
+    // and each of them stores only a `js_box_alloc_bits`-family result or the
+    // TAG_UNDEFINED sentinel into the slot — the VALUE always goes inside the
+    // box. Boxes are `std::alloc` allocations outside the GC heap: no
+    // collector phase moves them, box.rs never frees them (`BOX_REGISTRY` is
+    // monotonic), and the JSValue inside is traced and rewritten by the
+    // registered `scan_box_roots_mut` scanner. All three premises are pinned
+    // by `scripts/gc_root_dominance_check.py`'s IMMOVABLE_SOURCES "box" entry,
+    // whose probes fail the lint if boxes ever become arena-allocated or grow
+    // a free path — at which point this skip must be reverted with them.
+    //
+    // On the webpack-factory monolith of #8132, ~300 preallocated boxes were
+    // live across ~90% of one function's 5.5k statepoints; unbinding them is
+    // what "not modelling every value as a GC pointer where a proof exists"
+    // means for this shape.
+    if ctx.boxed_vars.contains(&local_id) && !ctx.module_globals.contains_key(&local_id) {
+        return;
+    }
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
         return;
     };

@@ -42,12 +42,28 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
     }
 }
 
-unsafe fn typed_array_owner_length(owner: usize) -> u32 {
-    match typed_array_owner_kind(owner) {
-        Some(TypedArrayOwnerKind::TypedArray) => (*(owner as *const TypedArrayHeader)).length,
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
+/// `[[ArrayLength]]` for an owner whose kind the CALLER already resolved.
+///
+/// #8116: the registry is not the only thing that can establish "this is a
+/// typed array" — `classify_element_read_receiver` also accepts a
+/// `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_VIEW` managed header, and
+/// promises that a registry miss "can only cost the diversion, never the
+/// element read". Taking the kind as a parameter is what lets the element
+/// read honour that promise: re-deriving it from `typed_array_owner_kind`
+/// here would answer `0` for exactly the receiver the classifier just
+/// accepted.
+unsafe fn typed_array_owner_length_for(owner: usize, kind: TypedArrayOwnerKind) -> u32 {
+    match kind {
+        TypedArrayOwnerKind::TypedArray => (*(owner as *const TypedArrayHeader)).length,
+        TypedArrayOwnerKind::Uint8ArrayBuffer => {
             crate::buffer::js_buffer_length(owner as *const crate::buffer::BufferHeader) as u32
         }
+    }
+}
+
+unsafe fn typed_array_owner_length(owner: usize) -> u32 {
+    match typed_array_owner_kind(owner) {
+        Some(kind) => typed_array_owner_length_for(owner, kind),
         None => 0,
     }
 }
@@ -86,15 +102,26 @@ pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) 
     }
 }
 
-unsafe fn typed_array_owner_get(owner: usize, index: u32) -> f64 {
-    match typed_array_owner_kind(owner) {
-        Some(TypedArrayOwnerKind::TypedArray) => {
+/// Element read for an owner whose kind the CALLER already resolved. See
+/// [`typed_array_owner_length_for`] for why the kind is a parameter.
+///
+/// `js_typed_array_get` is itself `classify_element_read_receiver`-backed, so
+/// the `TypedArray` arm serves a header-established receiver correctly (#8116).
+unsafe fn typed_array_owner_get_for(owner: usize, kind: TypedArrayOwnerKind, index: u32) -> f64 {
+    match kind {
+        TypedArrayOwnerKind::TypedArray => {
             js_typed_array_get(owner as *const TypedArrayHeader, index as i32)
         }
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
+        TypedArrayOwnerKind::Uint8ArrayBuffer => {
             crate::buffer::js_buffer_get(owner as *const crate::buffer::BufferHeader, index as i32)
                 as f64
         }
+    }
+}
+
+unsafe fn typed_array_owner_get(owner: usize, index: u32) -> f64 {
+    match typed_array_owner_kind(owner) {
+        Some(kind) => typed_array_owner_get_for(owner, kind, index),
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
@@ -566,8 +593,28 @@ unsafe fn typed_array_coerce_element_for_side_effects(owner: usize, value: f64) 
     }
 }
 
+/// True when `owner` is a typed-array receiver by EITHER registry — the
+/// cached-kind lookup used by the inline fast path, or the thread-local owner
+/// registry this module's slow dispatch gates on. Callers routing a key AWAY
+/// from the numeric-index arms need both, because either one alone leaves the
+/// other arm free to claim the write.
+pub(crate) fn is_typed_array_owner(owner: usize) -> bool {
+    typed_array_owner_kind(owner).is_some()
+}
+
 pub(crate) unsafe fn typed_array_set_numeric_index(owner: usize, index: f64, value: f64) -> bool {
     if typed_array_owner_kind(owner).is_none() {
+        return false;
+    }
+    // A Symbol key is NOT a CanonicalNumericIndexString, so ECMA-262
+    // §10.4.5.5 sends it to OrdinarySet — it is not an invalid index to be
+    // dropped. The `is_finite` test below cannot tell the two apart: a Symbol
+    // arrives as a NaN-boxed pointer, which AS AN f64 is a NaN, so it took the
+    // "canonical-invalid index" arm and returned `true` (write handled), and
+    // `u8[sym] = v` vanished with no error. Say "not mine" instead, so the
+    // caller can route it. Inert for this module's own callers, which reach
+    // here only under `is_int32()` / `is_finite()`.
+    if crate::symbol::js_is_symbol(index) != 0 {
         return false;
     }
     if !index.is_finite() || index.fract() != 0.0 || index < 0.0 || index > u32::MAX as f64 {
@@ -598,13 +645,39 @@ pub(crate) unsafe fn typed_array_get_own_property_value(
     typed_array_get_property_value_by_name(owner, name)
 }
 
+/// String-key own-property read for an owner whose kind the CALLER already
+/// resolved. See [`typed_array_owner_length_for`] (#8116).
+unsafe fn typed_array_get_own_property_value_for(
+    ta: *const TypedArrayHeader,
+    kind: TypedArrayOwnerKind,
+    key: *const crate::string::StringHeader,
+) -> Option<f64> {
+    if ta.is_null() || key.is_null() {
+        return None;
+    }
+    let name = string_header_str(key)?;
+    typed_array_get_property_value_by_name_for(ta as usize, kind, name)
+}
+
 pub(crate) unsafe fn typed_array_get_property_value_by_name(
     owner: usize,
     name: &str,
 ) -> Option<f64> {
-    typed_array_owner_kind(owner)?;
-    match typed_array_string_key_kind(name, typed_array_owner_length(owner)) {
-        TypedArrayStringKeyKind::InBoundsIndex(index) => Some(typed_array_owner_get(owner, index)),
+    let kind = typed_array_owner_kind(owner)?;
+    typed_array_get_property_value_by_name_for(owner, kind, name)
+}
+
+/// String-key `[[Get]]` for an owner whose kind the CALLER already resolved.
+/// See [`typed_array_owner_length_for`] (#8116).
+unsafe fn typed_array_get_property_value_by_name_for(
+    owner: usize,
+    kind: TypedArrayOwnerKind,
+    name: &str,
+) -> Option<f64> {
+    match typed_array_string_key_kind(name, typed_array_owner_length_for(owner, kind)) {
+        TypedArrayStringKeyKind::InBoundsIndex(index) => {
+            Some(typed_array_owner_get_for(owner, kind, index))
+        }
         TypedArrayStringKeyKind::IntegerIndex => Some(f64::from_bits(crate::value::TAG_UNDEFINED)),
         TypedArrayStringKeyKind::Ordinary => {
             let prop = typed_array_own_prop_snapshot(owner, name)?;
@@ -627,48 +700,100 @@ pub(crate) unsafe fn typed_array_get_property_value_by_name(
 }
 
 pub(crate) unsafe fn typed_array_get_numeric_index(owner: usize, index: f64) -> Option<f64> {
-    typed_array_owner_kind(owner)?;
+    let kind = typed_array_owner_kind(owner)?;
+    Some(typed_array_get_numeric_index_for(owner, kind, index))
+}
+
+/// IntegerIndexedExotic `[[Get]]` for an owner whose kind the CALLER already
+/// resolved. See [`typed_array_owner_length_for`] (#8116).
+unsafe fn typed_array_get_numeric_index_for(
+    owner: usize,
+    kind: TypedArrayOwnerKind,
+    index: f64,
+) -> f64 {
     if !index.is_finite() || index.fract() != 0.0 || index < 0.0 || index > u32::MAX as f64 {
-        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let index = index as u32;
-    if index < typed_array_owner_length(owner) {
-        Some(typed_array_owner_get(owner, index))
+    if index < typed_array_owner_length_for(owner, kind) {
+        typed_array_owner_get_for(owner, kind, index)
     } else {
-        Some(f64::from_bits(crate::value::TAG_UNDEFINED))
+        f64::from_bits(crate::value::TAG_UNDEFINED)
     }
 }
 
 pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) -> f64 {
-    let Some(owner) = typed_array_addr_from_value(f64::from_bits(owner_bits as u64)) else {
-        // #5989: a `u8.subarray(...)` / `u8.slice(...)` of a BufferHeader-backed
-        // Uint8Array returns another (uint8array-marked) BUFFER, which the
-        // typed-array registry gate above doesn't know — a statically-typed
-        // `r[i]` on such a value silently read `undefined` (react-server-dom's
-        // flight row parser walks exactly these chunk views). Route buffer
-        // receivers through the generic dynamic index path, which handles
-        // BufferHeader indexing (numeric, string, and symbol keys) correctly.
-        let addr = owner_bits & crate::value::POINTER_MASK as usize;
-        if addr != 0 && crate::buffer::is_registered_buffer(addr) {
-            return crate::value::js_dyn_index_get(
-                crate::value::js_nanbox_pointer(addr as i64),
-                key,
-            );
-        }
-        // #8100: the variable-key twin of the `js_typed_array_get` bug. Codegen
-        // emits this helper for a reassigned local whose DECLARED type is a
-        // typed array, so the receiver is routinely a plain array/object; the
-        // pre-#8100 arm answered `undefined` for all of them. Classify the raw
-        // address and take the ordinary `[[Get]]` when it is not a typed
-        // array. No recursion: `js_dyn_index_get` re-enters this function only
-        // when `lookup_typed_array_kind` succeeds, which is precisely the case
-        // `classify_element_read_receiver` keeps on the typed path.
-        return match crate::typedarray::classify_element_read_receiver(owner_bits as u64) {
-            crate::typedarray::ElementReadReceiver::Ordinary(receiver) => {
-                crate::value::js_dyn_index_get(receiver, key)
+    let resolved = typed_array_addr_from_value(f64::from_bits(owner_bits as u64))
+        .and_then(|owner| typed_array_owner_kind(owner).map(|kind| (owner, kind)));
+    let (owner, kind) = match resolved {
+        Some(pair) => pair,
+        None => {
+            // #5989: a `u8.subarray(...)` / `u8.slice(...)` of a
+            // BufferHeader-backed Uint8Array returns another
+            // (uint8array-marked) BUFFER, which the typed-array registry gate
+            // above doesn't know — a statically-typed `r[i]` on such a value
+            // silently read `undefined` (react-server-dom's flight row parser
+            // walks exactly these chunk views). Route buffer receivers through
+            // the generic dynamic index path, which handles BufferHeader
+            // indexing (numeric, string, and symbol keys) correctly.
+            let addr = owner_bits & crate::value::POINTER_MASK as usize;
+            if addr != 0 && crate::buffer::is_registered_buffer(addr) {
+                return crate::value::js_dyn_index_get(
+                    crate::value::js_nanbox_pointer(addr as i64),
+                    key,
+                );
             }
-            _ => f64::from_bits(crate::value::TAG_UNDEFINED),
-        };
+            // #8100: the variable-key twin of the `js_typed_array_get` bug.
+            // Codegen emits this helper for a reassigned local whose DECLARED
+            // type is a typed array, so the receiver is routinely a plain
+            // array/object; the pre-#8100 arm answered `undefined` for all of
+            // them. Classify the raw address and take the ordinary `[[Get]]`
+            // when it is not a typed array. No recursion: `js_dyn_index_get`
+            // re-enters this function only when `lookup_typed_array_kind`
+            // succeeds, which is precisely the case
+            // `classify_element_read_receiver` keeps on the typed path.
+            match crate::typedarray::classify_element_read_receiver(owner_bits as u64) {
+                crate::typedarray::ElementReadReceiver::Ordinary(receiver) => {
+                    return crate::value::js_dyn_index_get(receiver, key)
+                }
+                // #8116: the two receiver gates are NOT the same predicate.
+                // `classify_element_read_receiver` also accepts a
+                // `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_VIEW` managed
+                // header, on purpose, so that "a lookup failure can only cost
+                // the diversion, never the element read" — while
+                // `typed_array_addr_from_value` gates on
+                // `typed_array_owner_kind`, i.e. the registry alone. Where they
+                // disagree this arm used to answer `undefined`, which made the
+                // two READ helpers contradict each other on the same receiver:
+                // `js_typed_array_get` (constant index) reads the element,
+                // `js_typed_array_index_get_dynamic` (runtime key) did not.
+                // Codegen picks between them on nothing but whether the key is
+                // a proven integer. Resolve the classifier's answer into an
+                // owner and run the same key logic instead.
+                //
+                // REACHABILITY (2026-08-15, #8116): no TypeScript-level
+                // construction of the disagreeing receiver is known. Every
+                // `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_VIEW`
+                // allocation registers before it is returned
+                // (`typedarray::typed_array_alloc`,
+                // `native_arena::js_native_arena_view`), the only
+                // unregistrations outside tests are GC finalizers for a
+                // provably dead object, and a typed array cannot cross a
+                // thread boundary (`thread::unsupported_transfer_type_name`).
+                // So a live disagreement means a dangling pointer to a
+                // collected typed array — the #7154 class — where `undefined`
+                // was never the interesting part. This arm is therefore
+                // consistency, not a repair: it cannot regress a reachable
+                // read, and `element_read_receiver_tests.rs` pins it against a
+                // receiver built in exactly that state.
+                crate::typedarray::ElementReadReceiver::TypedArray(addr) => {
+                    (addr, TypedArrayOwnerKind::TypedArray)
+                }
+                crate::typedarray::ElementReadReceiver::Absent => {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED)
+                }
+            }
+        }
     };
     // A Symbol key is never an integer-indexed element — read it from the symbol
     // side table, exactly as the ordinary `obj[sym]` path does. Without this a
@@ -689,7 +814,7 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         if let Some(value) =
-            typed_array_get_own_property_value(owner as *const TypedArrayHeader, key_ptr)
+            typed_array_get_own_property_value_for(owner as *const TypedArrayHeader, kind, key_ptr)
         {
             return value;
         }
@@ -699,12 +824,10 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
         );
     }
     if jsval.is_int32() {
-        return typed_array_get_numeric_index(owner, jsval.as_int32() as f64)
-            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        return typed_array_get_numeric_index_for(owner, kind, jsval.as_int32() as f64);
     }
     if key.is_finite() {
-        return typed_array_get_numeric_index(owner, key)
-            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        return typed_array_get_numeric_index_for(owner, kind, key);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

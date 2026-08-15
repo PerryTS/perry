@@ -359,3 +359,153 @@ fn uint8_helpers_still_serve_a_uint8_clamped_array() {
     js_uint8array_set(recv as *mut TypedArrayHeader, 0, 300);
     assert_eq!(js_uint8array_index_get_value(recv, 0), 255.0);
 }
+
+// --------------------------------------------------------------------------
+// #8116: the two receiver gates the READ helpers use are NOT the same
+// predicate.
+//
+// * `classify_element_read_receiver` answers `TypedArray` on a registry hit
+//   OR on a `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_VIEW` managed
+//   header — deliberately, so "a lookup failure can only cost the diversion,
+//   never the element read".
+// * `typed_array_addr_from_value` (`typedarray_props.rs`) gates on
+//   `typed_array_owner_kind`, i.e. the registry alone.
+//
+// Where they disagree, `typed_array_index_get_dynamic` fell through to `_`
+// and answered `undefined` — so the two READ helpers CONTRADICTED each other
+// on the same receiver: `js_typed_array_get` (emitted for a proven integer
+// index) read the element, `js_typed_array_index_get_dynamic` (emitted for a
+// runtime key, same receiver, same function) did not.
+//
+// REACHABILITY. No TypeScript-level construction of a disagreeing receiver is
+// known, and the census says there should not be one: both allocation sites
+// register before returning (`typed_array_alloc`,
+// `native_arena::js_native_arena_view`), the only non-test unregistrations are
+// GC finalizers for a provably dead object, and a typed array cannot cross a
+// thread boundary. `js_typed_array_get_reads_the_sibling_of_the_dynamic_hole`
+// below is what makes the arm worth closing anyway: it is an inconsistency
+// between two helpers that share a classifier and a documented contract, not
+// a repair of a live read.
+//
+// The state is built the only way it can occur — allocation kept, registry
+// entry dropped — and every assertion is a VALUE, chosen so the pre-fix body
+// cannot pass: `70000 & 0xFFFF == 4464` proves the per-kind 16-bit lane load
+// ran rather than a boxed-f64 slot read.
+// --------------------------------------------------------------------------
+
+/// A receiver whose managed GC header says typed array while the registry
+/// does not know it — the exact disagreement #8116 names. Elements are
+/// written BEFORE the registry entry is dropped, so the payload is a real
+/// per-kind lane store.
+fn header_only_typed_array(kind: u8, values: &[f64]) -> *mut TypedArrayHeader {
+    let ta = typed(kind, values);
+    unregister_typed_array(ta);
+    ta
+}
+
+#[test]
+fn header_only_typed_array_is_the_disagreement_8116_names() {
+    let ta = header_only_typed_array(UINT16, &[1.0, 2.0]);
+    let addr = ta as usize;
+
+    assert!(
+        lookup_typed_array_kind(addr).is_none(),
+        "the registry must MISS, or this fixture is not the #8116 receiver"
+    );
+    assert!(
+        matches!(
+            classify_element_read_receiver(addr as u64),
+            ElementReadReceiver::TypedArray(a) if a == addr
+        ),
+        "the managed header must still WIN — that is the half of the \
+         disagreement `classify_element_read_receiver` documents"
+    );
+}
+
+#[test]
+fn js_typed_array_get_reads_the_sibling_of_the_dynamic_hole() {
+    // The control that makes the #8116 arm worth closing: the SAME receiver
+    // is already read correctly by the constant-index helper. Codegen chooses
+    // between the two on nothing but whether the key is a proven integer, so
+    // an `undefined` from the dynamic twin is a contradiction, not a policy.
+    // This assertion holds with and without the fix.
+    let ta = header_only_typed_array(UINT16, &[1.0, 70000.0]);
+    assert_eq!(js_typed_array_get(as_recv(ta), 1), 4464.0);
+}
+
+#[test]
+fn js_typed_array_index_get_dynamic_reads_a_header_only_typed_array() {
+    let ta = header_only_typed_array(UINT16, &[1.0, 70000.0]);
+    let recv = as_recv(ta);
+
+    // Pre-fix: `undefined` for every one of these.
+    assert_eq!(js_typed_array_index_get_dynamic(recv, 1.0), 4464.0);
+    assert_eq!(js_typed_array_index_get_dynamic(recv, 0.0), 1.0);
+    // A canonical numeric-index STRING key is an element read too.
+    let key = crate::string::js_string_from_str("1");
+    assert_eq!(
+        js_typed_array_index_get_dynamic(recv, crate::value::js_nanbox_string(key as i64)),
+        4464.0
+    );
+    // Out of bounds stays `undefined` — the IntegerIndexedExotic answer, not
+    // a read past the end of the payload.
+    assert!(is_undefined(js_typed_array_index_get_dynamic(recv, 2.0)));
+    assert!(is_undefined(js_typed_array_index_get_dynamic(recv, -1.0)));
+}
+
+#[test]
+fn js_typed_array_index_get_dynamic_reads_a_symbol_key_off_a_header_only_typed_array() {
+    let ta = header_only_typed_array(UINT16, &[5.0, 6.0]);
+    let recv = as_recv(ta);
+    let boxed = crate::value::js_nanbox_pointer(ta as i64);
+
+    let sym = unsafe { crate::symbol::js_symbol_new_empty() };
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(boxed, sym, 1234.0);
+    }
+    // Pre-fix the `_` arm answered before the symbol side table was ever
+    // consulted, so this read was `undefined`.
+    assert_eq!(js_typed_array_index_get_dynamic(recv, sym), 1234.0);
+}
+
+// --------------------------------------------------------------------------
+// Controls for the #8116 change: it must not widen the receiver funnel, and
+// threading the resolved owner KIND through the key logic must not collapse
+// the two owner representations into one.
+// --------------------------------------------------------------------------
+
+#[test]
+fn js_typed_array_index_get_dynamic_is_still_undefined_for_a_non_pointer_receiver() {
+    // `Absent` must stay `undefined`: "make the helper decline everything"
+    // would pass the tests above, and "make it accept everything" would fail
+    // this one.
+    assert!(is_undefined(js_typed_array_index_get_dynamic(
+        std::ptr::null(),
+        0.0
+    )));
+    assert!(is_undefined(js_typed_array_index_get_dynamic(
+        0x3F as *const TypedArrayHeader,
+        0.0
+    )));
+}
+
+#[test]
+fn js_typed_array_index_get_dynamic_still_reads_a_uint8array_buffer_owner() {
+    // The OTHER owner representation (`TypedArrayOwnerKind::Uint8ArrayBuffer`,
+    // a Buffer-backed `Uint8Array` — #5989). Its bytes live at a different
+    // offset than a `TypedArrayHeader`'s inline storage, so serving it through
+    // the typed-array lane reader would answer something other than 250.
+    let buf = crate::buffer::buffer_alloc(3);
+    unsafe {
+        (*buf).length = 3;
+    }
+    crate::buffer::js_buffer_set(buf, 0, 250);
+    crate::buffer::js_buffer_set(buf, 2, 7);
+    crate::buffer::mark_as_uint8array(buf as usize);
+    assert!(crate::buffer::is_uint8array_buffer(buf as usize));
+
+    let recv = ((buf as u64) & POINTER_MASK) as *const TypedArrayHeader;
+    assert_eq!(js_typed_array_index_get_dynamic(recv, 0.0), 250.0);
+    assert_eq!(js_typed_array_index_get_dynamic(recv, 2.0), 7.0);
+    assert!(is_undefined(js_typed_array_index_get_dynamic(recv, 3.0)));
+}

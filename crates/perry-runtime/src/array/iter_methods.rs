@@ -103,10 +103,56 @@ impl Drop for DenseThisGuard {
     }
 }
 
+/// #5989/#8117: `.forEach` on a receiver codegen could not prove is a
+/// collection is statically fused to the ARRAY entry point below, so a native
+/// `Set`/`Map` arrives there. Run the collection's own `forEach` and report
+/// `true`; a genuine array-like receiver reports `false` and falls through.
+///
+/// This MUST run before `normalize_array_receiver`. #8041 made `clean_arr_ptr`
+/// — which `normalize_array_receiver` funnels into — reject every *tracked
+/// non-array*, where it previously rejected only `GC_TYPE_OBJECT` /
+/// `GC_TYPE_CLOSURE`. That is correct for the array layout question, but it
+/// nulls a `GC_TYPE_SET` / `GC_TYPE_MAP` receiver, and #5989's reroute sat
+/// AFTER the normalize call, behind `if arr.is_null() { return; }`. The reroute
+/// therefore became unreachable and every fused `set.forEach(cb)` /
+/// `map.forEach(cb)` silently iterated nothing. Same ordering fix #8060 applied
+/// to the indexed read and #8090/#8119 applied to the typed-array question.
+///
+/// Tag-gated exactly as `js_array_get_f64` is (#7765): every registered
+/// `Map`/`Set` IS its `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header,
+/// so an ordinary array is excluded by one already-warm header byte and never
+/// reaches a registry probe. The registry remains the liveness/layout proof.
+#[inline]
+fn collection_foreach_reroute(arr: *const ArrayHeader, callback: *const ClosureHeader) -> bool {
+    let addr = crate::array::array_receiver_addr(arr as *mut ArrayHeader);
+    let tag = crate::array::array_receiver_gc_tag(addr as *const ArrayHeader).0;
+    if tag != crate::gc::GC_TYPE_SET && tag != crate::gc::GC_TYPE_MAP {
+        return false;
+    }
+    let cb_value = f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
+    let undef = undefined_value();
+    if tag == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(addr) {
+        crate::set::js_set_foreach(addr as *mut crate::set::SetHeader, cb_value, undef);
+        return true;
+    }
+    if tag == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(addr) {
+        crate::map::js_map_foreach(addr as *mut crate::map::MapHeader, cb_value, undef);
+        return true;
+    }
+    false
+}
+
 /// forEach - call callback(element, index) for each element
 /// Returns nothing (void)
 #[no_mangle]
 pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const ClosureHeader) {
+    // #5989: a native Set/Map reaching this fused array entry point runs its
+    // own `forEach`. Ordered before `normalize_array_receiver` because that
+    // funnel nulls every tracked non-array (#8041) — see
+    // `collection_foreach_reroute`.
+    if collection_foreach_reroute(arr, callback) {
+        return;
+    }
     // #7574: `normalize_array_receiver` materializes an array-like OBJECT
     // receiver — a `class X extends Array` instance among them — into a fresh
     // dense snapshot. The spec passes the RECEIVER as the callback's 3rd
@@ -129,26 +175,6 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             callback,
         );
         return;
-    }
-    // #5989: `.forEach` on an unknown-typed receiver is statically fused to
-    // this array entry point, but the receiver may be a native Set/Map —
-    // react-server-dom iterates `request.abortableTasks` (a Set read back off
-    // the request object) exactly this way. Treating a SetHeader as an
-    // ArrayHeader feeds hash-table internals to the callback as elements and
-    // segfaults on the first property read. `forEach` is the ONLY method name
-    // the fused array methods share with Set/Map, so this single reroute —
-    // mirroring the typed-array reroute above — covers the hazard class.
-    {
-        let cb_value = f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        if crate::set::is_registered_set(arr as usize) {
-            crate::set::js_set_foreach(arr as *mut crate::set::SetHeader, cb_value, undef);
-            return;
-        }
-        if crate::map::is_registered_map(arr as usize) {
-            crate::map::js_map_foreach(arr as *mut crate::map::MapHeader, cb_value, undef);
-            return;
-        }
     }
     unsafe {
         let length = (*arr).length;
