@@ -64,7 +64,7 @@ controls guard over-reach: `Absent` receivers stay `undefined`, and a
 (different payload offset — serving it through the typed-array lane reader
 would not answer 250).
 
-Not fixed here, found by the same probe and filed separately: a `DataView`
+Not fixed here, found by the same probe and filed as #8149: a `DataView`
 and a raw `ArrayBuffer` are byte-indexable in Perry (`(dv as any)[0]` is `0`,
 Node's `undefined`), and `Object.keys(buffer)` is `[]` where Node lists the
 byte indices. Both reproduce with no typed-array static hint at all, so they
