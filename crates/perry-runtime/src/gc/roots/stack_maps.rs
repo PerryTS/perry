@@ -138,6 +138,26 @@ static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 /// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
 /// never printed anything — this names it, with the owning frame from the
 /// pin-latch context.
+crate::perry_thread_local! {
+    /// The rewrite walk's stats for the CURRENT cycle, published so the
+    /// #7803 native-slot verifier can compare its own traversal against the
+    /// one that was supposed to rewrite (a rewrite walk that stopped early
+    /// and a verify walk that did not is the difference between "slot
+    /// skipped" and "slot unrewritable").
+    static LAST_REWRITE_WALK: std::cell::Cell<(usize, usize, usize)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+pub(in crate::gc) fn publish_rewrite_walk_stats(stats: &NativeStackWalkStats) {
+    LAST_REWRITE_WALK.with(|c| {
+        c.set((
+            stats.frames_visited,
+            stats.records_matched,
+            stats.locations_visited,
+        ))
+    });
+}
+
 pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -150,7 +170,10 @@ pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
         return;
     }
     let _phase = super::super::pin::CopyingWalkPhaseGuard::enter("native_slot_verify");
-    visit_stack_map_root_slots(&mut |slot| unsafe {
+    let rewrite_stats = LAST_REWRITE_WALK.with(|c| c.get());
+    let mut verify_frames = 0usize;
+    let verify_stats = visit_stack_map_root_slots(&mut |slot| unsafe {
+        verify_frames += 1;
         let bits = *slot.ptr;
         let Some(word) = super::super::root_words::decode_root_word(bits) else {
             return;
@@ -165,12 +188,14 @@ pub(in crate::gc) fn verify_native_slots_post_walk(untraced: bool) {
             "[gc-native-slot-verify] a native stack-map slot still names a from-space \
              address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
              target={target:#x} target_space={:?} untraced_cycle={untraced} \
+             rewrite_walk(frames,records,locations)={rewrite_stats:?} \
              context={context:?} — this is the CREATION cycle of the stale slot the \
              pin-latch only catches many cycles later (#7803)",
             slot.ptr as usize,
             crate::arena::classify_heap_space(target),
         );
     });
+    let _ = (verify_frames, verify_stats);
 }
 
 /// Upper bound on how far a derived pointer may sit from its base before the
