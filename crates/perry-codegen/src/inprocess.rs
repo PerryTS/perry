@@ -455,6 +455,70 @@ fn optimize_and_emit(
 mod tests {
     use super::*;
 
+    /// #8121: Perry emits `call void asm sideeffect "", ""()` as the issue-#74
+    /// loop-preservation barrier. RS4GC rewrites every non-leaf call in a
+    /// `gc "statepoint-example"` function into a `gc.statepoint`, and for inline
+    /// asm that means using the `InlineAsm` itself as the callee operand —
+    /// invalid IR ("Cannot take the address of an inline asm!"). Production
+    /// verified only BEFORE the rewrite, so the broken module reached
+    /// SelectionDAG and killed the compiler with a SIGBUS in
+    /// `AArch64TargetLowering::LowerCall`.
+    ///
+    /// `%p` stays live across `@may_collect`, so RS4GC has real work to do and
+    /// a fixture that rewrote nothing cannot pass either arm silently.
+    fn asm_barrier_fixture(gc_leaf: bool) -> String {
+        let barrier_attr = if gc_leaf { " #5" } else { "" };
+        format!(
+            "declare i64 @may_collect()\n\
+             \n\
+             define ptr addrspace(1) @barrier_fn(ptr addrspace(1) %p) gc \"statepoint-example\" {{\n\
+             entry:\n\
+             \x20 call void asm sideeffect \"\", \"\"(){barrier_attr}\n\
+             \x20 %r = call i64 @may_collect()\n\
+             \x20 ret ptr addrspace(1) %p\n\
+             }}\n\
+             \n\
+             attributes #5 = {{ \"gc-leaf-function\" }}\n"
+        )
+    }
+
+    /// The bug itself, pinned. If this ever stops failing, the `gc-leaf-function`
+    /// marking has become unnecessary and the sibling test below is vacuous.
+    #[test]
+    fn rs4gc_breaks_an_unmarked_inline_asm_barrier() {
+        let target = crate::codegen::default_target_triple();
+        let err =
+            statepoint_rewritten_ir(&asm_barrier_fixture(false), &target, "asm_barrier_unmarked")
+                .expect_err("RS4GC must reject an unmarked inline-asm barrier (#8121)");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("inline asm"),
+            "expected the inline-asm verifier rejection, got: {text}"
+        );
+    }
+
+    /// The fix: marked `gc-leaf-function`, the barrier is left alone and the
+    /// rewrite still happens for the genuinely collecting call.
+    #[test]
+    fn a_gc_leaf_inline_asm_barrier_survives_rs4gc() {
+        let target = crate::codegen::default_target_triple();
+        let rewritten =
+            statepoint_rewritten_ir(&asm_barrier_fixture(true), &target, "asm_barrier_gc_leaf")
+                .expect("a gc-leaf inline-asm barrier must survive RS4GC (#8121)");
+        assert!(
+            rewritten.contains("gc.statepoint"),
+            "RS4GC rewrote nothing, so this fixture proves nothing:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("elementtype(void ()) asm"),
+            "the inline-asm barrier was used as a statepoint callee:\n{rewritten}"
+        );
+        assert!(
+            rewritten.contains("asm sideeffect"),
+            "the barrier vanished instead of being left alone:\n{rewritten}"
+        );
+    }
+
     fn constant_fold_order_fixture(folded: bool) -> String {
         let mut ir = String::from(
             "declare i64 @may_collect()\n\ndefine i64 @f(i64 %d0, i64 %d1, i64 %d2, i64 %d3, i64 %d4, i64 %d5, i64 %d6, i64 %d7) gc \"statepoint-example\" {\nentry:\n",
