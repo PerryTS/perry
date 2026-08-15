@@ -759,3 +759,96 @@ fn test_named_class_expression_var_decl_reports_explicit_name() {
         "anonymous class expression uses the inferred binding name, no override"
     );
 }
+
+/// #8040: a `class A` declared inside a nested factory, referenced by `new A()`
+/// from one of its OWN method bodies, while a same-named binding (`var A`)
+/// exists in an enclosing scope.
+///
+/// `expr_new.rs` snapshotted `ctx.lookup_local("A")` unconditionally and, when
+/// it hit, rerouted the construct to `NewDynamic { callee: LocalGet(<outer
+/// slot>) }`. A method compiles to its own function, so that slot index names
+/// an unrelated (undefined) local there and the construct threw `TypeError:
+/// undefined is not a constructor` at runtime. The bare-ident read arm already
+/// resolved the same name to the class via `forward_class_shadows_local`; this
+/// makes `new` agree.
+///
+/// Next 16's webpack chunk for the bundled `@opentelemetry/api` is exactly this
+/// shape — `var …,i,…` in the module IIFE and `class i { static getInstance(){
+/// return this._instance || (this._instance = new i), this._instance } }` in an
+/// inner factory — so `context.active()` was unreachable at request time.
+#[test]
+fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
+    let source = r#"
+        var A: any;
+        const g = () => {
+            class A {
+                static mk(): any {
+                    return new A();
+                }
+                m(): string {
+                    return "ok";
+                }
+            }
+            return A;
+        };
+        const out: any = g().mk().m();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let mk = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "A")
+        .expect("class A is lowered")
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        !body.contains("NewDynamic"),
+        "`new A()` inside A's own method must not construct through an \
+         enclosing-scope local slot: {body}"
+    );
+    assert!(
+        body.contains("class_name: \"A\""),
+        "`new A()` inside A's own method must construct class A: {body}"
+    );
+}
+
+/// Companion (the case the depth rule must NOT break): a module-scope `class e`
+/// and a factory-local `let e` holding a different constructor. JS says the
+/// nearer local wins, so `new e()` inside the factory must still construct the
+/// LOCAL's value — mysql2's bundled chunk shape, where taking the class instead
+/// silently ran the wrong constructor.
+#[test]
+fn factory_local_still_shadows_module_scope_class_in_new() {
+    let source = r#"
+        class e {
+            tag(): string { return "class-e"; }
+        }
+        function make(): any {
+            const e: any = function () { return undefined; };
+            return new e();
+        }
+        const keep: any = e;
+        const out: any = make();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let make = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "make")
+        .expect("function make is lowered");
+    let body = format!("{:#?}", make.body);
+
+    assert!(
+        body.contains("NewDynamic"),
+        "a factory-local binding must keep shadowing a module-scope class of \
+         the same name for `new`: {body}"
+    );
+}
