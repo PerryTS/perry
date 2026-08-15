@@ -214,3 +214,43 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
     let ast = perry_parser::parse_typescript(&wrapped, "lazy.js").unwrap();
     perry_hir::lower_module(&ast, "lazy", &path.to_string_lossy()).unwrap();
 }
+
+/// #8040: Next's production webpack runtime loads lazy chunks with a *computed*
+/// relative specifier — `.next/server/webpack-runtime.js` calls
+/// `require("./chunks/" + g.u(a))`. The path->module registry is keyed by each
+/// module's ABSOLUTE source path, so handing it the raw `./chunks/2.js` could
+/// never hit: the compiled App Route died at startup with
+/// `Cannot find module './chunks/2.js'` even though that chunk had been
+/// compiled into the image alongside the other 103 modules.
+///
+/// Statically-known relative specifiers are resolved at compile time and never
+/// reach that branch, which is why only the real production route exposed it.
+#[test]
+fn computed_relative_requires_are_joined_against_the_module_dir() {
+    let path = Path::new("/tmp/perry-canary/.next/server/webpack-runtime.js");
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+
+    // Anti-vacuity: if the wrap stops consulting the registry at all, the
+    // assertions below would be about a branch that no longer exists.
+    assert!(
+        wrapped.contains("__perry_require_path_module("),
+        "the wrap no longer consults the path->module registry:\n{wrapped}"
+    );
+    // The join needs the module's own directory as a literal.
+    assert!(
+        wrapped.contains("/tmp/perry-canary/.next/server"),
+        "the wrap lost the module-dir literal the join needs:\n{wrapped}"
+    );
+    // The registry lookup must use the JOINED path...
+    assert!(
+        wrapped.contains("__perry_require_path_module(__perry_path_spec)"),
+        "computed relative requires are not joined before the registry lookup (#8040):\n{wrapped}"
+    );
+    // ...and must not still be handed the raw specifier, which is the shape
+    // that made every lazy chunk miss.
+    assert!(
+        !wrapped.contains("__perry_require_path_module(specifier)"),
+        "the raw-specifier registry lookup is still present; a computed \
+         './chunks/N.js' will miss it (#8040)"
+    );
+}
