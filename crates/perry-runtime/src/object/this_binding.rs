@@ -164,13 +164,14 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
 fn this_set_check(value: f64, side: &str) {
     use std::sync::OnceLock;
     static MODE: OnceLock<u8> = OnceLock::new();
-    let mode = *MODE.get_or_init(|| {
-        match std::env::var("PERRY_GC_THIS_SET_CHECK").ok().as_deref() {
-            Some("abort") => 2,
-            Some("1") | Some("on") | Some("true") => 1,
-            _ => 0,
-        }
-    });
+    let mode =
+        *MODE.get_or_init(
+            || match std::env::var("PERRY_GC_THIS_SET_CHECK").ok().as_deref() {
+                Some("abort") => 2,
+                Some("1") | Some("on") | Some("true") => 1,
+                _ => 0,
+            },
+        );
     if mode == 0 {
         return;
     }
@@ -209,13 +210,19 @@ fn this_set_check(value: f64, side: &str) {
 /// duration of a single method-style call.
 #[no_mangle]
 pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
-    this_set_check(value, "INCOMING (read from a frame save slot — the WALKER corrupted the slot)");
+    this_set_check(
+        value,
+        "INCOMING (read from a frame save slot — the WALKER corrupted the slot)",
+    );
     let previous = IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())));
     // Under the trap, grade the OUTGOING value too: an incoherent incoming
     // value was read from a frame save slot (the walker corrupted the SLOT),
     // an incoherent outgoing one was sitting in the cell (the scanner
     // corrupted the CELL). Which side fires first is the decisive bit.
-    this_set_check(previous, "OUTGOING (was sitting in the cell — the SCANNER corrupted the cell)");
+    this_set_check(
+        previous,
+        "OUTGOING (was sitting in the cell — the SCANNER corrupted the cell)",
+    );
     previous
 }
 

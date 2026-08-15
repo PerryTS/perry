@@ -103,11 +103,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let mut callee_group = crate::rooting::open_rooted_group(1);
             let func_double = lower_expr(ctx, callee)?;
             let callee_root = callee_group.adopt(ctx, callee, &func_double, true);
-            let result = crate::expr::call_spread::bundle_args_rooted(
-                ctx,
-                args,
-                false,
-                |ctx, current| {
+            let result =
+                crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, current| {
                     let args_box = nanbox_pointer_inline(ctx.block(), current);
                     // #5253: locate the not-a-constructor throw the apply path
                     // can raise.
@@ -120,8 +117,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_new_function_construct_apply",
                         &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
                     ))
-                },
-            )?;
+                })?;
             callee_group.release(ctx);
             // Write-back: when the callee is a statically-known user class,
             // propagate constructor mutations (e.g. `++called`) back to the

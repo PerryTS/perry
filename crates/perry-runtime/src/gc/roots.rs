@@ -10,9 +10,9 @@ mod stack_maps;
 mod temp_roots;
 pub(super) use stack_maps::initialize as initialize_stack_maps;
 pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
+pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
-pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{

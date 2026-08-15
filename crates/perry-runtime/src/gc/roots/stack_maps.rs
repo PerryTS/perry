@@ -182,8 +182,7 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
             return;
         };
         let target = word.addr();
-        if !super::super::fromspace_scan::is_from_space(crate::arena::classify_heap_space(target))
-        {
+        if !super::super::fromspace_scan::is_from_space(crate::arena::classify_heap_space(target)) {
             return;
         }
         let context = super::super::pin::native_root_slot_context();
