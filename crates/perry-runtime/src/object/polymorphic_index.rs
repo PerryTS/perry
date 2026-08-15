@@ -139,6 +139,28 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         // *registered* class-id takes the class-ref arm.
         match (obj_handle as u64) >> 48 {
             0x7FFD | 0x7FFF => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
+            // SHORT_STRING_TAG (0x7FF9): an SSO string IS a string receiver,
+            // it just carries its characters inline instead of a heap address
+            // (#6887/#8117). The question this match asks is "does the low 48
+            // hold a heap pointer?", and answering `undefined` for everything
+            // that does not conflates "not a pointer" with "not indexable" —
+            // so `("ab" + "c")[0]` read `undefined` while the byte-identical
+            // heap string read `"a"`. Codegen hands this helper the receiver's
+            // RAW NaN-boxed bits whenever the tag is not POINTER_TAG (see the
+            // `select` in `index_get.rs`'s generic dispatcher), so the value is
+            // intact here and the string question can still be asked.
+            //
+            // Delegate to the boxed string entry point, which materializes the
+            // SSO payload onto the heap and lands in exactly the
+            // `js_string_index_get` the 0x7FFF arm reaches below via
+            // `GC_TYPE_STRING` — so both string representations share one copy
+            // of the CanonicalNumericIndexString key semantics.
+            0x7FF9 => {
+                return crate::string::js_string_index_get_boxed(
+                    f64::from_bits(obj_handle as u64),
+                    idx,
+                );
+            }
             0x7FFE => {
                 let class_id = (obj_handle as u64 & 0xFFFF_FFFF) as u32;
                 if class_id != 0 && crate::object::class_registry::is_class_id_registered(class_id)

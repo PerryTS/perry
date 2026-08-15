@@ -120,6 +120,8 @@ pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;
 mod polymorphic_index;
 #[cfg(test)]
+mod polymorphic_index_sso_tests;
+#[cfg(test)]
 mod polymorphic_index_symbol_tests;
 mod primitive_proto_thunks;
 mod property_key;
