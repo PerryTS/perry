@@ -679,6 +679,83 @@ mod tests {
         }
     }
 
+    /// #8121: the issue-#74 loop-preservation barrier is inline asm, and RS4GC
+    /// rewrites every non-leaf call in a `gc "statepoint"` function into a
+    /// `gc.statepoint`. For inline asm that means taking the address of an
+    /// `InlineAsm`, which is not a value: the verifier rejects it with "Cannot
+    /// take the address of an inline asm!". Production verified only BEFORE the
+    /// rewrite, so the broken module reached SelectionDAG and took the whole
+    /// compiler down with a SIGBUS in `AArch64TargetLowering::LowerCall` while
+    /// compiling next@16.3.0's bundled `jsonwebtoken` (100 of 104 modules in).
+    ///
+    /// `statepoint_rewritten_ir` verifies AFTER the rewrite, which is exactly
+    /// the check that was missing, so this fails without the `gc-leaf-function`
+    /// attribute on the barrier.
+    fn asm_barrier_rs4gc_fixture() -> LlModule {
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
+        module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
+        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+        module.declare_function("js_map_alloc", I64, &[I32]);
+        module.declare_function("may_collect", I64, &[]);
+
+        let function = module.define_function("asm_barrier_gc_fixture", I64, vec![]);
+        function.enable_shadow_frame(0);
+        let root_index = function
+            .reserve_shadow_slot()
+            .expect("asm-barrier fixture reserves a precise-root slot");
+        let root = function.alloca_entry(I64);
+        function.entry_allocas_push_store(I64, "0", &root);
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(I32, &root_index.to_string()), (PTR, &root)],
+        );
+
+        let entry = function.create_block("entry");
+        let dynamic = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
+        entry.store(I64, &dynamic, &root);
+        // The barrier under test, in a function RS4GC will rewrite.
+        entry.asm_sideeffect_barrier();
+        let _safepoint = entry.call(I64, "may_collect", &[]);
+        let observed = entry.load(I64, &root);
+        entry.ret(I64, &observed);
+        module
+    }
+
+    #[test]
+    fn asm_barrier_is_a_gc_leaf_so_rs4gc_leaves_it_alone() {
+        let module = asm_barrier_rs4gc_fixture();
+        let target = crate::codegen::default_target_triple();
+        let text_ir = module.to_ir();
+        let context = Context::create();
+        let native_ir = build_native_module(&context, &module)
+            .expect("asm-barrier fixture constructs")
+            .print_to_string()
+            .to_string();
+        for (arm, ir) in [("text", text_ir), ("native", native_ir)] {
+            assert!(
+                ir.contains("asm sideeffect"),
+                "{arm} arm never emitted the barrier, so this proves nothing"
+            );
+            let rewritten = crate::inprocess::statepoint_rewritten_ir(
+                &ir,
+                &target,
+                &format!("asm_barrier_{arm}"),
+            )
+            .unwrap_or_else(|e| {
+                panic!("{arm} arm: RS4GC must not turn the asm barrier into invalid IR: {e:#}")
+            });
+            assert!(
+                !rewritten.contains("elementtype(void ()) asm"),
+                "{arm} arm: RS4GC used the inline-asm barrier as a statepoint callee:\n{rewritten}"
+            );
+            assert!(
+                rewritten.contains("asm sideeffect"),
+                "{arm} arm: the barrier vanished instead of being left alone"
+            );
+        }
+    }
+
     fn compact_gc_map_section_name() -> &'static [u8] {
         if cfg!(target_os = "macos") {
             b"__perry_gcmap"

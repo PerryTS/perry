@@ -861,9 +861,11 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let ptr =
             self.ctx
                 .create_inline_asm(void_fn, asm, constraints, sideeffect, false, None, false);
-        self.builder
+        let site = self
+            .builder
             .build_indirect_call(void_fn, ptr, &[], "")
             .map_err(be)?;
+        mark_gc_leaf(self.ctx, site);
         Ok(())
     }
 
@@ -1542,9 +1544,11 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     None,
                     false,
                 );
-                self.builder
+                let site = self
+                    .builder
                     .build_indirect_call(void_fn, ptr, &[], "")
                     .map_err(be)?;
+                mark_gc_leaf(self.ctx, site);
                 Ok(())
             }
             I::Br { label } => {
@@ -1817,4 +1821,29 @@ fn apply_flags(inst: Option<InstructionValue<'_>>, flags: &[&str]) {
     if fmf != 0 {
         unsafe { llvm_sys::core::LLVMSetFastMathFlags(inst.as_value_ref(), fmf) };
     }
+}
+
+/// #8121: tell `rewrite-statepoints-for-gc` to leave an inline-asm call alone.
+///
+/// Perry emits `call void asm sideeffect "", ""()` as the issue-#74 loop
+/// preservation barrier. RS4GC rewrites every non-leaf call in a `gc
+/// "statepoint"` function into a `gc.statepoint` whose callee operand is the
+/// original callee — and for inline asm that means taking the address of an
+/// `InlineAsm`, which is not a value. The result fails the verifier with
+/// "Cannot take the address of an inline asm!", and because production only
+/// verifies BEFORE the rewrite, the broken module reached SelectionDAG and
+/// SIGBUS'd in `AArch64TargetLowering::LowerCall` while lowering the bogus
+/// statepoint callee.
+///
+/// `"gc-leaf-function"` is the documented way to say "this call cannot trigger
+/// a collection", which is exactly true of an empty barrier: it emits no
+/// instructions and cannot call back into the runtime.
+fn mark_gc_leaf<'ctx>(
+    ctx: &'ctx inkwell::context::Context,
+    site: inkwell::values::CallSiteValue<'ctx>,
+) {
+    site.add_attribute(
+        inkwell::attributes::AttributeLoc::Function,
+        ctx.create_string_attribute("gc-leaf-function", ""),
+    );
 }

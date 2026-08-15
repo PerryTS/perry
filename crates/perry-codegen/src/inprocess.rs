@@ -412,6 +412,20 @@ fn optimize_and_emit(
                     e.to_string()
                 )
             })?;
+        // #8121: verify AFTER the rewrite, not only before it. RS4GC can turn
+        // a module the verifier accepted into one it rejects (it rewrote an
+        // inline-asm barrier into a statepoint whose callee is an InlineAsm).
+        // Production previously verified only the input, so the broken module
+        // went straight to SelectionDAG and took the whole compiler down with
+        // a SIGBUS instead of reporting anything. A crash inside this process
+        // is exactly what the funclet refusal above exists to avoid.
+        module.verify().map_err(|e| {
+            anyhow!(
+                "rewrite-statepoints-for-gc produced a module the LLVM verifier \
+                 rejects; refusing to hand it to codegen (#8121):\n{}",
+                e.to_string()
+            )
+        })?;
     }
 
     let pipeline = match opt {

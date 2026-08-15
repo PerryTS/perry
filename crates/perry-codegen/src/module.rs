@@ -799,6 +799,12 @@ impl LlModule {
         if used_nounwind_willreturn {
             ir.push_str("\nattributes #4 = { nounwind willreturn }\n");
         }
+        // #8121: the issue-#74 loop barrier carries `#5` so RS4GC treats it as
+        // a GC leaf. Emitted only when a barrier actually rendered, so modules
+        // without one keep byte-identical IR.
+        if ir.contains("call void asm sideeffect \"\", \"\"() #5") {
+            ir.push_str("\nattributes #5 = { \"gc-leaf-function\" }\n");
+        }
     }
 
     fn push_attrs_and_metadata(&self, ir: &mut String) {

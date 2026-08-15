@@ -277,7 +277,10 @@ impl LlInst {
                 out.push(')');
             }
             LlInst::AsmBarrier => {
-                out.push_str("  call void asm sideeffect \"\", \"\"()");
+                // #8121: `#5` is `{ "gc-leaf-function" }`, which stops
+                // rewrite-statepoints-for-gc from rewriting this barrier into
+                // a statepoint whose callee is an InlineAsm (invalid IR).
+                out.push_str("  call void asm sideeffect \"\", \"\"() #5");
             }
             LlInst::Br { label } => {
                 let _ = write!(out, "  br label %{label}");
