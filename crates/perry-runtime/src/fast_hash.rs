@@ -54,6 +54,19 @@ impl Hasher for PtrHasherImpl {
         }
         self.0 = mix(h.wrapping_mul(PTR_MIX));
     }
+    /// #8125: `u32` keys must not fall into the byte-stream fallback above.
+    /// `Hash for u32` calls `write_u32`, and `Hasher`'s DEFAULT `write_u32`
+    /// forwards to `write(&n.to_ne_bytes())` — four rotate/xor iterations plus
+    /// the multiply, for a key that needs exactly one multiply. The shape
+    /// descriptor table (`object::shapes`) is keyed by a bare `u32` ShapeId and
+    /// is probed once per allocated object and once per array element-shape
+    /// test, so this override is the difference between a fast path and a
+    /// loop. Deliberately identical to `write_u64` on the same numeric value;
+    /// `u32_keys_take_the_multiplicative_fast_path` pins that.
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.0 = mix((n as u64).wrapping_mul(PTR_MIX));
+    }
     #[inline]
     fn write_u64(&mut self, n: u64) {
         self.0 = mix(n.wrapping_mul(PTR_MIX));
@@ -181,6 +194,49 @@ mod tests {
         m.insert(0x2000, "b");
         assert_eq!(m.get(&0x1000), Some(&"a"));
         assert_eq!(m.get(&0x9999), None);
+    }
+
+    /// #8125: a `u32` key must reach the single-multiply path, not the
+    /// per-byte fold. `Hash for u32` calls `write_u32`; without an override
+    /// `Hasher`'s default `write_u32` forwards to `write(&n.to_ne_bytes())`.
+    /// Deleting `PtrHasherImpl::write_u32` turns this red.
+    #[test]
+    fn u32_keys_take_the_multiplicative_fast_path() {
+        use std::hash::Hash;
+        for n in [0u32, 1, 0x8000_0000, 0x8000_02ff, u32::MAX] {
+            let mut viaHash = PtrHasher.build_hasher();
+            n.hash(&mut viaHash);
+            let mut viaU64 = PtrHasher.build_hasher();
+            viaU64.write_u64(n as u64);
+            assert_eq!(
+                viaHash.finish(),
+                viaU64.finish(),
+                "u32 key {n:#x} fell into the byte-stream fallback"
+            );
+        }
+    }
+
+    /// ShapeIds are minted sequentially from `SHAPE_ID_BASE` (0x8000_0000), so
+    /// the descriptor table's keys are a dense run in the TOP half of the u32
+    /// range. Multiplicative mixing has to spread that run across buckets —
+    /// `HashMap` indexes on the LOW bits, and a run of consecutive integers has
+    /// no entropy there. Dropping `mix` (the `^= h >> 32` avalanche) collapses
+    /// this to a handful of buckets and turns the map into a linked list.
+    #[test]
+    fn sequential_shape_ids_spread_across_low_bit_buckets() {
+        use std::collections::HashSet;
+        let base = 0x8000_0000u32;
+        let mut buckets = HashSet::new();
+        for i in 0..1024u32 {
+            let mut h = PtrHasher.build_hasher();
+            h.write_u32(base + i);
+            buckets.insert(h.finish() & 0x3ff);
+        }
+        assert!(
+            buckets.len() > 512,
+            "sequential ShapeIds hashed into only {} of 1024 buckets",
+            buckets.len()
+        );
     }
 
     /// Pointer-aligned keys collide trivially with multiply-only on the

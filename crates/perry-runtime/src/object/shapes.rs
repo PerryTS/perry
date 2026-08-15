@@ -72,14 +72,36 @@ struct ShapeFacts {
 
 struct ShapeTableInner {
     indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
-    descriptors: HashMap<u32, ShapeDescriptor>,
+    /// #8125: `PtrHashMap`, not the SipHash default.
+    ///
+    /// This is the map `shape_descriptor_by_id` probes, and that probe is the
+    /// single hottest runtime lookup in the object model: `object_is_regular`
+    /// runs it once per array element-shape test (3 M times on the `retain`
+    /// bench, 20 M on `churn`) and, since #8113 deleted
+    /// `ObjectHeader::field_count`, `object_live_slot_count` runs it on every
+    /// indexed field get/set. A symbol profile of the `shapes` bench
+    /// (`PERRY_DEBUG_SYMBOLS=1` + `sample`) put `RandomState::hash_one` at the
+    /// TOP of self time with `shape_descriptor_by_id` fourth — together ~22% of
+    /// the program, nearly all of it SipHash on a bare `u32`.
+    ///
+    /// The key is a ShapeId minted by this process from a monotonic counter.
+    /// No external input reaches it, so hash-flooding resistance buys nothing
+    /// here for the same reason it buys nothing on the pointer-keyed
+    /// registries `fast_hash` already serves.
+    descriptors: crate::fast_hash::PtrHashMap<u32, ShapeDescriptor>,
     /// Exact-facts reverse index. More than one id is legal when a worker
     /// minted a local descriptor before a process-global module id arrived.
+    ///
+    /// Deliberately NOT a `PtrHashMap`: `PtrHasher`'s `write_*` methods
+    /// OVERWRITE the accumulator instead of folding it, which is exactly right
+    /// for a single-word key and wrong for this five-field one — every
+    /// `ShapeFacts` would hash to its last field alone.
     ids_by_facts: HashMap<ShapeFacts, Vec<u32>>,
     /// Keys-array address -> every descriptor id that currently names it.
     /// Same-address key-count retirement uses this index instead of scanning
-    /// every shape ever observed by the agent.
-    ids_by_keys: HashMap<u64, Vec<u32>>,
+    /// every shape ever observed by the agent. Single-word key, so `PtrHasher`
+    /// (#8125).
+    ids_by_keys: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
 }
 
 pub(crate) struct ShapeTable {
@@ -91,9 +113,9 @@ impl ShapeTable {
         ShapeTable {
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
-                descriptors: HashMap::new(),
+                descriptors: crate::fast_hash::new_ptr_hash_map(),
                 ids_by_facts: HashMap::new(),
-                ids_by_keys: HashMap::new(),
+                ids_by_keys: crate::fast_hash::new_ptr_hash_map(),
             }),
         }
     }
@@ -137,13 +159,30 @@ fn remove_id_from_facts_index(inner: &mut ShapeTableInner, facts: ShapeFacts, id
 fn rebuild_descriptor_reverse_indices(inner: &mut ShapeTableInner) {
     let mut ids_by_facts: HashMap<ShapeFacts, Vec<u32>> =
         HashMap::with_capacity(inner.descriptors.len());
-    let mut ids_by_keys: HashMap<u64, Vec<u32>> = HashMap::new();
+    let mut ids_by_keys: crate::fast_hash::PtrHashMap<u64, Vec<u32>> =
+        crate::fast_hash::new_ptr_hash_map();
     for (&id, &descriptor) in &inner.descriptors {
         ids_by_facts
             .entry(descriptor_facts(descriptor))
             .or_default()
             .push(id);
         ids_by_keys.entry(descriptor.keys).or_default().push(id);
+    }
+    // #8125: the rebuild walks `descriptors` in HASH order, and
+    // `shape_descriptor_ensure_with_generation` reuses `ids.first()` — so
+    // without this sort, WHICH id a facts key resolves to after a GC rewrite
+    // depends on the hasher. Two objects with identical facts, one born before
+    // a collection and one after, would then carry different ShapeIds, and
+    // every id-keyed consumer (the typed shape-layout install, the emitted
+    // PICs) splits its population. Ascending is the stable canonical choice:
+    // ids are minted monotonically, so the smallest is the oldest — the one
+    // already-published objects and already-installed layouts carry, and in
+    // practice the module-init id `install_external_shape_id` prefers.
+    for ids in ids_by_facts.values_mut() {
+        ids.sort_unstable();
+    }
+    for ids in ids_by_keys.values_mut() {
+        ids.sort_unstable();
     }
     inner.ids_by_facts = ids_by_facts;
     inner.ids_by_keys = ids_by_keys;
