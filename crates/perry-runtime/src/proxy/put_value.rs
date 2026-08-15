@@ -273,6 +273,14 @@ pub extern "C" fn js_put_value_set(
     let ok = if lookup(target).is_some() {
         js_proxy_set(target, property_key, value).to_bits() == TAG_TRUE
     } else {
+        // #8082: `ordinary_set_with_receiver` can run user setters (and
+        // allocates), so it is a collection point — the raw `receiver` and
+        // `property_key` locals go stale across it. The forced-moving gate
+        // faulted on exactly this pair inside the subclass-length note's
+        // header read. Root both and re-read after the set.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_h = scope.root_nanbox_f64(receiver);
+        let key_h = scope.root_nanbox_f64(property_key);
         let stored = ordinary_set_with_receiver(target, property_key, value, receiver);
         // #7574: `sub[3] = v` on a `class X extends Array` instance is an
         // Array-exotic `[[DefineOwnProperty]]` and must leave `length == 4`.
@@ -283,7 +291,10 @@ pub extern "C" fn js_put_value_set(
         // through `js_put_value_set_ic_miss`). Cheap no-op for every other
         // receiver: an object literal short-circuits on `class_id == 0`.
         if stored {
-            crate::array::note_array_subclass_index_write(receiver, property_key);
+            crate::array::note_array_subclass_index_write(
+                receiver_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+            );
         }
         stored
     };
