@@ -331,7 +331,26 @@ pub(crate) fn append_concat_arg(result: *mut ArrayHeader, value: f64) -> *mut Ar
         return append_spread_array(result, snap_ptr);
     }
 
-    // Arrays (and set/map/typed-array/buffer that concat treats array-like via
+    // #2879: a typed array is NOT concat-spreadable. `IsConcatSpreadable`
+    // (ECMA-262 §23.1.3.1 step 2) falls back to `IsArray`, and `IsArray` is
+    // FALSE for a TypedArray — node appends `new Uint8Array([3,4])` as one
+    // element, giving `[1,2,Uint8Array(2)]`.
+    //
+    // Checked before the `is_array` branch because this runtime's
+    // `js_array_is_array` answers true for a typed array, so it took the spread
+    // path — and that spread runs through `js_array_concat`, whose
+    // `clean_arr_ptr` nulls a tracked typed array. The argument contributed
+    // nothing and vanished: `[1,2].concat(u8)` returned `[1,2]`. An explicit
+    // `@@isConcatSpreadable === true` still opts in below, which is the one way
+    // the spec does spread one.
+    if spreadable != Some(true)
+        && (crate::typedarray::lookup_typed_array_kind(raw_addr).is_some()
+            || crate::buffer::is_registered_buffer(raw_addr))
+    {
+        return js_array_push_f64(result, value);
+    }
+
+    // Arrays (and set/map/buffer that concat treats array-like via
     // js_array_concat) spread by default, unless @@isConcatSpreadable === false.
     let is_array = js_array_is_array(value).to_bits() == 0x7FFC_0000_0000_0004;
     if is_array {
@@ -855,6 +874,24 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     // the caller falls through, exactly as it did before `clean_arr_ptr`
     // started refusing object receivers.
     if crate::array::subclass::raw_receiver_is_heap_object(src) {
+        return None;
+    }
+    // #2879: the same silent-drop hazard the comment above describes, for a
+    // typed array rather than a subclass. `clean_arr_ptr` nulls every tracked
+    // typed array, the `src.is_null()` arm below then reports "empty dense
+    // source", and the bulk path returns `Some(out)` — so the spec-shaped
+    // `append_concat_arg` flow never runs and the argument disappears.
+    // `[1,2].concat(new Uint8Array([3,4]))` yielded `1,2`.
+    //
+    // The rejection further down covers exactly these registries; it is simply
+    // BELOW the clean, which makes it unreachable for the values it names.
+    // Asking first is what lets the caller fall through to the spec path, where
+    // a typed array is appended as ONE element because `IsArray` is false for
+    // it.
+    let raw_before_clean = crate::array::array_receiver_addr(src as *mut ArrayHeader);
+    if crate::typedarray::lookup_typed_array_kind(raw_before_clean).is_some()
+        || crate::buffer::is_registered_buffer(raw_before_clean)
+    {
         return None;
     }
     let src = clean_arr_ptr(src);
