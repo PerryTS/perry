@@ -519,8 +519,14 @@ mod tests {
             optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], true)
                 .expect("fixture emits assembly")
         };
-        let text = emit(&text_ir, "constant_fold_text");
-        let folded = emit(&folded_ir, "constant_fold_native");
+        // Both arms must be emitted under the SAME module name. The name
+        // becomes the module id, and on ELF the assembler writes it into the
+        // object as a `.file` directive — so two differently-named arms differ
+        // by that one line no matter how perfectly the code itself converged.
+        // Mach-O records no such directive, which is why naming them apart only
+        // ever failed on Linux (#8087).
+        let text = emit(&text_ir, "constant_fold_order");
+        let folded = emit(&folded_ir, "constant_fold_order");
         assert_eq!(
             text, folded,
             "construction-time constant folding must converge before RS4GC assigns root liveness"
