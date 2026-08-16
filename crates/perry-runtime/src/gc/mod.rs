@@ -121,17 +121,6 @@ use barrier_arming::*;
 /// eligibility preflight is skipped on. Every write of the bit goes through
 /// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
 mod pin;
-
-/// #7803 diagnostics: expose the pin-latch's header-coherence verdict to
-/// runtime-side producer traps (e.g. `object::this_binding::this_set_check`)
-/// so every instrument grades headers with the same rules.
-pub(crate) fn header_incoherence_for_diagnostics(
-    obj_type: u8,
-    size: u32,
-    flags: u8,
-) -> Option<String> {
-    pin::header_incoherence(obj_type, size, flags)
-}
 #[cfg(test)]
 pub(crate) use pin::test_reset_young_pin_latch;
 pub use pin::{
