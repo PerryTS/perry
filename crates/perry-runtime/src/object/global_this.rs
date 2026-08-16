@@ -20,8 +20,7 @@ use super::*;
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
 pub(crate) use global_this_webassembly::{
-    clear_module_wrapper_for_dead_ptr, is_registered_wasm_module,
-    js_webassembly_memory_from_descriptor, module_wrapper_owner_moved,
+    clear_module_wrapper_for_dead_ptr, is_registered_wasm_module, module_wrapper_owner_moved,
     webassembly_error_ctor_instanceof, webassembly_value_ctor_instanceof,
 };
 // Only the `wasm-host` engine constructs real modules (via

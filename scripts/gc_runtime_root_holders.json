@@ -74,6 +74,13 @@
       "why": "Visited from the sibling module."
     },
     {
+      "file": "crates/perry-runtime/src/node_vm.rs",
+      "name": "VM_INTRINSIC_GLOBAL",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
+      "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell \u2014 fresh_intrinsic_global, node_vm.rs:1080 \u2014 calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
+    },
+    {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_OBJECT_VALUES",
       "verdict": "covered_elsewhere",
