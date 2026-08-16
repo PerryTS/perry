@@ -1,0 +1,5 @@
+parse: gem:GEM,gem:foo
+levels: 0,1,2,HIGH
+classify: missing ok other
+nested: ab
+mixed: one/two

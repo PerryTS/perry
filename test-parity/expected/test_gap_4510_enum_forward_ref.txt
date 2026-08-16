@@ -1,0 +1,6 @@
+fwd: B
+num: 2
+auto: 2
+before: green
+dispatch: isB
+back: off

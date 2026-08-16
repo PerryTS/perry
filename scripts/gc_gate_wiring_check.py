@@ -103,6 +103,16 @@ GATES = [
         "unit tests structurally cannot cover: a NEW materialiser path that "
         "forgets to finalize at all",
     ),
+    (
+        ".github/workflows/test.yml",
+        "lint",
+        "scripts/check_gc_env_knobs.py (--self-test, then the gate itself) — "
+        "the only CI execution of the GC env-knob kill-policy check, which "
+        "caught #8131's inverted PERRY_LL_RS4GC_STACKMAP_TRACE polarity. It is "
+        "a STEP inside `lint` rather than a job of its own, so the job-level "
+        "reachability question this script asks is the only wiring hazard it "
+        "can have — and #8166 was filed believing it ran nowhere at all",
+    ),
 ]
 
 MAIN_LINE_EVENTS = ("push", "schedule")

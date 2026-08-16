@@ -24,62 +24,6 @@
       "category": "bug-open",
       "reason": "process SIGINT trace hook gap; standing per #5917 diff."
     },
-    "test_gap_4510_enum_forward_ref": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-07-22",
-      "category": "gap-categorical",
-      "reason": "node --experimental-strip-types refuses this file: ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, 'TypeScript enum is not supported in strip-only mode'. The oracle CANNOT execute the very feature under test, so this has never verified anything. Fix by giving it a test-parity/expected/<name>.txt fixture (expected-output mode), not by editing the test."
-    },
-    "test_gap_backoff_options": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'exponential-backoff' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
-    },
-    "test_gap_cron_cronjob": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'cron' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
-    },
-    "test_gap_dayjs_factory_arg": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'dayjs' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
-    },
-    "test_gap_derived_param_props": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-07-22",
-      "category": "gap-categorical",
-      "reason": "node --experimental-strip-types refuses this file: ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, 'TypeScript parameter property is not supported in strip-only mode'. The oracle CANNOT execute the very feature under test, so this has never verified anything. Fix by giving it a test-parity/expected/<name>.txt fixture (expected-output mode), not by editing the test."
-    },
-    "test_gap_enum_in_function_body": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-07-30",
-      "category": "gap-categorical",
-      "reason": "node --experimental-strip-types refuses a function-body enum with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. The oracle cannot execute the TypeScript syntax under test; add an expected-output fixture to restore coverage."
-    },
-    "test_gap_iterator_helpers_2874": {
-      "status": "parity_fail",
-      "issue": "2874",
-      "added": "2026-07-04",
-      "category": "bug-open",
-      "reason": "iterator helpers (#2874); standing per #5917."
-    },
-    "test_gap_moment_methods": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'moment' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
-    },
     "test_gap_perfhooks_3088_3008_3010_3011": {
       "status": "parity_fail",
       "issue": "3088",
@@ -88,25 +32,11 @@
       "reason": "perf_hooks cluster (#3088/#3008/#3010/#3011); standing per #5917."
     },
     "test_gap_prop_plan_cache_invalidation": {
-      "status": "node_fail",
+      "status": "parity_fail",
       "issue": null,
       "added": "2026-07-22",
-      "category": "gap-bisect",
-      "reason": "node exits non-zero with TypeError: Cannot assign to read only property 'q' of object '#<H>' (ESM is strict mode). Either the fixture needs to expect the throw or the assignment is wrong; needs triage. Surfaced by the snapshot recording node_fail."
-    },
-    "test_gap_ratelimiter_memory": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'rate-limiter-flexible' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
-    },
-    "test_gap_slugify_options": {
-      "status": "node_fail",
-      "issue": "1634",
-      "added": "2026-07-22",
-      "category": "ci-env",
-      "reason": "node exits non-zero: cannot resolve the 'slugify' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
+      "category": "bug-open",
+      "reason": "Root-caused 2026-08-16, no longer 'needs triage'. The test is written for SLOPPY mode (its own comments say \"writes must be dropped\" / \"silent no-op\") but runs as ESM, which is strict, so cases 3 and 4 throw instead. Node AND Perry both correctly throw; they differ only in the message. Node names the constructor -- \"of object '#<H>'\" -- while Perry hardcodes \"'#<Object>'\" at error.rs:1726, because js_throw_type_error_immutable_write takes (kind, key_ptr, key_len) and no receiver. normalize_failure_output keeps the full error line, so the messages diverge. Real Perry parity bug, not a snapshot artifact: 14 callers, all behind the throw_immutable_write wrapper, so a receiver-aware variant fixes it without a codegen ABI change."
     },
     "test_gap_v8_2_3680plus": {
       "status": "parity_fail",

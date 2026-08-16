@@ -1,0 +1,4 @@
+base: 1 def
+mid: 2 mid true [9]
+leaf: 3 mid false [1,2] leaf
+withBody: 5 T init-T
