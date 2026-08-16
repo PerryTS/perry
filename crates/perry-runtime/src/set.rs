@@ -555,6 +555,18 @@ pub(crate) unsafe fn gc_element_slot_range(
     if size > capacity || size > 16_000_000 || (*set).elements.is_null() {
         return None;
     }
+    // Defensive tripwire (cf. Map's entries check in layout_slot_visit):
+    // a NaN-boxed JSValue read as `elements` carries 0x7FFD in the top
+    // bits — an impossible x86-64 user-space pointer.
+    if ((*set).elements as usize) >> 47 != 0 {
+        if crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-tripwire] Set elements has implausible top bits: {:#x} (fabricated Set?)",
+                (*set).elements as usize
+            );
+        }
+        return None;
+    }
     Some(crate::gc::HeapSlotRange::new(
         (*set).elements as *mut u64,
         size,

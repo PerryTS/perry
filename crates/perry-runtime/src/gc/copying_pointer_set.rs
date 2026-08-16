@@ -236,13 +236,58 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
         return false;
     }
     let obj_type = (*header).obj_type;
-    if gc_type_info(obj_type).is_none() {
-        return false;
-    }
+    let info = match gc_type_info(obj_type) {
+        Some(info) => info,
+        None => return false,
+    };
     let size = (*header).size as usize;
     if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
         return false;
     }
+    // Fixed-layout types have a known, constant total allocation size
+    // (header + payload). A fabricated header — produced when
+    // `classify_arena` reads an interior arena pointer's preceding bytes
+    // as a `GcHeader` — supplies a `size` of ~1024 (the top 32 bits of an
+    // arena address near 0x400_0000_0000), which can never equal the real
+    // total. This rejects the fabricated-Map corruption path at its
+    // source: the only descriptor arm that derives a slot base from a
+    // payload word is `GcRewriteDescriptorKind::Map` (`(*map).entries`),
+    // and GC_TYPE_MAP (8) is the only valid type ID that is a multiple of
+    // 8, so it is the only one an 8-aligned interior pointer can
+    // fabricate.
+    //
+    // The invariant "GcHeader.size == fixed_total" holds for every
+    // arena-allocated Map/Set because:
+    //   * The nursery bump-allocator sets `size = total` (allocators.rs).
+    //   * The old-gen allocator uses exact-match free-list reuse and
+    //     also sets `size = total`.
+    //   * The nursery free-list reuse path is inert —
+    //     `hot_arena_free_list` is never populated — so the branch that
+    //     would retain a stale larger `size` is dead code. That path is
+    //     also fixed to set `size = total` for safety.
+    if let Some(fixed_total) = fixed_layout_total_size(info) {
+        if size != fixed_total {
+            return false;
+        }
+    }
     let is_arena = (*header).gc_flags & GC_FLAG_ARENA != 0;
     is_arena == arena
+}
+
+/// Total allocation size (GcHeader + payload) for types whose payload
+/// layout is fixed regardless of content. `None` for variable-size types
+/// (arrays, objects, strings, closures, …) whose `size` field reflects
+/// runtime content and cannot be checked against a constant.
+///
+/// Used by `plausible_gc_header` to reject fabricated headers: an
+/// interior arena pointer read as a `GcHeader` yields a `size` of
+/// ~1024 (the top 32 bits of the address), which never matches the
+/// fixed total.
+fn fixed_layout_total_size(info: &GcTypeInfo) -> Option<usize> {
+    // MapHeader { size: u32, capacity: u32, entries: *mut f64 } = 16 B.
+    // SetHeader { size: u32, capacity: u32, elements: *mut f64 } = 16 B.
+    match info.type_id {
+        crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => Some(GC_HEADER_SIZE + 16),
+        _ => None,
+    }
 }

@@ -434,19 +434,23 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     let reused = if crate::gc::hot_arena_free_list_nonempty().get() {
         {
             let mut fl = crate::gc::hot_arena_free_list().borrow_mut();
-            // Find a slot that fits (exact or slightly larger)
-            let mut best_idx = None;
-            let mut best_waste = usize::MAX;
+            // Exact-fit only: a best-fit reuse into a larger slot would
+            // leave `GcHeader.size` equal to the SLOT size (set below),
+            // but the arena block walker steps by `size`, so a mismatch
+            // would either skip the padding and misalign the walk, or —
+            // if we kept the stale larger size — break the fixed-layout
+            // invariant `plausible_gc_header` relies on. Exact match
+            // makes both correct: `size == total`, and the walker steps
+            // to the next real object. Mirrors `arena_alloc_gc_old`'s
+            // `old_free_take_exact`.
+            let mut found_idx = None;
             for (idx, &(_, slot_size)) in fl.iter().enumerate() {
-                if slot_size >= size && slot_size - size < best_waste {
-                    best_waste = slot_size - size;
-                    best_idx = Some(idx);
-                    if best_waste == 0 {
-                        break; // Perfect fit
-                    }
+                if slot_size == total {
+                    found_idx = Some(idx);
+                    break;
                 }
             }
-            if let Some(idx) = best_idx {
+            if let Some(idx) = found_idx {
                 let (ptr, _slot_size) = fl.swap_remove(idx);
                 if fl.is_empty() {
                     crate::gc::hot_arena_free_list_nonempty().set(false);
@@ -469,7 +473,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
             crate::gc::gc_note_black_birth(header);
             (*header)._reserved = 0;
-            // size field already set from original allocation
+            (*header).size = total as u32;
         }
         return user_ptr;
     }

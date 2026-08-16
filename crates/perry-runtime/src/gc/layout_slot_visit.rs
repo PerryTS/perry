@@ -201,6 +201,23 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
                 return;
             }
+            // Defensive tripwire (# fabricated-Map): if a fabricated Map
+            // header ever slips past `plausible_gc_header`, the `entries`
+            // field would be a NaN-boxed JSValue (top bits 0x7FFD…) read
+            // from the original object's payload — an impossible pointer
+            // on x86-64 where user-space addresses stay below bit 47.
+            // Reject it rather than dereference a derived slot range from
+            // a garbage base. This is a backstop; the primary fix is the
+            // fixed-layout size check in `plausible_gc_header`.
+            if ((*map).entries as usize) >> 47 != 0 {
+                if crate::gc::gc_diag_enabled() {
+                    eprintln!(
+                        "[gc-tripwire] Map entries has implausible top bits: {:#x} (fabricated Map?)",
+                        (*map).entries as usize
+                    );
+                }
+                return;
+            }
             visit(GcMutableSlotDescriptor::Range {
                 range: HeapSlotRange::new((*map).entries as *mut u64, size as usize * 2),
                 layout_kind: None,

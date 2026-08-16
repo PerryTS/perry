@@ -1,6 +1,7 @@
 mod adaptive_tenuring;
 mod all_pointer_elements_7469;
 mod deferred_finalize_7635;
+mod fabricated_map_rejection;
 mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
