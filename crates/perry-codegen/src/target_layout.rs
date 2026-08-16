@@ -88,6 +88,73 @@ pub const INLINE_SLOT_FLOOR: u64 = 2;
 /// `INLINE_SLOT_FLOOR` as the string literal the IR emitters splice in.
 pub const INLINE_SLOT_FLOOR_LIT: &str = "2";
 
+/// The GcHeader (8 bytes).
+pub(crate) const GC_HEADER_SIZE_BYTES: u64 = 8;
+/// One inline field slot (a NaN-boxed f64).
+pub(crate) const FIELD_SLOT_SIZE_BYTES: u64 = 8;
+
+/// Total bytes the inline `new` path bump-allocates for a class instance with
+/// `field_count` declared fields: GcHeader + ObjectHeader +
+/// `max(field_count, INLINE_SLOT_FLOOR)` slots, rounded up to a slot multiple.
+///
+/// The round-up matters only on ILP32, where the header is not a multiple of
+/// 8 and an unpadded total would misalign the next bump; it is a no-op on
+/// 64-bit (8 + 24 + 8·n is already 8-aligned).
+pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u32) -> u64 {
+    let alloc_field_count = std::cmp::max(field_count as u64, INLINE_SLOT_FLOOR);
+    let payload_size =
+        object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;
+    (GC_HEADER_SIZE_BYTES + payload_size).next_multiple_of(FIELD_SLOT_SIZE_BYTES)
+}
+
+/// The packed `GcHeader` word the inline `new` path stores at byte 0 of a
+/// freshly bump-allocated class instance (little-endian):
+///
+/// ```text
+///   bits  0..7   = obj_type   (u8)   GC_TYPE_OBJECT
+///   bits  8..15  = gc_flags   (u8)   GC_FLAG_ARENA
+///   bits 16..31  = _reserved  (u16)  GC_LAYOUT_POINTER_FREE [| GC_OBJ_TYPED_LAYOUT_INTACT]
+///   bits 32..63  = size       (u32)  inline_alloc_total_size_bytes
+/// ```
+///
+/// `typed_intact` is #7834's bake: when the class's canonical layout is
+/// declarable at allocation AND its pointer mask is statically empty, the
+/// intact bit is folded into this constant and the per-instance
+/// `js_gc_declare_typed_shape_layout` call is skipped.
+///
+/// #8122: ONE definition, shared by the allocation site
+/// (`lower_call/new_alloc.rs`) and the module-level header-image table
+/// (`codegen/mod.rs`) that pre-composes `[gc_packed | class_id | ShapeId<<32]`
+/// into a per-class global at module init. Both sides must agree byte for
+/// byte — a divergence would publish objects whose recorded size or layout
+/// state the collector cannot trust — so the arithmetic lives here and the
+/// site cross-checks the table's value against its own before using it.
+pub(crate) fn inline_alloc_gc_packed(
+    target_triple: &str,
+    field_count: u32,
+    typed_intact: bool,
+) -> u64 {
+    const GC_TYPE_OBJECT: u64 = 2;
+    const GC_FLAG_ARENA: u64 = 0x02;
+    // PR #1146: pointer-free hint for inline-allocated regular objects. The
+    // field-store sites issue per-slot `js_gc_note_slot_layout` so the GC
+    // sees real pointer-bearing slots regardless of this initial tag.
+    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+    /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit `class_field_inline_guard`
+    /// requires before it will read or write a raw-f64 slot directly.
+    /// Runtime-side name: `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
+    const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
+    let typed_intact_bits = if typed_intact {
+        GC_OBJ_TYPED_LAYOUT_INTACT
+    } else {
+        0
+    };
+    GC_TYPE_OBJECT
+        | (GC_FLAG_ARENA << 8)
+        | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
+        | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

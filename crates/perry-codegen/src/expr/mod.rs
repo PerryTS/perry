@@ -208,6 +208,16 @@ pub(crate) struct InlineCtorReturn {
 }
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
+/// #8122: where an inline-`new` site gets its `<2 x i64>` header image from.
+#[derive(Clone, Debug)]
+pub enum HeaderImageSource {
+    /// An entry alloca holding the module-init image global's value; each
+    /// site emits its own `load <2 x i64>` from it.
+    EntrySlot(String),
+    /// An SSA value composed in the entry region (dominates every site).
+    EntryValue(String),
+}
+
 pub(crate) struct FnCtx<'a> {
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
@@ -474,6 +484,9 @@ pub(crate) struct FnCtx<'a> {
     /// `ctx.classes` chain (which mis-picks same-named cross-module parents).
     pub class_init_chains:
         &'a std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
+    /// #8122: per-class inline-`new` header-image globals, see
+    /// `CrossModuleCtx::class_header_images`.
+    pub class_header_image_globals: &'a std::collections::HashMap<String, (String, u64, u32)>,
     /// Imported class constructor metadata, keyed by effective imported class name.
     pub imported_class_ctors: &'a std::collections::HashMap<String, crate::codegen::ImportedCtor>,
     /// Per-function param signature: `(declared_param_count,
@@ -833,6 +846,14 @@ pub(crate) struct FnCtx<'a> {
     /// [`Self::class_keys_slots`]. Shape ids are scalar metadata rather than GC
     /// pointers, so these entry-hoisted copies need no shadow-slot binding.
     pub class_shape_slots: std::collections::HashMap<String, String>,
+    /// #8122: per-class `<2 x i64>` object-header prefix image, keyed by class
+    /// name + the packed GcHeader word it was built with. Read by the inline
+    /// `new` path so every allocation stores the prefix with ONE vector store
+    /// instead of rematerialising the packed constant per site. Either an
+    /// entry-hoisted stack slot holding the module-level image global (loaded
+    /// per site — a value loaded at one site does not dominate another) or,
+    /// as the fallback, an SSA value composed in the entry region.
+    pub class_header_images: std::collections::HashMap<(String, u64), HeaderImageSource>,
 
     /// Per-arr-local cached `arr.length` slots — populated by
     /// `lower_for` when it spots the well-known shape

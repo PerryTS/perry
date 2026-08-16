@@ -730,6 +730,16 @@ pub(crate) struct CrossModuleCtx {
     /// describes — not a colliding same-named cross-module parent's fields.
     pub class_init_chains:
         std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
+    /// #8122: per-class inline-`new` header image — `class_name → (image
+    /// global name, packed GcHeader word, class id)`. The global is a `<2 x i64>` holding
+    /// `[gc_packed | class_id | ShapeId << 32]`, composed once at module init
+    /// right after the ShapeId mint (`string_pool.rs`); the inline allocator
+    /// loads it and stores an instance's 16-byte header prefix in one vector
+    /// store. The packed word is recorded so the allocation site can
+    /// cross-check the table against its own derivation before using it —
+    /// both come from `target_layout::inline_alloc_gc_packed`, but a header
+    /// word is not something to trust by argument.
+    pub class_header_images: std::collections::HashMap<String, (String, u64, u32)>,
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.

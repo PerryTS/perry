@@ -604,6 +604,56 @@ pub fn arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
     });
 }
 
+/// Count the objects the young generation currently holds — Eden plus the
+/// ACTIVE survivor semispace, i.e. the copying collector's from-space — and
+/// their total bytes, by hopping headers exactly as [`arena_walk_objects`]
+/// does. Live and dead alike: this is an ALLOCATION census, not a liveness
+/// one.
+///
+/// #8122: feeds `gc::tenuring::maybe_seed_object_census_from_allocation`,
+/// the one-time seed of the nursery cap's object denomination BEFORE the
+/// first copying minor has produced a survivor census. It reads only header
+/// `size`/`obj_type` words and stops at the first implausible header the way
+/// the general walk does, so it is safe at the block-allocation trigger point
+/// where it runs (every prior allocation is complete there; the current one
+/// has not been carved yet).
+pub(crate) fn young_allocation_census() -> (usize, usize) {
+    use crate::gc::GcHeader;
+
+    sync_inline_arena_state();
+    let mut bytes = 0usize;
+    let mut objects = 0usize;
+    let mut census_region = |blocks: &[ArenaBlock]| {
+        for block in blocks {
+            let mut offset = 0usize;
+            while offset < block.offset {
+                let aligned = (offset + 7) & !7;
+                if aligned >= block.offset {
+                    break;
+                }
+                let header = unsafe { block.data.add(aligned) } as *const GcHeader;
+                let (total_size, obj_type) =
+                    unsafe { ((*header).size as usize, (*header).obj_type) };
+                if total_size == 0 || total_size > block.size {
+                    break;
+                }
+                if crate::gc::gc_type_is_arena_walkable(obj_type) {
+                    bytes += total_size;
+                    objects += 1;
+                }
+                offset = aligned + total_size;
+            }
+        }
+    };
+    ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        census_region(&arena.blocks);
+    });
+    let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    with_survivor_arena(active, |arena| census_region(&arena.blocks));
+    (bytes, objects)
+}
+
 /// Walk only objects physically allocated in the old-generation arena.
 /// Dirty-page remembered scanning uses this to process old-gen modbuf
 /// pages without touching nursery or longlived blocks.

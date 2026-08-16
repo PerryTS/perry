@@ -41,6 +41,13 @@ const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys
 const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_keys(";
 /// The immutable id is hoisted to the function-entry setup like keys_array.
 const SHAPE_GLOBAL_LOAD: &str = "load i32, ptr @perry_class_shape_id_";
+/// #8122: the inline allocator's 16-byte header prefix — packed GcHeader word
+/// + `class_id | ShapeId << 32` — is composed ONCE at module init into a
+/// per-class `<2 x i64>` global, entry-hoisted like the keys global, and
+/// stored with one vector store per allocation.
+const HEADER_IMAGE_COMPOSE: &str = "insertelement <2 x i64> <i64 ";
+const HEADER_IMAGE_GLOBAL_LOAD: &str = "load <2 x i64>, ptr @perry_class_header_image_";
+const HEADER_IMAGE_STORE: &str = "store <2 x i64> %";
 
 const N_ID: u32 = 11;
 const WALK_ID: u32 = 700;
@@ -303,9 +310,56 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
          only `new` site:\n{ir}"
     );
     assert!(
-        ir.contains(SHAPE_MINT_CALL) && ir.contains(SHAPE_GLOBAL_LOAD),
-        "the inline allocator did not consume the class ShapeId minted at module init; \
-         newborn instances would keep the allocation-time parent word until a lazy lookup:\n{ir}"
+        ir.contains(SHAPE_MINT_CALL) && ir.contains(HEADER_IMAGE_GLOBAL_LOAD),
+        "the inline allocator did not consume the class ShapeId minted at module init \
+         (through the module-init header image); newborn instances would keep the \
+         allocation-time parent word until a lazy lookup:\n{ir}"
+    );
+}
+
+/// #8122: the header prefix must be ONE vector store per allocation, composed
+/// ONCE — at module init, into the per-class image global — never two scalar
+/// stores whose 40-bit GcHeader constant LLVM rematerialises (`mov` + two
+/// `movk`) at every `new`, and not per function either (a recursive allocator
+/// like `walk` allocates once per call, so a per-function compose is a
+/// per-allocation cost — measured +0.6% on `tree`). So: exactly one compose,
+/// in the module init region; the site loads the global and stores the vector.
+#[test]
+fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(walk_module(true));
+    let compose_count = ir.matches(HEADER_IMAGE_COMPOSE).count();
+    assert_eq!(
+        compose_count, 1,
+        "the header image must be composed exactly once, at module init (found \
+         {compose_count} composes):\n{ir}"
+    );
+    assert!(
+        ir.contains(HEADER_IMAGE_GLOBAL_LOAD),
+        "the inline allocator must load the module-init header image global:\n{ir}"
+    );
+    assert!(
+        ir.contains(HEADER_IMAGE_STORE),
+        "the inline allocation site must store the `<2 x i64>` header image:\n{ir}"
+    );
+    // The compose lives beside the ShapeId mint in module init, i.e. after the
+    // mint call and outside the allocating function's own body.
+    let compose_at = ir.find(HEADER_IMAGE_COMPOSE).unwrap();
+    let mint_at = ir.find(SHAPE_MINT_CALL).unwrap();
+    assert!(
+        compose_at > mint_at,
+        "the header image must be composed from the ShapeId the mint returned:\n{ir}"
+    );
+    // And the per-function fallback compose (from the ShapeId slot) is NOT
+    // used when the module-level image exists: no `shl i64 %x, 32` in the
+    // allocating function's entry region.
+    let fast_at = ir.find(INLINE_FAST_BLOCK).unwrap();
+    let fn_start = ir[..fast_at].rfind("\ndefine ").unwrap_or(0);
+    let entry_region = &ir[fn_start..fast_at];
+    assert!(
+        !entry_region.contains(HEADER_IMAGE_COMPOSE),
+        "the allocating function composed its own header image although the \
+         module-level image global exists:\n{ir}"
     );
 }
 

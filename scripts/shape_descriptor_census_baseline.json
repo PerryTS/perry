@@ -19,6 +19,7 @@
     "crates/perry-codegen/src/target_layout.rs|assert_eq!(object_header_size_bytes( ), 16);": 2,
     "crates/perry-codegen/src/target_layout.rs|assert_eq!(object_header_size_bytes( ), 24);": 4,
     "crates/perry-codegen/src/target_layout.rs|let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;": 1,
+    "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;": 1,
     "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(triple) % 8,": 1,
     "crates/perry-codegen/src/target_layout.rs|pub fn object_header_size_bytes(target_triple: &str) -> u64 {": 1
   },
@@ -37,7 +38,7 @@
     "crates/perry-runtime/src/fs/dirent.rs|keys_array|access|let keys = (*obj_ptr).keys_array;": 1,
     "crates/perry-runtime/src/gc/heap_snapshot.rs|keys_array|access|.unwrap_or((*obj).keys_array as u64);": 1,
     "crates/perry-runtime/src/gc/layout.rs|keys_array|access|.unwrap_or((*obj_header).keys_array as usize);": 1,
-    "crates/perry-runtime/src/gc/layout.rs|keys_array|access|.unwrap_or((*object).keys_array as usize)": 1,
+    "crates/perry-runtime/src/gc/layout.rs|keys_array|access|.unwrap_or((*object).keys_array as usize);": 1,
     "crates/perry-runtime/src/gc/layout_slot_visit.rs|keys_array|access|.unwrap_or((*obj).keys_array);": 1,
     "crates/perry-runtime/src/gc/layout_slot_visit.rs|keys_array|access|let new_keys = (*obj).keys_array as u64;": 1,
     "crates/perry-runtime/src/gc/tests/copying.rs|keys_array|access|let keys = (*obj_after).keys_array;": 1,
@@ -177,7 +178,7 @@
     "crates/perry-stdlib/src/worker_threads.rs|keys_array|access|perry_runtime::array::js_array_length((*object).keys_array)": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 33,
+    "codegen_object_header_size_sites": 34,
     "raw_member_files": 65,
     "raw_member_sites": {
       "keys_array": 183

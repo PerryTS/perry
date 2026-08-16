@@ -108,7 +108,16 @@ pub(super) fn young_scavenge_cap_due() -> bool {
     if !nursery_cap_active() {
         return false;
     }
-    crate::arena::copying_from_space_in_use_bytes() >= scavenge_nursery_cap_dueness_bytes()
+    let from_space_in_use = crate::arena::copying_from_space_in_use_bytes();
+    // #8122: before the first copying minor has measured survivors, denominate
+    // the FIRST cap in this program's objects too (one header walk, once per
+    // process, halfway to the base cap). Not while a collection is in
+    // progress or a budgeted cycle is active — the young generation is being
+    // rewritten then and the walk would read forwarding stubs.
+    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC == 0 && !gc_budgeted_cycle_active() {
+        super::tenuring::maybe_seed_object_census_from_allocation(from_space_in_use);
+    }
+    from_space_in_use >= scavenge_nursery_cap_dueness_bytes()
 }
 
 /// The cap value [`young_scavenge_cap_due`] compares against.

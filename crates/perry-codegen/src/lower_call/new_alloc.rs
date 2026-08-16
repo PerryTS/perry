@@ -486,8 +486,6 @@ fn emit_instance_alloc_inner(
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
-            let shape_id =
-                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
 
             // Inline bump-allocator IR.
             let blk = ctx.block();
@@ -554,20 +552,16 @@ fn emit_instance_alloc_inner(
                 &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
             );
 
-            // Write GcHeader (8 bytes) as a single i64 store. Field
-            // packing (little-endian):
+            // Write the 16-byte header prefix — GcHeader (8 bytes) followed by
+            // the first ObjectHeader word — with ONE `<2 x i64>` store.
+            //
+            // GcHeader packing (little-endian):
             //   bits  0..7   = obj_type (u8)
             //   bits  8..15  = gc_flags (u8)
             //   bits 16..31  = _reserved (u16)
             //   bits 32..63  = size (u32)
-            let gc_packed: u64 = GC_TYPE_OBJECT
-                | (GC_FLAG_ARENA << 8)
-                | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
-                | ((total_size as u64) << 32);
-            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
-            blk.store(I64, &gc_packed.to_string(), &raw);
-
-            // Write ObjectHeader at raw + 8. #8113 collapsed the two packed
+            //
+            // The ObjectHeader word at raw + 8: #8113 collapsed the two packed
             // words into one: `class_id` (u32, low) | ShapeId (u32, high).
             // The module-init runtime call either publishes a usable ShapeId
             // or fail-stops on exhaustion; there is no pointer-token fallback.
@@ -575,11 +569,80 @@ fn emit_instance_alloc_inner(
             // `field_count` is now the ShapeId descriptor's
             // `live_inline_slot_count`, which the `descriptor_facts_exact`
             // gate above proved equals this site's `field_count`.
-            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
-            let shape_word64 = blk.zext(I32, &shape_id, I64);
-            let oh_shifted = blk.shl(I64, &shape_word64, "32");
-            let oh_word_1 = blk.or(I64, &oh_shifted, &(cid as u64).to_string());
-            blk.store(I64, &oh_word_1, &oh_addr_1);
+            //
+            // #8122: the pair is composed ONCE per function
+            // (`LlFunction::entry_init_object_header_image`) rather than
+            // stored as two scalars here. With `object_type` gone the second
+            // word is no longer a constant, so two scalar stores made LLVM
+            // rematerialise the 40-bit `gc_packed` immediate at every
+            // allocation (`mov` + two `movk`) and shift/or the ShapeId per
+            // site — measured +4.5 instructions per `new`. The vector image is
+            // one live register (or one reload) and one `str q` per
+            // allocation, the shape the pre-#8113 constant pair compiled to.
+            let gc_packed: u64 = crate::target_layout::inline_alloc_gc_packed(
+                ctx.target_triple,
+                field_count,
+                *typed_layout_baked,
+            );
+            debug_assert_eq!(
+                gc_packed,
+                GC_TYPE_OBJECT
+                    | (GC_FLAG_ARENA << 8)
+                    | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
+                    | ((total_size as u64) << 32),
+                "inline_alloc_gc_packed must reproduce this site's packed header word"
+            );
+            // Prefer the module-level image global — composed once at module
+            // init from the SAME `inline_alloc_gc_packed` derivation — and use
+            // it only when the table's packed word equals this site's own. A
+            // header word is not something to take on trust; a mismatch means
+            // the per-function compose (below) is used instead of a wrong
+            // header. `image_slot` is an entry-hoisted copy (like the keys
+            // global), so a site inside a loop or a recursive allocator pays
+            // one vector load per function entry and one `str q` per `new`.
+            let image_key = (class_name.to_string(), gc_packed);
+            let image_source = if let Some(source) = ctx.class_header_images.get(&image_key) {
+                source.clone()
+            } else {
+                let module_image = ctx
+                    .class_header_image_globals
+                    .get(class_name)
+                    .filter(|(_, module_gc_packed, module_cid)| {
+                        *module_gc_packed == gc_packed && *module_cid == cid
+                    })
+                    .map(|(global, _, _)| global.clone());
+                let source = if let Some(image_global) = module_image {
+                    crate::expr::HeaderImageSource::EntrySlot(
+                        ctx.func.entry_init_load_global(&image_global, "<2 x i64>"),
+                    )
+                } else {
+                    // Fallback: compose the pair once per function from the
+                    // ShapeId global's entry slot.
+                    let shape_slot = crate::typed_shape::ensure_class_shape_slot(
+                        ctx,
+                        class_name,
+                        &keys_global_name,
+                    );
+                    crate::expr::HeaderImageSource::EntryValue(
+                        ctx.func
+                            .entry_init_object_header_image(&shape_slot, gc_packed, cid),
+                    )
+                };
+                ctx.class_header_images.insert(image_key, source.clone());
+                source
+            };
+            let header_image = match image_source {
+                crate::expr::HeaderImageSource::EntrySlot(slot) => {
+                    ctx.block().load("<2 x i64>", &slot)
+                }
+                crate::expr::HeaderImageSource::EntryValue(value) => value,
+            };
+            let blk = ctx.block();
+            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
+            blk.emit_raw(format!(
+                "store <2 x i64> {}, ptr {}, align 8",
+                header_image, raw
+            ));
 
             // Second 8 bytes: keys_array pointer. The keys_ptr we loaded
             // above is an i64 (carries the ArrayHeader address); store as

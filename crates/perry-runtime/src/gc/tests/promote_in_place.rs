@@ -233,14 +233,17 @@ fn an_untraced_cycle_charges_the_dead_bytes_its_last_measurement_implies() {
     // one bound; they differ only in whether the dead figure is measured or
     // extrapolated.
     let _guard = InPlacePromotionTestGuard::untraced();
-    seed_young_survival_for_tests(990);
+    seed_young_survival_for_tests(UNTRACED_PROMOTION_SURVIVAL_PERMILLE);
     let before = promoted_dead_bytes_since_full();
     note_untraced_promotion(100 * 1000, 1);
+    let expected_dead = 100 * 1000 * (1000 - UNTRACED_PROMOTION_SURVIVAL_PERMILLE as usize) / 1000;
     assert_eq!(
         promoted_dead_bytes_since_full() - before,
-        1000,
-        "10 permille of 100_000 bytes is the dead figure a 990 permille \
-         measurement implies"
+        expected_dead,
+        "{} permille of 100_000 bytes is the dead figure a {} permille \
+         measurement implies",
+        1000 - UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
+        UNTRACED_PROMOTION_SURVIVAL_PERMILLE
     );
 
     // ...and it is the SAME cap: enough implied dead bytes stop in-place
@@ -278,8 +281,9 @@ fn a_stationary_fully_live_predictor_still_charges_implied_dead_bytes() {
     let before = promoted_dead_bytes_since_full();
     note_untraced_promotion(100 * 1000, 1);
     let charged = promoted_dead_bytes_since_full() - before;
+    let at_threshold = 100 * 1000 * (1000 - UNTRACED_PROMOTION_SURVIVAL_PERMILLE as usize) / 1000;
     assert_eq!(
-        charged, 1000,
+        charged, at_threshold,
         "a 1000 permille predictor must still be charged at the threshold the \
          decision admits ({UNTRACED_PROMOTION_SURVIVAL_PERMILLE} permille), not \
          at its own optimism"

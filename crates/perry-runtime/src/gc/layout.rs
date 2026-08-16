@@ -176,26 +176,6 @@ fn shape_layout_keyed_enabled() -> bool {
     *E.get_or_init(|| super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED"))
 }
 
-/// keys_array only exists on genuine shaped objects (`ObjectFields`). Arrays,
-/// closures, RegExps etc. also flow through `layout_note_slot` /
-/// `layout_visit_pointer_slots`, and reading `ObjectHeader::keys_array` off one
-/// would interpret unrelated payload bytes as a pointer. Returns 0 for anything
-/// that is not an ObjectFields object (⟹ callers skip the shared shape path).
-#[inline]
-unsafe fn object_keys_array_ptr(user_ptr: usize) -> usize {
-    if user_ptr < GC_HEADER_SIZE + 0x1000 {
-        return 0;
-    }
-    let header = header_from_user_ptr(user_ptr as *const u8);
-    if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
-        return 0;
-    }
-    let object = user_ptr as *const crate::object::ObjectHeader;
-    crate::object::shapes::object_shape_descriptor(object)
-        .map(|descriptor| descriptor.keys as usize)
-        .unwrap_or((*object).keys_array as usize)
-}
-
 /// Borrow the shared canonical descriptor for `user_ptr`'s shape, if
 /// shape-keying is on, the object carries a keys_array, and the shape is
 /// unambiguous (`Some`). Runs `f` against the descriptor in place — the GC
@@ -209,18 +189,55 @@ unsafe fn with_shape_shared_descriptor<R>(
     if !shape_layout_keyed_enabled() {
         return None;
     }
-    let keys = object_keys_array_ptr(user_ptr);
+    // keys_array / ShapeId only exist on genuine shaped objects
+    // (`ObjectFields`). Arrays, closures, RegExps etc. also flow through
+    // `layout_note_slot` / `layout_visit_pointer_slots`, and reading those
+    // header words off one would interpret unrelated payload bytes as a
+    // pointer. Anything else skips the shared shape path.
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = header_from_user_ptr(user_ptr as *const u8);
+    if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
+        return None;
+    }
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    // ONE shape-table probe (#8122). This used to be two — one for the keys
+    // edge (the retired `object_keys_array_ptr`) and one here for the live
+    // bound — on every field store that reaches it and on every traced object.
+    let descriptor = crate::object::shapes::object_shape_descriptor(object);
+    with_shape_shared_descriptor_from(user_ptr, descriptor, f)
+}
+
+/// [`with_shape_shared_descriptor`] against a receiver `ShapeDescriptor` the
+/// caller has already resolved (or found absent). The receiver MUST be an
+/// ObjectFields object — this skips the kind screen the probing form applies.
+///
+/// #8122: the collector's per-object path resolves the descriptor once in
+/// `gc_child_slots` and hands it down here through
+/// [`HeapChildSlotIterator::new_object`], instead of re-probing the shape
+/// table for the keys edge and again for the live bound.
+#[inline]
+unsafe fn with_shape_shared_descriptor_from<R>(
+    user_ptr: usize,
+    descriptor: Option<crate::object::shapes::ShapeDescriptor>,
+    f: impl Fn(&TypedLayoutDescriptor) -> R,
+) -> Option<R> {
+    if !shape_layout_keyed_enabled() {
+        return None;
+    }
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    // Keys edge: the descriptor's when stamped, else the header mirror.
+    let keys = descriptor
+        .map(|descriptor| descriptor.keys as usize)
+        .unwrap_or((*object).keys_array as usize);
     if keys == 0 {
         return None;
     }
     // Defense-in-depth: both descriptor families must agree on the exact live
-    // bound. The ObjectHeader count is only an ABI mirror pending #8047.
-    let object = user_ptr as *const crate::object::ObjectHeader;
-    // #8113: 0, not a second descriptor probe. `unwrap_or` is EAGER, so
-    // re-deriving the bound cost a whole extra shape-table lookup on every
-    // call — and the bound has no other source now, so the fallback could only
-    // ever have returned 0 anyway.
-    let field_count = crate::object::shapes::object_shape_descriptor(object)
+    // bound. #8113: an unstamped receiver has no bound anywhere, so 0 — not a
+    // second probe (`unwrap_or` is eager).
+    let field_count = descriptor
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
         .unwrap_or(0);
     let map = hot_shape_layouts().borrow();
@@ -289,6 +306,21 @@ unsafe fn shape_shared_pointer_mask(
     // `desc.clone()` allocated and freed a second vector — the `raw_f64_mask`
     // we immediately drop — once per traced wide object per GC walk.
     with_shape_shared_descriptor(user_ptr, |d| d.pointer_mask.clone())
+}
+
+/// [`shape_shared_pointer_mask`] for an ObjectFields receiver whose
+/// `ShapeDescriptor` the caller already resolved (#8122, see
+/// [`with_shape_shared_descriptor_from`]).
+#[inline]
+unsafe fn shape_shared_pointer_mask_from(
+    user_ptr: usize,
+    header: *const GcHeader,
+    descriptor: Option<crate::object::shapes::ShapeDescriptor>,
+) -> Option<LayoutSlotMask> {
+    if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
+        return None;
+    }
+    with_shape_shared_descriptor_from(user_ptr, descriptor, |d| d.pointer_mask.clone())
 }
 
 /// Install `descriptor` as the canonical layout for `keys` and set the object's
@@ -1084,9 +1116,9 @@ unsafe fn init_typed_shape_layout(
     // program constants. See `gc::shape_install` for the full staleness
     // argument.
     //
-    // `object_keys_array_ptr`'s two guards are already discharged above (the
-    // low addresses were rejected, `GcLayoutSlotKind::ObjectFields` was
-    // checked), so read the field directly rather than re-walking the header.
+    // The receiver-kind guards are already discharged above (the low
+    // addresses were rejected, `GcLayoutSlotKind::ObjectFields` was checked),
+    // so read the field directly rather than re-walking the header.
     let keys = shape_descriptor
         .map(|descriptor| descriptor.keys as usize)
         .unwrap_or((*obj_header).keys_array as usize);
@@ -1113,6 +1145,44 @@ unsafe fn init_typed_shape_layout(
         return;
     }
 
+    install_typed_shape_layout_slow(
+        user_ptr,
+        header,
+        keys,
+        slot_count,
+        raw_f64_words,
+        raw_f64_word_count,
+        pointer_words,
+        pointer_word_count,
+    );
+}
+
+/// The memo-MISS tail of [`init_typed_shape_layout`]: build the descriptor,
+/// install it (shared by shape, else per object), record the memo.
+///
+/// #8122: kept OUT OF LINE on purpose. Everything above the memo probe runs on
+/// every construction; this runs once per shape (plus downgrades). When LLVM's
+/// LTO inliner chose to fold this tail — with `shape_install_shared` and
+/// `shape_install::record` folded into it in turn — into the hot prologue, the
+/// per-construction path became an 811-instruction function whose prologue,
+/// spills and register pressure were paid on every memo hit: measured as a
+/// reproducible +3.9% instructions on `pipeline` between two builds of the
+/// SAME hot-path code, differing only in an unrelated module's size. `#[cold]`
+/// + `#[inline(never)]` pins the shape the profile wants regardless of what
+/// else moves in the crate.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn install_typed_shape_layout_slow(
+    user_ptr: usize,
+    header: *mut GcHeader,
+    keys: usize,
+    slot_count: usize,
+    raw_f64_words: *const u64,
+    raw_f64_word_count: u32,
+    pointer_words: *const u64,
+    pointer_word_count: u32,
+) {
     let raw_f64_slice = mask_words(raw_f64_words, raw_f64_word_count);
     let pointer_slice = mask_words(pointer_words, pointer_word_count);
 
@@ -1593,6 +1663,12 @@ pub(crate) struct HeapChildSlotIterator {
     pub(super) meta_slot: Option<*mut u64>,
     pub(super) payload: HeapSlotRange,
     pub(super) selection: HeapPayloadSlotSelection,
+    /// #8122: the receiver's `ShapeDescriptor`, resolved ONCE by
+    /// [`gc_child_slots`] for an ObjectFields object and carried here so
+    /// `visit_gc_layout_slot_descriptors` reads the same facts instead of
+    /// probing the shape table again. `None` for every other kind, and for
+    /// an unstamped object.
+    pub(super) object_shape: Option<crate::object::shapes::ShapeDescriptor>,
 }
 
 impl HeapChildSlotIterator {
@@ -1602,6 +1678,7 @@ impl HeapChildSlotIterator {
             meta_slot: None,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             selection: HeapPayloadSlotSelection::Empty,
+            object_shape: None,
         }
     }
 
@@ -1616,6 +1693,27 @@ impl HeapChildSlotIterator {
             meta_slot: None,
             payload,
             selection,
+            object_shape: None,
+        }
+    }
+
+    /// [`Self::new`] for an ObjectFields receiver whose `ShapeDescriptor` the
+    /// caller already resolved (#8122). The payload-mask selection reuses it
+    /// instead of probing the shape table, and it is retained on the iterator
+    /// for the slot visitor.
+    pub(super) fn new_object(
+        header: *mut GcHeader,
+        prefix_slot: Option<*mut u64>,
+        payload: HeapSlotRange,
+        object_shape: Option<crate::object::shapes::ShapeDescriptor>,
+    ) -> Self {
+        let selection = unsafe { heap_payload_slot_selection_from(header, payload, object_shape) };
+        Self {
+            prefix_slot,
+            meta_slot: None,
+            payload,
+            selection,
+            object_shape,
         }
     }
 
@@ -1738,6 +1836,30 @@ pub(super) unsafe fn heap_payload_slot_selection(
     header: *mut GcHeader,
     payload: HeapSlotRange,
 ) -> HeapPayloadSlotSelection {
+    heap_payload_slot_selection_impl(header, payload, |user_ptr, header| {
+        shape_shared_pointer_mask(user_ptr, header)
+    })
+}
+
+/// [`heap_payload_slot_selection`] for an ObjectFields receiver whose
+/// `ShapeDescriptor` the caller already resolved (#8122): the shared-shape
+/// pointer-mask lookup reuses it instead of probing the shape table twice.
+pub(super) unsafe fn heap_payload_slot_selection_from(
+    header: *mut GcHeader,
+    payload: HeapSlotRange,
+    descriptor: Option<crate::object::shapes::ShapeDescriptor>,
+) -> HeapPayloadSlotSelection {
+    heap_payload_slot_selection_impl(header, payload, |user_ptr, header| {
+        shape_shared_pointer_mask_from(user_ptr, header, descriptor)
+    })
+}
+
+#[inline]
+unsafe fn heap_payload_slot_selection_impl(
+    header: *mut GcHeader,
+    payload: HeapSlotRange,
+    shared_mask: impl FnOnce(usize, *const GcHeader) -> Option<LayoutSlotMask>,
+) -> HeapPayloadSlotSelection {
     if header.is_null() || payload.is_empty() {
         return HeapPayloadSlotSelection::Empty;
     }
@@ -1774,8 +1896,7 @@ pub(super) unsafe fn heap_payload_slot_selection(
                     raw_numeric_recorded: false,
                 };
             }
-            let mask = per_object_slot_mask(user_ptr)
-                .or_else(|| shape_shared_pointer_mask(user_ptr, header));
+            let mask = per_object_slot_mask(user_ptr).or_else(|| shared_mask(user_ptr, header));
             match mask {
                 Some(mask) => HeapPayloadSlotSelection::Masked {
                     mask,
@@ -1807,17 +1928,24 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
         }
         GcLayoutSlotKind::ObjectFields => {
             let obj = user_ptr as *mut crate::object::ObjectHeader;
-            let Some(range) = crate::object::gc_field_slot_range(obj) else {
+            // #8122: resolve the receiver's ShapeDescriptor ONCE and thread it
+            // through every step that needs a shape fact — the field range,
+            // the keys edge, the shared pointer mask (`new_object`) and the
+            // slot visitor (`object_shape` on the iterator). These used to be
+            // five independent `shape_descriptor_by_id` probes per traced
+            // object, the top leaf of a traced in-place-promotion cycle.
+            let descriptor = crate::object::shapes::object_shape_descriptor(obj);
+            let Some(range) = crate::object::gc_field_slot_range(obj, descriptor) else {
                 return HeapChildSlotIterator::empty();
             };
-            let keys_slot = crate::object::gc_keys_array_slot(obj);
+            let keys_slot = crate::object::gc_keys_array_slot(obj, descriptor);
             // #6812: the meta record is a raw-pointer child edge; before the
             // spill buffer it was enumerated only on the rewrite path, which
             // left it invisible to MARKING (latent for custom prototypes,
             // which are usually rooted elsewhere; fatal for the spill
             // buffer, reachable through meta alone). A second prefix slot
             // keeps payload slot indices aligned with the layout masks.
-            HeapChildSlotIterator::new(header, keys_slot, range)
+            HeapChildSlotIterator::new_object(header, keys_slot, range, descriptor)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
         }
         GcLayoutSlotKind::RegExpFields => {

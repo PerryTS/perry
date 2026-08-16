@@ -636,13 +636,32 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
             };
         let has_own_descriptors = is_object && super::super::object_has_descriptors(obj as usize);
-        let is_regular = is_object && crate::object::object_is_regular(obj);
+        // #8122: ONE shape-table probe. `object_is_regular` is `GC_TYPE_OBJECT
+        // && !FORWARDED && descriptor.object_kind == Ordinary`; the kind test
+        // was already `GC_TYPE_OBJECT` above, so read the descriptor once and
+        // take the kind, the keys edge, the key count and the live bound from
+        // it — this path used to probe three times (regularity, the
+        // descriptor, then `object_shape_id` for the PIC token).
+        let shape = if is_object {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+                crate::object::shapes::object_shape_descriptor(obj)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let is_regular = shape.is_some_and(|shape| {
+            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
+        });
         // Gate-neutral builtin accessors deliberately leave the process-wide
         // accessor latch clear. Their owner bit must still block this PIC:
         // its generated hit path is a raw slot load and would otherwise turn
         // `Set.prototype.size` into `undefined` instead of invoking the getter.
         if can_cache && is_regular && !has_own_descriptors {
-            let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+            let Some(shape) = shape else {
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             };
@@ -679,7 +698,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     //
                     // The runtime and emitted hit path share one identity:
                     // the authoritative, never-reused ShapeId token.
-                    let stamp = crate::object::shapes::object_shape_id(obj);
+                    // The descriptor resolved above, so the header stamp IS the
+                    // shape id — no second probe.
+                    let stamp = crate::object::shapes::object_shape_stamp(obj);
                     let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
                     pic_prime_get(cache, token, i as i64);
                     let field_ptr = (obj as *const u8)

@@ -101,7 +101,24 @@ pub(super) const PROMOTE_SURVIVAL_THRESHOLD_PERMILLE: u64 = 950;
 /// paragraph above described a bound nothing enforced. The untraced-bytes
 /// budget remains the binding bound, and it is now itself capped — see
 /// [`untraced_promotion_budget_bytes`].
-pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 990;
+///
+/// # Why this is 980 and not 990 (#8122)
+///
+/// The 992 above was read off a FIRST cycle that fired on the raw 16 MB byte
+/// band, before any object census existed. #8122 seeds the nursery cap's
+/// object denomination from an allocation census before the first minor
+/// (`gc::tenuring::maybe_seed_object_census_from_allocation`), so that cycle
+/// now fires when the band's OBJECT budget is spent — ~11 MB for a 48 B
+/// two-field object. The startup garbage is unchanged (the same ~131 KB of
+/// abandoned `all.push` backing stores), so as a fraction of a smaller first
+/// nursery `retain`/`retain1` measure **988** on their first cycle — and at
+/// 990 the second cycle traced again, costing `retain1` +13% instructions.
+/// The live mode is now 988–1000; the garbage mode is still 0–4. 980 keeps a
+/// wider margin under the live mode than 990 kept under 992, and the exposure
+/// arithmetic above becomes 2.56 MB against the same 32 MB cap — still an
+/// order of magnitude under it, and the untraced-bytes budget is still the
+/// binding bound.
+pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 980;
 
 /// Floor for the untraced-promotion budget on an UNCONSTRAINED heap — see
 /// [`untraced_promotion_budget_bytes`].

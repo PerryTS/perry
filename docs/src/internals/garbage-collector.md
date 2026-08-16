@@ -77,8 +77,8 @@ the next copying minor relabels the young blocks as old-gen instead of
 evacuating them object by object: nothing moves, so nothing in the heap or in
 any address-keyed side table is rewritten. A promoting cycle still traces — that
 is what keeps the next cycle's decision measured rather than assumed — except in
-the fully-live regime at or above 99%
-<!-- gc-fact: UNTRACED_PROMOTION_SURVIVAL_PERMILLE = 990 in crates/perry-runtime/src/gc/promote_in_place.rs -->,
+the fully-live regime at or above 98%
+<!-- gc-fact: UNTRACED_PROMOTION_SURVIVAL_PERMILLE = 980 in crates/perry-runtime/src/gc/promote_in_place.rs -->,
 where the trace itself is skipped and every object on the block is registered as
 live. Two budgets bound the retained garbage that costs: a running cap on
 promoted dead bytes
