@@ -22,6 +22,11 @@ static BOOL_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_POOL_REUSE_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_RELEASE_COUNT: AtomicU64 = AtomicU64::new(0);
+// Diagnostic-only (#8208 tuning): how often the quarantine actually drains,
+// and how many cells that published. A pool whose high-water mark is 41x one
+// batch's working set is a flush-frequency question, not a pool-size question.
+static BOX_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
+static BOX_FLUSH_PUBLISHED: AtomicU64 = AtomicU64::new(0);
 
 /// Snapshot of the release/reuse counters: `(allocs, pool_reuses, releases)`.
 /// Sums all three box kinds.
@@ -57,8 +62,10 @@ pub fn report_box_stats_at_exit() {
     eprintln!(
         "[box-stats] allocs={allocs} pool_reuses={reuses} releases={releases} \
          resident_cells={} registry_len={reg} i32_registry_len={i32_reg} \
-         bool_registry_len={bool_reg}",
+         bool_registry_len={bool_reg} flushes={} published={}",
         allocs - reuses,
+        BOX_FLUSH_COUNT.load(Ordering::Relaxed),
+        BOX_FLUSH_PUBLISHED.load(Ordering::Relaxed),
     );
 }
 
@@ -169,7 +176,7 @@ crate::perry_thread_local! {
     /// states, ONLY for cells the transform's escape analysis proved no
     /// closure can observe — `perry-transform/src/generator/box_release.rs`)
     /// clears the cell, removes it from its registry, and parks the address
-    /// in the QUARANTINE. The quarantine drains into the FREE_POOL at the
+    /// in the QUARANTINE. The quarantine drains into the free list at the
     /// outermost microtask-pump boundary once the task queue is empty
     /// (`flush_released_boxes`, called from `promise/microtasks.rs`), and
     /// `js_*box_alloc*` pops the pool before touching `std::alloc`.
@@ -202,12 +209,25 @@ crate::perry_thread_local! {
     /// NOT a GC root: parked cells are cleared before parking, and the
     /// addresses themselves are `std::alloc` memory, not GC-heap pointers
     /// (see `scripts/gc_runtime_root_holders.json`).
-    static BOX_FREE_POOL: std::cell::RefCell<Vec<usize>> =
-        std::cell::RefCell::new(Vec::new());
-    static I32_BOX_FREE_POOL: std::cell::RefCell<Vec<usize>> =
-        std::cell::RefCell::new(Vec::new());
-    static BOOL_BOX_FREE_POOL: std::cell::RefCell<Vec<usize>> =
-        std::cell::RefCell::new(Vec::new());
+    /// Head of the per-kind INTRUSIVE free list; 0 is the empty list.
+    ///
+    /// A free cell's own 8 bytes hold the address of the next free cell, so
+    /// the reuse pool costs **zero** bytes of side table. That is not a
+    /// micro-optimisation: a `Vec<usize>` pool is one 8-byte slot per cell on
+    /// top of the cell, and the pool's high-water mark is ~330 cells per unit
+    /// of PEAK CONCURRENCY (measured: `resident_cells / SIZE` is 329-334
+    /// across a 16x sweep), held for the life of the thread. At SIZE=200 that
+    /// side table was ~1 MB and made small async workloads a net RSS
+    /// REGRESSION; threading the list through the cells removes it entirely.
+    ///
+    /// Overwriting the cell is why this list holds only cells that are PAST
+    /// the quarantine. A quarantined cell must keep the parked terminal value
+    /// a stray duplicate resume reads (`-1` / `true` / `undefined`); once
+    /// `flush_released_boxes` has run, the task queue is empty and no such
+    /// resume can exist, so the bytes are free to become a link.
+    static BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static I32_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BOOL_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BOX_RELEASE_QUARANTINE: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::new());
     static I32_BOX_RELEASE_QUARANTINE: std::cell::RefCell<Vec<usize>> =
@@ -220,18 +240,65 @@ crate::perry_thread_local! {
 /// outermost microtask-pump exit once TASK_QUEUE is empty (see the
 /// QUARANTINE doc above for why that boundary), and by tests.
 pub fn flush_released_boxes() {
-    for (q, p) in [
-        (&BOX_RELEASE_QUARANTINE, &BOX_FREE_POOL),
-        (&I32_BOX_RELEASE_QUARANTINE, &I32_BOX_FREE_POOL),
-        (&BOOL_BOX_RELEASE_QUARANTINE, &BOOL_BOX_FREE_POOL),
+    BOX_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
+    for (q, head) in [
+        (&BOX_RELEASE_QUARANTINE, &BOX_FREE_HEAD),
+        (&I32_BOX_RELEASE_QUARANTINE, &I32_BOX_FREE_HEAD),
+        (&BOOL_BOX_RELEASE_QUARANTINE, &BOOL_BOX_FREE_HEAD),
     ] {
         q.with(|q| {
             let mut q = q.borrow_mut();
-            if !q.is_empty() {
-                p.with(|p| p.borrow_mut().append(&mut q));
+            if q.is_empty() {
+                return;
             }
+            BOX_FLUSH_PUBLISHED.fetch_add(q.len() as u64, Ordering::Relaxed);
+            head.with(|h| {
+                let mut next = h.get();
+                for addr in q.drain(..) {
+                    // Publishing is the first moment the parked terminal value
+                    // is dead (queue empty => no resume can read it), so the
+                    // cell's own bytes become the link to the next free cell.
+                    debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+                    unsafe { (addr as *mut usize).write(next) };
+                    next = addr;
+                }
+                h.set(next);
+            });
+            // Deliberately NOT shrunk. The quarantine is refilled to roughly
+            // the same size every interval, so handing the buffer back here
+            // just makes the next interval re-grow it: measured, shrinking to
+            // 1 KiB each flush cost +5.3 MB peak RSS at BATCHES=1200 in
+            // allocator churn, which is the opposite of the point.
         });
     }
+}
+
+/// Every box cell is exactly one pointer wide, which is what lets the free
+/// list live inside the cells. Asserted rather than assumed: a field added to
+/// any box struct would silently make the link write out of bounds.
+const ALIGN_OF_BOX_CELL: usize = std::mem::align_of::<Box>();
+const _: () = {
+    assert!(std::mem::size_of::<Box>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<I32Box>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<BoolBox>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<Box>() >= std::mem::align_of::<usize>());
+    assert!(std::mem::align_of::<I32Box>() >= std::mem::align_of::<usize>());
+    assert!(std::mem::align_of::<BoolBox>() >= std::mem::align_of::<usize>());
+};
+
+/// Pop a cell from an intrusive free list, or 0 when it is empty.
+#[inline(always)]
+fn pop_free_cell(head: &'static crate::tls_hot::HotKey<std::cell::Cell<usize>>) -> usize {
+    head.with(|h| {
+        let addr = h.get();
+        if addr != 0 {
+            // SAFETY: `addr` was minted by `js_*box_alloc*`, is cell-sized and
+            // cell-aligned, and its memory is never returned to the allocator,
+            // so the link written at publish time is still there.
+            h.set(unsafe { (addr as *const usize).read() });
+        }
+        addr
+    })
 }
 
 /// Boxes are 8-byte allocations, so bits 0..3 of an address carry no
@@ -274,7 +341,9 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
     // minted by this function, cleared and de-registered at release, and is
     // provably unreferenced (see the QUARANTINE doc) — re-registering it
     // with a fresh value is indistinguishable from a fresh allocation.
-    if let Some(addr) = BOX_FREE_POOL.with(|p| p.borrow_mut().pop()) {
+    let pooled = pop_free_cell(&BOX_FREE_HEAD);
+    if pooled != 0 {
+        let addr = pooled;
         BOX_POOL_REUSE_COUNT.fetch_add(1, Ordering::Relaxed);
         let ptr = addr as *mut Box;
         unsafe {
@@ -316,7 +385,9 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
 #[no_mangle]
 pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
     BOX_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
-    if let Some(addr) = I32_BOX_FREE_POOL.with(|p| p.borrow_mut().pop()) {
+    let pooled = pop_free_cell(&I32_BOX_FREE_HEAD);
+    if pooled != 0 {
+        let addr = pooled;
         BOX_POOL_REUSE_COUNT.fetch_add(1, Ordering::Relaxed);
         let ptr = addr as *mut I32Box;
         unsafe {
@@ -349,7 +420,9 @@ pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
 #[no_mangle]
 pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
     BOX_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
-    if let Some(addr) = BOOL_BOX_FREE_POOL.with(|p| p.borrow_mut().pop()) {
+    let pooled = pop_free_cell(&BOOL_BOX_FREE_HEAD);
+    if pooled != 0 {
+        let addr = pooled;
         BOX_POOL_REUSE_COUNT.fetch_add(1, Ordering::Relaxed);
         let ptr = addr as *mut BoolBox;
         unsafe {
@@ -910,9 +983,9 @@ pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
-    BOX_FREE_POOL.with(|p| p.borrow_mut().clear());
-    I32_BOX_FREE_POOL.with(|p| p.borrow_mut().clear());
-    BOOL_BOX_FREE_POOL.with(|p| p.borrow_mut().clear());
+    BOX_FREE_HEAD.with(|h| h.set(0));
+    I32_BOX_FREE_HEAD.with(|h| h.set(0));
+    BOOL_BOX_FREE_HEAD.with(|h| h.set(0));
     BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
@@ -1168,6 +1241,24 @@ mod tests {
 mod release_tests {
     use super::*;
 
+    /// `BOX_ALLOC_COUNT` / `BOX_POOL_REUSE_COUNT` / `BOX_RELEASE_COUNT` are
+    /// process-global atomics, while the registries, quarantines and free
+    /// lists they describe are THREAD-LOCAL. Any test that asserts on a
+    /// counter *delta* is therefore not isolated by `test_clear_box_registry`
+    /// alone — a sibling test allocating on another harness thread lands in
+    /// the same atomics and moves the delta under it. Observed exactly that:
+    /// these tests pass under `--test-threads=1` and fail in parallel.
+    ///
+    /// Serialise the counter-asserting tests against each other. Tests that
+    /// only assert on addresses and registry membership are thread-local and
+    /// need no lock.
+    fn counter_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        // A panicking test poisons the lock; the data is `()`, so recovering
+        // is right — otherwise one failure cascades into spurious ones.
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// A released cell must be INERT: de-registered (reads `undefined`,
     /// writes dropped), evicted from the positive cache, and parked exactly
     /// once no matter how many times the terminal arm re-runs (#7933
@@ -1253,6 +1344,67 @@ mod release_tests {
         assert_eq!(js_bool_box_get(done), 0);
     }
 
+    /// The intrusive free list must round-trip a WHOLE cohort, not just one
+    /// cell. Each free cell's own 8 bytes hold the link to the next, so a
+    /// mis-written link would either lose most of the pool (silently
+    /// reverting to `std::alloc` and re-growing the residue) or splice a cell
+    /// in twice and hand one address to two live activations.
+    ///
+    /// Asserts all three: every cell comes back, each exactly once, and each
+    /// carries its own fresh value rather than a leftover link.
+    #[test]
+    fn the_intrusive_free_list_round_trips_a_whole_cohort() {
+        let _guard = counter_guard();
+        super::test_clear_box_registry();
+        const N: usize = 512;
+        let first: Vec<*mut Box> = (0..N)
+            .map(|i| js_box_alloc_bits((i as f64).to_bits() as i64))
+            .collect();
+        let minted: std::collections::HashSet<usize> = first.iter().map(|p| *p as usize).collect();
+        assert_eq!(minted.len(), N, "the fixture must mint N distinct cells");
+
+        for p in &first {
+            js_box_release(*p);
+        }
+        flush_released_boxes();
+
+        let (a0, r0, _) = box_release_stats();
+        let second: Vec<*mut Box> = (0..N)
+            .map(|i| js_box_alloc_bits((1000.0 + i as f64).to_bits() as i64))
+            .collect();
+        let (a1, r1, _) = box_release_stats();
+        assert_eq!(a1 - a0, N as u64, "second cohort allocates N cells");
+        assert_eq!(
+            r1 - r0,
+            N as u64,
+            "ALL N must come from the free list; {} fell through to std::alloc",
+            N as u64 - (r1 - r0)
+        );
+
+        let reused: std::collections::HashSet<usize> = second.iter().map(|p| *p as usize).collect();
+        assert_eq!(reused.len(), N, "an address was handed out twice");
+        assert_eq!(
+            reused, minted,
+            "reused cells must be exactly the minted set"
+        );
+
+        for (i, p) in second.iter().enumerate() {
+            assert_eq!(
+                js_box_get_bits(*p),
+                (1000.0 + i as f64).to_bits() as i64,
+                "cell {i} kept a stale free-list link instead of its value"
+            );
+        }
+        // Drained: the next allocation has to mint.
+        let before = box_release_stats().1;
+        let _fresh = js_box_alloc_bits(0);
+        assert_eq!(
+            box_release_stats().1,
+            before,
+            "the list was drained, so this must be a fresh std::alloc"
+        );
+    }
+
     /// perry#4898 discipline extends to release: a structurally-plausible
     /// pointer that was never minted as a box must be a TOTAL no-op — no
     /// deref, no park.
@@ -1279,6 +1431,7 @@ mod release_tests {
     /// asyncpipe_big).
     #[test]
     fn completed_activation_residue_is_bounded_not_linear() {
+        let _guard = counter_guard();
         super::test_clear_box_registry();
         const TURNS: usize = 100;
         const ACTIVATIONS_PER_TURN: usize = 20;

@@ -2664,7 +2664,8 @@ def _probe_boxes_outside_the_gc_heap():
                        "positive cache")
     # The reuse path must stay quarantine-gated. Each release parks into a
     # *_RELEASE_QUARANTINE; only flush_released_boxes drains those into the
-    # *_FREE_POOL that js_*box_alloc* pops from.
+    # intrusive free list (threaded through the cells) that
+    # js_*box_alloc* pops from.
     for fn, quarantine in (("js_box_release", "BOX_RELEASE_QUARANTINE"),
                            ("js_i32_box_release", "I32_BOX_RELEASE_QUARANTINE"),
                            ("js_bool_box_release", "BOOL_BOX_RELEASE_QUARANTINE")):
@@ -2674,11 +2675,13 @@ def _probe_boxes_outside_the_gc_heap():
                            "changed shape and this premise must be re-argued")
         if quarantine not in rel:
             return (False, f"{fn} no longer parks into {quarantine}")
-        if "FREE_POOL" in rel:
-            return (False, f"{fn} touches a FREE_POOL directly — release must "
+        if "FREE_HEAD" in rel:
+            return (False, f"{fn} touches the free list directly — release must "
                            "park into the quarantine and let "
-                           "flush_released_boxes publish it, or a cell can be "
-                           "reused while an activation can still resume")
+                           "flush_released_boxes publish it. Publishing is also "
+                           "what overwrites the cell with its free-list link, so "
+                           "a release that published directly would destroy the "
+                           "parked terminal value a stray resume still reads.")
     flush = rust_fn_body("crates/perry-runtime/src/box.rs",
                          "flush_released_boxes")
     if flush is None:
