@@ -100,6 +100,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // The CALLEE has the §18/#7803 defect too: this spread arm was not
             // among the three `8842a0be4` fixed. A root and not a reload — JS
             // resolves the callee before the arguments.
+            //
+            // #8159: `true`, and not a computed window, on purpose.
+            // `bundle_args_rooted` opens with `js_array_alloc` and emits a
+            // `js_array_push_f64` / `js_array_concat` per argument, so this
+            // window allocates for EVERY spread construction — `new F(...[])`
+            // included. There is no narrowing to make here, which is worth
+            // stating: the two non-spread arms below take their window from
+            // `any_operand_may_collect` precisely because theirs can be empty.
             let mut callee_group = crate::rooting::open_rooted_group(1);
             let func_double = lower_expr(ctx, callee)?;
             let callee_root = callee_group.adopt(ctx, callee, &func_double, true);
@@ -715,12 +723,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // miscompile in place of a rooting bug. That is exactly why
                 // `operand_is_reloadable` refuses module globals, and the
                 // group's `operand_protection` answers it the same way here.
+                //
+                // #8159: the window is COMPUTED, not assumed. #8084 hardcoded
+                // `true`, which buys a slot, a re-read and a release at every
+                // call site whether or not anything between an operand and its
+                // consumer can collect — 3.9% of `pipeline`'s instructions,
+                // enough to swallow another PR's entire win on that row.
+                // `operand_protection` already answers "root, re-derive or
+                // reuse?", and its `Reuse` arm keeps the pre-#8084 IR byte for
+                // byte; all it was missing was the truthful window.
+                //
+                // The callee's window is every argument; argument `i`'s is the
+                // arguments after it. Neither reaches a collection point of its
+                // own: `lower_js_args_array` is an entry alloca plus stores,
+                // and `emit_call_location_at` emits nothing at all in a default
+                // build. So `new C(a, b)` over plain locals is back to emitting
+                // no rooting — the shape `operand_needs_root`'s doc already
+                // claims for it — while `new C(mk(), x)` still roots.
+                //
+                // Each flag is computed BELOW the operand it protects, exactly
+                // as `with_operands_rooted_window` computes it: the predicate
+                // reads `ctx`, so asking before the lowering asks about a
+                // different state.
                 let result = crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
                     let func_double = lower_expr(ctx, callee)?;
-                    let callee_root = g.adopt(ctx, callee, &func_double, true);
+                    let callee_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+                    let callee_root = g.adopt(ctx, callee, &func_double, callee_collects);
                     let mut arg_ids = Vec::with_capacity(args.len());
-                    for a in args {
-                        arg_ids.push(g.lower(ctx, a, true)?);
+                    for (i, a) in args.iter().enumerate() {
+                        let value = lower_expr(ctx, a)?;
+                        let collects =
+                            crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                        arg_ids.push(g.adopt(ctx, a, &value, collects));
                     }
                     let lowered_args: Vec<String> = arg_ids
                         .iter()
@@ -759,13 +793,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     MaterializationReason::UnknownCallEscape,
                 );
             }
-            // #7803: same callee-outlives-arguments fix as the arm above.
+            // #7803: same callee-outlives-arguments fix as the arm above,
+            // and #8159's same computed window — see there for both.
             crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
                 let func_double = lower_expr(ctx, callee)?;
-                let callee_root = g.adopt(ctx, callee, &func_double, true);
+                let callee_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+                let callee_root = g.adopt(ctx, callee, &func_double, callee_collects);
                 let mut arg_ids = Vec::with_capacity(args.len());
-                for a in args {
-                    arg_ids.push(g.lower(ctx, a, true)?);
+                for (i, a) in args.iter().enumerate() {
+                    let value = lower_expr(ctx, a)?;
+                    let collects =
+                        crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                    arg_ids.push(g.adopt(ctx, a, &value, collects));
                 }
                 let lowered_args: Vec<String> = arg_ids
                     .iter()

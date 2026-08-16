@@ -474,6 +474,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `open_rooted_group` rather than `with_rooted_group`: the release
             // has to sit below the consuming call, which is past the end of the
             // spread/regs marshalling block rather than inside it.
+            //
+            // #8159: `true` stays, and for the reason `NewDynamicSpread` gives
+            // — a spread call reaches `js_array_like_to_array` on its spread
+            // source unconditionally, so the window allocates in every
+            // instance of this arm. Nothing to narrow, as opposed to nothing
+            // narrowed.
             let mut callee_group = crate::rooting::open_rooted_group(1);
             let cb_box = lower_expr(ctx, callee)?;
             let cb_root = callee_group.adopt(ctx, callee, &cb_box, true);

@@ -396,9 +396,20 @@ pub fn try_lower_closure_typed_local_call(
             // arms: re-lowering `LocalGet` below the arguments re-reads the box
             // and would observe an assignment an argument made, when JS
             // resolved the callee before them.
+            //
+            // #8159: the window is EXACTLY the argument lowering below. The
+            // re-read sits above the unmask because that is where the value
+            // leaves the tracked domain — a collection point BELOW the unmask
+            // is a different exposure, which rooting the box cannot repair
+            // either way. So the flag is the same question every other
+            // combinator in `rooting/` asks its caller, and answering it
+            // truthfully puts `stage(rec)` — `pipeline`'s inner loop, three of
+            // these per record — back on the IR it had before #8084, while
+            // `stage(mk())` still roots.
             let mut callee_group = crate::rooting::open_rooted_group(1);
             let recv_box = lower_expr(ctx, callee)?;
-            let callee_root = callee_group.adopt(ctx, callee, &recv_box, true);
+            let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+            let callee_root = callee_group.adopt(ctx, callee, &recv_box, collects);
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
