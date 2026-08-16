@@ -120,6 +120,12 @@ GAP_SUITE = {
     "full": {"mode": "full", "total": 8},
 }
 
+# Parity: full tier only, sharded. The unsharded job was killed by GitHub's
+# 6-hour job cap on 2026-08-16 (run 31935729773) — 8 shards puts each around
+# 45-75 min. `parity-aggregate` (not in JOBS: it keys off `jobs.parity`)
+# merges the shard reports and runs the aggregate-only gates.
+PARITY_SHARDS = 8
+
 EXTENDED_LABEL = "run-extended-tests"
 
 # ---------------------------------------------------------------------------
@@ -279,6 +285,7 @@ def plan(
         "scope": scope,
         "jobs": jobs,
         "gap": gap,
+        "parity": {"total": PARITY_SHARDS, "shards": list(range(1, PARITY_SHARDS + 1))},
         # cargo-test: a pull_request run scopes to the diff via ci_test_scope.py
         # (`--lib --bins` of the affected crates); everything else -- including a
         # `workflow_dispatch --tier pr`, which has no PR to read -- runs the full
@@ -379,6 +386,7 @@ def _self_test() -> int:
     full = plan("schedule", "refs/heads/main")
     check("full: every job except e2e-scoped", all(v for k, v in full["jobs"].items() if k != "e2e_scoped"))
     check("full: 8 auto-optimize gap shards", full["gap"]["total"] == 8 and full["gap"]["mode"] == "full")
+    check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
 
     labelled = plan("pull_request", "refs/pull/1/merge", labels=[EXTENDED_LABEL], changed=["README.md"])
     check("labelled PR runs the full tier regardless of scope", labelled["jobs"]["parity"] and labelled["jobs"]["gap_suite"])

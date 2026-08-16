@@ -49,5 +49,11 @@ tests` drops its `push: main` arm. `security-audit.yml` becomes `workflow_call` 
 weekly. sccache saves only from main-line runs; PRs restore the newest main-line
 blob.
 
+`parity` is sharded (8x `run_parity_tests.sh --shard N/8` + a `parity-aggregate`
+fan-in running the threshold and matrix-trend gates over the merged report via
+`scripts/parity_report_merge.py`) — the unsharded job was killed by GitHub's
+6-hour job cap on the first full-tier run, so the release gate could not
+complete at all without this.
+
 **Follow-up (admin, after merge):** set the required status checks on `main` to
 `pr-gate` only. Full page: `docs/src/testing/ci-tiers.md`.
