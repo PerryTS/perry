@@ -66,12 +66,38 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_nanbox_store_on_block,
+    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
+    emit_may_carry_heap_pointer_check, emit_root_nanbox_store_on_block,
     emit_typed_feedback_register_site, emit_write_barrier,
     emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
     lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
 };
+
+/// Metadata may admit the #7839 append tier because that tier tests the live
+/// result bits before doing GC bookkeeping. A lying numeric operand makes JS
+/// `+` produce a heap value; the pointer test then takes the note/addref/
+/// barrier arm, so the annotation selects a checked lowering, not an answer.
+fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    if is_numeric_expr(ctx, value) {
+        return true;
+    }
+    match value {
+        Expr::LocalGet(id) => matches!(
+            ctx.local_type_hint(id),
+            Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
+        ),
+        Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        } => {
+            guarded_numeric_add_push_candidate(ctx, left)
+                && guarded_numeric_add_push_candidate(ctx, right)
+        }
+        _ => false,
+    }
+}
 
 /// The expression's result: the new length per ES2024 `Array.prototype.push`.
 ///
@@ -84,6 +110,142 @@ use super::{
 /// expression, never an operand — a consumed `n = arr.push(x)` always
 /// computes the real length). When set, the placeholder constant is returned
 /// without emitting the call.
+/// The `nofwd` admission test for a #7839 numeric push: the historical
+/// integrity mask `0x0407` PLUS the three `_reserved` states in which
+/// `js_gc_note_slot_layout` does real work for a **non-pointer** value stored
+/// into a `GC_TYPE_ARRAY`. Every other state that function can be in is a
+/// provable no-op for such a value (see
+/// [`emit_numeric_push_store_pointer_tested`]).
+///
+/// * `0x0407` `FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS` — the historical
+///   integrity bits, unchanged in meaning and in destination.
+/// * `0x0800` `GC_ARRAY_ELEMENT_SHAPE` — a live element-shape proof (#7480).
+///   `note_element_store` must CLEAR it when a non-object lands in the array,
+///   and that call sits ahead of every early return in `layout_note_slot`.
+/// * `0x1000` — `GC_OBJ_TYPED_LAYOUT_INTACT` as `layout_note_slot` reads it
+///   (`GC_ARRAY_RAW_F64_HOLES` as `gc::types` writes it for an array; the two
+///   share the bit and are disjoint by `obj_type`). Set, it routes into the
+///   typed-descriptor probe, whose `slot_index >= slot_count` arm downgrades.
+/// * `0x2000` `GC_LAYOUT_ALL_POINTERS` — a non-pointer store into an
+///   all-pointer array calls `layout_mark_unknown`, which is a real state
+///   change, not a no-op.
+///
+/// `GC_LAYOUT_SIDE_MASK` is deliberately absent. Skipping the note there leaves
+/// a stale set bit over a non-pointer, and `mark_field_into_worklist`
+/// re-validates every slot word, so the cost is one rejected visit and never a
+/// stranded child — the identical argument `class_field_store_needs_layout_note`
+/// already ships.
+///
+/// Failing this test costs the push its inline store: it takes
+/// `js_array_push_f64`, which notes the slot exactly as it always did. So a
+/// widening here can only ever be slower, never wrong — the same direction of
+/// approximation `emit_may_carry_heap_pointer_check` documents.
+///
+/// `0x0407 | 0x3800` == `0x3C07` == 15367.
+const ARRAY_PUSH_NUMERIC_CLEAN_I16: &str = "15367";
+
+/// #7839 — the inline array append's GC bookkeeping behind ONE live test.
+///
+/// The `apush.inbounds` store used to pay `js_string_addref_if_heap_string` +
+/// `js_gc_note_slot_layout` unconditionally and then an `ldar` on
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` for the barrier gate — three
+/// cross-crate obligations on *every* element of a `number[]` push loop, where
+/// all three are dead. `bench/push_num.ts` is 20M such pushes.
+///
+/// The static proof that would retire them (`array_store_needs_layout_note` →
+/// `expr_produces_non_pointer_bits_by_construction`) cannot be made for the
+/// shape that matters: `keep.push(base + j)` is an `Expr::Binary { Add }`, and
+/// that arm answers `false` unconditionally because `+` is string concatenation
+/// for non-numeric operands. It fires only for a bare canonical-i32 local
+/// (`keep.push(j)`), which is why the same loop is ~1.7x faster written that
+/// way. This is #7511's answer to the identical problem on class fields: ask
+/// the question ONCE inline, on the live bits, and branch over all three.
+///
+/// Why each obligation is dead when the test says no:
+///
+/// * `js_string_addref_if_heap_string` is tag-checked and a no-op for every
+///   non-`STRING_TAG` value — `emit_may_carry_heap_pointer_check` admits
+///   `STRING_TAG`, so a string always takes the guarded arm.
+/// * `js_write_barrier_slot` opens with `barrier_child_prologue`, which returns
+///   immediately when `decode_heap_addr(child) == 0`. The predicate is a
+///   superset of every address that decoder resolves.
+/// * `js_gc_note_slot_layout` for a non-pointer value is a no-op in every
+///   layout state EXCEPT three, and reaching this block already PROVES all
+///   three clear: [`ARRAY_PUSH_NUMERIC_CLEAN_I16`] widens the `nofwd`
+///   integrity mask to cover them, so the array's half of the proof costs a
+///   wider constant on an `and` that was being emitted anyway, and this block
+///   has only the value left to test.
+///
+/// Gated on `value_is_numeric` at the call site, so a pointer-pushing loop
+/// (`churn`, `tree`, `push_cls`) emits byte-identical IR to before rather than
+/// paying the predicate for a test it always fails. That also keeps
+/// `js_array_note_numeric_write` out of the picture: it is already statically
+/// elided for exactly this class of value.
+#[allow(clippy::too_many_arguments)]
+fn emit_numeric_push_store_pointer_tested(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    value_double: &str,
+    value_bits_override: Option<&str>,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    write_barrier_needed: bool,
+) -> (String, String, Option<String>) {
+    let (length, element_addr, value_bits) = {
+        let blk = ctx.block();
+        let length = blk.safe_load_i32_from_ptr(arr_handle);
+        let length_i64 = blk.zext(I32, &length, I64);
+        let byte_offset = blk.shl(I64, &length_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
+        // only the bookkeeping moves behind the live test below, and the
+        // barrier's own first test is a subset of that predicate.
+        blk.store(DOUBLE, value_double, &element_ptr);
+        let value_bits = value_bits_override
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
+        (length, element_addr, value_bits)
+    };
+    let bookkeeping_idx = ctx.new_block("apush.gc_bookkeeping");
+    let done_idx = ctx.new_block("apush.gc_bookkeeping.done");
+    let bookkeeping_label = ctx.block_label(bookkeeping_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
+        blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+    }
+    ctx.current_block = bookkeeping_idx;
+    {
+        let blk = ctx.block();
+        if string_addref_needed {
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+        }
+        if layout_note_needed {
+            emit_layout_note_slot_on_block(blk, arr_handle, &length, &value_bits);
+        }
+    }
+    if write_barrier_needed {
+        // `arr_handle` reached here through the `nofwd` header test, so it is a
+        // live, non-forwarded GC array user pointer — the precondition for
+        // reading its header byte. The generation test stays: this arm is
+        // reached for real pointer children too.
+        emit_write_barrier_slot_generation_tested(
+            ctx,
+            arr_handle,
+            arr_handle,
+            &element_addr,
+            &value_bits,
+            "apush",
+        );
+    }
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+    (length, element_addr, None)
+}
+
 fn emit_array_handle_length(
     ctx: &mut FnCtx<'_>,
     array_handle: &str,
@@ -420,9 +582,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 layout_note_needed
             };
             let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
-            let value_is_numeric = is_numeric_expr(ctx, value);
+            let value_is_statically_numeric = is_numeric_expr(ctx, value);
+            let value_is_numeric = guarded_numeric_add_push_candidate(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
+            // #7839 — the inline append's three GC-bookkeeping calls behind ONE
+            // live test of the stored bits, exactly #7511's class-field shape.
+            // See `emit_numeric_push_store_pointer_tested` for why each call is
+            // dead when the test says "no pointer, no watched layout state",
+            // and why the gate is `value_is_numeric` rather than unconditional.
+            let guarded_numeric_bookkeeping = value_is_numeric
+                && !declared_all_pointer
+                && (layout_note_needed || string_addref_needed || write_barrier_needed);
             // #7634: spec order (receiver Reference, then argument) is only
             // observable when the argument can rebind the receiver. When it
             // can, take the rooted spec-ordered arm; when it cannot — the hot
@@ -458,8 +629,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
             // numeric values (e.g. a read fallback's INT32-boxed bits) keep
             // the runtime-guarded tier: stored verbatim they would corrupt
             // the dense raw-f64 invariant.
-            let keep_guarded_numeric_push = super::typed_feedback_emission_enabled()
-                || !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
+            // Metadata-selected `+` is only a guarded candidate: a declared
+            // number may hold a string, boolean, or any other JS value. Keep
+            // that shape on the runtime numeric guard even when feedback
+            // emission is disabled. A guard miss reaches `js_array_push_f64`,
+            // which performs the generic store and revokes raw-f64 layout for
+            // every non-number (including non-pointer tags).
+            let inline_value_shape =
+                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
+            let keep_guarded_numeric_push =
+                super::typed_feedback_emission_enabled() || !inline_value_shape;
             if require_numeric_layout
                 && keep_guarded_numeric_push
                 && !ctx.boxed_vars.contains(array_id)
@@ -764,6 +943,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                         // notes the slot); it can never cost correctness.
                         let admitted_bits = blk.and(I16, &obj_flags, "62599");
                         blk.icmp_eq(I16, &admitted_bits, "40960")
+                    } else if guarded_numeric_bookkeeping {
+                        // #7839 — the array's half of the guard, folded into the
+                        // integrity test rather than emitted as a second one:
+                        // same `and`, same `icmp`, a wider constant. Reaching
+                        // the inline store now additionally proves the three
+                        // `_reserved` states in which `js_gc_note_slot_layout`
+                        // does real work for a NON-pointer value, so the store's
+                        // guard has only the value left to test. See
+                        // `emit_numeric_push_store_pointer_tested`.
+                        let admitted_bits = blk.and(I16, &obj_flags, ARRAY_PUSH_NUMERIC_CLEAN_I16);
+                        blk.icmp_eq(I16, &admitted_bits, "0")
                     } else {
                         // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
                         let integrity_bits = blk.and(I16, &obj_flags, "1031");
@@ -796,7 +986,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 // between the store and the barrier would run with the
                 // old→young edge unrecorded. The block is split here rather
                 // than the call being sunk to the end of the block.
-                let (length, element_addr, barrier_value_bits) = {
+                let (length, element_addr, barrier_value_bits) = if guarded_numeric_bookkeeping {
+                    emit_numeric_push_store_pointer_tested(
+                        ctx,
+                        &arr_handle,
+                        &v,
+                        v_bits.as_deref(),
+                        string_addref_needed,
+                        layout_note_needed,
+                        write_barrier_needed,
+                    )
+                } else {
                     let blk = ctx.block();
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let length_i64 = blk.zext(I32, &length, I64);
@@ -847,7 +1047,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                     // #7469: provably dead under `declared_all_pointer` — the
                     // `nofwd` admission test proved both raw-f64 bits already
                     // clear, and clearing them is this call's only effect.
-                    if !value_is_numeric && !declared_all_pointer {
+                    // A metadata-only numeric candidate has not established
+                    // the live value's kind. If this generic inline tier is
+                    // used (for an array without a static raw-f64 fact), let
+                    // the runtime note inspect every stored tag and revoke a
+                    // dynamically active numeric layout on strings, booleans,
+                    // undefined, and all other non-number values.
+                    if !value_is_statically_numeric && !declared_all_pointer {
                         let value_bits = barrier_value_bits
                             .clone()
                             .or(value_bits)

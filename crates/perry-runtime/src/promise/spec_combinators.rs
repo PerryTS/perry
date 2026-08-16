@@ -557,6 +557,111 @@ fn build_settled_rejected(reason: f64) -> f64 {
 // PerformPromise{All,AllSettled,Race,Any}
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// #7911: `Promise.all` per-element fast arm.
+//
+// The two per-element steps the spec makes observable — `Call(promiseResolve,
+// C, «next»)` and `Invoke(nextPromise, "then", …)` — are BOTH inert when the
+// combinator is running on the intrinsic `Promise` with the intrinsic
+// `Promise.resolve`, and the element resolves to a native promise carrying no
+// own `then` / `constructor` expando. `fast_element_ok` states that condition;
+// see `docs`/`changelog.d` for the enumerated observables. The fast arm calls
+// the SAME two runtime primitives the slow arm reaches through the dispatch
+// towers, so the resulting microtask job graph is identical:
+//
+//   Call(%Promise.resolve%, %Promise%, «next») == js_promise_resolved(next)
+//        (`js_promise_resolve_spec`'s own `is_default_promise_constructor` arm)
+//   Invoke(p, "then", «onFul, onRej»)          == js_promise_then(p, …)
+//        (`native_call_method/primitive_methods.rs`'s intrinsic then arm)
+//
+// with one deliberate difference: `js_promise_attach_handlers` replaces
+// `js_promise_then`, i.e. the chained promise `Promise.prototype.then` would
+// return is not allocated. `Promise.all` discards it, it is unreachable from
+// user code, and its only externally visible effects are the
+// `v8.promiseHooks` / `async_hooks` lifecycle callbacks — which the guard
+// excludes by requiring both hook sets to be inactive.
+
+// A test-only tally of how many elements actually took the fast arm. A test
+// that only asserts "nothing broke" cannot tell a working fast path from a
+// dead one — CLAUDE.md's "a gate must assert its subject was live".
+#[cfg(test)]
+crate::perry_thread_local! {
+    pub(super) static FAST_ARM_ELEMENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+#[allow(unused_variables)]
+fn note_fast_arm_element(taken: bool) {
+    #[cfg(test)]
+    if taken {
+        FAST_ARM_ELEMENTS.with(|c| c.set(c.get() + 1));
+    }
+}
+
+/// True iff `resolve_fn` is the intrinsic `Promise.resolve` — i.e. the reified
+/// `promise_resolve_static` thunk, not a user replacement. Compares the
+/// CLOSURE'S FUNCTION POINTER, not the closure object: `Get(Promise,
+/// "resolve")` may hand back a freshly reified closure each read, so object
+/// identity is not stable, but the underlying thunk is.
+fn is_intrinsic_promise_resolve(resolve_fn: f64) -> bool {
+    let Some((intrinsic, _, _, _)) = crate::object::promise_static_function_spec("resolve") else {
+        return false;
+    };
+    let bits = resolve_fn.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_handle_band(raw) || !crate::closure::is_closure_ptr(raw) {
+        return false;
+    }
+    unsafe { (*(raw as *const crate::closure::ClosureHeader)).func_ptr == intrinsic }
+}
+
+/// True while any promise-lifecycle observer is installed. Re-checked per
+/// element because the loop runs user JS (a thenable's `then` getter) between
+/// elements and `v8.promiseHooks` can be armed from it.
+#[inline]
+fn promise_lifecycle_observed() -> bool {
+    crate::v8::promise_hooks_active() || crate::async_hooks::hooks_active()
+}
+
+/// The element's resolved promise, when it is a plain native `Promise` whose
+/// `then` would dispatch to the intrinsic `Promise.prototype.then`. Mirrors the
+/// own-property tests in `native_call_method/primitive_methods.rs`: an own
+/// `then` is a user override that must be invoked, and an own `constructor`
+/// sends `then` through `SpeciesConstructor` (a user-observable read).
+fn attachable_native_promise(value: f64) -> Option<*mut Promise> {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return None;
+    }
+    let p: *mut Promise = unboxed_ptr(value);
+    if p.is_null() {
+        return None;
+    }
+    let addr = p as usize;
+    if crate::promise::promise_has_own_property(addr, "then")
+        || crate::promise::promise_has_own_constructor(addr)
+    {
+        return None;
+    }
+    Some(p)
+}
+
+/// A capability resolving function as a raw `ClosurePtr`, or `None` if it is
+/// not a plain closure (a user constructor's capability can hold anything).
+fn as_closure_ptr(value: f64) -> Option<crate::promise::ClosurePtr> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_handle_band(raw) || !crate::closure::is_closure_ptr(raw) {
+        return None;
+    }
+    Some(raw as crate::promise::ClosurePtr)
+}
+
 /// Run the per-element loop. `cap` is the result capability, `promise_resolve`
 /// the `C.resolve` function, `elements` the snapshot of iterated values.
 /// Returns `Ok(())` on success or `Err(thrown)` for `IfAbruptRejectPromise`.
@@ -611,15 +716,46 @@ fn perform(
     let values_ptr =
         || -> *mut crate::array::ArrayHeader { unboxed_ptr(values_h.get_nanbox_f64()) };
 
+    // #7911: hoisted half of the fast-arm guard. Both operands are read ONCE by
+    // the spec (`C` is the captured `this`, `promiseResolve` the single
+    // `Get(C, "resolve")` in `run_combinator`), so hoisting is not just an
+    // optimisation — re-reading `globalThis.Promise` per element would be the
+    // less faithful thing to do.
+    let fast_arm = kind == CombinatorKind::All
+        && is_default_promise_constructor(ctor_h.get_nanbox_f64())
+        && is_intrinsic_promise_resolve(resolve_fn_h.get_nanbox_f64());
+    // Only a BOOLEAN is hoisted. The capability's reject function is a GC
+    // object; caching its raw address across the per-element loop (which
+    // allocates a guard array and a closure every iteration, and runs user JS)
+    // is the #7184/#7497 defect shape verbatim. The address is re-read from
+    // `cap_reject_h` at each point of use.
+    let cap_reject_is_closure = fast_arm && as_closure_ptr(cap_reject_h.get_nanbox_f64()).is_some();
+
     for i in 0..count {
         let iter = crate::gc::RuntimeHandleScope::new();
         let next = js_array_get_f64(unboxed_ptr(elements_h.get_nanbox_f64()), i);
         // nextPromise = ? Call(promiseResolve, C, «next»)
-        let next_promise = call_with_this(
-            resolve_fn_h.get_nanbox_f64(),
-            ctor_h.get_nanbox_f64(),
-            &[next],
-        )?;
+        //
+        // #7911 fast arm: with C = %Promise% and the intrinsic `Promise.resolve`
+        // this call is `js_promise_resolved(next)` verbatim — see
+        // `js_promise_resolve_spec`'s `is_default_promise_constructor` branch.
+        // The `combinator_catch_js` frame is kept because thenable assimilation
+        // reads `Get(next, "then")`, whose getter may throw and must funnel
+        // through IfAbruptRejectPromise exactly as the generic call does.
+        let element_fast = cap_reject_is_closure && !promise_lifecycle_observed();
+        let next_promise = if element_fast {
+            let next_h = iter.root_nanbox_f64(next);
+            combinator_catch_js(|| {
+                let p = crate::promise::js_promise_resolved(next_h.get_nanbox_f64());
+                boxed_ptr(p)
+            })?
+        } else {
+            call_with_this(
+                resolve_fn_h.get_nanbox_f64(),
+                ctor_h.get_nanbox_f64(),
+                &[next],
+            )?
+        };
         let next_promise_h = iter.root_nanbox_f64(next_promise);
 
         match kind {
@@ -636,10 +772,39 @@ fn perform(
                 )));
                 let state = state_ptr();
                 js_array_set_f64(state, 0, js_array_get_f64(state, 0) + 1.0);
-                invoke_then(
-                    next_promise_h.get_nanbox_f64(),
-                    &[elem_h.get_nanbox_f64(), cap_reject_h.get_nanbox_f64()],
-                )?;
+                // `attachable_native_promise` is re-tested here rather than
+                // above because `js_promise_resolved` may have RETURNED the
+                // element itself (promise identity), so the own-`then` /
+                // own-`constructor` expandos that would make `Invoke` observable
+                // belong to the resolved value, not to the raw element.
+                let attached = if element_fast
+                    && !promise_lifecycle_observed()
+                    && attachable_native_promise(next_promise_h.get_nanbox_f64()).is_some()
+                {
+                    // Every address below is re-read from its handle here, AFTER
+                    // the last thing that can allocate (`attachable_native_promise`
+                    // interns the "then"/"constructor" keys), and nothing between
+                    // these four lines allocates.
+                    let p: *mut Promise = unboxed_ptr(next_promise_h.get_nanbox_f64());
+                    let on_fulfilled = as_closure_ptr(elem_h.get_nanbox_f64());
+                    let on_rejected = as_closure_ptr(cap_reject_h.get_nanbox_f64());
+                    match (on_fulfilled, on_rejected) {
+                        (Some(f), Some(r)) => {
+                            crate::promise::js_promise_attach_handlers(p, f, r);
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                note_fast_arm_element(attached);
+                if !attached {
+                    invoke_then(
+                        next_promise_h.get_nanbox_f64(),
+                        &[elem_h.get_nanbox_f64(), cap_reject_h.get_nanbox_f64()],
+                    )?;
+                }
             }
             CombinatorKind::AllSettled => {
                 let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
@@ -1022,4 +1187,178 @@ pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) 
         }
     }
     cap_promise_h.get_nanbox_f64()
+}
+
+// ---------------------------------------------------------------------------
+// #7911 fast-arm tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod fast_arm_tests {
+    use super::*;
+    use crate::array::{js_array_alloc, js_array_get_f64, js_array_set_f64};
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
+    use crate::promise::{js_promise_run_microtasks, PromiseState};
+
+    fn reset() {
+        FAST_ARM_ELEMENTS.with(|c| c.set(0));
+    }
+
+    fn taken() -> u64 {
+        FAST_ARM_ELEMENTS.with(|c| c.get())
+    }
+
+    fn array_of(values: &[f64]) -> f64 {
+        let arr = js_array_alloc(values.len() as u32);
+        unsafe {
+            (*arr).length = values.len() as u32;
+        }
+        for (i, v) in values.iter().enumerate() {
+            js_array_set_f64(arr, i as u32, *v);
+        }
+        js_nanbox_pointer(arr as i64)
+    }
+
+    fn settled_promise(value: f64) -> f64 {
+        boxed_ptr(crate::promise::js_promise_resolved(value))
+    }
+
+    fn run_all(iterable: f64) -> *mut Promise {
+        let c = default_promise_ctor();
+        unboxed_ptr(js_promise_all_spec(c, iterable))
+    }
+
+    /// The guard's identity test must accept the reified intrinsic and reject
+    /// anything else — including another `Promise` static, which is the shape a
+    /// `Promise.resolve = Promise.reject` assignment produces.
+    #[test]
+    fn intrinsic_promise_resolve_is_identified_by_thunk_not_by_object() {
+        let (resolve_thunk, _, _, _) =
+            crate::object::promise_static_function_spec("resolve").expect("resolve spec");
+        let (reject_thunk, _, _, _) =
+            crate::object::promise_static_function_spec("reject").expect("reject spec");
+        assert_ne!(resolve_thunk, reject_thunk);
+
+        let good = boxed_ptr(js_closure_alloc(resolve_thunk, 0));
+        assert!(is_intrinsic_promise_resolve(good));
+
+        let wrong_static = boxed_ptr(js_closure_alloc(reject_thunk, 0));
+        assert!(!is_intrinsic_promise_resolve(wrong_static));
+
+        // Non-closure values must not be probed as closures.
+        assert!(!is_intrinsic_promise_resolve(undef()));
+        assert!(!is_intrinsic_promise_resolve(1.0));
+        assert!(!is_intrinsic_promise_resolve(js_nanbox_pointer(0x40001)));
+    }
+
+    /// The subject is live: `Promise.all` over plain native promises takes the
+    /// fast arm for every element, and still resolves with the right values.
+    #[test]
+    fn fast_arm_is_taken_for_plain_native_promises() {
+        reset();
+        let elements = array_of(&[
+            settled_promise(1.0),
+            settled_promise(2.0),
+            settled_promise(3.0),
+        ]);
+        let all = run_all(elements);
+        assert!(!all.is_null());
+        js_promise_run_microtasks();
+        unsafe {
+            assert_eq!((*all).state, PromiseState::Fulfilled);
+            let results = crate::value::js_nanbox_get_pointer((*all).value)
+                as *const crate::array::ArrayHeader;
+            assert_eq!(js_array_get_f64(results, 0), 1.0);
+            assert_eq!(js_array_get_f64(results, 1), 2.0);
+            assert_eq!(js_array_get_f64(results, 2), 3.0);
+        }
+        assert_eq!(taken(), 3, "every element should have taken the fast arm");
+    }
+
+    /// Non-promise elements resolve through the same `js_promise_resolved`, so
+    /// they are still eligible once wrapped.
+    #[test]
+    fn fast_arm_handles_plain_values() {
+        reset();
+        let all = run_all(array_of(&[10.0, 20.0]));
+        js_promise_run_microtasks();
+        unsafe {
+            assert_eq!((*all).state, PromiseState::Fulfilled);
+        }
+        assert_eq!(taken(), 2);
+    }
+
+    extern "C" fn own_then_fn(
+        closure: *const crate::closure::ClosureHeader,
+        on_fulfilled: f64,
+        _on_rejected: f64,
+    ) -> f64 {
+        let v = crate::closure::js_closure_get_capture_f64(closure, 0);
+        unsafe {
+            crate::closure::js_native_call_value(on_fulfilled, [v].as_ptr(), 1);
+        }
+        undef()
+    }
+
+    /// An own `then` on the resolved element is a user override the spec must
+    /// invoke — the fast arm must refuse it, and the override must run.
+    #[test]
+    fn own_then_expando_forces_the_slow_arm_and_is_invoked() {
+        reset();
+        let p = settled_promise(1.0);
+        let then = js_closure_alloc(own_then_fn as *const u8, 1);
+        js_closure_set_capture_f64(then, 0, 99.0);
+        unsafe {
+            crate::object::exotic_expando::exotic_set_property(
+                unboxed_ptr::<u8>(p) as usize,
+                crate::object::exotic_expando::ExoticKind::Promise,
+                "then",
+                boxed_ptr(then),
+                p,
+            );
+        }
+        assert!(attachable_native_promise(p).is_none());
+
+        let all = run_all(array_of(&[p]));
+        js_promise_run_microtasks();
+        unsafe {
+            assert_eq!((*all).state, PromiseState::Fulfilled);
+            let results = crate::value::js_nanbox_get_pointer((*all).value)
+                as *const crate::array::ArrayHeader;
+            assert_eq!(
+                js_array_get_f64(results, 0),
+                99.0,
+                "the own `then` override must supply the value"
+            );
+        }
+        assert_eq!(taken(), 0, "an own `then` must not take the fast arm");
+    }
+
+    /// An own `constructor` sends `then` through SpeciesConstructor, a
+    /// user-observable read, so it is likewise excluded.
+    #[test]
+    fn own_constructor_expando_forces_the_slow_arm() {
+        let p = settled_promise(5.0);
+        assert!(attachable_native_promise(p).is_some());
+        unsafe {
+            crate::object::exotic_expando::exotic_set_property(
+                unboxed_ptr::<u8>(p) as usize,
+                crate::object::exotic_expando::ExoticKind::Promise,
+                "constructor",
+                1.0,
+                p,
+            );
+        }
+        assert!(attachable_native_promise(p).is_none());
+    }
+
+    /// Values that are not native promises are never attachable, and the probe
+    /// must not dereference them as promise headers.
+    #[test]
+    fn non_promise_values_are_never_attachable() {
+        assert!(attachable_native_promise(undef()).is_none());
+        assert!(attachable_native_promise(3.5).is_none());
+        assert!(attachable_native_promise(js_nanbox_pointer(0x40001)).is_none());
+        assert!(attachable_native_promise(array_of(&[1.0])).is_none());
+    }
 }

@@ -147,6 +147,27 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     }
 }
 
+/// Normalize a Fetch `Request`/`Response` value for a direct stdlib FFI call.
+///
+/// Bare Fetch values are already registry handles and pass through unchanged.
+/// A userland subclass such as Next.js's `NextResponse` is a GC object whose
+/// native handle lives in [`FETCH_SUBCLASS_HANDLE_FIELD`]; typed lowering used
+/// to pass that object address to `js_fetch_response_*`, where it could never
+/// resolve in the stdlib registry.  Recover and re-box the backing handle so
+/// typed and dynamic property access share the same record.
+#[no_mangle]
+pub extern "C" fn js_fetch_unwrap_handle(value: f64) -> f64 {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !js_value.is_pointer() {
+        return value;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    match unsafe { fetch_subclass_handle_id(raw) } {
+        Some(id) => crate::value::js_nanbox_pointer(id),
+        None => value,
+    }
+}
+
 /// Hidden own-field name under which a `class X extends Temporal.<Type>`
 /// instance stashes the NaN-boxed pointer to its underlying Temporal cell.
 /// Written by `js_fetch_or_value_super` (the runtime-value super dispatcher,
@@ -236,13 +257,16 @@ pub(crate) use accessors::scan_accessor_receiver_override_root_mut;
 mod buffer_own_prop;
 mod class_object_props;
 mod crypto_key;
-mod enumeration;
+pub(crate) mod enumeration;
 mod field_ops;
 mod get_field_by_name;
+#[cfg(test)]
+mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
 mod map_set_receiver;
+mod probe_dispatch;
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
 /// cache backing `js_object_get_field_by_name`'s slow tail.
@@ -306,15 +330,14 @@ pub(crate) use has_property::{
     wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
-pub(crate) use ic_miss::pic_epoch_bump;
 pub(crate) use ic_miss::{
-    is_array_method_value_name, is_primitive_proto_method, is_timer_handle_method_key,
-    set_method_value_name,
+    is_array_method_value_name, is_primitive_proto_method, set_method_value_name,
+    timer_handle_method_name_static,
 };
 pub use ic_miss::{
     js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
-    js_private_guard, PicCache, PERRY_IC_EPOCH, PIC_CACHE_WORDS,
+    js_private_guard, PicCache, PIC_CACHE_WORDS,
 };
 
 #[cfg(test)]

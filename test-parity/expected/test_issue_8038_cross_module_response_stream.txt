@@ -1,0 +1,30 @@
+headers-copy:identity=false
+headers-copy:response=a
+headers-copy:initializer=b
+sync:brand=true
+sync:status=207 Multi-Status
+sync:headers-stable=true
+sync:body-stable=true
+sync:content-type=application/json; charset=utf-8
+sync:x-perry-repro=sync
+sync:cookie=perry_ctx=sync; Path=/; HttpOnly; SameSite=Strict
+sync:chunks=2 eof=true body={"label":"sync","complete":true}
+async:brand=true
+async:status=207 Multi-Status
+async:headers-stable=true
+async:body-stable=true
+async:content-type=application/json; charset=utf-8
+async:x-perry-repro=async
+async:cookie=perry_ctx=async; Path=/; HttpOnly; SameSite=Strict
+async:chunks=2 eof=true body={"label":"async","complete":true}
+next:subclass-brand=true
+next:marker=next-like
+next:brand=true
+next:status=207 Multi-Status
+next:headers-stable=true
+next:body-stable=true
+next:content-type=application/json; charset=utf-8
+next:x-perry-repro=next
+next:cookie=perry_ctx=next; Path=/; HttpOnly; SameSite=Strict
+next:chunks=2 eof=true body={"label":"next","complete":true}
+error:surfaced=Error: stream-boom

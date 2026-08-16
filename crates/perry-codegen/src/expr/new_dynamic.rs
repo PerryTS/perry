@@ -12,7 +12,7 @@ use crate::lower_call::lower_new;
 use crate::lower_conditional::lower_conditional;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::MaterializationReason;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I64, PTR};
 
 use super::{
     downgrade_buffer_aliases_in_expr, lower_expr, lower_js_args_array, nanbox_pointer_inline,
@@ -82,39 +82,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
+            // #7803 — THE zod corpus corruption. This arm used to thread the
+            // accumulator through the bundling loop as a bare i64 register:
+            // every regular argument's lowering and every spread part's
+            // `js_array_like_to_array` can run a moving minor, after which
+            // `js_array_push_f64`/`js_array_concat` wrote through the
+            // accumulator's PRE-MOVE address — into from-space pages the same
+            // cycle had already recycled into Eden. The element being written
+            // is typically a NaN-boxed string (tag 0x7FFF), and every garbage
+            // header the #7803 pin-latch ever recorded is the high half of one
+            // (sizes 0x7FFF02AB / 0x7FFF03AF / 0x7FFF03FF / 0x7FFF0543).
+            // zod's `Doc.compile` — `new F(...args, lines.join("\n"))`, run at
+            // the end of every `generateFastpass` — is the corridor that hit
+            // it. `bundle_args_rooted` re-reads the accumulator from its temp
+            // root below each collection point, same as the CallSpread arms.
+            //
+            // The CALLEE has the §18/#7803 defect too: this spread arm was not
+            // among the three `8842a0be4` fixed. A root and not a reload — JS
+            // resolves the callee before the arguments.
+            let mut callee_group = crate::rooting::open_rooted_group(1);
             let func_double = lower_expr(ctx, callee)?;
-            let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-            for a in args {
-                match a {
-                    CallArg::Expr(e) => {
-                        let v = lower_expr(ctx, e)?;
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &acc_handle), (DOUBLE, &v)],
-                        );
-                    }
-                    CallArg::Spread(e) => {
-                        let part_box = lower_expr(ctx, e)?;
-                        let part_handle =
-                            ctx.block()
-                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_concat",
-                            &[(I64, &acc_handle), (I64, &part_handle)],
-                        );
-                    }
-                }
-            }
-            let args_box = nanbox_pointer_inline(ctx.block(), &acc_handle);
-            // #5253: locate the not-a-constructor throw the apply path can raise.
-            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-            let result = ctx.block().call(
-                DOUBLE,
-                "js_new_function_construct_apply",
-                &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
-            );
+            let callee_root = callee_group.adopt(ctx, callee, &func_double, true);
+            let result =
+                crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, current| {
+                    let args_box = nanbox_pointer_inline(ctx.block(), current);
+                    // #5253: locate the not-a-constructor throw the apply path
+                    // can raise.
+                    crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                    // Below every collection point in the bundling: the slot is
+                    // a mutable root an evacuating cycle rewrites in place.
+                    let func_double = callee_group.reread(ctx, callee_root)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_new_function_construct_apply",
+                        &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
+                    ))
+                })?;
+            callee_group.release(ctx);
             // Write-back: when the callee is a statically-known user class,
             // propagate constructor mutations (e.g. `++called`) back to the
             // outer captured locals. The runtime construction path stores
@@ -240,7 +244,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if property == "constructor" {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         let is_date = matches!(
-                            ctx.local_types.get(id),
+                            ctx.stable_local_type_proof(id),
                             Some(HirType::Named(name)) if name == "Date"
                         );
                         if is_date {
@@ -688,21 +692,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         MaterializationReason::UnknownCallEscape,
                     );
                 }
-                let func_double = lower_expr(ctx, callee)?;
-                let lowered_args: Vec<String> = args
-                    .iter()
-                    .map(|a| lower_expr(ctx, a))
-                    .collect::<Result<Vec<_>>>()?;
-                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
-                // #5253: locate a not-a-constructor throw from the runtime
-                // construct path (a `LocalGet` callee holding `undefined`, a
-                // non-callable value, etc.).
-                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-                let result = ctx.block().call(
-                    DOUBLE,
-                    "js_new_function_construct",
-                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
-                );
+                // #7803: the CALLEE has to outlive the arguments.
+                //
+                // This arm used to lower `callee` into a bare register, lower
+                // every argument, build the argument array — each of which can
+                // allocate and therefore evacuate — and only then pass the
+                // original register to the helper. Under the shipping
+                // (statepoint) lowering that register is in no live bundle, so
+                // nothing marks it and nothing relocates it, and the constructor
+                // handed to `js_new_function_construct` is a pre-move address.
+                //
+                // It is the largest single population the dependency-scale
+                // corpus reports: 21 `unrooted:global` hazards in
+                // `zod/src/v4/classic/schemas.ts` alone (`strictObject`,
+                // `looseObject`, `union`, `record`, …), every one a
+                // `load @perry_global_*` held across `js_closure_alloc` /
+                // `js_closure_call1` / `js_object_alloc`.
+                //
+                // A ROOT, not a reload: JS resolves the callee before it
+                // evaluates the arguments, so re-reading the global below them
+                // would hand the call whatever an argument assigned — a
+                // miscompile in place of a rooting bug. That is exactly why
+                // `operand_is_reloadable` refuses module globals, and the
+                // group's `operand_protection` answers it the same way here.
+                let result = crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
+                    let func_double = lower_expr(ctx, callee)?;
+                    let callee_root = g.adopt(ctx, callee, &func_double, true);
+                    let mut arg_ids = Vec::with_capacity(args.len());
+                    for a in args {
+                        arg_ids.push(g.lower(ctx, a, true)?);
+                    }
+                    let lowered_args: Vec<String> = arg_ids
+                        .iter()
+                        .map(|i| g.reread(ctx, *i))
+                        .collect::<Result<Vec<_>>>()?;
+                    let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                    // #5253: locate a not-a-constructor throw from the runtime
+                    // construct path (a `LocalGet` callee holding `undefined`, a
+                    // non-callable value, etc.).
+                    crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                    // Below `lower_js_args_array`, which allocates.
+                    let func_double = g.reread(ctx, callee_root)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_new_function_construct",
+                        &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                    ))
+                })?;
                 return Ok(result);
             }
 
@@ -723,21 +759,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     MaterializationReason::UnknownCallEscape,
                 );
             }
-            let func_double = lower_expr(ctx, callee)?;
-            let lowered_args: Vec<String> = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>>>()?;
-            let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
-            // #5253: locate the not-a-constructor throw for `new <primitive>` /
-            // `new <non-constructor-value>` rejected inside the runtime helper.
-            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
-            let result = ctx.block().call(
-                DOUBLE,
-                "js_new_function_construct",
-                &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
-            );
-            Ok(result)
+            // #7803: same callee-outlives-arguments fix as the arm above.
+            crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, g| {
+                let func_double = lower_expr(ctx, callee)?;
+                let callee_root = g.adopt(ctx, callee, &func_double, true);
+                let mut arg_ids = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_ids.push(g.lower(ctx, a, true)?);
+                }
+                let lowered_args: Vec<String> = arg_ids
+                    .iter()
+                    .map(|i| g.reread(ctx, *i))
+                    .collect::<Result<Vec<_>>>()?;
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                // #5253: locate the not-a-constructor throw for `new <primitive>` /
+                // `new <non-constructor-value>` rejected inside the runtime helper.
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                let func_double = g.reread(ctx, callee_root)?;
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_new_function_construct",
+                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                ))
+            })
         }
 
         // `this` — load from the topmost `this` slot in the constructor

@@ -584,6 +584,10 @@ fn exec_block_scope(ctx: &Ctx, block: &ast::BlockStmt, env_idx: usize) -> Flow {
 }
 
 pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
+    // #7803: statement-granularity safepoint, for the same reason `eval_expr`
+    // has one. A loop whose body is a single statement with no sub-expression
+    // that allocates would otherwise still offer nothing.
+    super::interp_safepoint();
     use ast::Stmt::*;
     match stmt {
         Expr(e) => {

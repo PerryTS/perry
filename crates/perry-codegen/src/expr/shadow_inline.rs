@@ -261,15 +261,17 @@ fn emit_inline_slot_write(ctx: &mut FnCtx<'_>, slot_idx: u32, what: InlineSlotWr
 /// Identical in kind to `emit_persistent_shadow_root_barrier` and to the
 /// runtime's own `root_shading_barrier`: a zero count *proves* this thread's
 /// `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
-/// `incremental_mark_barrier_enable` installs the thread-local before
-/// incrementing the count. Skipping the call on a zero count is therefore
-/// observationally identical, not a weaker barrier.
+/// `incremental_mark_barrier_enable` increments the count before installing
+/// the thread-local and disable clears the thread-local before decrementing
+/// the count. Skipping the call on a zero count is therefore observationally
+/// identical, not a weaker barrier. The LLVM `monotonic` load matches the
+/// runtime's Rust `Relaxed` readers; this gate does not publish other memory.
 ///
 /// Terminates the current block with a branch to `done_label`.
 fn emit_inline_root_shading_barrier(ctx: &mut FnCtx<'_>, value_bits: &str, done_label: &str) {
     let active =
         ctx.block()
-            .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+            .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let needed = ctx.block().icmp_ne(I32, &active, "0");
     let barrier_idx = ctx.new_block("ss.barrier");
     let barrier_label = ctx.block_label(barrier_idx);
@@ -535,9 +537,9 @@ mod tests {
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains(
-                "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst"
+                "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic"
             ),
-            "inline bind must gate on the incremental-mark active count; \
+            "inline bind must use the runtime's relaxed ordering for the incremental-mark gate; \
              body:\n{body}"
         );
         assert!(

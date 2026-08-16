@@ -491,27 +491,65 @@ pub(crate) fn decide_full_outline_ic(callable_count: usize) -> bool {
 /// 13MB bundle); splitting bounds peak compiler memory to roughly whole/N.
 ///
 /// `PERRY_CODEGEN_UNITS=N` forces exactly N units (1 disables splitting).
-/// Otherwise auto: 1 unit until the module's callable count crosses a floor,
-/// then `ceil(callables / target_per_unit)`, capped — so ordinary per-file
-/// modules stay on the single-unit path (default 1, zero behavior change).
-/// `PERRY_CODEGEN_UNIT_SIZE` overrides the target callables-per-unit.
-pub(crate) fn decide_codegen_units(callable_count: usize) -> usize {
+/// Otherwise auto: choose the larger of the callable-count estimate and the
+/// post-lowering generated-IR estimate. The latter matters for generated and
+/// minified bundles: one HIR callable can expand into many large helper/wrapper
+/// bodies, so callable count alone left 100+ MiB LLVM modules unsplit.
+///
+/// `PERRY_CODEGEN_UNIT_SIZE` overrides callables/unit;
+/// `PERRY_CODEGEN_UNIT_BYTES` overrides generated IR bytes/unit.
+pub(crate) fn decide_codegen_units(callable_count: usize, estimated_ir_bytes: usize) -> usize {
     if let Ok(v) = std::env::var("PERRY_CODEGEN_UNITS") {
         if let Ok(n) = v.parse::<usize>() {
             return n.max(1);
         }
     }
-    const MIN_CALLABLES_TO_SPLIT: usize = 8000;
-    const MAX_UNITS: usize = 48;
-    let target = std::env::var("PERRY_CODEGEN_UNIT_SIZE")
+    const MIN_CALLABLES_TO_SPLIT: usize = 8_000;
+    // Real-app calibration (OpenCode's split CLI): the estimator reports only
+    // function bodies, while LLVM also receives globals, declarations,
+    // attributes, and metadata. Modules estimated just below the old 48 MiB
+    // gate therefore reached LLVM as 44--46 MiB single units. Late in a large
+    // build, with the collected program HIR and cached-object bookkeeping
+    // resident, two such units expanded the process/pagefile until C: had less
+    // than 1 GiB free. Start splitting at 16 MiB of estimated function IR and
+    // require at least two units once the gate is crossed; the 20 MiB target
+    // remains the balancing goal for larger modules.
+    const MIN_IR_BYTES_TO_SPLIT: usize = 16 * 1024 * 1024;
+    const DEFAULT_IR_BYTES_PER_UNIT: usize = 20 * 1024 * 1024;
+    const MAX_UNITS: usize = 128;
+    let target_callables = std::env::var("PERRY_CODEGEN_UNIT_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(6000);
-    if callable_count < MIN_CALLABLES_TO_SPLIT {
-        return 1;
+    let target_ir_bytes = std::env::var("PERRY_CODEGEN_UNIT_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_IR_BYTES_PER_UNIT);
+    let by_callables = if callable_count >= MIN_CALLABLES_TO_SPLIT {
+        callable_count.div_ceil(target_callables)
+    } else {
+        1
+    };
+    let by_ir = if estimated_ir_bytes >= MIN_IR_BYTES_TO_SPLIT {
+        estimated_ir_bytes.div_ceil(target_ir_bytes).max(2)
+    } else {
+        1
+    };
+    by_callables.max(by_ir).clamp(1, MAX_UNITS)
+}
+
+#[cfg(test)]
+mod codegen_unit_tests {
+    use super::decide_codegen_units;
+
+    #[test]
+    fn splits_medium_generated_modules_before_the_llvm_memory_cliff() {
+        assert_eq!(decide_codegen_units(800, 15 * 1024 * 1024), 1);
+        assert_eq!(decide_codegen_units(800, 16 * 1024 * 1024), 2);
+        assert_eq!(decide_codegen_units(800, 45 * 1024 * 1024), 3);
     }
-    callable_count.div_ceil(target).clamp(1, MAX_UNITS)
 }
 
 pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
@@ -523,6 +561,21 @@ pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     // mangling here keeps all local-function call sites consistent. Byte-identical
     // to `sanitize` for plain `[A-Za-z0-9_]` names (the overwhelming common case).
     format!("perry_fn_{}__{}", module_prefix, sanitize_member(hir_name))
+}
+
+/// Stable, module-scoped sentinel used when a [`perry_hir::Expr::FuncRef`]
+/// cannot be resolved in the module's function registry.
+///
+/// The fallback wrapper is emitted once per source module. Keeping the module
+/// prefix in the sentinel name is required when codegen-unit splitting
+/// promotes that wrapper from internal to external linkage for cross-unit
+/// calls: independently compiled modules must not publish the same symbol.
+pub(crate) fn unknown_func_name(module_prefix: &str) -> String {
+    format!("perry_unknown_func_{module_prefix}")
+}
+
+pub(crate) fn unknown_func_wrapper_name(module_prefix: &str) -> String {
+    format!("__perry_wrap_{}", unknown_func_name(module_prefix))
 }
 
 pub(super) fn scoped_static_method_name(
@@ -787,6 +840,8 @@ pub(crate) fn default_target_triple() -> String {
         "x86_64-unknown-linux-gnu".to_string()
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         "aarch64-unknown-linux-gnu".to_string()
+    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        "aarch64-pc-windows-msvc".to_string()
     } else if cfg!(target_os = "windows") {
         "x86_64-pc-windows-msvc".to_string()
     } else {
@@ -852,7 +907,11 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "linux-aarch64-musl" => Some("aarch64-unknown-linux-musl".to_string()),
         "macos" => Some("arm64-apple-macosx15.0.0".to_string()),
         "macos-x86_64" => Some("x86_64-apple-macosx15.0.0".to_string()),
-        "windows" | "windows-winui" => Some("x86_64-pc-windows-msvc".to_string()),
+        "windows" | "windows-winui" if cfg!(target_os = "windows") => Some(default_target_triple()),
+        "windows" | "windows-winui" | "windows-x86_64" => {
+            Some("x86_64-pc-windows-msvc".to_string())
+        }
+        "windows-aarch64" | "windows-arm64" => Some("aarch64-pc-windows-msvc".to_string()),
         _ => None,
     }
 }
@@ -1541,7 +1600,11 @@ pub(super) fn emit_namespace_populator(
                     let wrapper_name = format!(
                         "__perry_wrap_perry_fn_{}__{}",
                         source_prefix,
-                        sanitize(source_local)
+                        // Function bodies and their closure wrappers use the
+                        // injective function-name mangler. Plain names are
+                        // unchanged; `$constructor` and similar exports must
+                        // not be collapsed to `_constructor` here (#7964).
+                        sanitize_member(source_local)
                     );
                     let arity = (*param_count).min(16);
                     let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
@@ -1659,6 +1722,20 @@ mod resolve_target_triple_tests {
         );
         // Unknown targets still fall through to None.
         assert_eq!(resolve_target_triple("android-mips"), None);
+    }
+
+    #[test]
+    fn explicit_windows_targets_resolve_to_coff_triples() {
+        assert_eq!(
+            resolve_target_triple("windows-x86_64").as_deref(),
+            Some("x86_64-pc-windows-msvc")
+        );
+        for target in ["windows-aarch64", "windows-arm64"] {
+            assert_eq!(
+                resolve_target_triple(target).as_deref(),
+                Some("aarch64-pc-windows-msvc")
+            );
+        }
     }
 }
 

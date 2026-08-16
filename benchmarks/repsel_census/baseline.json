@@ -285,7 +285,7 @@
         "ptr-shape": 0,
         "ptr-shape-consumed": 0,
         "ptr-numarray": 0,
-        "canonical-i32": 3,
+        "canonical-i32": 4,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,

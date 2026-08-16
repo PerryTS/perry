@@ -93,6 +93,7 @@ pub(crate) fn runtime_main_thread_id() -> u64 {
 /// handle call recorded main first — and a 0 here reads as "unrecorded",
 /// which waves EVERY thread through [`is_main_thread_or_unrecorded`] and
 /// reintroduces the worker-teardown print this exists to prevent.
+#[cfg(test)]
 pub(crate) fn record_diagnostics_owner_thread() {
     let _ = MAIN_OS_THREAD_ID.compare_exchange(
         0,

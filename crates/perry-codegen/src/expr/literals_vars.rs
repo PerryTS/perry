@@ -502,7 +502,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string-typed local that does `s = s + t` aborted codegen
             // with `string self-append: local N not in scope` because the
             // helper's `ctx.locals.get(id)` lookup whiffed.
-            if matches!(ctx.local_types.get(id), Some(HirType::String))
+            // #7841: the tag-dispatched helper validates the destination's
+            // current value before choosing append versus ordinary JS `+`.
+            // This is therefore a dispatch hint, not a binding proof; using
+            // the stable-only query would disable the optimization for every
+            // self-append because this `LocalSet` is itself a reassignment.
+            if matches!(ctx.local_type_hint(id), Some(HirType::String))
                 && !ctx.module_globals.contains_key(id)
                 && !ctx.closure_captures.contains_key(id)
                 && !ctx.boxed_vars.contains(id)

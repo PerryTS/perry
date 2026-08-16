@@ -62,7 +62,7 @@ pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
 /// - Async function calls (return type is Promise)
 pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+        Expr::LocalGet(id) => match ctx.stable_local_type_proof(id) {
             Some(HirType::Promise(_)) => true,
             // `const p: Promise<T> = ...` is lowered as Generic { base: "Promise", ... }
             // by the HIR when the source annotation is `Promise<T>` rather than the
@@ -180,7 +180,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // recognize `fn({}).then(cb)` as a Promise receiver and the
             // .then call falls through to a generic dispatch that
             // silently drops the callback.
-            Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Expr::LocalGet(id) => match ctx.stable_local_type_proof(id) {
                 Some(HirType::Function(ft)) if ft.is_async => true,
                 Some(HirType::Function(ft)) => match ft.return_type.as_ref() {
                     HirType::Promise(_) => true,
@@ -262,7 +262,7 @@ pub(crate) fn receiver_is_error_type(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// blanket exclusion — the monomorphized-specialization resolution below is
 /// what those must go through (#6040).
 fn declared_type_overrides_shape_proof(ctx: &FnCtx<'_>, id: &u32) -> bool {
-    match ctx.local_types.get(id) {
+    match ctx.stable_local_type_proof(id) {
         Some(HirType::Named(name)) => ctx.classes.contains_key(name),
         Some(HirType::Generic { .. }) => true,
         _ => false,
@@ -294,7 +294,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
                 .shape_proven_ptr_local(*id)
                 .map(|fact| fact.class_name.clone())
         }
-        Expr::LocalGet(id) => match ctx.local_types.get(id)? {
+        Expr::LocalGet(id) => match ctx.stable_local_type_proof(id)? {
             HirType::Named(name) => Some(name.clone()),
             // Generic instantiation `SimpleContainer<number>`: prefer the
             // MONOMORPHIZED specialization `base$mangled` whenever it is
@@ -342,7 +342,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // method dispatch.
         Expr::IndexGet { object, .. } => {
             if let Expr::LocalGet(arr_id) = object.as_ref() {
-                if let Some(HirType::Array(elem)) = ctx.local_types.get(arr_id) {
+                if let Some(HirType::Array(elem)) = ctx.stable_local_type_proof(arr_id) {
                     if let HirType::Named(name) = elem.as_ref() {
                         return Some(name.clone());
                     }
@@ -508,7 +508,10 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::String(_) | Expr::WtfString(_) => Some(HirType::String),
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
-        Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
+        // Source-level metadata only. Consumers that need a binding proof use
+        // `stable_local_type_proof` directly; guarded dispatchers may use this
+        // claim as a candidate.
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
         Expr::StaticMethodCall {
             class_name,
             method_name,
@@ -624,6 +627,30 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                                 }
                             }
                         }
+                    }
+                }
+                // The `type X = { … }` half of #655. A TS object-type ALIAS is
+                // structurally interchangeable with an `interface` — the same
+                // declaration, the same runtime layout (a plain object), the
+                // same absence of any layout guarantee — and `type` is the form
+                // most application code reaches for. But `lower_type_alias_decl`
+                // files aliases in `module.type_aliases` while
+                // `lower_interface_decl` files interfaces in
+                // `module.interfaces`, and only the latter was consulted here.
+                // So `type Record = { kind: string; amount: number }` proved
+                // NOTHING about `r.kind` / `r.amount`: `"t:" + r.kind` lowered
+                // to `js_dynamic_string_or_number_add` and `r.amount + r.id`
+                // picked up `js_number_coerce` on both sides, purely because
+                // the author wrote `type` instead of `interface`.
+                //
+                // Only a non-generic alias whose right-hand side is a closed
+                // object type answers here. An alias to a `Named`/`Generic`
+                // type is left alone — resolving those would need the
+                // cycle-guarded chain walk the class path has, and they are not
+                // what this is for.
+                if let Some(HirType::Object(obj)) = ctx.type_aliases.get(&receiver_class) {
+                    if let Some(p) = obj.properties.get(property) {
+                        return Some(p.ty.clone());
                     }
                 }
             }

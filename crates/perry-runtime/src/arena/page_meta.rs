@@ -294,6 +294,7 @@ pub(crate) struct OldPageSummary {
     pub(crate) live_bytes: usize,
     pub(crate) dead_bytes: usize,
     pub(crate) reusable_bytes: usize,
+    pub(crate) pooled_bytes: usize,
     pub(crate) returned_bytes: usize,
     pub(crate) pinned_bytes: usize,
     pub(crate) object_count: usize,
@@ -325,7 +326,18 @@ thread_local! {
     static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Promoted-block pages whose object list is DESCRIBED rather than stored —
+    /// see [`register_promoted_page_run`].
+    static OLD_GEN_PAGE_PROMOTED_RUNS: RefCell<crate::fast_hash::PtrHashMap<usize, PromotedPageRun>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
+    /// Monotone-within-a-window latch so the common case — a program that never
+    /// promotes a block in place — pays one `Cell` read per reader instead of a
+    /// hash probe per page. Same pattern as `PER_OBJECT_LAYOUTS_NONEMPTY`.
+    static OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY: Cell<bool> = const { Cell::new(false) };
+
     pub(crate) static OLD_GEN_RECLAIM_REUSABLE_BYTES: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static OLD_GEN_RECLAIM_POOLED_BYTES: Cell<usize> = const { Cell::new(0) };
     pub(crate) static OLD_GEN_RECLAIM_RETURNED_BYTES: Cell<usize> = const { Cell::new(0) };
 
     /// Monotonic per-cycle epoch for old-page `dirty_slots` (#6181). Bumped
@@ -334,6 +346,11 @@ thread_local! {
     /// page (stamp 0, see `OldPageMeta::zero_for_page`) reads as having no
     /// dirty slots. `u64` never wraps in practice (one bump per collection).
     static OLD_GEN_PAGE_DIRTY_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static OLD_PAGE_META_SNAPSHOT_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
 // --- #7469 hot-TLS address providers. See `crate::tls_hot`. ---
@@ -427,6 +444,17 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
             index.remove(&page);
         }
     });
+    // RUN REMOVER: DISCARD, never expand — the block backing these pages is
+    // going away, so a run's `first_header` no longer points at memory this
+    // arena owns. Expanding would parse freed pages.
+    if OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| {
+            let mut runs = runs.borrow_mut();
+            for &page in pages {
+                runs.remove(&page);
+            }
+        });
+    }
     // #7187 Phase B: the other place a page's dirty stamp stops existing — the
     // metadata entry itself is gone. A cached page whose metadata was dropped
     // is no longer a complete recording, so drop the cache.
@@ -504,6 +532,44 @@ pub(crate) fn retag_block_space(
     generation: HeapGeneration,
     space: HeapSpace,
 ) {
+    retag_block_space_inner(base, size, generation, space, true);
+}
+
+/// Relabel a block WITHOUT minting the old-gen page-metadata entries an
+/// `Old` retag normally mints (#7937).
+///
+/// For a retag that may be UNDONE — the speculative first-cycle promotion,
+/// which decides from its own trace and rolls back if the trace disagrees —
+/// eager registration is both wasted and expensive: it mints one zeroed
+/// `OldPageMeta` per 4 KB of the whole young generation, and a `HashMap` never
+/// gives its capacity back, so removing the entries afterwards does not undo
+/// the footprint. Measured: `tree_wide` +6 MB, `tree` +3 MB, `churn` +1 MB of
+/// peak RSS for blocks that were handed straight back to the nursery.
+///
+/// Deferring it is sound for that caller specifically because a speculative
+/// attempt requires `skip_remembering` (see `gc::copying`), which is the proof
+/// that NO remembered-set insertion can happen between the retag and the
+/// finish — and the remembered set is the only reader that would want a
+/// promoted page's metadata before it exists. If the attempt commits,
+/// `finish_in_place_promotion` mints the entries on the way past: both
+/// `register_promoted_page_headers`/`_run` (per live page) and its closing
+/// `retag_block_space(.., Old, HeapSpace::Old)` (every page) create them.
+pub(crate) fn retag_block_space_deferring_old_page_registration(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+) {
+    retag_block_space_inner(base, size, generation, space, false);
+}
+
+fn retag_block_space_inner(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+    register_old_pages: bool,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
@@ -534,7 +600,7 @@ pub(crate) fn retag_block_space(
             }
         }
     });
-    if matches!(generation, HeapGeneration::Old) {
+    if register_old_pages && matches!(generation, HeapGeneration::Old) {
         register_old_block_pages(base, size);
     }
     invalidate_generation_cache();
@@ -555,7 +621,186 @@ pub(crate) fn retag_block_space(
 /// `bytes` is the number of bytes of the run that fall inside `page` (an object
 /// straddling a page boundary contributes its overlap to each page it touches),
 /// matching `update_old_page_meta_for_object`'s accounting exactly.
-pub(crate) fn register_promoted_page_run(page: usize, headers: &[usize], bytes: usize) {
+///
+/// # The list is DESCRIBED, not stored
+///
+/// The run is recorded as `(first_header, last_header, count)` and expanded into
+/// [`OLD_GEN_PAGE_OBJECTS`] only if some reader actually asks for this page —
+/// see [`PromotedPageRun`]. The header addresses are recoverable by the same
+/// linear parse `old_arena_walk_objects` already performs over every old block,
+/// so storing them is storing a derivable fact.
+///
+/// Measured on `gc-handoff/bench/retain.ts` (2.11 M promoted objects): building
+/// the per-object list was **6.7 ms of the 18.2 ms** `in_place_promotion` phase
+/// and **20 MB of permanent RSS**, and `retain` never reads one of those pages.
+/// On `retain_wide` (2.94 M) it was 22.9 ms of 34.1 and 28 MB.
+pub(crate) fn register_promoted_page_run(
+    page: usize,
+    first_header: usize,
+    last_header: usize,
+    count: usize,
+    bytes: usize,
+) {
+    if count == 0 {
+        return;
+    }
+    // One promoted block authors a given page exactly once per cycle, but two
+    // blocks can share a page when block bases are not page aligned. Expanding
+    // the incumbent keeps "at most one pending run per page" true by
+    // construction rather than by an alignment argument.
+    //
+    // Taken and expanded OUTSIDE the borrow: `expand_promoted_run` touches a
+    // different thread-local today, and this keeps that from being a fact the
+    // next edit has to re-derive before it can add one line to the expansion.
+    let previous = OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow_mut().remove(&page));
+    if let Some(previous) = previous {
+        expand_promoted_run(page, previous);
+    }
+    OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| {
+        runs.borrow_mut().insert(
+            page,
+            PromotedPageRun {
+                first_header,
+                last_header,
+                count,
+            },
+        );
+    });
+    OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(|flag| flag.set(true));
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        let page_meta = meta
+            .entry(page)
+            .or_insert_with(|| OldPageMeta::zero_for_page(page));
+        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+        page_meta.object_count = page_meta.object_count.saturating_add(count);
+        page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+        page_meta.live_object_count = page_meta.live_object_count.saturating_add(count);
+        page_meta.refresh_policy_bits();
+    });
+}
+
+/// A promoted-block page whose object list has not been built.
+///
+/// `first_header`/`last_header` are INCLUSIVE header addresses of the first and
+/// last object overlapping the page — the first may sit below the page base
+/// (an object straddling in from the previous page), which is exactly the
+/// population the eager list used to hold. Objects on an old block are
+/// contiguous and ascending, so every object between those two also overlaps
+/// the page: the pair is an exact description of the set, not an approximation.
+///
+/// # Only [`PromotionLiveness::AssumeAllLive`] pages may be described
+///
+/// The parse cannot reconstruct which objects were MARKED — `clear_marks` runs
+/// after the promotion, so by expansion time the marks are gone. On a TRACED
+/// promoting cycle the eager list therefore stays: it is the only place that
+/// liveness exists. Restricting the description to the untraced path is what
+/// makes "the parse yields exactly `count`" an exact claim rather than an
+/// approximation, and it is the path that carries the cost anyway (4 of
+/// `retain`'s 5 cycles, all of its promoted objects).
+#[derive(Clone, Copy, Debug)]
+struct PromotedPageRun {
+    first_header: usize,
+    last_header: usize,
+    count: usize,
+}
+
+/// Expand one run into [`OLD_GEN_PAGE_OBJECTS`]. Caller must have already
+/// removed it from [`OLD_GEN_PAGE_PROMOTED_RUNS`], so this cannot recurse and
+/// cannot double-append.
+///
+/// The parse is the one `old_arena_walk_objects` performs — hop by
+/// `GcHeader::size`, stop on an implausible one. That walker is the old-gen
+/// sweep's own enumerator, so "an old block parses linearly by header size" is
+/// not a new invariant this introduces; it is the invariant the sweep already
+/// rests on. What this adds is a bound taken at promotion time, which is why
+/// runs are expanded before anything can reshape the block — see
+/// [`materialize_all_promoted_page_runs`].
+fn expand_promoted_run(page: usize, run: PromotedPageRun) {
+    use crate::gc::GcHeader;
+
+    let mut headers = Vec::with_capacity(run.count);
+    let mut addr = run.first_header;
+    while addr <= run.last_header {
+        let header = addr as *const GcHeader;
+        let total = unsafe { (*header).size } as usize;
+        if total < crate::gc::GC_HEADER_SIZE {
+            break;
+        }
+        // Same filter the producer applied: a non-arena-walkable object is
+        // hopped OVER, not indexed. Without this the expansion would hand
+        // readers headers the eager list never contained.
+        if crate::gc::gc_type_is_arena_walkable(unsafe { (*header).obj_type }) {
+            headers.push(addr);
+        }
+        addr += total;
+    }
+    debug_assert_eq!(
+        headers.len(),
+        run.count,
+        "a promoted page run did not re-parse to the object count recorded at \
+         promotion (page {page:#x}, {:#x}..={:#x}). The block was reshaped while \
+         its run was still pending, which means some path that frees, moves or \
+         resizes an old-gen object reached it without expanding the run first.",
+        run.first_header,
+        run.last_header,
+    );
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        let slot = index.entry(page).or_insert_with(Vec::new);
+        if slot.is_empty() {
+            *slot = headers;
+        } else {
+            slot.extend_from_slice(&headers);
+        }
+    });
+}
+
+/// Expand any pending run covering one of `pages`.
+///
+/// Every reader of [`OLD_GEN_PAGE_OBJECTS`] must call this for the pages it is
+/// about to read, in the same way #7624 makes every reader flush the deferred
+/// registration buffer. `promoted_page_run_materialization_sites` enumerates
+/// the obligation from the source so a new reader cannot silently skip it.
+pub(crate) fn materialize_promoted_page_runs(pages: impl IntoIterator<Item = usize>) {
+    if !OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        return;
+    }
+    for page in pages {
+        let run = OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow_mut().remove(&page));
+        if let Some(run) = run {
+            expand_promoted_run(page, run);
+        }
+    }
+}
+
+/// Expand every pending run.
+///
+/// Called before anything that can reshape an old-gen block — the full and
+/// budgeted cycle constructors, whose sweep frees objects in place and whose
+/// holes are then refilled by `old_free` with objects of a different size. A
+/// run's `last_header` is an address remembered at promotion time; once
+/// boundaries inside it can move, that address stops being a header boundary.
+/// Expanding first keeps the run representation confined to the window in which
+/// promoted blocks are immutable: between the promotion and the next old-gen
+/// sweep.
+pub(crate) fn materialize_all_promoted_page_runs() {
+    if !OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        return;
+    }
+    let pending: Vec<(usize, PromotedPageRun)> =
+        OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow_mut().drain().collect());
+    OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(|flag| flag.set(false));
+    for (page, run) in pending {
+        expand_promoted_run(page, run);
+    }
+}
+
+/// Eager per-object registration for a promoted page whose liveness is
+/// [`PromotionLiveness::Marked`] — a TRACED promoting cycle, where the marks
+/// are the only record of which objects are live and they are cleared before
+/// anything could re-derive them. Unchanged from the pre-description path.
+pub(crate) fn register_promoted_page_headers(page: usize, headers: &[usize], bytes: usize) {
     if headers.is_empty() {
         return;
     }
@@ -577,6 +822,12 @@ pub(crate) fn register_promoted_page_run(page: usize, headers: &[usize], bytes: 
         page_meta.live_object_count = page_meta.live_object_count.saturating_add(headers.len());
         page_meta.refresh_policy_bits();
     });
+}
+
+/// Pending runs, for tests that must prove the subject actually ran.
+#[cfg(test)]
+pub(crate) fn pending_promoted_page_runs() -> usize {
+    OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow().len())
 }
 
 pub(crate) fn unregister_block_generation(base: usize, size: usize) {
@@ -978,6 +1229,8 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
     // flush would leave the flush to resurrect this object.
     flush_deferred_old_page_registrations();
     let overlaps = old_object_page_overlaps(header_addr, total_size);
+    // RUN REMOVER: as `old_arena_page_index_remove_object`.
+    materialize_promoted_page_runs(overlaps.iter().map(|&(page, _)| page));
     let mut removed_pages = Vec::with_capacity(overlaps.len());
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
@@ -1011,6 +1264,7 @@ pub(crate) fn old_pages_begin_gc_cycle() {
     // it on first touch this cycle (`old_page_account_dirty_slot`).
     OLD_GEN_PAGE_DIRTY_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(0));
+    OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(0));
     OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(0));
 }
 
@@ -1096,18 +1350,30 @@ pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
     if slot_addr == 0 {
         return;
     }
-    let page = generation_page_for_addr(slot_addr);
+    old_page_account_dirty_slots(generation_page_for_addr(slot_addr), 1);
+}
+
+/// Batched form of [`old_page_account_dirty_slot`] for a run of `count` slots
+/// already known to lie on `page`.
+///
+/// The dirty scan walks contiguous, ascending slot ranges, so ~512 consecutive
+/// slots share one 4 KiB page. Per-slot this was one hash-map probe each; the
+/// counter it maintains is per-page, so the run can be folded into a single
+/// probe. Same epoch semantics as the per-slot form — the first run seen this
+/// cycle re-stamps and starts the count over, later runs on the same page
+/// accumulate (#6181).
+pub(crate) fn old_page_account_dirty_slots(page: usize, count: usize) {
+    if count == 0 {
+        return;
+    }
     let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
-            // First dirty slot seen this cycle re-stamps and starts from 1
-            // (the lazy equivalent of the old per-cycle reset-to-zero);
-            // subsequent slots on the same page accumulate (#6181).
             if page_meta.dirty_slots_epoch == current_epoch {
-                page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+                page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(count);
             } else {
                 page_meta.dirty_slots_epoch = current_epoch;
-                page_meta.dirty_slots = 1;
+                page_meta.dirty_slots = count;
             }
         }
     });
@@ -1156,12 +1422,15 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
             }
         }
         summary.reusable_bytes = OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.get());
+        summary.pooled_bytes = OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.get());
         summary.returned_bytes = OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.get());
         summary
     })
 }
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    #[cfg(test)]
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     // #7624 READER (`OLD_GEN_PAGE_META`): this one drives real policy —
     // `gc/oldgen_defrag.rs` selects evacuation pages from it.
     flush_deferred_old_page_registrations();
@@ -1176,6 +1445,16 @@ pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
         snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
         snapshot
     })
+}
+
+#[cfg(test)]
+pub(crate) fn old_page_meta_snapshot_calls_for_tests() -> usize {
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_old_page_meta_snapshot_calls_for_tests() {
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(|calls| calls.set(0));
 }
 
 /// Fold a stale `dirty_slots` stamp down to the effective value so a copied
@@ -1231,6 +1510,8 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     // root scan runs before the remembered-set walk), so this cannot rely on
     // the cycle-start flush alone.
     flush_deferred_old_page_registrations();
+    // RUN READER: a promoted page's list is built on demand.
+    materialize_promoted_page_runs(pages.iter().copied());
 
     let mut headers = Vec::new();
     let mut seen = crate::fast_hash::new_ptr_hash_set();
@@ -1268,6 +1549,10 @@ impl OldArenaPageObjectCursor {
         // between `new` and the last `next`; `next` debug-asserts that rather
         // than paying a thread-local check per object.
         flush_deferred_old_page_registrations();
+        // RUN READER: same obligation, same window — the stepping window
+        // promotes nothing, so expanding every page's run once here covers
+        // every `next`.
+        materialize_promoted_page_runs(pages.iter().copied());
         Self {
             pages: pages.iter().copied().collect(),
             page_cursor: 0,
@@ -1316,6 +1601,10 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
     if overlaps.is_empty() {
         return;
     }
+    // RUN REMOVER: a removal against a page whose list is still described
+    // would silently no-op, and the later expansion would resurrect the
+    // object. Expand first, then remove from the real list.
+    materialize_promoted_page_runs(overlaps.iter().map(|&(page, _)| page));
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
         for (page, _) in overlaps {
@@ -1367,6 +1656,11 @@ pub(crate) fn old_arena_page_index_clear_for_tests() {
     // would get a repopulated one if the pending burst were folded in first.
     DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow_mut().clear());
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
+    // DISCARD pending runs for the same reason the deferral buffer is
+    // discarded: a caller asking for an empty index must not get a
+    // repopulated one at the next read.
+    OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| runs.borrow_mut().clear());
+    OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(|flag| flag.set(false));
 }
 
 #[cfg(test)]

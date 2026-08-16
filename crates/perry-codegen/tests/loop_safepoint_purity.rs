@@ -122,6 +122,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -456,11 +457,21 @@ fn a_surviving_poll_is_guarded_by_the_arming_word() {
         .split("load volatile i32, ptr @PERRY_GC_POLL_ARMED")
         .skip(1)
         .all(|after| {
-            // The `icmp` + `br` must come before the call: the call is on the
-            // taken arm, not in the same straight line as the load.
-            let call = after.find(POLL);
-            let branch = after.find("br i1 ");
-            matches!((call, branch), (Some(c), Some(b)) if b < c)
+            // The property is about the CFG, not about text order: the load's
+            // own block must end in a conditional branch, and the call must
+            // not be in that block — it belongs to a successor.
+            //
+            // Asking instead for "the first `br i1` appears before the first
+            // POLL anywhere after the load" silently depended on the poll
+            // blocks being emitted next to their guards. They are not: the
+            // guards sit inline in `for.cond` / `for.body` / `for.update`,
+            // while every `gcpoll.N` block is emitted together after the loop.
+            // Under that layout the first two segments contain no call at all,
+            // so the old check read `None` and failed a correctly-guarded
+            // poll. Bounding the search at the block edge asserts the real
+            // thing and does not care where the successor is printed.
+            let block_tail = after.split("\n\n").next().unwrap_or(after);
+            block_tail.contains("br i1 ") && !block_tail.contains(POLL)
         });
     assert!(
         guarded,

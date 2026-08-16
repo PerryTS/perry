@@ -126,6 +126,39 @@ amending the existing one.
 - Benchmark regressions in `benchmark.yml` hard-fail on release tags (warn only
   on main-branch pushes)
 
+## 4a. What tells you a release is overdue
+
+Nothing in the sections above fires if a release simply never happens. That is
+[#7491](https://github.com/PerryTS/perry/issues/7491): npm served a month-old
+`latest` while the linker fix users were hitting had been on `main` for weeks. Every
+gate was green, and all of them were right — they measure `main`, and `main` is not
+what `npm install @perryts/perry` gives you. The only detector was a user reading the
+versions tab.
+
+`npm-publish-freshness.yml` runs daily and calls
+`scripts/check_npm_publish_freshness.py`, which reads the full packument for every
+package under `npm/` and compares it against `[workspace.package] version`:
+
+| signal | budget | why |
+|---|---|---|
+| age of the published `latest` | 14 days | counted **only while the tree is ahead**, so a quiet week with nothing to release is not a failure. This is the signal that would have caught #7491 on day 15. |
+| patch distance | 500 | every merge bumps the workspace patch, so this is a commit count in disguise. A backstop for a cadence spike inside an unexpired age budget — not a release-cadence rule. |
+| platform packages match the launcher | none | `npm/perry/package.json.tmpl` pins its optionalDependencies to its own exact version, so a partial publish breaks installs while both halves sit inside their budgets. |
+
+Budgets live in `scripts/npm_publish_freshness.json`. A failing run files one sticky
+issue and updates it in place; it closes itself once the registry has caught up.
+
+```bash
+python3 scripts/check_npm_publish_freshness.py --self-test       # proves it can fail
+python3 scripts/check_npm_publish_freshness.py --check-manifest  # offline
+python3 scripts/check_npm_publish_freshness.py --dry-run         # real registry, no issue writes
+```
+
+An unreachable or unparseable registry is **red, not a skip** — this detector exists
+because a silence read as health for a month, and a skip that exits 0 is that same
+silence with a green badge. It is deliberately not a required status context: whether
+a release has been cut is not something a PR author can fix.
+
 ## 5. If a release goes wrong
 
 - **Wrong artifact published**: tag a new patch release with the fix; npm

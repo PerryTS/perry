@@ -1,0 +1,86 @@
+name: CI Queue Reaper
+
+# Cancels QUEUED pull-request runs whose pull request is already closed.
+#
+# WHY: GitHub does not reliably cancel a queued run when its PR merges and the
+# branch auto-deletes. Perry squash-merges, auto-deletes branches, and fans each
+# PR out to ~11 workflows, so a busy day leaves hundreds of runs queued against
+# branches that no longer exist. They cannot gate anything -- the code is
+# already in `main` -- but they hold runner slots ahead of the six-hourly `main`
+# gates, which is how those gates go dark.
+#
+# Measured 2026-08-12 (#7966): 1,529 queued runs; 794 were `pull_request` runs
+# across 63 head branches, of which 61 no longer existed. ~790 runs -- 51% of
+# the whole queue -- were dead work sitting in front of ten `main` gates that
+# had not completed in 32+ hours.
+#
+# THIS WORKFLOW IS NOT A GATE. It cannot fail a merge and is not a required
+# context. It is a janitor. The policy it enforces, its guard rails and its
+# self-test live in scripts/reap_stale_ci_runs.py -- read that before changing
+# anything here. In particular it only ever touches `event == pull_request`
+# runs in state `queued` whose branch has no OPEN PR, so a `push`, `schedule`,
+# tag or dispatch run is structurally out of reach.
+#
+# BOOTSTRAP NOTE: this job queues like everything else, so it cannot dig the
+# repo out of an already-saturated queue on its own. The first drain is a
+# manual `python3 scripts/reap_stale_ci_runs.py --apply` (or a
+# `workflow_dispatch` of this workflow with `apply=true`); the schedule then
+# keeps the queue clear.
+
+on:
+  schedule:
+    # Every 30 minutes, off the hour and half-hour -- :00 and :30 are the most
+    # contended slots on GitHub's cron scheduler and the most likely to be
+    # dropped or delayed.
+    - cron: "13,43 * * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually cancel (unchecked = dry run)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  # #7966: keyed per RUN. A constant group across scheduled runs lets only the
+  # first one execute -- GitHub keeps at most one PENDING run per group and
+  # cancels the rest with `jobs: 0`, regardless of `cancel-in-progress`. That is
+  # the exact bug this workflow exists to clean up after; reproducing it here
+  # would be its own joke. Enforced by scripts/gc_gate_wiring_check.py.
+  group: ci-queue-reaper-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Cancelling a run is an Actions write. `pull-requests: read` backs the
+      # open-PR list that protects every live PR from being reaped.
+      actions: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The policy check runs unconditionally, including on a dry run. A janitor
+      # that cancels things must be able to prove its guard rails still bind
+      # before it is allowed to touch the queue.
+      - name: Self-test the reaping policy
+        run: python3 scripts/reap_stale_ci_runs.py --self-test
+
+      - name: Reap stale queued pull-request runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Scheduled sweeps apply; a manual dispatch applies only if asked.
+          APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
+        run: |
+          set -euo pipefail
+          if [[ "$APPLY" == "true" ]]; then
+            python3 scripts/reap_stale_ci_runs.py --apply
+          else
+            python3 scripts/reap_stale_ci_runs.py
+          fi

@@ -10,6 +10,7 @@ pub struct RuntimeHandleScope {
 }
 
 impl RuntimeHandleScope {
+    #[inline]
     pub fn new() -> Self {
         let base = RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len());
         Self { base }
@@ -30,6 +31,7 @@ impl RuntimeHandleScope {
         }
     }
 
+    #[inline]
     pub fn root_nanbox_f64<'scope>(&'scope self, value: f64) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
     }
@@ -44,6 +46,7 @@ impl RuntimeHandleScope {
             .collect()
     }
 
+    #[inline]
     pub fn root_nanbox_u64<'scope>(&'scope self, bits: u64) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::Nanbox(bits))
     }
@@ -73,6 +76,7 @@ impl RuntimeHandleScope {
             .collect()
     }
 
+    #[inline]
     pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::RawTagged {
             addr: ptr as usize,
@@ -80,6 +84,7 @@ impl RuntimeHandleScope {
         })
     }
 
+    #[inline]
     pub fn root_raw_const_ptr<'scope, T>(&'scope self, ptr: *const T) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::RawTagged {
             addr: ptr as usize,
@@ -142,6 +147,7 @@ impl Default for RuntimeHandleScope {
 }
 
 impl Drop for RuntimeHandleScope {
+    #[inline]
     fn drop(&mut self) {
         RUNTIME_HANDLE_STACK.with(|stack| {
             stack.borrow_mut().truncate(self.base);
@@ -155,14 +161,33 @@ pub struct RuntimeHandle<'scope> {
     pub(super) _scope: PhantomData<&'scope RuntimeHandleScope>,
 }
 
+/// The two failure paths every handle accessor carries. Out of line and
+/// `#[cold]` so the accessors stay small enough for the inliner: a formatted
+/// `expect`/`panic!` expanded inline is most of each accessor's estimated
+/// size, and it was enough to keep `get_nanbox_u64` / `root_nanbox_f64` out of
+/// line in the release build — they showed up as 4.3 % and 3.0 % of a
+/// promise-heavy program's leaf samples purely as call frames.
+#[cold]
+#[inline(never)]
+fn handle_used_after_scope() -> ! {
+    panic!("runtime handle used after its scope was dropped");
+}
+
+#[cold]
+#[inline(never)]
+fn handle_kind_mismatch(expected: &str) -> ! {
+    panic!("runtime handle kind mismatch: expected {expected}");
+}
+
 impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
         RUNTIME_HANDLE_STACK.with(|stack| {
             let stack = stack.borrow();
-            let slot = *stack
-                .get(self.index)
-                .expect("runtime handle used after its scope was dropped");
+            let slot = match stack.get(self.index) {
+                Some(slot) => *slot,
+                None => handle_used_after_scope(),
+            };
             f(slot)
         })
     }
@@ -171,11 +196,33 @@ impl<'scope> RuntimeHandle<'scope> {
     pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
         RUNTIME_HANDLE_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
-            let slot = stack
-                .get_mut(self.index)
-                .expect("runtime handle used after its scope was dropped");
+            let slot = match stack.get_mut(self.index) {
+                Some(slot) => slot,
+                None => handle_used_after_scope(),
+            };
             f(slot)
         })
+    }
+
+    /// Pass the handle's current mutable pointer to `f` without exposing a
+    /// bare handle read at the call site.
+    ///
+    /// This is the argument-position companion to [`Self::across_mut`]. Use it
+    /// when a rooted pointer must be handed directly to a non-allocating
+    /// operation or to a runtime entry point that establishes its own root
+    /// before it can allocate. The callback must not retain the pointer: this
+    /// method scopes the raw value, but it cannot keep that value current if a
+    /// collection moves the allocation while `f` is running. Use
+    /// [`Self::across_mut`] when the caller needs a post-collection address.
+    #[inline]
+    pub fn with_mut_ptr<T, R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
+        f(self.get_raw_mut_ptr::<T>())
+    }
+
+    /// `with_mut_ptr` for a `*const` argument. See its safety contract.
+    #[inline]
+    pub fn with_const_ptr<T, R>(&self, f: impl FnOnce(*const T) -> R) -> R {
+        f(self.get_raw_const_ptr::<T>())
     }
 
     /// Run `f` — which may allocate, and therefore may MOVE the object this
@@ -240,14 +287,16 @@ impl<'scope> RuntimeHandle<'scope> {
         (result, self.get_nanbox_f64())
     }
 
+    #[inline]
     pub fn get_nanbox_f64(&self) -> f64 {
         f64::from_bits(self.get_nanbox_u64())
     }
 
+    #[inline]
     pub fn get_nanbox_u64(&self) -> u64 {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::Nanbox(bits) => bits,
-            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+            _ => handle_kind_mismatch("NaN-boxed value"),
         })
     }
 
@@ -255,18 +304,20 @@ impl<'scope> RuntimeHandle<'scope> {
         self.set_nanbox_u64(value.to_bits());
     }
 
+    #[inline]
     pub fn set_nanbox_u64(&self, bits: u64) {
         self.with_slot_mut(|slot| match slot {
             RuntimeHandleSlot::Nanbox(current) => *current = bits,
-            _ => panic!("runtime handle kind mismatch: expected NaN-boxed value"),
+            _ => handle_kind_mismatch("NaN-boxed value"),
         });
         runtime_write_barrier_root_nanbox(bits);
     }
 
+    #[inline]
     pub fn get_heap_word_u64(&self) -> u64 {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::HeapWord(bits) => bits,
-            _ => panic!("runtime handle kind mismatch: expected heap word"),
+            _ => handle_kind_mismatch("heap word"),
         })
     }
 
@@ -278,10 +329,11 @@ impl<'scope> RuntimeHandle<'scope> {
         runtime_write_barrier_root_heap_word(bits);
     }
 
+    #[inline]
     pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::RawTagged { addr, .. } => addr as *mut T,
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+            _ => handle_kind_mismatch("raw pointer"),
         })
     }
 
@@ -297,10 +349,11 @@ impl<'scope> RuntimeHandle<'scope> {
         });
     }
 
+    #[inline]
     pub fn get_raw_const_ptr<T>(&self) -> *const T {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::RawTagged { addr, .. } => addr as *const T,
-            _ => panic!("runtime handle kind mismatch: expected raw pointer"),
+            _ => handle_kind_mismatch("raw pointer"),
         })
     }
 
@@ -372,4 +425,72 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
         }
         state.cursor >= stack.len()
     })
+}
+
+// ---------------------------------------------------------------------------
+// FFI transient roots (#8082).
+// ---------------------------------------------------------------------------
+//
+// Extern surface over the transient-handle stack for ext crates (perry-ffi
+// consumers). Their handle-struct side tables are rewritten by registered
+// mutable-root scanners, but a SNAPSHOT of those tables held in a Rust local
+// across a JS callback is a copy the collector cannot see — the #8082 forced
+// gate faulted on exactly that shape in the http server's pending-request
+// pump. These entry points let FFI code park such copies in slots the
+// existing runtime-handle scanner marks AND rewrites, then re-read the
+// post-collection values. Scopes must strictly nest: `enter` snapshots the
+// depth, `exit` truncates back to it (the JS-exception savepoint machinery
+// above already restores this stack across throws).
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_scope_enter() -> usize {
+    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+}
+
+/// Root a raw heap ADDRESS (e.g. an `i64` closure pointer from an ext
+/// listener table). Returns the slot index for [`js_ffi_root_get_heap_addr`].
+#[no_mangle]
+pub extern "C" fn js_ffi_root_push_heap_addr(addr: u64) -> usize {
+    let slot = RuntimeHandleSlot::HeapWord(addr);
+    runtime_handle_slot_write_barrier(slot);
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let index = stack.len();
+        stack.push(slot);
+        index
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
+    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+        Some(RuntimeHandleSlot::HeapWord(bits)) => *bits,
+        _ => 0,
+    })
+}
+
+/// Root a NaN-boxed VALUE (string/buffer/object handed to callbacks).
+#[no_mangle]
+pub extern "C" fn js_ffi_root_push_nanbox(bits: u64) -> usize {
+    let slot = RuntimeHandleSlot::Nanbox(bits);
+    runtime_handle_slot_write_barrier(slot);
+    RUNTIME_HANDLE_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let index = stack.len();
+        stack.push(slot);
+        index
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_get_nanbox(index: usize) -> u64 {
+    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+        Some(RuntimeHandleSlot::Nanbox(bits)) => *bits,
+        _ => 0,
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_ffi_root_scope_exit(base: usize) {
+    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow_mut().truncate(base));
 }

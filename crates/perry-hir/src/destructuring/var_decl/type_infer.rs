@@ -6,7 +6,7 @@ use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use crate::lower::LoweringContext;
-use crate::lower_types::{extract_ts_type, infer_type_from_expr};
+use crate::lower_types::{extract_ts_type, extract_ts_type_with_ctx, infer_type_from_expr};
 
 /// #7547: the type of a declaration in a **`for` initializer**
 /// (`for (let j = 0; …)`).
@@ -84,7 +84,7 @@ pub(crate) fn infer_decl_type(
     let mut ty = ident
         .type_ann
         .as_ref()
-        .map(|ann| extract_ts_type(&ann.type_ann))
+        .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
         .unwrap_or_else(|| {
             // No type annotation: try local inference from initializer
             if let Some(init_expr) = &decl.init {

@@ -127,7 +127,7 @@ fn the_pipeline_produces_safepoints_and_a_map_on_every_shipped_target() {
         );
         let _pin = NativeRootsPin::native();
         let ir = native_ir(&module, target, false);
-        let symbol = probe_symbol("selftest_canary.ts");
+        let symbol = probe_body_symbol(&ir, "selftest_canary.ts");
         let fn_ir = function_slice(&ir, &symbol);
 
         assert!(
@@ -137,8 +137,8 @@ fn the_pipeline_produces_safepoints_and_a_map_on_every_shipped_target() {
         );
         assert_eq!(
             root_allocas(fn_ir),
-            2,
-            "[{target}] two heap locals, two root slots:\n{fn_ir}"
+            3,
+            "[{target}] two heap locals plus the unchecked generic-ABI parameter, three root slots:\n{fn_ir}"
         );
 
         let points = statepoints_of(&ir, target, &symbol);
@@ -187,7 +187,7 @@ fn no_root_alloca_survives_the_statepoint_rewrite() {
         );
         let _pin = NativeRootsPin::native();
         let ir = native_ir(&module, target, false);
-        let symbol = probe_symbol("selftest_promotion.ts");
+        let symbol = probe_body_symbol(&ir, "selftest_promotion.ts");
         assert!(
             root_allocas(function_slice(&ir, &symbol)) >= 2,
             "[{target}] control: codegen must have asked for root slots here"

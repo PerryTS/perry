@@ -59,8 +59,7 @@ pub(crate) use state::{
     class_object_value_root_store, class_own_enumerable_field_names, class_own_static_field_value,
     class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_root_store, class_static_defined_attrs,
-    class_static_key_is_non_enumerable, class_static_set_defined_attrs,
+    class_prototype_object_root_store, class_static_defined_attrs, class_static_set_defined_attrs,
     global_object_prototype_bits, is_bound_native_method_closure_value,
     is_non_constructable_builtin_function_value, parent_closure_in_chain,
     throw_non_constructable_builtin_function,
@@ -127,7 +126,8 @@ pub(crate) use vm_brand::brand_vm_script_instance;
 
 // ── gc_roots.rs ─────────────────────────────────────────────────────────────
 pub(crate) use gc_roots::{
-    new_class_side_table_root_scan_state, scan_class_side_table_roots_mut_step,
+    new_class_side_table_root_scan_state, prune_dead_function_class_id_keys,
+    scan_class_side_table_roots_mut_step,
 };
 pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut};
 #[cfg(test)]
@@ -135,9 +135,10 @@ pub(crate) use gc_roots::{
     test_class_dynamic_prop_root_bits, test_class_parent_closure_root_addr,
     test_class_prototype_method_root_bits, test_class_prototype_method_value_root_bits,
     test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
-    test_function_class_id_key_for_class, test_seed_class_dynamic_prop_root,
-    test_seed_class_prototype_method_root, test_seed_class_prototype_method_value_root,
-    test_seed_class_prototype_object_root, test_seed_function_class_id_key,
+    test_function_class_id_key_count, test_function_class_id_key_for_class,
+    test_seed_class_dynamic_prop_root, test_seed_class_prototype_method_root,
+    test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
+    test_seed_function_class_id_key,
 };
 
 // ── registration.rs ─────────────────────────────────────────────────────────

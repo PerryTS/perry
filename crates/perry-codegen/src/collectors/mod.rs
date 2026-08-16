@@ -28,6 +28,7 @@ mod local_refs;
 mod loop_bounded_i32;
 mod mutation;
 mod not_bigint_locals;
+mod number_by_construction;
 mod param_ranges;
 mod pointer_locals;
 mod proven_this;
@@ -60,10 +61,10 @@ pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;
 pub(crate) use hir_facts::{
-    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
+    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_params,
     NativeRegionFactGraph,
 };
-pub(crate) use hot_callees::collect_hot_loop_callees;
+pub(crate) use hot_callees::{collect_alloc_hot_functions, collect_hot_loop_callees};
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
     is_ushr_zero,
@@ -73,7 +74,8 @@ pub(crate) use integer_locals::{
     collect_flat_row_aliases, is_int32_producing_expr, static_index_window,
 };
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
-pub(crate) use mutation::has_any_mutation;
+pub(crate) use mutation::{body_contains_call, has_any_mutation};
+pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use proven_this::{
@@ -82,6 +84,7 @@ pub(crate) use proven_this::{
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
+pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };

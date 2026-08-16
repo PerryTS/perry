@@ -69,3 +69,22 @@ const u8 = new Uint8Array([4, 5, 6, 7]);
 let sum = 0;
 for (let i = 0; i < u8.length; i++) sum += u8[i];
 console.log(sum);
+
+// --- typed-array numeric-expression windows -------------------------------
+// A numeric return type is a dispatch hint, not an effect proof: both helpers
+// allocate before producing the key/value. This covers the width-aware and
+// Uint8Array numeric fallbacks plus the native-store pointer-ordering audit.
+function taIndex(): number {
+  alloc(200);
+  return 1;
+}
+function taValue(): number {
+  alloc(200);
+  return 41;
+}
+const i32 = new Int32Array([3, 4, 5]);
+i32[taIndex()] = taValue();
+console.log(i32[taIndex()], i32[0], i32[2]);
+
+u8[taIndex()] = taValue();
+console.log(u8[taIndex()], u8[0], u8[2]);

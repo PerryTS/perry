@@ -535,12 +535,10 @@ pub(crate) fn lower(
         // `(closure_ptr, arg0, arg1, ...)` and forwards to the
         // underlying function.
         Expr::FuncRef(id) => {
-            let func_name = ctx
-                .func_names
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| "perry_unknown_func".to_string());
-            let wrap_name = format!("__perry_wrap_{}", func_name);
+            let wrap_name = ctx.func_names.get(id).map_or_else(
+                || crate::codegen::helpers::unknown_func_wrapper_name(ctx.strings.module_prefix()),
+                |func_name| format!("__perry_wrap_{func_name}"),
+            );
             let blk = ctx.block();
             let wrap_ptr = format!("@{}", wrap_name);
             // FuncRef wrappers always have 0 captures, so we can route

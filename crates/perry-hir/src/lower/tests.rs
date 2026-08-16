@@ -8,7 +8,7 @@
 #![cfg(test)]
 
 use super::*;
-use crate::ir::EnumValue;
+use crate::ir::{EnumValue, Stmt};
 use crate::types::{Type, TypeParam};
 
 fn make_ctx() -> LoweringContext {
@@ -23,6 +23,68 @@ fn test_lower_define_and_lookup_local() {
     assert_eq!(ctx.lookup_local("y"), None);
     // Verify the type is stored correctly
     assert_eq!(ctx.lookup_local_type("x"), Some(&Type::Number));
+}
+
+#[test]
+fn local_declaration_span_survives_ast_to_hir_lowering() {
+    let source = "function build() {\n  const boxed = makeValue();\n  return boxed;\n}\n";
+    let module = perry_parser::parse_typescript(source, "span.ts").expect("source parses");
+    let hir = super::lower_module(&module, "span.ts", "span.ts").expect("source lowers");
+    let function = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "build")
+        .expect("function is lowered");
+    let local_id = function
+        .body
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let { id, name, .. } if name == "boxed" => Some(*id),
+            _ => None,
+        })
+        .expect("boxed local is lowered");
+    let span = hir
+        .local_source_spans
+        .get(&local_id)
+        .expect("boxed local retains its declaration span");
+    let start = source.find("boxed").expect("binding occurs") as u32 + 1;
+    assert_eq!(span.start, start);
+    assert_eq!(span.end, start + "boxed".len() as u32);
+}
+
+#[test]
+fn source_spans_cover_export_loop_catch_and_method_bindings() {
+    let source = r#"export const exportedBox = {};
+function build(paramBox: unknown) {
+  for (let loopBox = 0; loopBox < 1; loopBox++) {}
+  try { throw 1; } catch (caughtBox) {}
+  const objBox = { method(methodBox: unknown) { return methodBox; } };
+  return paramBox;
+}
+"#;
+    let module = perry_parser::parse_typescript(source, "span-kinds.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "span-kinds.ts", "span-kinds.ts").expect("source lowers");
+    let starts: std::collections::HashSet<u32> = hir
+        .local_source_spans
+        .values()
+        .map(|span| span.start)
+        .collect();
+
+    for name in [
+        "exportedBox",
+        "paramBox",
+        "loopBox",
+        "caughtBox",
+        "objBox",
+        "methodBox",
+    ] {
+        let expected = source.find(name).expect("binding occurs") as u32 + 1;
+        assert!(
+            starts.contains(&expected),
+            "missing declaration span for {name} at {expected}: {starts:?}"
+        );
+    }
 }
 
 #[test]
@@ -695,5 +757,207 @@ fn test_named_class_expression_var_decl_reports_explicit_name() {
         hir.class_display_names.get(&anon.id),
         None,
         "anonymous class expression uses the inferred binding name, no override"
+    );
+}
+
+/// #8040: a `class A` declared inside a nested factory, referenced by `new A()`
+/// from one of its OWN method bodies, while a same-named binding (`var A`)
+/// exists in an enclosing scope.
+///
+/// `expr_new.rs` snapshotted `ctx.lookup_local("A")` unconditionally and, when
+/// it hit, rerouted the construct to `NewDynamic { callee: LocalGet(<outer
+/// slot>) }`. A method compiles to its own function, so that slot index names
+/// an unrelated (undefined) local there and the construct threw `TypeError:
+/// undefined is not a constructor` at runtime. The bare-ident read arm already
+/// resolved the same name to the class via `forward_class_shadows_local`; this
+/// makes `new` agree.
+///
+/// Next 16's webpack chunk for the bundled `@opentelemetry/api` is exactly this
+/// shape — `var …,i,…` in the module IIFE and `class i { static getInstance(){
+/// return this._instance || (this._instance = new i), this._instance } }` in an
+/// inner factory — so `context.active()` was unreachable at request time.
+#[test]
+fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
+    let source = r#"
+        var A: any;
+        const g = () => {
+            class A {
+                static mk(): any {
+                    return new A();
+                }
+                m(): string {
+                    return "ok";
+                }
+            }
+            return A;
+        };
+        const out: any = g().mk().m();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let mk = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "A")
+        .expect("class A is lowered")
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        !body.contains("NewDynamic"),
+        "`new A()` inside A's own method must not construct through an \
+         enclosing-scope local slot: {body}"
+    );
+    assert!(
+        body.contains("class_name: \"A\""),
+        "`new A()` inside A's own method must construct class A: {body}"
+    );
+}
+
+/// Companion (the case the depth rule must NOT break): a module-scope `class e`
+/// and a factory-local `let e` holding a different constructor. JS says the
+/// nearer local wins, so `new e()` inside the factory must still construct the
+/// LOCAL's value — mysql2's bundled chunk shape, where taking the class instead
+/// silently ran the wrong constructor.
+#[test]
+fn factory_local_still_shadows_module_scope_class_in_new() {
+    let source = r#"
+        class e {
+            tag(): string { return "class-e"; }
+        }
+        function make(): any {
+            const e: any = function () { return undefined; };
+            return new e();
+        }
+        const keep: any = e;
+        const out: any = make();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let make = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "make")
+        .expect("function make is lowered");
+    let body = format!("{:#?}", make.body);
+
+    assert!(
+        body.contains("NewDynamic"),
+        "a factory-local binding must keep shadowing a module-scope class of \
+         the same name for `new`: {body}"
+    );
+}
+
+/// #8040, the shape the minified `@opentelemetry/api` bundle actually has: a
+/// file with MANY same-named single-letter classes over one outer `var i`.
+///
+/// The collision rename accidentally immunised every duplicate — `i$0`, `i$1`,
+/// … match no local, so `lookup_local` missed and the reroute never fired for
+/// them. Only the FIRST `class i`, the one that keeps the bare name, was
+/// broken. That asymmetry is why the bundle's `trace` API worked while its
+/// `context` and `propagation` APIs did not, and why a symptom that looks like
+/// "prototype methods are missing" moves when unrelated code is added to the
+/// file. All three must construct their own class.
+#[test]
+fn first_of_several_same_named_nested_classes_constructs_itself() {
+    let source = r#"
+        function t(n: string, f: () => any): void {
+            try { console.log(n + ": " + String(f())); } catch (e) { console.log(String(e)); }
+        }
+        var i: any;
+        const f1 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "one"; }
+            }
+            return i;
+        };
+        const f2 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "two"; }
+            }
+            return i;
+        };
+        const f3 = () => {
+            class i {
+                static mk(): any { return new i(); }
+                m(): string { return "three"; }
+            }
+            return i;
+        };
+        t("f1", () => f1().mk().m());
+        t("f2", () => f2().mk().m());
+        t("f3", () => f3().mk().m());
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    // The first `class i` keeps the bare name; the duplicate is renamed.
+    let first = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "i")
+        .expect("the first class keeps the bare name `i`");
+    let mk = first
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        !body.contains("NewDynamic"),
+        "`new i()` inside i's own method must not construct through the \
+         enclosing binding's slot: {body}"
+    );
+    assert!(
+        body.contains("class_name: \"i\""),
+        "`new i()` inside i's own method must construct class i: {body}"
+    );
+}
+
+/// Over-trigger guard: a binding declared in the METHOD's own scope still wins.
+/// `m() { const C = Other; return new C(); }` constructs `Other`, not the
+/// enclosing class — `lookup_local_in_current_scope` is what keeps that true.
+#[test]
+fn method_local_shadowing_the_class_name_still_wins_in_new() {
+    let source = r#"
+        class Other {
+            tag(): string { return "other"; }
+        }
+        const g = () => {
+            class C {
+                static mk(): any {
+                    const C: any = Other;
+                    return new C();
+                }
+            }
+            return C;
+        };
+        const out: any = g().mk();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let mk = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "C")
+        .expect("class C is lowered")
+        .static_methods
+        .iter()
+        .find(|m| m.name == "mk")
+        .expect("static method mk is lowered");
+    let body = format!("{:#?}", mk.body);
+
+    assert!(
+        body.contains("NewDynamic"),
+        "a method-scope local named after the class must still win for `new`: {body}"
     );
 }

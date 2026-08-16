@@ -25,16 +25,262 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
-use perry_runtime::{
-    js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
-    js_nanbox_get_pointer, js_object_alloc, js_object_get_field_by_name, js_object_set_field,
-    js_object_set_field_by_name, js_object_set_keys, js_promise_mark_internally_handled,
-    js_promise_new, js_promise_reject, js_promise_resolve, js_string_from_bytes, ClosureHeader,
-    JSValue, ObjectHeader, Promise,
-};
+use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_int;
 use std::sync::Mutex;
+
+// Calls that allocate or mutate runtime-owned values must cross the stable C
+// ABI. A shared stdlib still contains fallback Rust runtime glue for generic
+// monomorphizations; direct Rust calls would allocate into that image's arena
+// instead of the process-wide runtime provider.
+extern "C" {
+    #[link_name = "js_array_alloc"]
+    fn provider_js_array_alloc(capacity: u32) -> *mut ArrayHeader;
+    #[link_name = "js_array_push"]
+    fn provider_js_array_push(array: *mut ArrayHeader, value: JSValue) -> *mut ArrayHeader;
+    #[link_name = "js_array_get"]
+    fn provider_js_array_get(array: *const ArrayHeader, index: u32) -> JSValue;
+    #[link_name = "js_array_is_array"]
+    fn provider_js_array_is_array(value: f64) -> f64;
+    #[link_name = "js_array_length"]
+    fn provider_js_array_length(array: *const ArrayHeader) -> u32;
+    #[link_name = "js_array_push_f64"]
+    fn provider_js_array_push_f64(array: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
+    #[link_name = "js_iterator_to_array"]
+    fn provider_js_iterator_to_array(iterator: f64) -> *mut ArrayHeader;
+    #[link_name = "js_assimilate_thenable"]
+    fn provider_js_assimilate_thenable(value: f64) -> f64;
+    #[link_name = "js_closure_alloc"]
+    fn provider_js_closure_alloc(function: *const u8, capture_count: u32) -> *mut ClosureHeader;
+    #[link_name = "js_closure_call0"]
+    fn provider_js_closure_call0(closure: *const ClosureHeader) -> f64;
+    #[link_name = "js_closure_call1"]
+    fn provider_js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64;
+    #[link_name = "js_closure_call2"]
+    fn provider_js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64;
+    #[link_name = "js_closure_get_capture_ptr"]
+    fn provider_js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64;
+    #[link_name = "js_closure_set_capture_ptr"]
+    fn provider_js_closure_set_capture_ptr(closure: *mut ClosureHeader, index: u32, value: i64);
+    #[link_name = "js_nanbox_get_pointer"]
+    fn provider_js_nanbox_get_pointer(value: f64) -> i64;
+    #[link_name = "js_object_alloc"]
+    fn provider_js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    #[link_name = "js_object_get_field_by_name"]
+    fn provider_js_object_get_field_by_name(
+        object: *const ObjectHeader,
+        key: *const StringHeader,
+    ) -> JSValue;
+    #[link_name = "js_object_set_field"]
+    fn provider_js_object_set_field(object: *mut ObjectHeader, index: u32, value: JSValue);
+    #[link_name = "js_object_set_field_by_name"]
+    fn provider_js_object_set_field_by_name(
+        object: *mut ObjectHeader,
+        key: *const StringHeader,
+        value: f64,
+    );
+    #[link_name = "js_object_set_keys"]
+    fn provider_js_object_set_keys(object: *mut ObjectHeader, keys: *mut ArrayHeader);
+    #[link_name = "js_promise_mark_internally_handled"]
+    fn provider_js_promise_mark_internally_handled(promise: *mut Promise);
+    #[link_name = "js_native_call_value"]
+    fn provider_js_native_call_value(
+        function: f64,
+        arguments: *const f64,
+        argument_count: usize,
+    ) -> f64;
+    #[link_name = "js_implicit_this_set"]
+    fn provider_js_implicit_this_set(value: f64) -> f64;
+    #[link_name = "js_promise_new"]
+    fn provider_js_promise_new() -> *mut Promise;
+    #[link_name = "js_promise_all"]
+    fn provider_js_promise_all(promises: *const ArrayHeader) -> *mut Promise;
+    #[link_name = "js_promise_reason"]
+    fn provider_js_promise_reason(promise: *mut Promise) -> f64;
+    #[link_name = "js_promise_reject"]
+    fn provider_js_promise_reject(promise: *mut Promise, reason: f64);
+    #[link_name = "js_promise_resolve"]
+    fn provider_js_promise_resolve(promise: *mut Promise, value: f64);
+    #[link_name = "js_promise_resolve_with_promise"]
+    fn provider_js_promise_resolve_with_promise(outer: *mut Promise, inner: *mut Promise);
+    #[link_name = "js_promise_run_microtasks"]
+    fn provider_js_promise_run_microtasks() -> i32;
+    #[link_name = "js_promise_state"]
+    fn provider_js_promise_state(promise: *mut Promise) -> i32;
+    #[link_name = "js_promise_then"]
+    fn provider_js_promise_then(
+        promise: *mut Promise,
+        on_fulfilled: *const ClosureHeader,
+        on_rejected: *const ClosureHeader,
+    ) -> *mut Promise;
+    #[link_name = "js_promise_value"]
+    fn provider_js_promise_value(promise: *mut Promise) -> f64;
+    #[link_name = "js_register_closure_arity"]
+    fn provider_js_register_closure_arity(function: *const u8, arity: u32);
+    #[link_name = "js_string_from_bytes"]
+    fn provider_js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+    #[link_name = "js_value_is_promise"]
+    fn provider_js_value_is_promise(value: f64) -> i32;
+}
+
+macro_rules! provider_call {
+    ($name:ident ( $($argument:expr),* $(,)? )) => {
+        unsafe { $name($($argument),*) }
+    };
+}
+
+fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
+    provider_call!(provider_js_array_alloc(capacity))
+}
+
+fn js_array_push(array: *mut ArrayHeader, value: JSValue) -> *mut ArrayHeader {
+    provider_call!(provider_js_array_push(array, value))
+}
+
+fn js_array_get(array: *const ArrayHeader, index: u32) -> JSValue {
+    provider_call!(provider_js_array_get(array, index))
+}
+
+fn js_array_is_array(value: f64) -> f64 {
+    provider_call!(provider_js_array_is_array(value))
+}
+
+fn js_array_length(array: *const ArrayHeader) -> u32 {
+    provider_call!(provider_js_array_length(array))
+}
+
+fn js_array_push_f64(array: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    provider_call!(provider_js_array_push_f64(array, value))
+}
+
+fn js_iterator_to_array(iterator: f64) -> *mut ArrayHeader {
+    provider_call!(provider_js_iterator_to_array(iterator))
+}
+
+fn js_assimilate_thenable(value: f64) -> f64 {
+    provider_call!(provider_js_assimilate_thenable(value))
+}
+
+fn js_closure_alloc(function: *const u8, capture_count: u32) -> *mut ClosureHeader {
+    provider_call!(provider_js_closure_alloc(function, capture_count))
+}
+
+fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
+    provider_call!(provider_js_closure_call0(closure))
+}
+
+fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    provider_call!(provider_js_closure_call1(closure, arg0))
+}
+
+fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
+    provider_call!(provider_js_closure_call2(closure, arg0, arg1))
+}
+
+fn js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64 {
+    provider_call!(provider_js_closure_get_capture_ptr(closure, index))
+}
+
+fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index: u32, value: i64) {
+    provider_call!(provider_js_closure_set_capture_ptr(closure, index, value))
+}
+
+fn js_nanbox_get_pointer(value: f64) -> i64 {
+    provider_call!(provider_js_nanbox_get_pointer(value))
+}
+
+fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    provider_call!(provider_js_object_alloc(class_id, field_count))
+}
+
+fn js_object_get_field_by_name(object: *const ObjectHeader, key: *const StringHeader) -> JSValue {
+    provider_call!(provider_js_object_get_field_by_name(object, key))
+}
+
+fn js_object_set_field(object: *mut ObjectHeader, index: u32, value: JSValue) {
+    provider_call!(provider_js_object_set_field(object, index, value))
+}
+
+fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64) {
+    provider_call!(provider_js_object_set_field_by_name(object, key, value))
+}
+
+fn js_object_set_keys(object: *mut ObjectHeader, keys: *mut ArrayHeader) {
+    provider_call!(provider_js_object_set_keys(object, keys))
+}
+
+fn js_promise_mark_internally_handled(promise: *mut Promise) {
+    provider_call!(provider_js_promise_mark_internally_handled(promise))
+}
+
+fn js_native_call_value(function: f64, arguments: *const f64, argument_count: usize) -> f64 {
+    provider_call!(provider_js_native_call_value(
+        function,
+        arguments,
+        argument_count
+    ))
+}
+
+fn js_implicit_this_set(value: f64) -> f64 {
+    provider_call!(provider_js_implicit_this_set(value))
+}
+
+fn js_promise_new() -> *mut Promise {
+    provider_call!(provider_js_promise_new())
+}
+
+fn js_promise_all(promises: *const ArrayHeader) -> *mut Promise {
+    provider_call!(provider_js_promise_all(promises))
+}
+
+fn js_promise_reason(promise: *mut Promise) -> f64 {
+    provider_call!(provider_js_promise_reason(promise))
+}
+
+fn js_promise_reject(promise: *mut Promise, reason: f64) {
+    provider_call!(provider_js_promise_reject(promise, reason))
+}
+
+fn js_promise_resolve(promise: *mut Promise, value: f64) {
+    provider_call!(provider_js_promise_resolve(promise, value))
+}
+
+fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *mut Promise) {
+    provider_call!(provider_js_promise_resolve_with_promise(outer, inner))
+}
+
+fn js_promise_run_microtasks() -> i32 {
+    provider_call!(provider_js_promise_run_microtasks())
+}
+
+fn js_promise_state(promise: *mut Promise) -> i32 {
+    provider_call!(provider_js_promise_state(promise))
+}
+
+fn js_promise_then(
+    promise: *mut Promise,
+    on_fulfilled: *const ClosureHeader,
+    on_rejected: *const ClosureHeader,
+) -> *mut Promise {
+    provider_call!(provider_js_promise_then(promise, on_fulfilled, on_rejected))
+}
+
+fn js_promise_value(promise: *mut Promise) -> f64 {
+    provider_call!(provider_js_promise_value(promise))
+}
+
+fn js_register_closure_arity(function: *const u8, arity: u32) {
+    provider_call!(provider_js_register_closure_arity(function, arity))
+}
+
+fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader {
+    provider_call!(provider_js_string_from_bytes(data, len))
+}
+
+fn js_value_is_promise(value: f64) -> i32 {
+    provider_call!(provider_js_value_is_promise(value))
+}
 
 /// Allocate a promise the stream machinery owns and observes internally — the
 /// reader/writer `closed`, writer `ready`, and `[[closeRequest]]` promises.
@@ -62,8 +308,8 @@ unsafe fn try_call_stream_action(callback: i64, reason: f64) -> Result<f64, u64>
 }
 
 unsafe fn stream_action_promise(result: f64) -> Option<*mut Promise> {
-    let adopted = perry_runtime::promise::js_assimilate_thenable(result);
-    if perry_runtime::promise::js_value_is_promise(adopted) == 0 {
+    let adopted = js_assimilate_thenable(result);
+    if js_value_is_promise(adopted) == 0 {
         return None;
     }
     let promise = js_nanbox_get_pointer(adopted) as *mut Promise;
@@ -73,20 +319,21 @@ unsafe fn stream_action_promise(result: f64) -> Option<*mut Promise> {
 unsafe fn settle_stream_action_promise(promise: *mut Promise, actions: &[*mut Promise]) {
     match actions {
         [] => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
-        [action] => perry_runtime::promise::js_promise_resolve_with_promise(promise, *action),
+        [action] => js_promise_resolve_with_promise(promise, *action),
         _ => {
             let values = js_array_alloc(actions.len() as u32);
             for action in actions {
                 js_array_push(values, JSValue::pointer(*action as *const u8));
             }
-            let all = perry_runtime::promise::js_promise_all(values);
-            perry_runtime::promise::js_promise_resolve_with_promise(promise, all);
+            let all = js_promise_all(values);
+            js_promise_resolve_with_promise(promise, all);
         }
     }
 }
 
 mod byob;
 mod expando;
+mod gc;
 mod idalloc;
 mod pipe;
 mod strategy;
@@ -105,6 +352,9 @@ pub use self::byob::{
     js_readable_stream_controller_byob_request, js_readable_stream_get_byob_reader,
     js_reader_read_with_view,
 };
+use self::gc::ensure_gc_registered;
+#[cfg(test)]
+use self::gc::scan_stream_roots;
 pub(crate) use self::strategy::parse_strategy_value;
 pub use self::strategy::{
     js_byte_length_queuing_strategy_new, js_count_queuing_strategy_new,
@@ -322,133 +572,6 @@ lazy_static::lazy_static! {
 // `src.pipeThrough(ts).getReader()`. #6602: ids of terminal objects recycle
 // through `idalloc` so the finite band survives long-running servers.
 use self::idalloc::next_stream_id;
-
-static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-/// Register the streams GC root scanner once. Closures held by user-
-/// supplied `start` / `pull` / `cancel` / `write` / `close` / `abort` /
-/// `transform` / `flush` callbacks live in the registry maps below; the
-/// runtime GC mark phase wouldn't see them otherwise and a sweep
-/// between registration and dispatch would free the closure body. Same
-/// shape as `ws.rs::ensure_gc_scanner_registered`.
-fn ensure_gc_registered() {
-    GC_REGISTERED.call_once(|| {
-        perry_runtime::gc::gc_register_mutable_root_scanner_named(
-            "stdlib:streams",
-            scan_stream_roots_mut,
-        );
-        perry_runtime::node_submodules::js_register_stream_consumer_callbacks(
-            js_readable_stream_get_reader,
-            js_reader_read,
-        );
-        unsafe {
-            perry_runtime::object::js_register_stream_expando_set(expando::stream_expando_set_hook);
-        }
-    });
-}
-
-#[allow(dead_code)]
-fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_stream_roots_mut(&mut visitor);
-}
-
-fn visit_stream_value_slot(
-    visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>,
-    slot: &mut u64,
-) {
-    let top = *slot >> 48;
-    if top == 0x7FFD || top == 0x7FFF {
-        visitor.visit_nanbox_u64_slot(slot);
-    }
-}
-
-fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    expando::scan_expando_roots(visitor);
-    if let Ok(mut map) = READABLE_STREAMS.lock() {
-        for s in map.values_mut() {
-            visitor.visit_i64_slot(&mut s.start_cb);
-            visitor.visit_i64_slot(&mut s.pull_cb);
-            visitor.visit_i64_slot(&mut s.cancel_cb);
-            visitor.visit_i64_slot(&mut s.strategy_size_cb);
-            for c in s.chunks.iter_mut() {
-                visit_stream_value_slot(visitor, c);
-            }
-            for p in s.pending_reads.iter_mut() {
-                visitor.visit_raw_mut_ptr_slot(p);
-            }
-            if s.state == ReadableState::Errored {
-                visit_stream_value_slot(visitor, &mut s.error_value);
-            }
-            if let Some(error) = &mut s.pending_error_after_chunks {
-                visit_stream_value_slot(visitor, error);
-            }
-        }
-    }
-    byob::scan_byob_roots(visitor);
-    if let Ok(mut map) = WRITABLE_STREAMS.lock() {
-        for s in map.values_mut() {
-            visitor.visit_i64_slot(&mut s.write_cb);
-            visitor.visit_i64_slot(&mut s.close_cb);
-            visitor.visit_i64_slot(&mut s.abort_cb);
-            visitor.visit_i64_slot(&mut s.strategy_size_cb);
-            for (chunk, p, _size) in s.write_queue.iter_mut() {
-                visit_stream_value_slot(visitor, chunk);
-                visitor.visit_raw_mut_ptr_slot(p);
-            }
-            visitor.visit_raw_mut_ptr_slot(&mut s.ready_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut s.closed_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut s.close_request_promise);
-            if s.state == WritableState::Errored {
-                visit_stream_value_slot(visitor, &mut s.error_value);
-            }
-        }
-    }
-    if let Ok(mut map) = TRANSFORM_STREAMS.lock() {
-        for t in map.values_mut() {
-            visitor.visit_i64_slot(&mut t.transform_cb);
-            visitor.visit_i64_slot(&mut t.flush_cb);
-        }
-    }
-    // Parked/deferred transform promises are held only as raw addresses in
-    // these maps (an unawaited write/close has no other root).
-    if let Ok(mut map) = transform::TRANSFORM_WRITE_RELEASES.lock() {
-        for promises in map.values_mut() {
-            for slot in promises.iter_mut() {
-                let mut p = *slot as *mut Promise;
-                visitor.visit_raw_mut_ptr_slot(&mut p);
-                *slot = p as usize;
-            }
-        }
-    }
-    if let Ok(mut map) = transform::TRANSFORM_PENDING_CLOSE.lock() {
-        for slot in map.values_mut() {
-            let mut p = *slot as *mut Promise;
-            visitor.visit_raw_mut_ptr_slot(&mut p);
-            *slot = p as usize;
-        }
-    }
-    if let Ok(mut map) = transform::TRANSFORM_BACKPRESSURED_JOBS.lock() {
-        for jobs in map.values_mut() {
-            for slot in jobs.iter_mut() {
-                let mut job = *slot as *mut ClosureHeader;
-                visitor.visit_raw_mut_ptr_slot(&mut job);
-                *slot = job as usize;
-            }
-        }
-    }
-    if let Ok(mut map) = READERS.lock() {
-        for r in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut r.closed_promise);
-        }
-    }
-    if let Ok(mut map) = WRITERS.lock() {
-        for w in map.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut w.closed_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut w.ready_promise);
-        }
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
@@ -730,11 +853,10 @@ unsafe fn invoke_start(stream_id: usize) {
 
 extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
     unsafe {
-        let stream_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+        let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
         let stream_id = f64::from_bits(stream_bits) as usize;
-        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1);
-        let pull_returns_byte_chunk =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) != 0;
+        let cb = js_closure_get_capture_ptr(closure, 1);
+        let pull_returns_byte_chunk = js_closure_get_capture_ptr(closure, 2) != 0;
         let should_pull = {
             let mut g = READABLE_STREAMS.lock().unwrap();
             match g.get_mut(&stream_id) {
@@ -765,7 +887,7 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
             });
             match pull_outcome {
                 Ok(result) => {
-                    if perry_runtime::promise::js_value_is_promise(result) != 0 {
+                    if js_value_is_promise(result) != 0 {
                         let promise =
                             perry_runtime::value::js_nanbox_get_pointer(result) as *mut Promise;
                         if !promise.is_null() {
@@ -777,9 +899,7 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
                                 readable_pull_rejected as *const u8,
                                 stream_id,
                             );
-                            let _ = perry_runtime::promise::js_promise_then(
-                                promise, fulfilled, rejected,
-                            );
+                            let _ = js_promise_then(promise, fulfilled, rejected);
                             return f64::from_bits(TAG_UNDEFINED);
                         }
                     }
@@ -800,15 +920,15 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
 }
 
 fn readable_pull_settled_closure(func: *const u8, stream_id: usize) -> *mut ClosureHeader {
-    perry_runtime::closure::js_register_closure_arity(func, 1);
-    let closure = perry_runtime::closure::js_closure_alloc(func, 1);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    js_register_closure_arity(func, 1);
+    let closure = js_closure_alloc(func, 1);
+    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
     closure
 }
 
 extern "C" fn readable_pull_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
         if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
             s.pulling = false;
         }
@@ -819,7 +939,7 @@ extern "C" fn readable_pull_fulfilled(closure: *const ClosureHeader, _value: f64
 
 extern "C" fn readable_pull_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
     unsafe {
-        let stream_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
         let should_error = {
             let mut streams = READABLE_STREAMS.lock().unwrap();
             match streams.get_mut(&stream_id) {
@@ -893,15 +1013,11 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
         return;
     }
     let pull_fn = readable_pull_microtask as *const u8;
-    perry_runtime::closure::js_register_closure_arity(pull_fn, 0);
-    let pull = perry_runtime::closure::js_closure_alloc(pull_fn, 3);
-    perry_runtime::closure::js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(pull, 1, cb);
-    perry_runtime::closure::js_closure_set_capture_ptr(
-        pull,
-        2,
-        if pull_returns_byte_chunk { 1 } else { 0 },
-    );
+    js_register_closure_arity(pull_fn, 0);
+    let pull = js_closure_alloc(pull_fn, 3);
+    js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
+    js_closure_set_capture_ptr(pull, 1, cb);
+    js_closure_set_capture_ptr(pull, 2, if pull_returns_byte_chunk { 1 } else { 0 });
     perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 
@@ -1327,10 +1443,8 @@ fn ptr_addr_from_nanbox(value: f64) -> Option<usize> {
 }
 
 unsafe fn chunks_from_array_ptr(arr_ptr: *const perry_runtime::ArrayHeader) -> Vec<u64> {
-    let len = perry_runtime::array::js_array_length(arr_ptr);
-    (0..len)
-        .map(|i| perry_runtime::array::js_array_get(arr_ptr, i).bits())
-        .collect()
+    let len = js_array_length(arr_ptr);
+    (0..len).map(|i| js_array_get(arr_ptr, i).bits()).collect()
 }
 
 unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
@@ -1338,7 +1452,7 @@ unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
     if iter.to_bits() == value.to_bits() {
         return None;
     }
-    let arr = perry_runtime::array::js_iterator_to_array(iter);
+    let arr = js_iterator_to_array(iter);
     Some(chunks_from_array_ptr(arr))
 }
 
@@ -1377,9 +1491,9 @@ unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     if !is_callable_value(method) {
         return None;
     }
-    let prev_this = perry_runtime::object::js_implicit_this_set(value);
-    let iterator = perry_runtime::closure::js_native_call_value(method, std::ptr::null(), 0);
-    perry_runtime::object::js_implicit_this_set(prev_this);
+    let prev_this = js_implicit_this_set(value);
+    let iterator = js_native_call_value(method, std::ptr::null(), 0);
+    js_implicit_this_set(prev_this);
     if iterator.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -1399,7 +1513,7 @@ unsafe fn has_iterator_next(value: f64) -> bool {
 }
 
 unsafe fn await_maybe_promise(value: f64) -> SettledValue {
-    if perry_runtime::promise::js_value_is_promise(value) == 0 {
+    if js_value_is_promise(value) == 0 {
         return SettledValue::Fulfilled(value);
     }
     let promise = js_nanbox_get_pointer(value) as *mut Promise;
@@ -1408,17 +1522,17 @@ unsafe fn await_maybe_promise(value: f64) -> SettledValue {
     }
 
     for _ in 0..100_000 {
-        if perry_runtime::promise::js_promise_state(promise) != 0 {
+        if js_promise_state(promise) != 0 {
             break;
         }
-        if perry_runtime::promise::js_promise_run_microtasks() == 0 {
+        if js_promise_run_microtasks() == 0 {
             break;
         }
     }
 
-    match perry_runtime::promise::js_promise_state(promise) {
-        1 => SettledValue::Fulfilled(perry_runtime::promise::js_promise_value(promise)),
-        2 => SettledValue::Rejected(perry_runtime::promise::js_promise_reason(promise).to_bits()),
+    match js_promise_state(promise) {
+        1 => SettledValue::Fulfilled(js_promise_value(promise)),
+        2 => SettledValue::Rejected(js_promise_reason(promise).to_bits()),
         _ => SettledValue::Pending,
     }
 }
@@ -1433,9 +1547,9 @@ unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
     let next_val = js_object_get_field_by_name(iter_obj, next_key);
     let next = f64::from_bits(next_val.bits());
     if is_callable_value(next) {
-        let prev_this = perry_runtime::object::js_implicit_this_set(iterator);
-        let result = perry_runtime::closure::js_native_call_value(next, std::ptr::null(), 0);
-        perry_runtime::object::js_implicit_this_set(prev_this);
+        let prev_this = js_implicit_this_set(iterator);
+        let result = js_native_call_value(next, std::ptr::null(), 0);
+        js_implicit_this_set(prev_this);
         Some(result)
     } else {
         Some(perry_runtime::object::js_native_call_method(
@@ -1525,7 +1639,7 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
 
     let source = if let Some(source) = chunks_from_async_iterable(value) {
         source
-    } else if perry_runtime::array::js_array_is_array(value).to_bits() == TAG_TRUE {
+    } else if js_array_is_array(value).to_bits() == TAG_TRUE {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
         ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
@@ -1587,8 +1701,8 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
 /// rendered HTML node directly (degraded but usable).
 #[no_mangle]
 pub unsafe extern "C" fn js_jsx_render_stream_from_value(html_value: f64) -> f64 {
-    let mut arr = perry_runtime::array::js_array_alloc(1);
-    arr = perry_runtime::array::js_array_push_f64(arr, html_value);
+    let mut arr = js_array_alloc(1);
+    arr = js_array_push_f64(arr, html_value);
     let arr_f64 = f64::from_bits(perry_runtime::JSValue::pointer(arr as *const u8).bits());
     js_readable_stream_from_iterable(arr_f64)
 }
@@ -1825,7 +1939,7 @@ extern "C" fn readable_from_chunk_fulfilled(closure: *const ClosureHeader, value
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     unsafe {
         let result = build_iter_result(value.to_bits(), false);
         js_promise_resolve(promise, f64::from_bits(result));
@@ -1837,7 +1951,7 @@ extern "C" fn readable_from_chunk_rejected(closure: *const ClosureHeader, reason
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     js_promise_reject(promise, reason);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1851,7 +1965,7 @@ unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
         }
     }
     let value = f64::from_bits(value_bits);
-    if perry_runtime::promise::js_value_is_promise(value) == 0 {
+    if js_value_is_promise(value) == 0 {
         let result = build_iter_result(value_bits, false);
         js_promise_resolve(promise, f64::from_bits(result));
         return;
@@ -1864,27 +1978,21 @@ unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
         return;
     }
 
-    match perry_runtime::promise::js_promise_state(inner) {
+    match js_promise_state(inner) {
         1 => {
-            let value = perry_runtime::promise::js_promise_value(inner);
+            let value = js_promise_value(inner);
             let result = build_iter_result(value.to_bits(), false);
             js_promise_resolve(promise, f64::from_bits(result));
         }
         2 => {
-            js_promise_reject(promise, perry_runtime::promise::js_promise_reason(inner));
+            js_promise_reject(promise, js_promise_reason(inner));
         }
         _ => {
-            let fulfill = perry_runtime::closure::js_closure_alloc(
-                readable_from_chunk_fulfilled as *const u8,
-                1,
-            );
-            let reject = perry_runtime::closure::js_closure_alloc(
-                readable_from_chunk_rejected as *const u8,
-                1,
-            );
-            perry_runtime::closure::js_closure_set_capture_ptr(fulfill, 0, promise as i64);
-            perry_runtime::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
-            let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
+            let fulfill = js_closure_alloc(readable_from_chunk_fulfilled as *const u8, 1);
+            let reject = js_closure_alloc(readable_from_chunk_rejected as *const u8, 1);
+            js_closure_set_capture_ptr(fulfill, 0, promise as i64);
+            js_closure_set_capture_ptr(reject, 0, promise as i64);
+            let _ = js_promise_then(inner, fulfill, reject);
         }
     }
 }
@@ -2002,9 +2110,9 @@ fn closure_capture_value(
     value: f64,
 ) -> *mut ClosureHeader {
     let fn_ptr = func as *const u8;
-    perry_runtime::closure::js_register_closure_arity(fn_ptr, 0);
-    let closure = perry_runtime::closure::js_closure_alloc(fn_ptr, 1);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, value.to_bits() as i64);
+    js_register_closure_arity(fn_ptr, 0);
+    let closure = js_closure_alloc(fn_ptr, 1);
+    js_closure_set_capture_ptr(closure, 0, value.to_bits() as i64);
     closure
 }
 
@@ -2012,7 +2120,7 @@ fn closure_capture_value_get(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let bits = js_closure_get_capture_ptr(closure, 0) as u64;
     f64::from_bits(bits)
 }
 

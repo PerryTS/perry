@@ -321,6 +321,23 @@ fn supported_module_with_unknown_member_is_rejected() {
     );
 }
 
+#[test]
+fn perry_native_namespace_rejects_unknown_call_in_strict_mode() {
+    let result = lower_result_strict(
+        r#"
+        import * as native from "perry/native";
+        native.__perry_known_bogus_native_call__();
+        "#,
+    );
+    let err = result.expect_err("unknown perry/native namespace calls must be rejected");
+    assert!(
+        err.contains("perry/native.__perry_known_bogus_native_call__")
+            && err.contains("not implemented")
+            && err.contains("#463"),
+        "expected the strict native-module surface refusal, got: {err}"
+    );
+}
+
 /// Coverage sweep for #513: every module in `NATIVE_MODULES` must error
 /// on a known-bogus property. Catches manifest entries that flag a
 /// module as "covered" without actually flipping strictness on.

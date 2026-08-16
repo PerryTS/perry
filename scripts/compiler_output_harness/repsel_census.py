@@ -62,6 +62,7 @@ scope and are **not** silently reported as zero:
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -220,12 +221,12 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
         "canonical-u32": 1,
         "canonical-str": 1,
     },
-    # #7110: every canonical-i32 promotion in this fixture comes from the
-    # loop-induction range proof and from nothing else -- no bitwise mixing, no
+    # #7110/#7123: every canonical-i32 promotion in this fixture comes from the
+    # loop-bound range proofs and from nothing else -- no bitwise mixing, no
     # `| 0`, no array indexing. Pinned at the exact count it is written to
-    # promote (2 counters + 1 in the accumulator loop), so losing any one of the
-    # three goes red rather than silently degrading to "still nonzero".
-    "fixture_loop_bounded_i32": {"canonical-i32": 3},
+    # promote (3 counters + 1 bounded accumulator), so losing the accumulator
+    # rule goes red rather than silently degrading to "still nonzero".
+    "fixture_loop_bounded_i32": {"canonical-i32": 4},
     "fixture_int_valued_ta": {"int-valued-ta": 1},
     "fixture_spec_abi_taptr": {"spec-abi-entry": 1, "spec-abi-taptr-slot": 1},
     # #7109. The same three reps as `fixture_canonical_slots`, but this fixture
@@ -364,6 +365,11 @@ ALLOC_BUCKET_FLOORS: dict[str, dict[tuple[str, str, str], int]] = {
         ("ptr-shape", "constructor argument", "rule 1 (provenance)"): 1,
         ("ptr-shape", "object literal property value", "rule 1 (provenance)"): 1,
         ("ptr-shape", "returned expression operand", "rule 1 (provenance)"): 1,
+        (
+            "ptr-shape",
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ): 2,
         (
             "ptr-shape",
             "return",
@@ -1411,6 +1417,14 @@ def self_test(_args: argparse.Namespace) -> int:
         ("constructor argument", "rule 1 (provenance)"),
         ("object literal property value", "rule 1 (provenance)"),
         ("returned expression operand", "rule 1 (provenance)"),
+        (
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ),
+        (
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ),
         ("return", "rule 1 (provenance) — already served by return-shape"),
     )
     bucket_report = {
@@ -1444,9 +1458,9 @@ def self_test(_args: argparse.Namespace) -> int:
         ],
     }
     buckets = census_from_report(bucket_report)
-    assert buckets["alloc_buckets"] == {
-        alloc_bucket_key("ptr-shape", c, r): 1 for c, r in bucket_rows
-    }, buckets["alloc_buckets"]
+    assert buckets["alloc_buckets"] == dict(
+        Counter(alloc_bucket_key("ptr-shape", c, r) for c, r in bucket_rows)
+    ), buckets["alloc_buckets"]
 
     # Named, not `next(iter(...))`: #7170 R1 added a second fixture to the
     # table, and an implicit "first entry" would have silently retargeted every
@@ -1498,6 +1512,11 @@ def self_test(_args: argparse.Namespace) -> int:
         ): 1,
         alloc_bucket_key(
             "ptr-shape",
+            "returned expression operand",
+            "rule 1 (provenance) — already served by return-shape",
+        ): 2,
+        alloc_bucket_key(
+            "ptr-shape",
             "return",
             "rule 1 (provenance) — already served by return-shape",
         ): 1,
@@ -1523,11 +1542,13 @@ def self_test(_args: argparse.Namespace) -> int:
     # RULE present, but on the wrong POSITION. With the rule and the context
     # floored independently this passed; keyed as one tuple it cannot.
     swapped = json.loads(json.dumps(good))
-    swapped[fixture]["alloc_buckets"] = {
-        alloc_bucket_key("ptr-shape", c, r): 1
-        for c, r in bucket_rows
-        if c != "return"
-    }
+    swapped[fixture]["alloc_buckets"] = dict(
+        Counter(
+            alloc_bucket_key("ptr-shape", c, r)
+            for c, r in bucket_rows
+            if c != "return"
+        )
+    )
     swapped[fixture]["alloc_buckets"][
         alloc_bucket_key(
             "ptr-shape",

@@ -55,7 +55,7 @@
 //! the `Cell` and this counter are one piece of state with two representations,
 //! and `pending_transitions_arm_and_disarm` pins them together.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Process-global count of reasons `js_gc_loop_safepoint` must do more than
 /// return; see the module docs for the invariant.
@@ -86,7 +86,47 @@ pub(crate) fn poll_armed() -> bool {
 /// Add one reason for the poll to run. Paired with [`disarm_poll`].
 #[inline]
 pub(crate) fn arm_poll() {
-    PERRY_GC_POLL_ARMED.fetch_add(1, Ordering::Relaxed);
+    arm_counters(&PERRY_GC_POLL_ARMED, &ARM_EVENTS);
+}
+
+/// The arm/disarm algebra, over the pair of counters it maintains rather than
+/// over the two `static`s (#7946).
+///
+/// [`PERRY_GC_POLL_ARMED`] is `#[no_mangle]` ABI and [`ARM_EVENTS`] is a
+/// process-global census, so a test that asserts EXACT values of either is
+/// asserting about the whole test binary — and `ScheduleGuard::set` calls
+/// [`arm_poll`] from any thread that pins a schedule. Both `poll_arm::tests`
+/// cases failed that way (`poll_arm_events()` reading 3 where the test had
+/// armed once), 3 runs in 100. Taking the counters as parameters lets those
+/// tests exercise the real algebra on their own pair; the wiring of the
+/// `static`s stays covered by `the_statics_are_wired_to_the_shared_algebra`.
+#[inline]
+fn arm_counters(armed: &AtomicU32, events: &AtomicU64) {
+    events.fetch_add(1, Ordering::Relaxed);
+    armed.fetch_add(1, Ordering::Relaxed);
+}
+
+/// See [`disarm_poll`] for why this saturates instead of wrapping.
+#[inline]
+fn disarm_counter(armed: &AtomicU32) {
+    let _ = armed.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |armed| {
+        (armed > 0).then(|| armed - 1)
+    });
+}
+
+static ARM_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+/// How many times a deferral armed the back-edge poll. With
+/// [`PERRY_GC_POLL_ARMED`]'s value at exit this says whether the poll's fast
+/// path was actually fast for the run: a word left armed makes EVERY back-edge
+/// take the out-of-line call.
+pub fn poll_arm_events() -> u64 {
+    ARM_EVENTS.load(Ordering::Relaxed)
+}
+
+/// The arming word's current value; `0` proves the poll is a no-op right now.
+pub fn poll_armed_count() -> u32 {
+    PERRY_GC_POLL_ARMED.load(Ordering::Relaxed)
 }
 
 /// Release one reason.
@@ -98,9 +138,7 @@ pub(crate) fn arm_poll() {
 /// detected nor recoverable, so it is the one outcome made impossible.
 #[inline]
 pub(crate) fn disarm_poll() {
-    let _ = PERRY_GC_POLL_ARMED.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |armed| {
-        (armed > 0).then(|| armed - 1)
-    });
+    disarm_counter(&PERRY_GC_POLL_ARMED);
 }
 
 /// Release the startup seed, once, on the first poll that gets through.
@@ -143,36 +181,81 @@ pub(crate) fn reset_poll_seed_for_test() {
 mod tests {
     use super::*;
 
-    /// The counter is process-global, so these tests move it and must put it
-    /// back; they run under the same `cargo test` process as everything else.
-    struct Restore(u32);
-    impl Restore {
-        fn capture() -> Self {
-            Self(PERRY_GC_POLL_ARMED.load(Ordering::Relaxed))
-        }
+    /// A private (armed, events) pair with the same shape as the two `static`s.
+    ///
+    /// #7946: these cases used to `store(0)` into [`PERRY_GC_POLL_ARMED`] and
+    /// assert exact values back. That is an assertion about the whole test
+    /// binary: [`arm_poll`] is reached from `ScheduleGuard::set` on any thread
+    /// that pins a GC schedule, so a concurrent test's arm landed in the middle
+    /// (`poll_arm_events()` read 3 where this test had armed once). Restoring
+    /// the word on drop does not help — the damage window is between this
+    /// test's write and this test's read, the same window
+    /// `per_test_global!`'s module docs describe. The algebra under test is
+    /// unchanged; only the counters it runs on are private.
+    struct Counters {
+        armed: AtomicU32,
+        events: AtomicU64,
     }
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            PERRY_GC_POLL_ARMED.store(self.0, Ordering::Relaxed);
+
+    impl Counters {
+        fn new() -> Self {
+            Self {
+                armed: AtomicU32::new(0),
+                events: AtomicU64::new(0),
+            }
+        }
+        fn arm(&self) {
+            arm_counters(&self.armed, &self.events);
+        }
+        fn disarm(&self) {
+            disarm_counter(&self.armed);
+        }
+        fn armed(&self) -> bool {
+            self.armed.load(Ordering::Relaxed) != 0
+        }
+        fn count(&self) -> u32 {
+            self.armed.load(Ordering::Relaxed)
+        }
+        fn events(&self) -> u64 {
+            self.events.load(Ordering::Relaxed)
         }
     }
 
     #[test]
     fn arm_and_disarm_are_a_counter_not_a_flag() {
-        let _r = Restore::capture();
-        PERRY_GC_POLL_ARMED.store(0, Ordering::Relaxed);
-        assert!(!poll_armed());
-        arm_poll();
-        arm_poll();
-        assert!(poll_armed(), "two arms");
-        disarm_poll();
+        let c = Counters::new();
+        assert!(!c.armed());
+        c.arm();
+        c.arm();
+        assert!(c.armed(), "two arms");
+        c.disarm();
         assert!(
-            poll_armed(),
+            c.armed(),
             "one outstanding arm must keep the poll live — a flag would have \
              stranded the second thread's deferred collection here"
         );
-        disarm_poll();
-        assert!(!poll_armed());
+        c.disarm();
+        assert!(!c.armed());
+    }
+
+    /// #7909: `poll_arm_events` must count ARMS, and `poll_armed_count` must
+    /// report the word, because the pair is what distinguishes "the back-edge
+    /// poll was never armed" from "it was armed and drained". On `asyncpipe`
+    /// the answer is `arm_events=0`, which is what retired the hypothesis that
+    /// the loop poll was driving the incremental collector there.
+    #[test]
+    fn arm_events_count_arms_and_the_word_is_reported() {
+        let c = Counters::new();
+        c.arm();
+        assert_eq!(c.events(), 1);
+        assert_eq!(c.count(), 1);
+        c.disarm();
+        assert_eq!(c.count(), 0);
+        assert_eq!(
+            c.events(),
+            1,
+            "a release is not an arm; the event counter is monotone in arms only"
+        );
     }
 
     /// An unbalanced release must not wrap. `u32::MAX` reads as armed forever,
@@ -180,12 +263,51 @@ mod tests {
     /// permanently and silently.
     #[test]
     fn disarm_saturates_at_zero() {
-        let _r = Restore::capture();
-        PERRY_GC_POLL_ARMED.store(0, Ordering::Relaxed);
-        disarm_poll();
-        disarm_poll();
-        assert_eq!(PERRY_GC_POLL_ARMED.load(Ordering::Relaxed), 0);
-        assert!(!poll_armed());
+        let c = Counters::new();
+        c.disarm();
+        c.disarm();
+        assert_eq!(c.count(), 0);
+        assert!(!c.armed());
+    }
+
+    /// The subject of the three cases above is the algebra; this one is the
+    /// WIRING, and it is deliberately read-only so it cannot be raced.
+    ///
+    /// Without it, moving the algebra onto private counters would leave nothing
+    /// asserting that the shipped accessors read the shipped `static`s — the
+    /// "gate runs but its subject never did" shape. `poll_armed()` /
+    /// `poll_armed_count()` must agree with [`PERRY_GC_POLL_ARMED`], and
+    /// `poll_arm_events()` with [`ARM_EVENTS`], whatever the rest of the binary
+    /// has left in them.
+    #[test]
+    fn the_statics_are_wired_to_the_shared_algebra() {
+        // `ARM_EVENTS` is monotone, so a sandwich is exact with no retry.
+        let before = ARM_EVENTS.load(Ordering::Relaxed);
+        let via_events = poll_arm_events();
+        let after = ARM_EVENTS.load(Ordering::Relaxed);
+        assert!(
+            before <= via_events && via_events <= after,
+            "poll_arm_events() must read ARM_EVENTS ({before} <= {via_events} <= {after})"
+        );
+
+        // The armed word moves in both directions, so read it until three
+        // consecutive loads agree and assert inside that stable window. Retry
+        // rather than assert-and-hope: the point of this test is the wiring,
+        // and a wiring test that can fail for scheduling reasons is the very
+        // defect #7946 is about.
+        for _ in 0..10_000 {
+            let a = PERRY_GC_POLL_ARMED.load(Ordering::Relaxed);
+            let via_count = poll_armed_count();
+            let via_bool = poll_armed();
+            let b = PERRY_GC_POLL_ARMED.load(Ordering::Relaxed);
+            if a != b {
+                continue;
+            }
+            assert_eq!(via_count, a, "poll_armed_count() must read the word");
+            assert_eq!(via_bool, a != 0, "poll_armed() must read the same word");
+            return;
+        }
+        panic!("PERRY_GC_POLL_ARMED never held still long enough to read it twice");
     }
 
     /// The default is ARMED, and it has to be: the seed is what guarantees the

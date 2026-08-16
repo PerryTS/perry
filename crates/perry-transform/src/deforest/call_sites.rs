@@ -200,24 +200,63 @@ fn try_consumer_fuse_pattern(
     producers: &HashMap<FuncId, ProducerInfo>,
     out_param_ids: &HashMap<FuncId, LocalId>,
 ) -> Option<(usize, Vec<Stmt>)> {
+    let (callee_id, outer_id) = match_consumer_fuse_pattern(stmts, producers)?;
+    let (call_args, type_args) = match &stmts[0] {
+        Stmt::Let {
+            init: Some(Expr::Call {
+                args, type_args, ..
+            }),
+            ..
+        } => (args.clone(), type_args.clone()),
+        _ => return None,
+    };
+
+    // Build replacement: `outer = f(args, outer);`
+    //
+    // #7661: the assignment is not cosmetic. The callee may grow the array,
+    // and `js_array_grow` relocates - leaving a forwarding stub at the address
+    // `outer` still holds. The producer returns its own (written-back) head;
+    // storing it back is what keeps `outer` live for the caller's own later
+    // pushes and element reads.
+    let mut new_args = call_args;
+    new_args.push(Expr::LocalGet(outer_id));
+    let _ = out_param_ids.get(&callee_id)?; // sanity check producer was sized
+    let new_call = Expr::Call {
+        callee: Box::new(Expr::FuncRef(callee_id)),
+        args: new_args,
+        type_args,
+        // #5247: deforestation-fused call; no single source offset.
+        byte_offset: 0,
+    };
+    Some((
+        2,
+        vec![Stmt::Expr(Expr::LocalSet(outer_id, Box::new(new_call)))],
+    ))
+}
+
+/// The MATCH half of [`try_consumer_fuse_pattern`], with no rewrite and no
+/// dependency on the out-param allocation. Returns `(producer, outer)` for the
+/// `let X = f(args); for (j) outer.push(X[j]);` shape at `stmts[0..]`.
+///
+/// #8104: `run` needs this before it decides whether to transform anything at
+/// all, because the fuse is the ONLY call-site shape that removes work - the
+/// value-binding and pass-through rewrites are pure cost. Sharing the matcher
+/// keeps the profitability question and the rewrite from ever disagreeing
+/// about what a fuse site is.
+pub(super) fn match_consumer_fuse_pattern(
+    stmts: &[Stmt],
+    producers: &HashMap<FuncId, ProducerInfo>,
+) -> Option<(FuncId, LocalId)> {
     if stmts.len() < 2 {
         return None;
     }
-    let (child_id, callee_id, call_args, type_args) = match &stmts[0] {
+    let (child_id, callee_id) = match &stmts[0] {
         Stmt::Let {
             id,
-            init:
-                Some(Expr::Call {
-                    callee,
-                    args,
-                    type_args,
-                    ..
-                }),
+            init: Some(Expr::Call { callee, .. }),
             ..
         } => match callee.as_ref() {
-            Expr::FuncRef(fid) if producers.contains_key(fid) => {
-                (*id, *fid, args.clone(), type_args.clone())
-            }
+            Expr::FuncRef(fid) if producers.contains_key(fid) => (*id, *fid),
             _ => return None,
         },
         _ => return None,
@@ -245,28 +284,7 @@ fn try_consumer_fuse_pattern(
     if later_uses {
         return None;
     }
-
-    // Build replacement: `outer = f(args, outer);`
-    //
-    // #7661: the assignment is not cosmetic. The callee may grow the array,
-    // and `js_array_grow` relocates — leaving a forwarding stub at the address
-    // `outer` still holds. The producer returns its own (written-back) head;
-    // storing it back is what keeps `outer` live for the caller's own later
-    // pushes and element reads.
-    let mut new_args = call_args;
-    new_args.push(Expr::LocalGet(outer_id));
-    let _ = out_param_ids.get(&callee_id)?; // sanity check producer was sized
-    let new_call = Expr::Call {
-        callee: Box::new(Expr::FuncRef(callee_id)),
-        args: new_args,
-        type_args,
-        // #5247: deforestation-fused call; no single source offset.
-        byte_offset: 0,
-    };
-    Some((
-        2,
-        vec![Stmt::Expr(Expr::LocalSet(outer_id, Box::new(new_call)))],
-    ))
+    Some((callee_id, outer_id))
 }
 
 /// Match the for-loop shape `for (let j = 0; j < child.length; j++)
@@ -449,5 +467,121 @@ fn try_rewrite_single_stmt(
         // the return value is the whole point. Skip for now —
         // misclassifying these is more dangerous than missing them.
         _ => None,
+    }
+}
+
+// ── #8104: profitability ───────────────────────────────────────────────────
+
+/// Every producer with at least ONE consumer-fuse call site.
+///
+/// The fuse (`let X = f(args); for (j) outer.push(X[j]);` -> `outer = f(args,
+/// outer);`) is the only rewrite that removes work: it deletes a copy loop and
+/// leaves one array where there were two. The other two shapes are pure cost.
+/// The value-binding rewrite in particular turns
+///
+/// ```ignore
+/// const arr = build(n);          // one array, one immutable binding
+/// ```
+///
+/// into
+///
+/// ```ignore
+/// let arr = [];  arr = build(n, arr);   // same one array, now REASSIGNED
+/// ```
+///
+/// which allocates exactly as many arrays as before and costs the binding its
+/// write-once proof - and with it `Ptr<NumArray>`, the element-shape versioned
+/// clone, and every other representation fact keyed on a stable local.
+///
+/// Measured on the three programs in the corpus whose emitted object changes
+/// at all (macOS arm64, `--profile perry-dev`, medians, identical output):
+/// `batch` +-0.0%, `shapes` +4.4% instructions, and
+/// `bench_numeric_array_numeric` **+2926% instructions and +103% peak RSS**
+/// (7.7 G -> 232.7 G, 21.7 MB -> 44.1 MB). None of the three has a fuse site.
+///
+/// Scans exactly the bodies `run` rewrites - module init, free functions,
+/// non-`super` class member bodies - plus each producer's own body, where the
+/// recursive fuse that motivated the transform (ABC451D) lives. Closure bodies
+/// are excluded because `scan_producers_used_in_closures` already disqualifies
+/// a producer referenced from one.
+pub fn producers_with_fuse_sites(
+    module: &Module,
+    producers: &HashMap<FuncId, ProducerInfo>,
+) -> HashSet<FuncId> {
+    let mut fused: HashSet<FuncId> = HashSet::new();
+    scan_fuse_sites(&module.init, producers, &mut fused);
+    for func in &module.functions {
+        scan_fuse_sites(&func.body, producers, &mut fused);
+    }
+    for class in &module.classes {
+        if let Some(ctor) = &class.constructor {
+            if !body_has_super(&ctor.body) {
+                scan_fuse_sites(&ctor.body, producers, &mut fused);
+            }
+        }
+        for m in class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, g)| g))
+            .chain(class.setters.iter().map(|(_, s)| s))
+        {
+            if !body_has_super(&m.body) {
+                scan_fuse_sites(&m.body, producers, &mut fused);
+            }
+        }
+    }
+    fused
+}
+
+/// Recursive half of [`producers_with_fuse_sites`]. Mirrors
+/// `rewrite_call_sites_in_stmts_with_local_pass`'s descent so the two cannot
+/// disagree about which positions are reachable.
+fn scan_fuse_sites(
+    stmts: &[Stmt],
+    producers: &HashMap<FuncId, ProducerInfo>,
+    fused: &mut HashSet<FuncId>,
+) {
+    for i in 0..stmts.len() {
+        if let Some((callee, _)) = match_consumer_fuse_pattern(&stmts[i..], producers) {
+            fused.insert(callee);
+        }
+        match &stmts[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                scan_fuse_sites(then_branch, producers, fused);
+                if let Some(eb) = else_branch {
+                    scan_fuse_sites(eb, producers, fused);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                scan_fuse_sites(body, producers, fused);
+            }
+            Stmt::Labeled { body, .. } => {
+                scan_fuse_sites(std::slice::from_ref(body.as_ref()), producers, fused);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                scan_fuse_sites(body, producers, fused);
+                if let Some(c) = catch {
+                    scan_fuse_sites(&c.body, producers, fused);
+                }
+                if let Some(f) = finally {
+                    scan_fuse_sites(f, producers, fused);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    scan_fuse_sites(&case.body, producers, fused);
+                }
+            }
+            _ => {}
+        }
     }
 }

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2001 entries across 122 modules
+// Coverage: 2010 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2664,6 +2664,17 @@ declare module "perry/media" {
   export function stop(...args: any[]): any;
 }
 
+declare module "perry/native" {
+  /** stdlib */
+  export const NativeArena: any;
+  /** intrinsic */
+  export function alignof(): number;
+  /** intrinsic */
+  export function offsetof(field: string): number;
+  /** intrinsic */
+  export function sizeof(): number;
+}
+
 declare module "perry/plugin" {
   /** stdlib */
   export class PluginApi { [key: string]: any; }
@@ -3153,7 +3164,15 @@ declare module "perry/updater" {
   /** stdlib */
   export function computeFileSha256(...args: any[]): any;
   /** stdlib */
+  export function embeddedCheckHeaders(...args: any[]): any;
+  /** stdlib */
+  export function embeddedCheckUrl(...args: any[]): any;
+  /** stdlib */
+  export function embeddedRefreshDue(...args: any[]): any;
+  /** stdlib */
   export function getBackupPath(...args: any[]): any;
+  /** stdlib */
+  export function getEmbeddedConfig(...args: any[]): any;
   /** stdlib */
   export function getExePath(...args: any[]): any;
   /** stdlib */
@@ -3164,6 +3183,8 @@ declare module "perry/updater" {
   export function performRollback(...args: any[]): any;
   /** stdlib */
   export function readSentinel(...args: any[]): any;
+  /** stdlib */
+  export function recordEmbeddedResponse(...args: any[]): any;
   /** stdlib */
   export function relaunch(...args: any[]): any;
   /** stdlib */

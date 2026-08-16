@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Tier 1 — cargo_workspace
 #
-# Runs `cargo test --release --workspace` with the CLAUDE.md UI exclusions.
+# Runs the release workspace tests with the CLAUDE.md UI exclusions, then runs
+# `perry-runtime` separately with its mandatory single-threaded test harness.
 # Per the canonical command in that file:
 #
-#   cargo test --release --workspace \
+#   cargo test --release --workspace --exclude perry-runtime \
 #     --exclude perry-ui-ios --exclude perry-ui-tvos --exclude perry-ui-watchos \
 #     --exclude perry-ui-visionos --exclude perry-ui-android \
 #     --exclude perry-ui-windows --exclude perry-ui-gtk4
+#   RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
 #
 # Linux/Windows hosts swap the host's UI crate back in (so perry-ui-gtk4 is
 # tested on Linux but not macOS, etc.) — same logic as tier 0.
@@ -41,14 +43,23 @@ esac
 start="$(date +%s)"
 {
     echo "tier 1 cargo_workspace — host=$host"
-    echo "command: cargo test --release --workspace ${EXCLUDES[*]}"
+    echo "command: cargo test --release --workspace --exclude perry-runtime ${EXCLUDES[*]}"
+    echo "command: RUST_TEST_THREADS=1 cargo test --release -p perry-runtime"
     echo
 } > "$LOG"
 
 set +e
-(cd "$REPO_ROOT" && cargo test --release --workspace "${EXCLUDES[@]}") >> "$LOG" 2>&1
-rc=$?
+(cd "$REPO_ROOT" && cargo test --release --workspace --exclude perry-runtime "${EXCLUDES[@]}") \
+    >> "$LOG" 2>&1
+workspace_rc=$?
+(cd "$REPO_ROOT" && RUST_TEST_THREADS=1 cargo test --release -p perry-runtime) >> "$LOG" 2>&1
+runtime_rc=$?
 set -e
+
+rc=0
+if [[ "$workspace_rc" -ne 0 || "$runtime_rc" -ne 0 ]]; then
+    rc=1
+fi
 
 # Try to extract per-crate test counts from the log.
 # `cargo test` prints lines like "test result: ok. 12 passed; 0 failed; 0 ignored ..."
@@ -66,12 +77,20 @@ end="$(date +%s)"
 dur="$((end - start))"
 
 cat > "$SUMMARY" <<EOF
-{"script": "tier01_cargo_workspace.sh", "passed": $total_passed, "failed": $total_failed, "skipped": 0, "host": "$host", "exit_code": $rc}
+{"script": "tier01_cargo_workspace.sh", "passed": $total_passed, "failed": $total_failed, "skipped": 0, "host": "$host", "exit_code": $rc, "workspace_exit_code": $workspace_rc, "runtime_exit_code": $runtime_rc}
 EOF
 
 if [[ "$rc" -eq 0 ]]; then
     sweep_tier_emit "$OUT" 1 "cargo_workspace" "PASS" "$dur" "$total_passed crate-suites passed"
 else
+    # A compile/link error exits nonzero without ever printing a `test result`
+    # line, so `total_failed` stays 0. Saying "0 crate-suites failed" there
+    # reads as "nothing failed" on a tier that did fail; name the real shape.
+    if [[ "$total_failed" -eq 0 ]]; then
+        detail="no suite reported a failure, so an invocation died before emitting results (compile/link)"
+    else
+        detail="$total_failed crate-suites failed of $((total_passed + total_failed))"
+    fi
     sweep_tier_emit "$OUT" 1 "cargo_workspace" "FAIL" "$dur" \
-        "cargo test exited $rc ($total_failed crate-suites failed of $((total_passed + total_failed)))"
+        "cargo test failed (workspace=$workspace_rc runtime=$runtime_rc; $detail)"
 fi

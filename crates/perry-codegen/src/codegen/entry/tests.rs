@@ -86,12 +86,26 @@ fn empty_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
 fn emitted_ir(output_type: &str) -> String {
     String::from_utf8(compile_module(&empty_module(), entry_opts(output_type)).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
+
+fn emitted_path_init_ir(output_type: &str) -> String {
+    let mut opts = entry_opts(output_type);
+    opts.non_entry_module_prefixes = vec!["lazy_chunk_js".to_string()];
+    opts.deferred_module_prefixes
+        .insert("lazy_chunk_js".to_string());
+    opts.nextjs_path_init_modules = vec![(
+        "/fixture/.next/server/chunks/lazy.js".to_string(),
+        "lazy_chunk_js".to_string(),
+    )];
+    String::from_utf8(compile_module(&empty_module(), opts).unwrap())
         .expect("LLVM IR should be UTF-8")
 }
 
@@ -150,5 +164,51 @@ fn dylib_entry_does_not_release_process_owned_collection_storage() {
     assert!(
         !ir.contains("call void @js_gc_release_current_thread_collection_side_allocations()"),
         "a library return is not a process-exit boundary"
+    );
+}
+
+#[test]
+fn executable_and_app_dylib_both_register_lazy_path_initializers() {
+    for output_type in ["executable", "dylib"] {
+        let ir = emitted_path_init_ir(output_type);
+        let entry_symbol = if output_type == "dylib" {
+            "define void @perry_module_init()"
+        } else {
+            "define i32 @main()"
+        };
+        assert!(ir.contains(entry_symbol), "missing {entry_symbol}\n{ir}");
+        assert!(
+            ir.contains("call void @js_register_path_init("),
+            "{output_type} entry omitted the provider-visible lazy path registration\n{ir}"
+        );
+        assert!(
+            ir.contains("ptrtoint (ptr @lazy_chunk_js__init to i64)"),
+            "{output_type} entry did not register the generated init function\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @lazy_chunk_js__init()"),
+            "path-only module must remain cold at {output_type} startup\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn module_init_body_runs_through_native_exception_boundary() {
+    let mut opts = entry_opts("executable");
+    opts.is_entry_module = false;
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8");
+
+    assert!(
+        ir.contains("call void @js_run_module_init_catching("),
+        "module init must cache an escaping CJS partial-export failure before rethrowing\n{ir}"
+    );
+    assert!(
+        ir.contains("__init_body to i64)"),
+        "the exception boundary must receive the generated module body address\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @gc_exit_teardown_ts__init_body()"),
+        "the generated wrapper must not bypass the exception boundary\n{ir}"
     );
 }

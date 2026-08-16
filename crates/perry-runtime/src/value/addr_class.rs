@@ -119,6 +119,12 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
 /// Values below 0x100000 (1MB) are likely INT32_TAG extracts, small handles,
 /// or null. The upper bound filters out NaN-box tag bits that leaked through.
+/// Linux-family AArch64 targets can map userspace arenas anywhere in the full
+/// low 48-bit VA range, including addresses with bit 47 set (observed under
+/// the native Linux ARM provider gate around `0x0000_e000_...`). Those
+/// addresses are still exactly representable in Perry's 48-bit NaN-box
+/// payload. The half-range bound used by x86-64 canonical low addresses must
+/// not reject them.
 ///
 /// Issue #73 follow-up: raised the lower bound from 1 MB to 2 TB to reject
 /// corrupted NaN-boxes whose 48-bit handle lands in the 1-2 TB window
@@ -181,7 +187,17 @@ pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
         target_os = "visionos",
     )))]
     const HEAP_MIN: u64 = 0x200_0000_0000;
-    (HEAP_MIN..0x8000_0000_0000).contains(&addr)
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    ))]
+    const HEAP_MAX: u64 = 0x1_0000_0000_0000;
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    )))]
+    const HEAP_MAX: u64 = 0x8000_0000_0000;
+    (HEAP_MIN..HEAP_MAX).contains(&addr)
 }
 
 /// True when `addr` is outside every handle band AND inside the platform
@@ -216,6 +232,80 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
         return None;
     }
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrackedGcStorage {
+    Arena,
+    Malloc,
+}
+
+/// Classify a candidate user address without dereferencing it.
+///
+/// The injected lookups keep the safety policy independently testable: a
+/// low-address arena range must win on allocator membership, while every
+/// handle-band value must be rejected before either lookup runs.
+#[inline]
+fn classify_tracked_gc_header_with(
+    addr: usize,
+    arena_range_base: impl FnOnce(usize) -> Option<usize>,
+    malloc_header_is_tracked: impl FnOnce(*const GcHeader) -> bool,
+) -> Option<(usize, TrackedGcStorage)> {
+    if is_handle_band(addr) {
+        return None;
+    }
+    let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
+    if let Some(range_base) = arena_range_base(addr) {
+        // The payload and its header must belong to the same registered
+        // range. This prevents a candidate at the first bytes of a mapped
+        // range from back-reading the preceding page (#7742).
+        return (header_addr >= range_base).then_some((header_addr, TrackedGcStorage::Arena));
+    }
+    malloc_header_is_tracked(header_addr as *const GcHeader)
+        .then_some((header_addr, TrackedGcStorage::Malloc))
+}
+
+/// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
+/// is a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use
+/// an address-magnitude window as evidence of ownership: arena page membership
+/// or an exact malloc-registry hit is required before the first header byte is
+/// touched. The header's type, size, and arena flag are then validated.
+///
+/// This is the canonical gate for code that must distinguish live Perry GC
+/// allocations from registry handles, synthetic pointers, and unrelated
+/// allocations before dereferencing a header.
+///
+/// # Safety
+/// The returned pointer is valid only while the allocation remains live and on
+/// the current runtime thread. Callers must not dereference it after an
+/// allocation or collection safepoint. Returning a raw pointer is deliberate:
+/// some checked callers install forwarding metadata, so this gate must not
+/// manufacture a shared reference and then write through a cast of it.
+#[inline]
+pub(crate) unsafe fn try_read_tracked_gc_header(
+    addr: usize,
+) -> Option<std::ptr::NonNull<GcHeader>> {
+    let (header_addr, storage) = classify_tracked_gc_header_with(
+        addr,
+        |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base)| base),
+        crate::gc::gc_malloc_header_is_tracked,
+    )?;
+    if header_addr % std::mem::align_of::<GcHeader>() != 0 {
+        return None;
+    }
+    let header = std::ptr::NonNull::new(header_addr as *mut GcHeader)?;
+    let header_ptr = header.as_ptr();
+    if crate::gc::gc_type_info((*header_ptr).obj_type).is_none() {
+        return None;
+    }
+    if ((*header_ptr).size as usize) < GC_HEADER_SIZE {
+        return None;
+    }
+    let header_is_arena = (*header_ptr).gc_flags & crate::gc::GC_FLAG_ARENA != 0;
+    if header_is_arena != matches!(storage, TrackedGcStorage::Arena) {
+        return None;
+    }
+    Some(header)
 }
 
 #[cfg(test)]
@@ -265,6 +355,79 @@ mod tests {
     }
 
     #[test]
+    fn tracked_gc_classifier_accepts_injected_low_arena_membership() {
+        use std::cell::Cell;
+
+        // 4 GiB is well below the legacy 2 TiB macOS floor. Membership in a
+        // registered arena range, not this magnitude, is the ownership proof.
+        // The array install-path test injects this candidate because mapping a
+        // fixed low address in the test process would be platform-dependent.
+        const LOW_USER: usize = 0x1_0000_0008;
+        const LOW_RANGE_BASE: usize = LOW_USER - GC_HEADER_SIZE;
+        const { assert!(LOW_USER < 0x200_0000_0000) };
+        let malloc_lookup_ran = Cell::new(false);
+        assert_eq!(
+            classify_tracked_gc_header_with(
+                LOW_USER,
+                |_| Some(LOW_RANGE_BASE),
+                |_| {
+                    malloc_lookup_ran.set(true);
+                    false
+                },
+            ),
+            Some((LOW_RANGE_BASE, TrackedGcStorage::Arena))
+        );
+        assert!(!malloc_lookup_ran.get());
+    }
+
+    #[test]
+    fn tracked_gc_classifier_rejects_handle_boundaries_before_lookup() {
+        for addr in [0, 1, COMMON_HANDLE_BAND_END, HANDLE_BAND_MAX - 1] {
+            assert_eq!(
+                classify_tracked_gc_header_with(
+                    addr,
+                    |_| panic!("handle must not reach the arena classifier"),
+                    |_| panic!("handle must not reach the malloc registry"),
+                ),
+                None
+            );
+        }
+
+        // The first address outside the handle band is still rejected when
+        // neither allocator owns it, without a header dereference.
+        assert_eq!(
+            classify_tracked_gc_header_with(HANDLE_BAND_MAX, |_| None, |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn try_read_tracked_gc_header_rejects_unrelated_allocation() {
+        #[repr(C)]
+        struct SyntheticAllocation {
+            header: GcHeader,
+            payload: u64,
+        }
+
+        let make_synthetic = || SyntheticAllocation {
+            header: GcHeader {
+                obj_type: crate::gc::GC_TYPE_ARRAY,
+                gc_flags: 0,
+                _reserved: 0,
+                size: std::mem::size_of::<SyntheticAllocation>() as u32,
+            },
+            payload: 0,
+        };
+        let stack_synthetic = make_synthetic();
+        let stack_user = &stack_synthetic.payload as *const u64 as usize;
+        assert!(unsafe { try_read_tracked_gc_header(stack_user) }.is_none());
+
+        let heap_synthetic = Box::new(make_synthetic());
+        let heap_user = &heap_synthetic.payload as *const u64 as usize;
+        assert!(unsafe { try_read_tracked_gc_header(heap_user) }.is_none());
+    }
+
+    #[test]
     fn stream_id_band_is_above_pointer_handles() {
         assert!(is_stream_id_band(STREAM_ID_BAND_START));
         assert!(!is_stream_id_band(HANDLE_BAND_MAX - 1));
@@ -278,5 +441,19 @@ mod tests {
         // 45 GB. Classification is purely numeric and must not dereference
         // this representative address.
         assert!(is_valid_obj_ptr(0x0000_000a_0000_0000usize as *const u8));
+    }
+
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[test]
+    fn linux_family_aarch64_accepts_the_full_low_48_bit_heap_range() {
+        // The provider-dylib regression allocated its first ObjectHeader in
+        // this half of the AArch64 userspace range. It remains a plain 48-bit
+        // NaN-box payload; only x86-64's canonical-address rule excludes it.
+        assert!(is_valid_obj_ptr(0x0000_e000_0000_1000usize as *const u8));
+        assert!(is_plausible_heap_addr(0x0000_e000_0000_1000));
+        assert!(!is_valid_obj_ptr(0x0001_0000_0000_0000usize as *const u8));
     }
 }

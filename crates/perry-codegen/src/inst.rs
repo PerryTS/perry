@@ -20,6 +20,7 @@ pub enum LoadFlavor {
     Plain,
     Aligned(u32),
     Volatile,
+    AtomicMonotonic(u32),
     AtomicSeqCst(u32),
     /// `!invariant.load !0` tagged (issue #52).
     Invariant,
@@ -193,6 +194,12 @@ impl LlInst {
                 LoadFlavor::Volatile => {
                     let _ = write!(out, "  {dst} = load volatile {ty}, ptr {ptr}");
                 }
+                LoadFlavor::AtomicMonotonic(n) => {
+                    let _ = write!(
+                        out,
+                        "  {dst} = load atomic {ty}, ptr {ptr} monotonic, align {n}"
+                    );
+                }
                 LoadFlavor::AtomicSeqCst(n) => {
                     let _ = write!(
                         out,
@@ -270,7 +277,14 @@ impl LlInst {
                 out.push(')');
             }
             LlInst::AsmBarrier => {
-                out.push_str("  call void asm sideeffect \"\", \"\"()");
+                // `"gc-leaf-function"` exempts the barrier from
+                // rewrite-statepoints-for-gc: RS4GC otherwise wraps the call
+                // into a `gc.statepoint` whose callee is the inline asm —
+                // invalid IR ("Cannot take the address of an inline asm!")
+                // that SIGBUSes in ISel because the in-process pipeline does
+                // not re-verify (#8082). An empty asm can never reach a
+                // safepoint, so the exemption is sound by construction.
+                out.push_str("  call void asm sideeffect \"\", \"\"() \"gc-leaf-function\"");
             }
             LlInst::Br { label } => {
                 let _ = write!(out, "  br label %{label}");

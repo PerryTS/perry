@@ -124,10 +124,9 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 
 /// #6759 Phase B: classify `obj_ptr` as a genuine shaped `GC_TYPE_OBJECT`
 /// whose header can carry the per-object meta record. Everything else —
-/// arrays, typed arrays, native handle-band ids, proxy ids, and the
-/// `RegExpHeader` that is tagged `GC_TYPE_OBJECT` but has a different
-/// layout — returns `None` and stays on the residual registry. The
-/// classification is a pure function of the allocation, so an owner is
+/// arrays, typed arrays, native handle-band ids, proxy ids, and the dedicated
+/// `GC_TYPE_REGEXP` cell — returns `None` and stays on the residual registry.
+/// The classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
     if !crate::value::addr_class::is_above_handle_band(obj_ptr)
@@ -137,9 +136,6 @@ pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::O
     }
     let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return None;
-    }
-    if crate::regex::regex_header_has_magic(obj_ptr as *const crate::regex::RegExpHeader) {
         return None;
     }
     Some(obj_ptr as *mut crate::ObjectHeader)
@@ -201,7 +197,14 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     // registry.
     unsafe {
         if let Some(obj) = meta_capable_object(obj_ptr) {
-            let meta = crate::object::object_meta_ensure(obj);
+            // `object_meta_ensure` allocates and may evacuate the owner. Keep
+            // the caller's pointer rooted and reload it before the semantic
+            // ShapeId transition below.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (meta, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+                crate::object::object_meta_ensure(obj)
+            });
             (*meta).prototype = proto_bits;
             if instance_override {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;
@@ -214,6 +217,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
                 &(*meta).prototype as *const u64 as usize,
                 proto_bits,
             );
+            if instance_override {
+                crate::object::shapes::transition_object_shape_semantics(obj);
+            }
             return;
         }
     }
@@ -392,6 +398,19 @@ pub(crate) fn visit_object_static_prototype_slot_mut(
     mut visit: impl FnMut(*mut u64),
 ) {
     if owner == 0 {
+        return;
+    }
+    // The residual registry is EMPTY until a non-meta-capable owner records a
+    // prototype, and the latch is stored (`Release`) *before* that insert, so
+    // a `false` read proves there is nothing here to visit. Its siblings
+    // (`object_static_prototype`, `object_static_prototype_owner_moved`,
+    // `prune_dead_object_prototype_owners`) already gate on it; THIS one is
+    // the collector's per-object rewrite hook, so without the gate every
+    // traced object took a process-global `Mutex<HashMap>` and paid a SipHash
+    // probe against an empty map. Measured on `gc-handoff/bench/retain.ts`:
+    // `pthread_mutex_lock` and `RandomState::hash_one` were both visible under
+    // the mark drain in a single-threaded profile.
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
         return;
     }
     // Take the entry OUT and run the visit with the lock RELEASED: a
@@ -619,5 +638,50 @@ mod latch_drain_tests_7737 {
              every evacuated object keeps paying the mutex + SipHash lookup \
              for the rest of the process"
         );
+    }
+
+    /// The collector's per-object rewrite hook now gates on the same latch.
+    ///
+    /// Both halves are asserted, because only the pair is a fix: a hook that
+    /// skips an EMPTY registry is the optimisation, and a hook that still
+    /// reaches a RECORDED entry is the thing the optimisation must not break.
+    /// Without the second assertion, `return;` at the top of the function
+    /// would also pass.
+    #[test]
+    fn the_gc_visit_hook_skips_an_empty_registry_and_still_reaches_a_recorded_one() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        prune_dead_object_prototype_owners(&|_| true);
+
+        // A REAL old-gen allocation, not a synthetic address: on the armed
+        // path the visitor re-reads the owner's `GcHeader` to re-key a
+        // self-referential prototype, so a made-up owner segfaults there. (The
+        // #7737 test above never calls the visitor, which is why it can use
+        // one.)
+        let owner = crate::arena::arena_alloc_gc_old(64, 8, crate::gc::GC_TYPE_OBJECT) as usize;
+        let proto_bits: u64 = 0x7FFC_0000_0000_0001;
+
+        let mut visits = 0usize;
+        visit_object_static_prototype_slot_mut(owner, |_| visits += 1);
+        assert_eq!(
+            visits, 0,
+            "an empty registry must be answered by the latch, not by a \
+             process-global mutex plus a SipHash probe — this hook runs once \
+             per TRACED object"
+        );
+
+        if let Ok(mut map) = get_object_prototypes().lock() {
+            OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
+            map.insert(owner, proto_bits);
+        }
+        let mut seen = 0u64;
+        let mut visits = 0usize;
+        visit_object_static_prototype_slot_mut(owner, |slot| {
+            visits += 1;
+            seen = unsafe { *slot };
+        });
+        assert_eq!(visits, 1, "a recorded prototype slot must still be visited");
+        assert_eq!(seen, proto_bits);
+
+        prune_dead_object_prototype_owners(&|o| o == owner);
     }
 }

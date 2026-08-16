@@ -296,6 +296,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: perry-windows-aarch64
 
     runs-on: ${{ matrix.os }}
     env:
@@ -428,6 +431,12 @@ jobs:
         # needs the prebuilt `libperry_ext_*.a` sitting next to
         # libperry_runtime.a so `perry compile` can link them without a
         # workspace checkout (see optimized_libs.rs::resolve_prebuilt_ext_libs).
+        # #7358: keep the compiler and both shipped wrapper archives in each
+        # Cargo invocation. Building an ext staticlib alone gives its bundled
+        # runtime/shared dependencies a different feature union from stdlib;
+        # the link deduper then cannot remove the whole second copy, and the
+        # HTTP accept loop reads a different async reactor from the one the JS
+        # event loop drives.
         # Best-effort per crate: a wrapper that can't build on this host must
         # not fail the whole release — the packaging glob below ships
         # whatever was produced.
@@ -437,7 +446,8 @@ jobs:
             [ -d "$d" ] || continue
             name=$(basename "$d")
             echo "::group::build $name"
-            cargo build --profile dist --target ${{ matrix.target }} -p "$name" \
+            cargo build --profile dist --target ${{ matrix.target }} \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done
@@ -602,22 +612,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # #4823 (option 1): the Android UI backend so a WinGet/Scoop-installed
           # perry can link `perry/ui` apps for android without a source tree.
-          # Best-effort: aws-lc-rs cross-from-Windows can be finicky; a failure
-          # here must not sink the whole release, because the npm path backfills
-          # libperry_ui_android.a from the ubuntu `perry-cross-*` bundle and the
-          # zip still ships runtime+stdlib. The UI staging below is guarded on
-          # the lib actually existing.
+          # This is mandatory for every Windows archive: matrix legs package
+          # independently, so another leg cannot backfill a missing library.
           # Mirrors the ubuntu cross-bundle leg: `--profile dist` build for the
           # staticlib (UI crates are already staticlib — no -static wrapper); the
           # global-dynamic TLS rustflag only matters at the consumer's final
           # cdylib link, not here.
-          # A native non-zero exit isn't a terminating error in pwsh, so guard
-          # on $LASTEXITCODE explicitly and reset it so the step stays green.
           cargo build --profile dist --target aarch64-linux-android -p perry-ui-android
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "perry-ui-android android cross-build failed (exit $LASTEXITCODE) — zip will omit the UI lib; npm backfills it from perry-cross-aarch64-linux-android."
-            $global:LASTEXITCODE = 0
-          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # #4856 — defense in depth behind the cache eviction above: assert
       # every runtime archive this leg built (host triple + any Apple/
@@ -763,7 +765,7 @@ jobs:
               $signtool = $signtoolCommand.Source
             } else {
               $kitsBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-              $signtool = Get-ChildItem "$kitsBin\*\x64\signtool.exe" |
+              $signtool = Get-ChildItem "$kitsBin\*\arm64\signtool.exe", "$kitsBin\*\x64\signtool.exe" |
                 Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
                 Select-Object -First 1 -ExpandProperty FullName
             }
@@ -792,8 +794,34 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = "target/${{ matrix.target }}/dist/perry.exe"
+          $llvmBin = Join-Path $env:LLVM_SYS_221_PREFIX 'bin'
+          $llvmReadObj = Join-Path $llvmBin 'llvm-readobj.exe'
+          $llvmRuntime = Join-Path $llvmBin 'LLVM-C.dll'
+
+          foreach ($required in @($binary, $llvmReadObj, $llvmRuntime)) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Windows release prerequisite is missing: $required"
+            }
+          }
+
+          # #7985: the official LLVM archive's static libraries use /MT and
+          # bundle rpmalloc, so Perry links its LLVM C surface dynamically on
+          # Windows. Prove the release binary has the expected import before
+          # copying the matching DLL; otherwise this step could ship either a
+          # loader-broken executable or a stale, unused 70 MB runtime.
+          $imports = (& $llvmReadObj --coff-imports $binary | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "llvm-readobj failed while inspecting $binary"
+          }
+          if ($imports -notmatch '(?m)^\s*Name:\s+LLVM-C\.dll\s*$') {
+            throw "$binary does not import LLVM-C.dll; refusing to package an unverified LLVM runtime"
+          }
+
           New-Item -ItemType Directory -Force -Path staging
-          Copy-Item "target/${{ matrix.target }}/dist/perry.exe" staging/
+          Copy-Item $binary staging/
+          Copy-Item $llvmRuntime staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
           # Include static libraries for linking (runtime, stdlib, UI)
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_ui_windows.lib")
@@ -810,14 +838,14 @@ jobs:
           # subdir lives alongside `perry.exe`.
           $androidLibDir = "staging/aarch64-linux-android/release"
           New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
-          # #4823: libperry_ui_android.a is best-effort (the cross-build above
-          # may have skipped it) — Test-Path guards it just like the others.
           $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a", "libperry_ui_android.a")
           foreach ($lib in $androidLibs) {
             $src = "target/aarch64-linux-android/dist/$lib"
-            if (Test-Path $src) {
-              Copy-Item $src $androidLibDir
+            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+              Write-Error "Required Android library missing from ${{ matrix.artifact }}: $src"
+              exit 1
             }
+            Copy-Item $src $androidLibDir
           }
           Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"
 
@@ -1059,12 +1087,15 @@ jobs:
             ui_lib: libperry_ui_android.a
             tier3: false
           # --- Windows MSVC (native runner) ---------------------------------
-          # Only x86_64 today. perry's compile.rs maps `--target windows`
-          # to `x86_64-pc-windows-msvc` (compile.rs:1009); ARM64 Windows
-          # support is a separate follow-up — re-add `aarch64-pc-windows-msvc`
-          # here once the CLI knows about it.
+          # Both native Windows architectures use their matching hosted runner
+          # so Rust, LLVM, MSVC, and the packaged executable all agree.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            ui_crate: perry-ui-windows
+            ui_lib: perry_ui_windows.lib
+            tier3: false
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             ui_crate: perry-ui-windows
             ui_lib: perry_ui_windows.lib
             tier3: false
@@ -1992,9 +2023,9 @@ jobs:
           echo "Hub response: ${RESPONSE}"
 
   # ---------------------------------------------------------------------------
-  # Publish npm packages (@perryts/perry + 7 per-platform packages)
+  # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
-  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 8
+  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 9
   # package names must be registered on npmjs.com with this repo + workflow
   # as a Trusted Publisher. See npm/README.md for the one-time setup.
   # ---------------------------------------------------------------------------
@@ -2027,15 +2058,26 @@ jobs:
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
       # *publishing* toolchain (npm registry auth), not a test oracle — it never
       # runs a parity diff, so the gap suite's Node version is irrelevant here.
+      # Pinned to a MAJOR literal on purpose, not `node-version-file`: an oracle
+      # bump made for gap-suite reasons must never be able to move the runtime
+      # that publishes releases. Registered in
+      # scripts/check_node_version_consistency.py, which keeps this major in
+      # step with .node-version's major.
+      #
+      # Was "20" until the Node-26 sweep. Node 20 reached end-of-life on
+      # 2026-04-30, and this is the repo's most privileged job (`id-token: write`,
+      # OIDC-publishes every platform package) — an EOL runtime is a defect there.
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "26"
           registry-url: "https://registry.npmjs.org"
 
       - name: Upgrade npm (OIDC Trusted Publisher requires >= 11.5.1)
-        # Node 20 ships npm 10.x; versions below 11.5.1 silently fail the OIDC
-        # handshake and the registry returns a misleading 404 ("'pkg@ver' is
-        # not in this registry") on PUT. See npm/cli#9088.
+        # Node 26 already ships npm 11.x, which clears the floor; kept because
+        # it is free and pins the guarantee rather than inheriting it. Below
+        # 11.5.1 the OIDC handshake fails silently and the registry returns a
+        # misleading 404 ("'pkg@ver' is not in this registry") on PUT. See
+        # npm/cli#9088.
         run: npm install -g npm@latest
 
       - name: Download all build artifacts

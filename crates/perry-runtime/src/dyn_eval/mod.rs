@@ -181,6 +181,74 @@ pub(crate) fn lookup_fn(id: u32) -> Option<Rc<InterpFn>> {
     FN_REGISTRY.with(|r| r.borrow().get(&id).cloned())
 }
 
+// ── GC safepoints ──────────────────────────────────────────────────────────
+
+/// Offer a GC safepoint at an interpreter step, behind
+/// `PERRY_GC_INTERP_SAFEPOINTS=1` (#7803 tooling).
+///
+/// # The structural gap this closes
+///
+/// Compiled code offers the collector cooperative safepoints at loop
+/// back-edges (`PERRY_GC_MOVING_LOOP_POLLS`, default on since #7721). The
+/// interpreter offers NONE. A collection can therefore only reach interpreted
+/// execution at an *allocation* point — and the alloc-point arm forces a
+/// conservative stack scan, which finds Rust locals and makes the copying
+/// minor ineligible. The consequence is not that the interpreter is safe; it
+/// is that the interpreter is **untestable**:
+///
+///  * `PERRY_GC_ZEAL` forces collection at safepoints, and there are none here;
+///  * `PERRY_GC_SCHEDULE_SEED` selects safepoints, and there are none here;
+///  * `gc_root_dominance_check.py` reads emitted LLVM IR, and there is none
+///    here.
+///
+/// So the one rooting domain with no static checker also has no dynamic one.
+/// That is the finding #7803 turned up, independent of what its own root cause
+/// turns out to be: `dyn_eval/mod.rs` claims "interpreter frames hold every
+/// live JSValue in a rooted thread-local value stack", and nothing in the tree
+/// can currently falsify that sentence.
+///
+/// This gives the existing instruments a handle. It routes through
+/// `js_gc_loop_safepoint`, deliberately, rather than collecting directly:
+/// every entry guard (in-alloc, root-lock, unsafe-FFI-zone, budgeted-cycle)
+/// and the seeded-schedule ordinal apply exactly as they do to a compiled
+/// back-edge, so an interpreter safepoint is the *same* safepoint, not a
+/// second kind.
+///
+/// # Why it is opt-in rather than on
+///
+/// Turning it on lets the precise moving collector run at points where
+/// interpreted frames are live. If the interpreter's rooting is complete that
+/// is simply better — the copying minor becomes eligible where only a
+/// conservative sweep could run before. If it is NOT complete, this converts a
+/// latent hole into a live crash for exactly the workloads `dyn_eval` exists
+/// to serve (ajv, fast-json-stringify, find-my-way, fastify). Shipping that
+/// flip before the rooting is verified would be trading a quiet bug for a loud
+/// one in someone else's server.
+///
+/// So it lands as an instrument, and the flip to default-on is a separate,
+/// evidence-gated decision — the same sequencing `PERRY_GC_MOVING_LOOP_POLLS`
+/// had between #7161 and #7721.
+///
+/// Parsed BY VALUE (`1`/`on`/`true`), never by presence — see #7993.
+#[inline]
+pub(crate) fn interp_safepoint() {
+    if !interp_safepoints_enabled() {
+        return;
+    }
+    crate::gc::js_gc_loop_safepoint();
+}
+
+fn interp_safepoints_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_INTERP_SAFEPOINTS").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
 // ── rooted value stack ─────────────────────────────────────────────────────
 
 /// Push a value onto the rooted stack; returns its index. The index stays

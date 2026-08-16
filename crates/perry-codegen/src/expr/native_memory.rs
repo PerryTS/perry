@@ -9,7 +9,7 @@ use crate::native_value::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    attach_native_owned_view_fact, buffer_access_materialization_reason, buffer_view_lowered_value,
+    attach_buffer_view_facts, buffer_access_materialization_reason, buffer_view_lowered_value,
     effective_alias_state_for_access, lower_expr, lower_expr_native, unbox_to_i64, FnCtx,
 };
 
@@ -176,10 +176,15 @@ fn proven_view(
     let Expr::LocalGet(local_id) = expr else {
         return None;
     };
-    if !is_native_memory_typed_view(ctx.local_types.get(local_id)) {
+    // `buffer_view_slots` below is the representation proof and every write
+    // invalidates its pointer state. The type is only an early dispatch hint.
+    if !is_native_memory_typed_view(ctx.local_type_hint(local_id)) {
         return None;
     }
     let slot = ctx.buffer_view_slots.get(local_id)?.clone();
+    if !slot.pointer_state.is_stable() {
+        return None;
+    }
     if slot.index_unit != BufferIndexUnit::Element {
         return None;
     }
@@ -290,7 +295,7 @@ fn record_bulk_view(
         false,
         Vec::new(),
     );
-    attach_native_owned_view_fact(ctx, view);
+    attach_buffer_view_facts(ctx, view);
 }
 
 fn record_runtime_fallback(

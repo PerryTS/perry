@@ -6,8 +6,20 @@
 /// inside the IIFE will throw at runtime if hit.
 pub fn extract_require_specifiers(source: &str) -> Vec<String> {
     let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    let masked = super::detect::strip_comments_and_strings(source);
     let mut specs = Vec::new();
     for cap in re.captures_iter(source) {
+        let Some(call) = cap.get(0) else {
+            continue;
+        };
+        // The regexp runs on the original source so it can capture the quoted
+        // specifier. Require the `require` token itself to survive the
+        // comment/string masking pass, though. Otherwise text such as Next's
+        // `"unexpected require(" + request + ") ..."` is mistaken for a call
+        // whose specifier is the intervening JavaScript expression.
+        if masked.as_bytes()[call.start()..call.start() + b"require".len()] != *b"require" {
+            continue;
+        }
         if let Some(m) = cap.get(1) {
             let s = m.as_str().to_string();
             if !specs.contains(&s) {
@@ -300,10 +312,14 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
 
     // (offset, spec) for every static `require('<spec>')` call, in source order.
     let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    let masked = super::detect::strip_comments_and_strings(source);
     let sbytes = source.as_bytes();
     let mut sites: Vec<(usize, &str)> = Vec::new();
     for cap in re.captures_iter(source) {
         let m0 = cap.get(0).unwrap();
+        if masked.as_bytes()[m0.start()..m0.start() + b"require".len()] != *b"require" {
+            continue;
+        }
         // Skip member-access matches (`foo.require('x')`).
         let mut p = m0.start();
         while p > 0 && (sbytes[p - 1] as char).is_whitespace() {
@@ -318,7 +334,6 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
         return HashSet::new();
     }
 
-    let masked = super::detect::strip_comments_and_strings(source);
     let mbytes = masked.as_bytes();
     let is_ident = |c: u8| c == b'_' || c == b'$' || c.is_ascii_alphanumeric();
     let control_keywords = ["if", "for", "while", "switch", "catch", "with", "else"];

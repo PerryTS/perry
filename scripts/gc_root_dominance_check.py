@@ -468,15 +468,12 @@ NONCOLLECTING = {
     # cannot -- side-table metadata writes through the system allocator, which
     # arms no Perry GC trigger.
     "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
-    "js_gc_layout_note_slot",
     "js_write_barrier_root_nanbox", "js_write_barrier_slot",
-    "js_runtime_write_barrier_slot", "js_gc_register_global_root",
+    "js_gc_register_global_root",
     # pure value predicates / bit twiddling
-    "js_is_truthy", "js_nanbox_get_pointer", "js_value_is_object",
-    "js_value_is_string", "js_typeof_tag",
+    "js_is_truthy", "js_nanbox_get_pointer",
     # inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
-    "js_typed_feedback_shape_guard", "js_typed_feedback_note",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
@@ -486,6 +483,16 @@ NONCOLLECTING = {
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
     "js_box_set_bits", "js_box_get_bits",           # box.rs:317 raw cell write
     "js_i32_box_set", "js_bool_box_set",
+    "js_i32_box_get", "js_bool_box_get",            # registry check + raw read, no TDZ
+    # Box allocators (#8132): `std::alloc::alloc` + a TLS registry insert.
+    # A raw Rust allocation arms no Perry GC trigger (the malloc-count
+    # trigger counts MALLOC_STATE GC objects), so the call cannot enter the
+    # collector. The premise is machine-checked: IMMOVABLE_SOURCES' "box"
+    # probes below fail if box.rs ever arena-allocates or grows a free path,
+    # and these entries must be removed with them. Required here for the
+    # one-way containment `gc_call_effects.rs` documents (its CannotCollect
+    # set must stay a subset of this one).
+    "js_box_alloc_bits", "js_i32_box_alloc", "js_bool_box_alloc",
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
@@ -505,7 +512,15 @@ NONCOLLECTING = {
     "js_closure_unbox_callee_checked",
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
-    "js_gc_note_slot_layout", "js_string_addref_if_heap_string",
+    # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
+    # (:833). `_aware` is the same body behind an early return taken when
+    # neither the new nor the old bits are pointer-bearing, so it does strictly
+    # LESS than the entry point beside it -- the same "differ only by doing
+    # less" argument this file already accepts for `declare` vs `init` above.
+    # A phantom third spelling, `js_gc_layout_note_slot`, sat in this set (and
+    # in `root_reload.rs`) and matched no symbol in the tree.
+    "js_gc_note_slot_layout", "js_gc_note_slot_layout_aware",
+    "js_string_addref_if_heap_string",
     # `js_get_string_pointer_unified` is deliberately NOT here. Its SSO branch
     # calls `js_string_materialize_to_heap`, which allocates (value/nanbox.rs:268),
     # so it is a collection point by this file's one-sided rule even though the
@@ -1198,6 +1213,25 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
     "js_array_reduce", "js_json_stringify",
+    # Buffer / typed-array construction FROM another collection. Each of these
+    # is matched by ALLOC_RE (its result is a heap value the checker tracks)
+    # AND reaches an element read that is already poll-capable, so `--audit-
+    # poll-reach` reported the pair and refused to let a window whose only
+    # collection point is one of them classify `MOVING: no`:
+    #
+    #   js_uint8array_new            -> js_typed_array_get, js_uint8array_from_array
+    #   js_typed_array_new_from_array-> js_array_get_f64
+    #   js_buffer_from_array         -> js_array_get_f64
+    #   js_buffer_from_value         -> js_buffer_from_array
+    #   js_buffer_alloc_fill_value   -> js_buffer_from_value
+    #
+    # The reads are the reach proof: a source element can be an accessor or a
+    # Proxy `get` trap, i.e. user JS, and the per-element loop allocates the
+    # destination as it goes. `Buffer.from(arr)` / `new Uint8Array(arr)` are
+    # therefore collection points like any other element-reading builtin.
+    "js_uint8array_new", "js_typed_array_new_from_array",
+    "js_buffer_from_array", "js_buffer_from_value",
+    "js_buffer_alloc_fill_value",
     "js_string_replace_regex_fn", "js_string_replace_string_fn",
     "js_string_replace_all_regex_fn", "js_string_replace_all_string_fn",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",
@@ -1283,6 +1317,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_object_get_own_property_names", "js_object_keys",
     "js_object_keys_value",
     "js_reflect_construct", "js_regexp_construct_call",
+    "js_string_concat_box",
     "js_string_from_char_code_array",
     "js_string_index_get_boxed", "js_string_substr",
     "js_super_construct_apply",
@@ -2549,9 +2584,8 @@ class ImmovableSource:
         return bool(self.load_re and self.load_re.search(ins.text))
 
 
-# `js_build_class_keys_array`'s body, which the first probe reads. rustfmt puts
-# a top-level fn's closing brace at column 0, so "from the signature to the
-# next line that is exactly `}`" is the body and nothing else.
+# rustfmt puts a top-level fn's closing brace at column 0, so "from the
+# signature to the next line that is exactly `}`" is the body and nothing else.
 def rust_fn_body(path, fn_name):
     """Source text of a top-level Rust fn, or None if it is not there."""
     try:
@@ -2570,85 +2604,6 @@ def rust_fn_body(path, fn_name):
         if lines[j] == "}":
             return "\n".join(lines[start:j + 1])
     return None
-
-
-def _probe_class_keys_longlived():
-    """Every array allocation in `js_build_class_keys_array` is `_longlived`."""
-    body = rust_fn_body("crates/perry-runtime/src/object/alloc.rs",
-                        "js_build_class_keys_array")
-    if body is None:
-        return (False, "js_build_class_keys_array not found in "
-                       "crates/perry-runtime/src/object/alloc.rs")
-    allocs = re.findall(r"js_array_alloc\w*", body)
-    if not allocs:
-        return (False, "js_build_class_keys_array no longer allocates its "
-                       "array with a js_array_alloc* call; the arena it uses "
-                       "must be re-established by hand")
-    bad = [a for a in allocs if "longlived" not in a]
-    if bad:
-        return (False, "js_build_class_keys_array now calls %s — a NURSERY "
-                       "allocator. The class-keys exemption is void; the 64 "
-                       "#7210 reports are real." % ", ".join(sorted(set(bad))))
-    return (True, "%d longlived allocation(s)" % len(allocs))
-
-
-# The defrag gate moved from `gc/oldgen.rs` to `gc/oldgen_defrag.rs` in #7443.
-# Search both rather than hardcoding one: this probe FAILING does not merely
-# turn the job red, it declares the reports it suppresses to be real again, so
-# a file rename silently converts a passing audit into a wall of false
-# positives. Listing candidates keeps the next split cheap, and the
-# "not found in ANY of" message names them so the fix is obvious. (#7540)
-_OLD_DEFRAG_SOURCES = (
-    "crates/perry-runtime/src/gc/oldgen_defrag.rs",
-    "crates/perry-runtime/src/gc/oldgen.rs",
-)
-
-
-def _probe_old_defrag_off_by_default():
-    """Old-page defrag still returns an empty selection unless opted in."""
-    src = None
-    src_path = None
-    for cand in _OLD_DEFRAG_SOURCES:
-        try:
-            with open(cand, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
-        if "PERRY_GC_OLD_DEFRAG" in text:
-            src, src_path = text, cand
-            break
-    if src is None:
-        return (False, "PERRY_GC_OLD_DEFRAG not mentioned in any of %s; "
-                       "old-page defrag may now be unconditional (or the file "
-                       "moved again -- add it to _OLD_DEFRAG_SOURCES)"
-                       % ", ".join(_OLD_DEFRAG_SOURCES))
-    body = rust_fn_body(src_path, "select_old_page_defrag_pages")
-    if body is None:
-        return (False,
-                "select_old_page_defrag_pages not found in %s" % src_path)
-    if not re.search(r"if\s+!old_page_defrag_enabled\(\)\s*\{\s*\n\s*return\s+"
-                     r"OldPageDefragSelection::default\(\);", body):
-        return (False, "select_old_page_defrag_pages no longer short-circuits "
-                       "to an empty selection when defrag is disabled — "
-                       "old-arena objects may relocate on a default build")
-    return (True, "gated on PERRY_GC_OLD_DEFRAG in %s, empty selection when off"
-            % src_path)
-
-
-def _probe_class_keys_global_is_a_root():
-    """The keys global is registered, so the array is never unreachable."""
-    try:
-        with open("crates/perry-codegen/src/codegen/string_pool.rs",
-                  encoding="utf-8", errors="replace") as fh:
-            src = fh.read()
-    except OSError:
-        return (False, "perry-codegen/src/codegen/string_pool.rs not readable")
-    if "js_build_class_keys_array" not in src:
-        return (False, "string_pool.rs no longer emits js_build_class_keys_array")
-    if "js_gc_register_global_root" not in src:
-        return (False, "string_pool.rs no longer registers the class-keys "
-                       "global as a GC root — the array can now be swept")
-    return (True, "@perry_class_keys_* registered via js_gc_register_global_root")
 
 
 def _probe_boxes_outside_the_gc_heap():
@@ -2676,39 +2631,6 @@ def _probe_boxes_outside_the_gc_heap():
 
 
 IMMOVABLE_SOURCES = (
-    ImmovableSource(
-        key="class-keys",
-        label="@perry_class_keys_* / js_build_class_keys_array (old arena)",
-        knob="assume_old_defrag",
-        callees={"js_build_class_keys_array"},
-        load_re=re.compile(r"load\s+\S+,\s*ptr\s+@perry_class_keys_\w+"),
-        not_movable_because=(
-            "js_build_class_keys_array allocates through "
-            "js_array_alloc_with_length_longlived — the OLD arena. The nursery "
-            "copying minor relocates nursery objects only, and the one thing "
-            "that relocates an old-arena object is old-page defrag, which "
-            "select_old_page_defrag_pages short-circuits off (#6206). No "
-            "shipped configuration and no gc_repsel_matrix arm sets "
-            "PERRY_GC_OLD_DEFRAG=1."),
-        not_reclaimable_because=(
-            "the @perry_class_keys_* global is registered with "
-            "js_gc_register_global_root at module init, so the array is "
-            "reachable from a root for the life of the process and no sweep "
-            "can free it. (#5042 registered the global for the DEFRAG rewrite; "
-            "the reachability is the side effect that closes this half.)"),
-        becomes_real_when=(
-            "PERRY_GC_OLD_DEFRAG ships on by default, or "
-            "js_build_class_keys_array stops using a _longlived allocator. "
-            "Re-check with --assume-old-defrag; the fix is to bind "
-            "entry_init_load_global's cache slot (expr::root_entry_alloca "
-            "accepts a bare i64 heap word)."),
-        probes=(
-            ("class-keys array is old-arena", _probe_class_keys_longlived),
-            ("old-page defrag is off by default", _probe_old_defrag_off_by_default),
-            ("the keys global is a registered root",
-             _probe_class_keys_global_is_a_root),
-        ),
-    ),
     ImmovableSource(
         key="box",
         label="js_box_alloc* (outside the GC heap)",
@@ -2775,8 +2697,7 @@ def audit_immovable_sources():
     return 0
 
 
-def classify_heap_source(ins, exempt=True, assume_old_defrag=False,
-                         assume_boxes_in_gc_heap=False):
+def classify_heap_source(ins, exempt=True, assume_boxes_in_gc_heap=False):
     """`(is_heap_source, is_hazardous, exemption_or_None)` for one instruction.
 
     `is_hazardous` is the reportable property: the object can move, or can be
@@ -2792,8 +2713,7 @@ def classify_heap_source(ins, exempt=True, assume_old_defrag=False,
         return (False, False, None)
     if not exempt:
         return (True, True, None)
-    assumed = {"assume_old_defrag": assume_old_defrag,
-               "assume_boxes_in_gc_heap": assume_boxes_in_gc_heap}
+    assumed = {"assume_boxes_in_gc_heap": assume_boxes_in_gc_heap}
     for src in IMMOVABLE_SOURCES:
         if src.matches(ins):
             if assumed.get(src.knob):
@@ -3338,14 +3258,13 @@ def native_heap_source_kind(ins, token_callee):
 def native_immovable_exemption(ins, effective_callee, source_opts):
     """The `IMMOVABLE_SOURCES` entry that exempts this source, if any.
 
-    The #7210 adjudication is about the ALLOCATOR, not about the lowering: the
-    class-keys array is old-arena and the keys global is a registered root
-    under statepoints exactly as under the shadow stack, and a box is still
-    `std::alloc::alloc`. Re-deriving that judgement here would be the
+    The #7210 adjudication is about the ALLOCATOR, not about the lowering: a
+    box is still `std::alloc::alloc` under statepoints exactly as under the
+    shadow stack. Re-deriving that judgement here would be the
     `REWRITTEN_LOAD_RE` mistake again — two modes with two answers to one
-    question, of which the narrower was wrong (#7240). Measured before this
-    was wired: 40 of 137 `unrooted` hits on the 21-module corpus were
-    `@perry_class_keys_*`, i.e. the population #7210 already dismissed.
+    question, of which the narrower was wrong (#7240). Class-key arrays used
+    to share this exemption, but default old-page relocation makes them
+    movable; their cached copies are now ordinary mutable roots (#7876).
 
     The premises are gated by `--audit-immovable-sources`, which runs in CI
     ahead of both corpora, and each exemption's knob turns it back off.
@@ -4481,24 +4400,14 @@ def statepoint_self_test():
                   "function reports clean.", file=sys.stderr)
             ok = False
 
-        # --- the exemptions carry over from #7210 -------------------------
-        # An exemption that fires in one mode and not the other is the
-        # REWRITTEN_LOAD_RE divergence again, and #7240 is what that costs.
+        # Old-page relocation makes the class-keys source movable. A bare
+        # cached copy must therefore be reported in the native lowering too.
         ck = os.path.join(td, "sp_class_keys.ll")
         with open(ck, "w") as fh:
             fh.write(_SELFTEST_SP_CLASS_KEYS)
-        if _scan_statepoints([ck], moving_only=True):
-            print("self-test FAIL: the @perry_class_keys_* source is exempt "
-                  "under #7210 (old-arena, registered root) and the statepoint "
-                  "mode must honour the same adjudication the alloca mode "
-                  "does. 1162 of this corpus's sources are that shape.",
-                  file=sys.stderr)
-            ok = False
-        if len(_scan_statepoints([ck], moving_only=True,
-                                 assume_old_defrag=True)) != 1:
-            print("self-test FAIL: --assume-old-defrag must make the "
-                  "class-keys fixture report again. An exemption with no "
-                  "off-switch is a condition nobody can re-check.",
+        if len(_scan_statepoints([ck], moving_only=True)) != 1:
+            print("self-test FAIL: a bare @perry_class_keys_* copy must be "
+                  "reported now that old-page relocation ships enabled.",
                   file=sys.stderr)
             ok = False
 
@@ -5070,14 +4979,13 @@ def self_test():
                   f"got {len(found)}", file=sys.stderr)
             ok = False
 
-        # --- movability vs rewritability (#7210), all four directions -------
+        # --- movability vs rewritability (#7210) -----------------------------
         #
         # An exemption is a suppression, so it gets the strictest treatment in
-        # the file: it must FIRE (or the 66 false positives come back), it must
-        # be exactly REVERSIBLE by its knob (or the counterfactual in #7210 is
-        # unrecheckable), it must not suppress a genuine nursery hazard of the
-        # SAME SHAPE (or it has become a code-shape rule instead of an
-        # allocator rule), and its premises must still hold in the tree.
+        # the file: it must FIRE, be exactly REVERSIBLE by its knob, avoid a
+        # genuine nursery hazard of the same shape, and retain its source-tree
+        # premises. The former class-keys fixture now asserts the opposite:
+        # default old-page relocation makes a bare copy reportable.
         ck = os.path.join(td, "exempt_class_keys.ll")
         bx = os.path.join(td, "exempt_box.ll")
         nz = os.path.join(td, "nursery_hazard.ll")
@@ -5087,8 +4995,7 @@ def self_test():
             with open(p, "w") as fh:
                 fh.write(text)
 
-        for path, knob, label in ((ck, "assume_old_defrag", "class-keys"),
-                                  (bx, "assume_boxes_in_gc_heap", "box")):
+        for path, knob, label in ((bx, "assume_boxes_in_gc_heap", "box"),):
             found, n_allocas = _scan_unrooted([path], moving_only=True)
             if found:
                 print(f"self-test FAIL: the {label} exemption fixture must "
@@ -5119,6 +5026,14 @@ def self_test():
                       "a condition nobody can re-check.", file=sys.stderr)
                 ok = False
 
+        found, n_allocas = _scan_unrooted([ck], moving_only=True)
+        if len(found) != 1 or n_allocas != 1:
+            print("self-test FAIL: a bare class-keys cache must be a moving "
+                  f"hazard with old-page relocation enabled (got {len(found)} "
+                  f"report(s), {n_allocas} alloca(s)).",
+                  file=sys.stderr)
+            ok = False
+
         # ★ The planted genuine hazard. Structurally identical to the
         # class-keys fixture — same slot type, same load below the same call,
         # same consumer — differing only in the ALLOCATOR.
@@ -5135,11 +5050,10 @@ def self_test():
                   "as MOVING, or --moving-only would drop it and the "
                   "acceptance proof would be vacuous", file=sys.stderr)
             ok = False
-        found, _ = _scan_unrooted([nz], assume_old_defrag=True,
-                                  assume_boxes_in_gc_heap=True)
+        found, _ = _scan_unrooted([nz], assume_boxes_in_gc_heap=True)
         if len(found) != 1:
             print("self-test FAIL: the planted nursery hazard must be reported "
-                  "under BOTH knobs too — the knobs only ever widen",
+                  "under the exemption knob too — knobs only ever widen",
                   file=sys.stderr)
             ok = False
         found, _ = _scan_unrooted([nz], moving_only=True)
@@ -5166,7 +5080,7 @@ def self_test():
         # Every exemption must be reachable through its knob, or it is a dead
         # switch. Asserted structurally rather than per-entry so a new
         # exemption cannot be added without one.
-        knobs = {"assume_old_defrag", "assume_boxes_in_gc_heap"}
+        knobs = {"assume_boxes_in_gc_heap"}
         for src in IMMOVABLE_SOURCES:
             if src.knob not in knobs:
                 print(f"self-test FAIL: exemption {src.key!r} declares knob "
@@ -5330,6 +5244,11 @@ _POLL_REACH_FIXTURE = {
     # one-hop audit misses entirely.
     "js_gadget_create": ["{ js_helper_that_coerces(v) }"],
     "js_helper_that_coerces": ["{ js_string_coerce(v) }"],
+    # #7872's exact edge: the allocating concat wrapper reaches coercion via
+    # a non-ALLOC_RE arithmetic helper. Keeping the production names here
+    # proves the audit can still expose this two-hop disagreement.
+    "js_string_concat_box": ["{ js_dynamic_string_or_number_add(l, r) }"],
+    "js_dynamic_string_or_number_add": ["{ js_number_coerce(v) }"],
     # a name that appears ONLY in a comment and a string literal. Reported
     # would mean `_strip_noncode` has stopped working and the audit is
     # extracting premises from prose.
@@ -5346,13 +5265,15 @@ _POLL_REACH_FIXTURE = {
 
 def poll_reach_self_test():
     ok = True
-    poll = {"js_object_get_field_by_name", "js_string_coerce"}
+    poll = {"js_object_get_field_by_name", "js_string_coerce",
+            "js_number_coerce"}
     # Through the SAME stripper `runtime_symbol_bodies` applies, so the decoy
     # arm below tests the real pipeline rather than a hand-cleaned copy of it.
     fixture = {sym: [_strip_noncode(b) for b in bodies]
                for sym, bodies in _POLL_REACH_FIXTURE.items()}
     gaps = dict(poll_reach_gaps(fixture, poll))
-    want = {"js_widget_new", "js_widget_new_from_value", "js_gadget_create"}
+    want = {"js_widget_new", "js_widget_new_from_value", "js_gadget_create",
+            "js_string_concat_box"}
     if set(gaps) != want:
         print("self-test FAIL: --audit-poll-reach over the planted fixture -> "
               f"{sorted(gaps)}, expected {sorted(want)}", file=sys.stderr)
@@ -5469,11 +5390,9 @@ def main():
                          "came from. Takes no corpus.")
     ap.add_argument("--audit-immovable-sources", action="store_true",
                     help="re-check the PREMISES of every --unrooted-allocas "
-                         "exemption against the runtime source (#7210): the "
-                         "class-keys array is still old-arena, old-page defrag "
-                         "is still off by default, the keys global is still a "
-                         "registered root, and boxes are still outside the GC "
-                         "heap and never freed. An exemption whose premise has "
+                         "exemption against the runtime source (#7210): boxes "
+                         "are still outside the GC heap and never freed. An "
+                         "exemption whose premise has "
                          "quietly lapsed reads as a triaged false positive and "
                          "is a live hazard. Takes no corpus.")
     ap.add_argument("--statepoints", action="store_true",
@@ -5503,11 +5422,6 @@ def main():
                          "because the residual is a population under triage, "
                          "not a list of adjudicated sites -- the same call "
                          "--max-stale makes. It can only be lowered.")
-    ap.add_argument("--assume-old-defrag", action="store_true",
-                    help="treat old-arena objects (the @perry_class_keys_* "
-                         "cache) as MOVABLE, i.e. answer #7210's first "
-                         "counterfactual: what --unrooted-allocas reports if "
-                         "PERRY_GC_OLD_DEFRAG=1 ever ships on. Widens only.")
     ap.add_argument("--assume-boxes-in-gc-heap", action="store_true",
                     help="treat js_box_alloc* results as GC-heap objects, i.e. "
                          "#7210's second counterfactual: what "
@@ -5571,10 +5485,9 @@ def main():
                  "--unrooted-allocas; it is honoured by the bind-anchored "
                  "default and by --statepoints only")
     # Same disarmed-knob rule. The exemptions live in the unrooted-alloca pass
-    # only, so `--assume-old-defrag` on any other pass would read like a
+    # only, so the assumption knob on any other pass would read like a
     # widening and do nothing at all.
-    for flag, val in (("--assume-old-defrag", ns.assume_old_defrag),
-                      ("--assume-boxes-in-gc-heap", ns.assume_boxes_in_gc_heap)):
+    for flag, val in (("--assume-boxes-in-gc-heap", ns.assume_boxes_in_gc_heap),):
         if val and not (ns.unrooted_allocas or ns.statepoints):
             ap.error(f"{flag} requires --unrooted-allocas or --statepoints "
                      "(they are the passes that carry the exemptions)")
@@ -5706,8 +5619,7 @@ def main():
         rc = run_statepoints(
             parsed, poll_reaching, verbose, moving_only, allowlist,
             ns.max_stale, ns.max_unrooted,
-            source_opts={"assume_old_defrag": ns.assume_old_defrag,
-                         "assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap})
+            source_opts={"assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap})
         # --- can this gate still fail? -----------------------------------
         #
         # UNCONDITIONALLY, not after an early `return rc`. The bind-anchored
@@ -5750,8 +5662,7 @@ def main():
         per_fn = defaultdict(int)
         out = []
         n_allocas = 0
-        source_opts = {"assume_old_defrag": ns.assume_old_defrag,
-                       "assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap}
+        source_opts = {"assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap}
         exempt_counts = defaultdict(int)
         for mod, fs in parsed:
             for f in fs:

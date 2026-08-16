@@ -21,6 +21,7 @@ use std::ffi::CString;
 use std::sync::Once;
 
 use anyhow::{anyhow, Result};
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::passes::PassBuilderOptions;
@@ -38,7 +39,16 @@ use inkwell::OptimizationLevel;
 /// passing against a pipeline production had stopped using. `mem2reg` is not
 /// incidental company: RS4GC tracks `addrspace(1)` **SSA values**, not memory,
 /// so a root alloca that survives promotion is a root the collector never sees.
-pub(crate) const STATEPOINT_REWRITE_PASSES: &str = "function(mem2reg),rewrite-statepoints-for-gc";
+// SCCP—not InstCombine—is before RS4GC deliberately (#8065). Native C-API construction
+// folds constants as instructions are built, while whole-module text parsing
+// retains the equivalent instruction graph. If RS4GC sees those two shapes
+// before canonicalization, their live-root ordering can differ and reach both
+// machine code and the compact GC map. The ordinary optimization pipeline is
+// too late: statepoints and relocations have already been assigned by then.
+// The narrower SCCP preserves dynamic pointer round trips which InstCombine
+// can erase, so the positive live-root witness remains visible to RS4GC.
+pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
+    "function(mem2reg,sccp),rewrite-statepoints-for-gc";
 
 /// Test seam (#7502): parse `ll_text`, run [`STATEPOINT_REWRITE_PASSES`] for
 /// `effective_target`, and return the rewritten IR.
@@ -54,6 +64,21 @@ pub(crate) fn statepoint_rewritten_ir(
     ll_text: &str,
     effective_target: &str,
     module_name: &str,
+) -> Result<String> {
+    statepoint_rewritten_ir_with_passes(
+        ll_text,
+        effective_target,
+        module_name,
+        STATEPOINT_REWRITE_PASSES,
+    )
+}
+
+#[cfg(test)]
+fn statepoint_rewritten_ir_with_passes(
+    ll_text: &str,
+    effective_target: &str,
+    module_name: &str,
+    passes: &str,
 ) -> Result<String> {
     global_init(&[]);
     let context = Context::create();
@@ -77,8 +102,8 @@ pub(crate) fn statepoint_rewritten_ir(
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected pre-statepoint module:\n{}", e))?;
     module
-        .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
-        .map_err(|e| anyhow!("`{STATEPOINT_REWRITE_PASSES}` failed:\n{}", e))?;
+        .run_passes(passes, &tm, PassBuilderOptions::create())
+        .map_err(|e| anyhow!("`{passes}` failed:\n{}", e))?;
     module
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected the statepoint module:\n{}", e))?;
@@ -157,13 +182,14 @@ pub fn compile_ll_to_object_inprocess(
     effective_target: &str,
     clang_style_args: &[String],
     module_name: &str,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     // Same guard as the external `opt` path (`linker::rs4gc_funclet_refusal`):
     // rewrite-statepoints-for-gc crashes on WinEH funclet pads, and here the
     // pass runs inside THIS process — the crash would take the compiler down
     // with it, not just a child.
-    if crate::codegen::helpers::rs4gc_enabled() {
+    if native_roots {
         if let Some(refusal) = crate::linker::rs4gc_funclet_refusal(ll_text) {
             return Err(anyhow!(refusal));
         }
@@ -178,6 +204,7 @@ pub fn compile_ll_to_object_inprocess(
         explicit_cpu.as_deref(),
         &mllvm,
         emit_asm,
+        native_roots,
     )
 }
 
@@ -286,6 +313,7 @@ pub(crate) fn optimize_and_emit_module(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
     clang_style_args: &[String],
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
@@ -296,7 +324,74 @@ pub(crate) fn optimize_and_emit_module(
         explicit_cpu.as_deref(),
         &mllvm,
         emit_asm,
+        native_roots,
     )
+}
+
+/// Instruction-count cap above which a single post-RS4GC function is stamped
+/// `optnone`+`noinline` rather than entering the `-O1+` pipeline.
+///
+/// Calibrated on the #8036 Next 16.3.0 production bundle: the largest
+/// known-fine post-rewrite function is ~413k lines (its `-Os` unit finished
+/// in ~40s), the pathological one is ~2.1M (its unit ran >65 CPU-minutes
+/// without finishing). 512k sits between them, biased low because the false
+/// positive costs only code size in one already-degenerate function while the
+/// false negative costs an unbounded compile. Tunable via
+/// `PERRY_LL_RS4GC_OPTNONE_INSTRS`; `0` disables the demotion.
+const DEFAULT_RS4GC_OPTNONE_INSTRS: usize = 512 * 1024;
+
+fn rs4gc_optnone_instr_cap() -> usize {
+    std::env::var("PERRY_LL_RS4GC_OPTNONE_INSTRS")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_RS4GC_OPTNONE_INSTRS)
+}
+
+/// Stamp `optnone`+`noinline` on every function whose post-RS4GC body exceeds
+/// `cap` instructions, so the optimization pipeline skips exactly the
+/// relocation-fan-out monsters and still optimizes their siblings. `optnone`
+/// only gates the middle-end: the function keeps its `gc "statepoint-example"`
+/// lowering, so the compact stack map it emits is unchanged in kind.
+fn demote_relocation_bloated_functions(module: &inkwell::module::Module<'_>, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    let context = module.get_context();
+    let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+    let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        let mut instrs = 0usize;
+        'body: for bb in f.get_basic_blocks() {
+            let mut inst = bb.get_first_instruction();
+            while let Some(i) = inst {
+                instrs += 1;
+                if instrs > cap {
+                    break 'body;
+                }
+                inst = i.get_next_instruction();
+            }
+        }
+        if instrs > cap {
+            f.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(optnone_kind, 0),
+            );
+            f.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(noinline_kind, 0),
+            );
+            eprintln!(
+                "perry: rewrite-statepoints-for-gc grew `{}` past {} \
+                 instructions; compiling it unoptimized (optnone) so the \
+                 -O1+ pipeline doesn't go super-linear on relocation fan-out \
+                 (#8082). Override with PERRY_LL_RS4GC_OPTNONE_INSTRS.",
+                f.get_name().to_string_lossy(),
+                cap,
+            );
+        }
+        function = f.get_next_function();
+    }
 }
 
 fn optimize_and_emit(
@@ -307,6 +402,7 @@ fn optimize_and_emit(
     explicit_cpu: Option<&str>,
     mllvm: &[String],
     emit_asm: bool,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     global_init(mllvm);
     announce();
@@ -374,7 +470,7 @@ fn optimize_and_emit(
     // backend that can root an `invoke`, and since #7302 every call inside a
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
-    if crate::codegen::helpers::rs4gc_enabled() {
+    if native_roots {
         module
             .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
             .map_err(|e| {
@@ -383,6 +479,31 @@ fn optimize_and_emit(
                     e.to_string()
                 )
             })?;
+        // Verify the rewritten module before it reaches the backend. RS4GC
+        // has produced verifier-invalid IR in the wild (#8082: it wrapped an
+        // inline-asm barrier into a gc.statepoint), and unlike the external
+        // `opt` path — whose verifier aborts with the broken instruction —
+        // the in-process pipeline would feed the broken module straight to
+        // ISel, where it dies as a bare SIGBUS with no diagnostic.
+        module.verify().map_err(|e| {
+            anyhow!(
+                "in-process rewrite-statepoints-for-gc produced a module the \
+                 verifier rejects (this is a Perry codegen bug — the input \
+                 shape must be exempted or fixed):\n{}",
+                e.to_string()
+            )
+        })?;
+        // The #4880 opt-tier decision (`native_plan_args`) was made from
+        // PRE-rewrite sizes, but RS4GC's relocation fan-out is quadratic-ish
+        // in (live gc values x statepoints): one 51k-line minified-bundle
+        // closure grew 40x to 2.1M instructions, and a single `-Os` function
+        // pass then ran for over an hour on it (#8082). Re-check here, where
+        // the grown sizes exist, and opt out just the exploded functions.
+        // The external text path needs no twin: it re-parses the REWRITTEN
+        // text, so its plan already sees post-RS4GC sizes.
+        if opt != '0' {
+            demote_relocation_bloated_functions(module, rs4gc_optnone_instr_cap());
+        }
     }
 
     let pipeline = match opt {
@@ -411,6 +532,235 @@ fn optimize_and_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn asm_barrier_fixture(leaf_attr: &str) -> String {
+        format!(
+            "declare i64 @may_collect()\n\n\
+             define i64 @f(i64 %a) gc \"statepoint-example\" {{\n\
+             entry:\n\
+             \x20 %slot = alloca ptr addrspace(1)\n\
+             \x20 %p = inttoptr i64 %a to ptr addrspace(1)\n\
+             \x20 store ptr addrspace(1) %p, ptr %slot\n\
+             \x20 call void asm sideeffect \"\", \"\"(){leaf_attr}\n\
+             \x20 %t = call i64 @may_collect()\n\
+             \x20 %after = load ptr addrspace(1), ptr %slot\n\
+             \x20 %bits = ptrtoint ptr addrspace(1) %after to i64\n\
+             \x20 %r = add i64 %t, %bits\n\
+             \x20 ret i64 %r\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn gc_leaf_asm_barrier_survives_rs4gc_unwrapped() {
+        // The shipped emitters stamp the loop-preservation barrier
+        // `"gc-leaf-function"`; RS4GC must leave it as a plain inline-asm
+        // call while still statepointing the real call next to it.
+        let rewritten = statepoint_rewritten_ir(
+            &asm_barrier_fixture(" \"gc-leaf-function\""),
+            "arm64-apple-darwin",
+            "asm_barrier_leaf",
+        )
+        .expect("attributed barrier must survive the rewrite");
+        assert!(
+            rewritten.contains("call void asm sideeffect"),
+            "barrier must remain a plain inline-asm call:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("elementtype(void ()) asm"),
+            "barrier must not be statepoint-wrapped:\n{rewritten}"
+        );
+        assert!(
+            rewritten.contains("@llvm.experimental.gc.statepoint"),
+            "the genuine call must still be statepointed:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn unattributed_asm_barrier_is_rejected_not_miscompiled() {
+        // Sabotage arm: without the attribute RS4GC wraps the asm into a
+        // gc.statepoint whose callee is inline asm — invalid IR. The
+        // pipeline must fail verification loudly (#8082's SIGBUS shape),
+        // proving the leaf test above can actually fail.
+        let result = statepoint_rewritten_ir(
+            &asm_barrier_fixture(""),
+            "arm64-apple-darwin",
+            "asm_barrier_broken",
+        );
+        assert!(
+            result.is_err(),
+            "an unattributed barrier must be rejected by the verifier"
+        );
+    }
+
+    #[test]
+    fn relocation_bloated_function_is_demoted_to_optnone_and_its_sibling_is_not() {
+        global_init(&[]);
+        let context = Context::create();
+        // `big` carries 6 instructions, `small` 2; a cap of 4 separates them.
+        let ir = "define i64 @big(i64 %a) gc \"statepoint-example\" {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 %x2 = add i64 %x1, 1\n\
+                  \x20 %x3 = add i64 %x2, 1\n\
+                  \x20 %x4 = add i64 %x3, 1\n\
+                  \x20 %x5 = add i64 %x4, 1\n\
+                  \x20 ret i64 %x5\n\
+                  }\n\
+                  define i64 @small(i64 %a) gc \"statepoint-example\" {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 ret i64 %x1\n\
+                  }\n";
+        let module = parse_ir_text(&context, ir, "optnone_demotion").expect("fixture parses");
+        demote_relocation_bloated_functions(&module, 4);
+
+        let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+        let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
+        let big = module.get_function("big").expect("big exists");
+        let small = module.get_function("small").expect("small exists");
+        assert!(
+            big.get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_some(),
+            "a function past the cap must be stamped optnone"
+        );
+        assert!(
+            big.get_enum_attribute(AttributeLoc::Function, noinline_kind)
+                .is_some(),
+            "optnone requires noinline or the verifier rejects the function"
+        );
+        assert!(
+            small
+                .get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_none(),
+            "a sibling under the cap must keep the ordinary pipeline"
+        );
+    }
+
+    fn constant_fold_order_fixture(folded: bool) -> String {
+        let mut ir = String::from(
+            "declare i64 @may_collect()\n\ndefine i64 @f(i64 %d0, i64 %d1, i64 %d2, i64 %d3, i64 %d4, i64 %d5, i64 %d6, i64 %d7) gc \"statepoint-example\" {\nentry:\n",
+        );
+        for i in 0..8 {
+            ir.push_str(&format!("  %cslot{i} = alloca ptr addrspace(1)\n"));
+            if folded {
+                ir.push_str(&format!(
+                    "  store ptr addrspace(1) inttoptr (i64 9222246136947933185 to ptr addrspace(1)), ptr %cslot{i}\n"
+                ));
+            } else {
+                ir.push_str(&format!(
+                    "  %cb{i} = bitcast double 0x7FFC000000000001 to i64\n  %cp{i} = inttoptr i64 %cb{i} to ptr addrspace(1)\n  store ptr addrspace(1) %cp{i}, ptr %cslot{i}\n"
+                ));
+            }
+        }
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %dslot{i} = alloca ptr addrspace(1)\n  %dp{i} = inttoptr i64 %d{i} to ptr addrspace(1)\n  store ptr addrspace(1) %dp{i}, ptr %dslot{i}\n"
+            ));
+        }
+        ir.push_str("  %sp = call i64 @may_collect()\n");
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %after{i} = load ptr addrspace(1), ptr %dslot{i}\n  %bits{i} = ptrtoint ptr addrspace(1) %after{i} to i64\n"
+            ));
+        }
+        for i in 0..8 {
+            ir.push_str(&format!(
+                "  %cafter{i} = load ptr addrspace(1), ptr %cslot{i}\n  %cbits{i} = ptrtoint ptr addrspace(1) %cafter{i} to i64\n"
+            ));
+        }
+        ir.push_str("  %x1 = xor i64 %bits0, %bits1\n");
+        for i in 2..8 {
+            ir.push_str(&format!("  %x{i} = xor i64 %x{}, %bits{i}\n", i - 1));
+        }
+        ir.push_str("  %y0 = xor i64 %x7, %cbits0\n");
+        for i in 1..8 {
+            ir.push_str(&format!("  %y{i} = xor i64 %y{}, %cbits{i}\n", i - 1));
+        }
+        ir.push_str("  ret i64 %y7\n}\n");
+        ir
+    }
+
+    #[test]
+    fn rs4gc_canonicalizes_construction_time_folds_before_root_liveness() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let target = crate::codegen::default_target_triple();
+        let text_ir = constant_fold_order_fixture(false);
+        let folded_ir = constant_fold_order_fixture(true);
+
+        for (label, ir) in [("text", &text_ir), ("folded", &folded_ir)] {
+            let rewritten = statepoint_rewritten_ir(ir, &target, label)
+                .unwrap_or_else(|e| panic!("{label} fixture must run RS4GC: {e:#}"));
+            assert!(
+                !rewritten.contains("%cb0 = bitcast"),
+                "{label} fixture reached RS4GC before construction-time folds converged:\n{rewritten}"
+            );
+            let live_bundle = rewritten
+                .lines()
+                .find(|line| line.contains("\"gc-live\""))
+                .unwrap_or_else(|| panic!("{label} fixture lost every dynamic root:\n{rewritten}"));
+            assert!(
+                live_bundle.contains("%dp0"),
+                "{label} fixture lost every dynamic root:\n{rewritten}"
+            );
+            assert!(
+                rewritten.contains("gc.relocate"),
+                "{label} fixture did not relocate a dynamic root:\n{rewritten}"
+            );
+        }
+
+        let emit = |ir: &str, name: &str| {
+            let context = Context::create();
+            let module = parse_ir_text(&context, ir, name).expect("fixture parses");
+            optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], true)
+                .expect("fixture emits assembly")
+        };
+        // Both arms must be emitted under the SAME module name. The name
+        // becomes the module id, and on ELF the assembler writes it into the
+        // object as a `.file` directive — so two differently-named arms differ
+        // by that one line no matter how perfectly the code itself converged.
+        // Mach-O records no such directive, which is why naming them apart only
+        // ever failed on Linux (#8087).
+        let text = emit(&text_ir, "constant_fold_order");
+        let folded = emit(&folded_ir, "constant_fold_order");
+        assert_eq!(
+            text, folded,
+            "construction-time constant folding must converge before RS4GC assigns root liveness"
+        );
+
+        const PRE_FIX_PASSES: &str = "function(mem2reg),rewrite-statepoints-for-gc";
+        let pre_fix_emit = |ir: &str, name: &str| {
+            let rewritten = statepoint_rewritten_ir_with_passes(
+                ir,
+                &target,
+                &format!("{name}_rewrite"),
+                PRE_FIX_PASSES,
+            )
+            .expect("pre-fix pipeline rewrites fixture");
+            let context = Context::create();
+            let module =
+                parse_ir_text(&context, &rewritten, name).expect("rewritten fixture parses");
+            let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+            (
+                rewritten,
+                optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], false)
+                    .expect("rewritten fixture emits assembly"),
+            )
+        };
+        let (pre_fix_text_ir, pre_fix_text) = pre_fix_emit(&text_ir, "pre_fix_text");
+        let (_, pre_fix_folded) = pre_fix_emit(&folded_ir, "pre_fix_native");
+        assert!(
+            pre_fix_text_ir
+                .lines()
+                .find(|line| line.contains("\"gc-live\""))
+                .is_some_and(|line| line.contains("%cp0")),
+            "negative control must keep a constant-derived text root live across the safepoint:\n{pre_fix_text_ir}"
+        );
+        assert_ne!(
+            pre_fix_text, pre_fix_folded,
+            "fixture must fail byte equality under the pre-#8065 pass order"
+        );
+    }
 
     /// Layer-2 readiness (#7174, engine-plan layer 0 -> 2): the in-process
     /// pipeline can schedule `RewriteStatepointsForGC` at the pinned LLVM —

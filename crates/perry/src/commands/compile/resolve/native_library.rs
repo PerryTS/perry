@@ -55,6 +55,9 @@ pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
     if is_android_target(target) {
         return "android";
     }
+    if super::super::is_windows_target(target) {
+        return "windows";
+    }
     match target {
         Some("ios-simulator") | Some("ios") => "ios",
         Some("visionos-simulator") | Some("visionos") => "visionos",
@@ -69,9 +72,6 @@ pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
         | Some("linux-musl")
         | Some("linux-x86_64-musl")
         | Some("linux-aarch64-musl") => "linux",
-        // WinUI (#4680) is the same OS/arch as the Win32 target for native
-        // library resolution (D3d12/Vulkan backends, x64 prebuilts).
-        Some("windows") | Some("windows-winui") => "windows",
         Some("web") => "web",
         Some("macos") => "macos",
         None if cfg!(target_os = "linux") => "linux",
@@ -1312,13 +1312,15 @@ fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
     if let Some(android) = android_target(target) {
         return Some(android.manifest_arch);
     }
+    if let Some(windows) = super::super::windows_target_arch(target) {
+        return Some(windows.manifest_token());
+    }
     match target {
         // OS-level targets where both arm64 and x64 are real distribution
         // targets — surface the arch so wrappers can ship per-arch
         // prebuilts.
         Some("macos") => Some("arm64"),
         Some("linux") => Some("x64"),
-        Some("windows") | Some("windows-winui") => Some("x64"),
         Some("harmonyos") => Some("arm64"),
         Some("harmonyos-simulator") => Some("x64"),
         // ios/tvos/watchos/visionos: device builds are always arm64 (or

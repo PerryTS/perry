@@ -8,7 +8,7 @@ use super::*;
 use anyhow::{anyhow, Result};
 
 use perry_hir::types::Type as HirType;
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{Expr, UnaryOp};
 
 use crate::types::{I32, I64, PTR};
 
@@ -42,6 +42,14 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => {
+            // Whole-function write analysis proves these locals numeric by
+            // construction.  That proof does not depend on a TypeScript
+            // annotation and remains valid at every read, including loop
+            // counters whose back-edge update makes an initializer-only
+            // proof ineligible.
+            if ctx.integer_locals.contains(id) {
+                return true;
+            }
             // A reserved shadow slot means the local is pointer-possible even
             // if its initializer refined `local_types` to a scalar.
             //
@@ -62,14 +70,22 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             // change. The guard makes the arm exactly the old list minus
             // `Symbol`.
             !ctx.shadow_slot_map.contains_key(id)
-                && ctx.local_types.get(id).is_some_and(|ty| {
+                && ctx.stable_local_type_proof(id).is_some_and(|ty| {
                     !matches!(ty, HirType::Union(_))
                         && !crate::typed_shape::type_is_pointer_bearing(ty)
                 })
         }
         Expr::Compare { .. } | Expr::Void(_) => true,
-        Expr::Unary { .. } => true,
-        Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Not | UnaryOp::Pos => true,
+            UnaryOp::Neg | UnaryOp::BitNot => {
+                crate::type_analysis::is_provably_not_bigint(ctx, operand)
+            }
+        },
+        Expr::Binary { .. } => {
+            crate::type_analysis::is_numeric_expr(ctx, expr)
+                && crate::type_analysis::is_provably_not_bigint(ctx, expr)
+        }
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never
         // a pointer — even when the receiver's static type is erased.
@@ -220,6 +236,29 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #8132: a boxed local's alloca never holds a GC-heap value, so rooting it
+    // protects nothing and (under the RS4GC lowering) costs a relocation of
+    // the box pointer at EVERY statepoint it is live across. Every store site
+    // routes through the same `boxed_vars && !module_globals` test
+    // (`stmt/mod.rs` prealloc, `let_stmt.rs`'s boxed arm,
+    // `codegen/arguments.rs::store_param_slot`, `lower_call/new_ctor_args.rs`),
+    // and each of them stores only a `js_box_alloc_bits`-family result or the
+    // TAG_UNDEFINED sentinel into the slot — the VALUE always goes inside the
+    // box. Boxes are `std::alloc` allocations outside the GC heap: no
+    // collector phase moves them, box.rs never frees them (`BOX_REGISTRY` is
+    // monotonic), and the JSValue inside is traced and rewritten by the
+    // registered `scan_box_roots_mut` scanner. All three premises are pinned
+    // by `scripts/gc_root_dominance_check.py`'s IMMOVABLE_SOURCES "box" entry,
+    // whose probes fail the lint if boxes ever become arena-allocated or grow
+    // a free path — at which point this skip must be reverted with them.
+    //
+    // On the webpack-factory monolith of #8132, ~300 preallocated boxes were
+    // live across ~90% of one function's 5.5k statepoints; unbinding them is
+    // what "not modelling every value as a GC pointer where a proof exists"
+    // means for this shape.
+    if ctx.boxed_vars.contains(&local_id) && !ctx.module_globals.contains_key(&local_id) {
+        return;
+    }
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
         return;
     };
@@ -272,11 +311,13 @@ pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot
 /// collector scanned roots still has to be shaded. Guarding on
 /// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` inline keeps the common
 /// (no incremental cycle in flight) path down to a load, a compare, and a
-/// not-taken branch instead of a TLS-touching call.
+/// not-taken branch instead of a TLS-touching call. The load is LLVM
+/// `monotonic`, matching the runtime's Rust `Relaxed` readers: the counter is
+/// only a gate and does not publish accompanying memory.
 pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
     let active =
         ctx.block()
-            .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+            .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let barrier_needed = ctx.block().icmp_ne(I32, &active, "0");
     let barrier_idx = ctx.new_block("shadow.root.barrier");
     let done_idx = ctx.new_block("shadow.root.barrier.done");
@@ -304,6 +345,17 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     // per-statement shadow traffic needed until the refinement is dropped
     // (see `stmt::masked_window_region`).
     if ctx.masked_region_scalar_locals.contains(&local_id) {
+        return;
+    }
+    // The element-shape clone's preheader checked this accumulator's current
+    // Number tag, and the matcher admits only numeric-preserving writes in a
+    // call-free clone. Its old shadow value may remain conservatively rooted;
+    // the slow clone resumes ordinary mirroring after the scoped fact is gone.
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.numeric_accumulator == local_id)
+    {
         return;
     }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {

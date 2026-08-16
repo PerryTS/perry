@@ -270,7 +270,6 @@ fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, 
             let e_off = u16at(page_off + 4) as usize;
             let count = u16at(page_off + 6) as usize;
             let enc_off = u16at(page_off + 8) as usize;
-            let enc_count = u16at(page_off + 10) as usize;
             for e in 0..count {
                 let raw = u32at(page_off + e_off + 4 * e);
                 let idx = (raw >> 24) as usize;
@@ -919,17 +918,18 @@ mod tests {
     /// Collect frame PCs via the SYSTEM unwinder (_Unwind_Backtrace) —
     /// the oracle the owned walk must match.
     fn system_pcs(max: usize) -> Vec<u64> {
+        use crate::eh::UnwindContext;
         use core::ffi::{c_int, c_void};
         unsafe extern "C" {
             fn _Unwind_Backtrace(
-                trace: extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+                trace: unsafe extern "C" fn(*mut UnwindContext, *mut c_void) -> c_int,
                 arg: *mut c_void,
             ) -> c_int;
-            fn _Unwind_GetIP(ctx: *mut c_void) -> u64;
+            fn _Unwind_GetIP(ctx: *mut UnwindContext) -> usize;
         }
-        extern "C" fn cb(ctx: *mut c_void, arg: *mut c_void) -> c_int {
+        unsafe extern "C" fn cb(ctx: *mut UnwindContext, arg: *mut c_void) -> c_int {
             let v = unsafe { &mut *(arg as *mut Vec<u64>) };
-            unsafe { v.push(_Unwind_GetIP(ctx)) };
+            unsafe { v.push(_Unwind_GetIP(ctx) as u64) };
             0
         }
         let mut v: Vec<u64> = Vec::with_capacity(max);

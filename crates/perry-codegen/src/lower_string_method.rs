@@ -126,40 +126,32 @@ pub(crate) fn lower_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    // Optimistic any-typed path: `property_get` routes `(x: any).charAt(i)` /
-    // `.split(…)` here even when `x` is not statically a string, because most
-    // such receivers ARE strings (e.g. `readFileSync(p).split('\n')`). But a
-    // boxed/object receiver — `new Boolean().charAt = String.prototype.charAt;
-    // …charAt(i)`, a `{ toString }` object — must have `ToString(this)` applied
-    // (ECMA-262 §22.1.3) before the inline string helpers run, or they would
-    // bit-cast the object pointer as a string and read garbage. A statically
-    // string-typed receiver skips this (fast path, no coercion).
-    let recv_box = if is_string_expr(ctx, object) {
-        recv_box
-    } else {
-        // A nullish receiver must throw the V8 member-access TypeError —
-        // `undefined.charAt(0)` reads `charAt` off `undefined` FIRST (ECMA-262
-        // §13.3), so it throws `Cannot read properties of undefined (reading
-        // 'charAt')` — NOT coerce `undefined`→`"undefined"` like the general
-        // `js_string_coerce`. The guarded helper does RequireObjectCoercible +
-        // ToString; pass the method name for the diagnostic.
-        let prop_idx = ctx.strings.intern(property);
-        let (prop_global, prop_len) = {
-            let entry = ctx.strings.entry(prop_idx);
-            (
-                format!("@{}", entry.bytes_global),
-                entry.byte_len.to_string(),
-            )
-        };
-        let blk = ctx.block();
-        let coerced = blk.call(
-            I64,
-            "js_string_coerce_method_this",
-            &[(DOUBLE, &recv_box), (PTR, &prop_global), (I64, &prop_len)],
-        );
-        nanbox_string_inline(blk, &coerced)
-    };
+    lower_string_method_from_box(ctx, object, property, args, recv_box)
+}
 
+/// Lower a string method after a runtime tag guard has proved that the
+/// already-evaluated receiver is a heap or short string.
+///
+/// Keeping the receiver as an SSA value is load-bearing: the non-string arm of
+/// the guard must dispatch the exact same value, rather than evaluate a
+/// side-effecting receiver expression a second time.
+pub(crate) fn lower_string_method_from_proven_box(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    recv_box: String,
+) -> Result<String> {
+    lower_string_method_from_box(ctx, object, property, args, recv_box)
+}
+
+fn lower_string_method_from_box(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    recv_box: String,
+) -> Result<String> {
     // #6971: the receiver is lowered BEFORE the arguments, and an argument's
     // lowering can collect — `fresh(k).concat("|" + churn(N))` dropped the
     // receiver, whose unboxed form is a BARE string address that only the
@@ -232,12 +224,6 @@ fn lower_string_method_dispatch(
     let recv_box = recv_box.to_string();
     match property {
         "indexOf" => {
-            if args.len() > 2 {
-                bail!(
-                    "perry-codegen: String.indexOf expects 0, 1 or 2 args, got {}",
-                    args.len()
-                );
-            }
             // No `searchString` → `undefined`, which `js_string_coerce`
             // stringifies to "undefined" (`"".indexOf()` === -1).
             let needle_box = if args.is_empty() {
@@ -251,11 +237,14 @@ fn lower_string_method_dispatch(
             // ECMA-262 §22.1.3.8. A statically string-typed arg skips this.
             let needle_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
             // Optional fromIndex.
-            let from_idx_double = if args.len() == 2 {
+            let from_idx_double = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -284,13 +273,6 @@ fn lower_string_method_dispatch(
             Ok(blk.sitofp(I32, &result_i32, DOUBLE))
         }
         "slice" | "substring" => {
-            if args.len() > 2 {
-                bail!(
-                    "perry-codegen: String.{} expects 0, 1 or 2 args, got {}",
-                    property,
-                    args.len()
-                );
-            }
             // Issue #316: 0-arg form is the spec'd "clone" idiom —
             // `s.slice()` ≡ `s.slice(0, length)`. Was rejected at
             // codegen with "expects 1 or 2 args, got 0" before this fix.
@@ -300,11 +282,14 @@ fn lower_string_method_dispatch(
                 lower_expr(ctx, &args[0])?
             };
             // 2-arg form: explicit end (may be `undefined` → treated as `len`).
-            let end_d = if args.len() == 2 {
+            let end_d = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -346,12 +331,6 @@ fn lower_string_method_dispatch(
             // Issue #567: accept the optional 2nd `limit: number` arg.
             // `str.split()` with no args is valid: an `undefined` separator
             // yields `[str]` (handled by `js_string_split_value`).
-            if args.len() > 2 {
-                bail!(
-                    "perry-codegen: String.split expects 0, 1, or 2 args (delimiter[, limit]), got {}",
-                    args.len()
-                );
-            }
             // A literal separator with no `limit` cannot invoke user code,
             // cannot be a RegExp, and has the unbounded limit directly
             // expressible by `js_string_split_n`. Avoid the boxed dispatch and
@@ -382,11 +361,14 @@ fn lower_string_method_dispatch(
             } else {
                 Some(lower_expr(ctx, &args[0])?)
             };
-            let limit_box = if args.len() == 2 {
+            let limit_box = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -418,13 +400,6 @@ fn lower_string_method_dispatch(
         // language-neutral Unicode casing. Closes #2781. (#592: Effect's
         // `aliasOrValue` at Cron.ts:846 was the original user-impact site.)
         "toLocaleLowerCase" | "toLocaleUpperCase" => {
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.{} expects 0 or 1 args, got {}",
-                    property,
-                    args.len()
-                );
-            }
             // The `locales` arg is passed as a NaN-boxed JSValue (double) to the
             // runtime, which extracts/validates it. Missing → undefined.
             let locales_box = if args.is_empty() {
@@ -432,6 +407,9 @@ fn lower_string_method_dispatch(
             } else {
                 Some(lower_expr(ctx, &args[0])?)
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let locales_box = match locales_box {
@@ -553,13 +531,16 @@ fn lower_string_method_dispatch(
             Ok(nanbox_string_inline(blk, &result))
         }
         "repeat" => {
-            if args.len() != 1 {
+            if args.is_empty() {
                 bail!(
-                    "perry-codegen: String.repeat expects 1 arg, got {}",
+                    "perry-codegen: String.repeat expects at least 1 arg, got {}",
                     args.len()
                 );
             }
             let count_d = lower_expr(ctx, &args[0])?;
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -571,37 +552,51 @@ fn lower_string_method_dispatch(
             Ok(nanbox_string_inline(blk, &result))
         }
         "replace" | "replaceAll" => {
-            if args.len() != 2 {
-                bail!(
-                    "perry-codegen: String.{} expects 2 args, got {}",
-                    property,
-                    args.len()
-                );
-            }
             // First arg is either a string or a regex literal. The
             // second arg can be a string OR a function (replacer
             // callback). Pick the right runtime function based on
             // both shapes.
-            let needle_is_regex = matches!(&args[0], Expr::RegExp { .. })
-                || matches!(&args[0], Expr::LocalGet(id) if matches!(
-                    ctx.local_types.get(id),
-                    Some(HirType::Named(n)) if n == "RegExp"
-                ));
+            let needle_is_regex = args.first().is_some_and(|needle| {
+                matches!(needle, Expr::RegExp { .. })
+                    || matches!(needle, Expr::LocalGet(id) if matches!(
+                        ctx.stable_local_type_proof(id),
+                        Some(HirType::Named(n)) if n == "RegExp"
+                    ))
+            });
             // Detect a function replacer: a Closure literal, a FuncRef,
             // or a LocalGet of a function-typed local.
-            let repl_is_function = matches!(&args[1], Expr::Closure { .. } | Expr::FuncRef(_))
-                || matches!(&args[1], Expr::LocalGet(id) if ctx.local_closure_func_ids.contains_key(id));
+            let repl_is_function = args.get(1).is_some_and(|replacement| {
+                matches!(replacement, Expr::Closure { .. } | Expr::FuncRef(_))
+                    || matches!(replacement, Expr::LocalGet(id) if ctx.local_closure_func_ids.contains_key(id))
+            });
             // Detect a string literal that includes $<name> back-refs
             // so we route to the named-group-aware runtime variant.
-            let repl_has_named = matches!(&args[1], Expr::String(s) if s.contains("$<"));
+            let repl_has_named = matches!(args.get(1), Some(Expr::String(s)) if s.contains("$<"));
             // A non-RegExp, non-static-string `searchValue` is `ToString`-coerced
             // (running user `toString`/`valueOf`, may throw) BEFORE the
             // replacement is coerced, per ECMA-262 §22.1.3.19. Likewise a
             // non-function, non-static-string `replaceValue`.
-            let needle_is_str = is_string_expr(ctx, &args[0]);
-            let repl_is_str = is_string_expr(ctx, &args[1]);
-            let needle_box = lower_expr(ctx, &args[0])?;
-            let repl_box = lower_expr(ctx, &args[1])?;
+            let needle_is_str = args
+                .first()
+                .is_some_and(|needle| is_string_expr(ctx, needle));
+            let repl_is_str = args
+                .get(1)
+                .is_some_and(|replacement| is_string_expr(ctx, replacement));
+            let undefined =
+                || crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let needle_box = if let Some(needle) = args.first() {
+                lower_expr(ctx, needle)?
+            } else {
+                undefined()
+            };
+            let repl_box = if let Some(replacement) = args.get(1) {
+                lower_expr(ctx, replacement)?
+            } else {
+                undefined()
+            };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -785,12 +780,6 @@ fn lower_string_method_dispatch(
             ))
         }
         "lastIndexOf" => {
-            if args.len() > 2 {
-                bail!(
-                    "perry-codegen: String.lastIndexOf expects 0, 1 or 2 args, got {}",
-                    args.len()
-                );
-            }
             // No `searchString` → `undefined` → "undefined"
             // (`"".lastIndexOf()` === -1).
             let needle_box = if args.is_empty() {
@@ -806,11 +795,14 @@ fn lower_string_method_dispatch(
             // Optional `position` (2nd arg). Without it, use the plain
             // last-index-of (search to the end); with it, the position-aware
             // variant. Mirrors the `indexOf` arm.
-            let pos_double = if args.len() == 2 {
+            let pos_double = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -843,7 +835,7 @@ fn lower_string_method_dispatch(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "padStart" | "padEnd" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.is_empty() {
                 bail!(
                     "perry-codegen: String.{} expects 1 or 2 args, got {}",
                     property,
@@ -869,7 +861,7 @@ fn lower_string_method_dispatch(
             // back to " "), otherwise ToString — so non-string fills (numbers,
             // booleans, `null`, `{ toString }`) render correctly instead of
             // being bit-cast and dropped.
-            let pad_handle = if args.len() == 2 {
+            let pad_handle = if args.len() >= 2 {
                 let pad_box = lower_expr(ctx, &args[1])?;
                 let blk = ctx.block();
                 blk.call(I64, "js_string_pad_fill", &[(DOUBLE, &pad_box)])
@@ -880,6 +872,9 @@ fn lower_string_method_dispatch(
                 let sp_box = blk.load(DOUBLE, &sp_global);
                 unbox_str_handle(blk, &sp_box)
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -928,12 +923,6 @@ fn lower_string_method_dispatch(
             Ok(nanbox_string_inline(blk, &result))
         }
         "localeCompare" => {
-            if args.len() > 3 {
-                bail!(
-                    "perry-codegen: String.localeCompare expects 0-3 args, got {}",
-                    args.len()
-                );
-            }
             // A missing/undefined `that` argument coerces to the string
             // "undefined" (ECMA-262 §22.1.3.10: `ToString(that)`), so
             // `s.localeCompare()` === `s.localeCompare(undefined)` ===
@@ -954,11 +943,14 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let options_box = if args.len() == 3 {
+            let options_box = if args.len() >= 3 {
                 Some(lower_expr(ctx, &args[2])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(3) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let blk = ctx.block();
             if let Some(loc) = &locales_box {
                 // Validate `(locales, options)` exactly as `Construct(%Collator%,
@@ -1004,12 +996,6 @@ fn lower_string_method_dispatch(
             }
         }
         "search" => {
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.search expects 0 or 1 arg, got {}",
-                    args.len()
-                );
-            }
             // The arg may be a RegExp OR any value that `RegExpCreate` coerces
             // via `ToString` (a string pattern, `undefined`, a `{ toString }`
             // object). Pass it BOXED to `js_string_search_value`, which detects
@@ -1021,6 +1007,9 @@ fn lower_string_method_dispatch(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1032,12 +1021,6 @@ fn lower_string_method_dispatch(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "match" => {
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.match expects 0 or 1 arg, got {}",
-                    args.len()
-                );
-            }
             // Like `search`, coerce a non-RegExp arg via `RegExpCreate(ToString
             // (arg))` by passing it BOXED to `js_string_match_value`. A missing
             // arg is `undefined` → the empty `/(?:)/` regex.
@@ -1046,6 +1029,9 @@ fn lower_string_method_dispatch(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1065,17 +1051,16 @@ fn lower_string_method_dispatch(
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
         "matchAll" => {
-            if args.len() > 1 {
-                bail!(
-                    "perry-codegen: String.matchAll expects 0 or 1 arg, got {}",
-                    args.len()
-                );
-            }
             let pattern_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            // Like every JavaScript call, extra arguments are evaluated for
+            // side effects even though String.prototype.matchAll ignores them.
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1167,18 +1152,21 @@ fn lower_string_method_dispatch(
             // the rest of the string. Routed to the dedicated runtime helper
             // `js_string_substr`, which coerces both args via ToIntegerOrInfinity
             // (#2897).
-            if args.is_empty() || args.len() > 2 {
+            if args.is_empty() {
                 bail!(
                     "perry-codegen: String.substr expects 1 or 2 args, got {}",
                     args.len()
                 );
             }
             let start_d = lower_expr(ctx, &args[0])?;
-            let len_d = if args.len() == 2 {
+            let len_d = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1202,7 +1190,7 @@ fn lower_string_method_dispatch(
         "startsWith" | "endsWith" => {
             // Spec allows the 2-arg form: startsWith(searchString, position)
             // and endsWith(searchString, endPosition). Closes #315.
-            if args.is_empty() || args.len() > 2 {
+            if args.is_empty() {
                 bail!(
                     "perry-codegen: String.{} expects 1 or 2 args, got {}",
                     property,
@@ -1210,11 +1198,14 @@ fn lower_string_method_dispatch(
                 );
             }
             let other_box = lower_expr(ctx, &args[0])?;
-            let pos_d = if args.len() == 2 {
+            let pos_d = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1262,7 +1253,7 @@ fn lower_string_method_dispatch(
             // honored (search starts there), matching the dynamic dispatch
             // path. Negative/NaN clamp to 0 and Infinity saturates past the
             // end inside js_string_index_of_from.
-            if args.is_empty() || args.len() > 2 {
+            if args.is_empty() {
                 bail!(
                     "perry-codegen: String.includes expects 1 or 2 args, got {}",
                     args.len()
@@ -1271,11 +1262,14 @@ fn lower_string_method_dispatch(
             let needle_box = lower_expr(ctx, &args[0])?;
             // Preserve evaluation of the second argument for side effects and
             // use it as the start index when present.
-            let pos_d = if args.len() == 2 {
+            let pos_d = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
+            for extra in args.iter().skip(2) {
+                let _ = lower_expr(ctx, extra)?;
+            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);

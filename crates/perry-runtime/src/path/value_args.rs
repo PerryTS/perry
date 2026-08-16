@@ -195,6 +195,10 @@ mod tests {
             .expect("entry point must return a real StringHeader")
     }
 
+    fn read_native_path(ptr: *mut StringHeader) -> String {
+        read(ptr).replace('\\', "/")
+    }
+
     /// The bug: an inline operand's CHARACTERS were dereferenced as a header.
     #[test]
     fn sso_operand_resolves_to_a_real_header() {
@@ -236,32 +240,32 @@ mod tests {
     #[test]
     fn both_operands_survive_the_materialisation_window() {
         assert_eq!(
-            read(js_path_join_value(sso_string("/r"), sso_string("s1"))),
+            read_native_path(js_path_join_value(sso_string("/r"), sso_string("s1"))),
             "/r/s1"
         );
         assert_eq!(
-            read(js_path_join_value(
+            read_native_path(js_path_join_value(
                 heap_string("/root-that-is-long"),
                 sso_string("s1")
             )),
             "/root-that-is-long/s1"
         );
         assert_eq!(
-            read(js_path_join_value(
+            read_native_path(js_path_join_value(
                 sso_string("/r"),
                 heap_string("segment-longer-than-sso")
             )),
             "/r/segment-longer-than-sso"
         );
         assert_eq!(
-            read(js_path_resolve_join_value(
+            read_native_path(js_path_resolve_join_value(
                 heap_string("/root"),
                 sso_string("s1")
             )),
             "/root/s1"
         );
         assert_eq!(
-            read(js_path_resolve_join_value(
+            read_native_path(js_path_resolve_join_value(
                 sso_string("/a"),
                 sso_string("/b")
             )),

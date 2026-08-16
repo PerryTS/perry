@@ -5,7 +5,7 @@
 //! with conflicting parameter types — `*mut u64` vs `*mut i32`. The Rust
 //! compiler emitted a `clashing_extern_declarations` warning. Both
 //! declarations linked to the same C symbol (`_setjmp` on Apple,
-//! `setjmp` elsewhere), so any one of them necessarily disagreed with
+//! `setjmp` on most other targets), so any one of them necessarily disagreed with
 //! the real libc signature; we got away with it on macOS/aarch64 only
 //! because the ABI happens to pass the pointer in `x0` regardless of
 //! pointee type and the C side only reads/writes a fixed number of bytes.
@@ -51,7 +51,29 @@ extern "C" {
     pub fn setjmp(env: *mut c_int) -> c_int;
 }
 
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+#[link(name = "libvcruntime")]
+extern "C" {
+    /// MSVC implements ARM64 `setjmp` as a compiler intrinsic. Clang lowers
+    /// the public `_setjmp` spelling to `__intrinsic_setjmpex`, passing the
+    /// current frame as a hidden second argument. Rust does not perform that
+    /// lowering, so calling the ordinary CRT `setjmp` thunk leaves an
+    /// unresolved `__intrinsic_setjmp` reference when lld links the final PE.
+    ///
+    /// Perry deliberately uses the non-unwinding form of `longjmp` and clears
+    /// `_JUMP_BUFFER::Frame` before jumping (see the Windows caveat below).
+    /// Consequently the hidden frame argument is not observed: as on x64, its
+    /// unspecified register value is stored and then cleared before `longjmp`.
+    /// Linking the static VCRuntime implementation makes the intrinsic
+    /// available to Perry's manually linked executables.
+    #[link_name = "__intrinsic_setjmpex"]
+    pub fn setjmp(env: *mut c_int) -> c_int;
+}
+
+#[cfg(all(
+    not(target_vendor = "apple"),
+    not(all(target_os = "windows", target_arch = "aarch64"))
+))]
 extern "C" {
     /// `setjmp(3)`. On glibc Linux this already doesn't save the
     /// signal mask, so it's the same fast path we want.
@@ -88,6 +110,7 @@ extern "C" {
 /// - Windows x64 MSVC: 16 doubles = 128 bytes for `_JBLEN`, padded
 ///   to 256 bytes of `_JUMP_BUFFER` — and the buffer must be
 ///   **16-byte aligned** (aligned XMM stores; see the extern's docs).
+/// - Windows arm64 MSVC: `_JBLEN = 24` `u64`s = 192 bytes.
 ///
 /// We surface 192 here so callers can `const_assert!` against it.
 pub const JMP_BUF_MIN_BYTES: usize = 192;

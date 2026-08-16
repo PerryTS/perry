@@ -27,6 +27,9 @@ use native_proof_support::{
     NativeRepsEnv,
 };
 
+#[path = "native_proof_buffer_views/pointer_lifetime.rs"]
+mod pointer_lifetime;
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         target: None,
@@ -137,6 +140,7 @@ fn module_with_classes_and_params(
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }

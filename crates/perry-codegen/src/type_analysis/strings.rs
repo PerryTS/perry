@@ -14,7 +14,7 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::SetNew | Expr::SetNewFromArray(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Generic { base, .. }) if base == "Set"
         ),
         // `this.field` where the field is declared as `Set<T>` on the
@@ -40,12 +40,19 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 pub(crate) fn set_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
     match e {
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
-            Some(HirType::Generic { base, type_args }) if base == "Set" => {
-                Some(type_args.as_slice())
+        Expr::LocalGet(id)
+            if matches!(
+                ctx.stable_local_type_proof(id),
+                Some(HirType::Generic { base, .. }) if base == "Set"
+            ) =>
+        {
+            match ctx.local_type_hint(id) {
+                Some(HirType::Generic { base, type_args }) if base == "Set" => {
+                    Some(type_args.as_slice())
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
@@ -70,7 +77,7 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::UrlSearchParamsNew(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Named(name)) if name == "URLSearchParams"
         ),
         Expr::UrlGetSearchParams(_) => true,
@@ -83,7 +90,7 @@ pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         } if property == "searchParams" => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 return matches!(
-                    ctx.local_types.get(id),
+                    ctx.stable_local_type_proof(id),
                     Some(HirType::Named(name)) if name == "URL"
                 );
             }
@@ -136,7 +143,7 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::MapNew | Expr::MapNewFromArray(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.stable_local_type_proof(id),
             Some(HirType::Generic { base, .. }) if base == "Map"
         ),
         // `this.field` where the field is declared as `Map<K, V>` on
@@ -165,12 +172,19 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 pub(crate) fn map_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
     match e {
-        Expr::LocalGet(id) => match ctx.local_types.get(id) {
-            Some(HirType::Generic { base, type_args }) if base == "Map" => {
-                Some(type_args.as_slice())
+        Expr::LocalGet(id)
+            if matches!(
+                ctx.stable_local_type_proof(id),
+                Some(HirType::Generic { base, .. }) if base == "Map"
+            ) =>
+        {
+            match ctx.local_type_hint(id) {
+                Some(HirType::Generic { base, type_args }) if base == "Map" => {
+                    Some(type_args.as_slice())
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
@@ -201,7 +215,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
+            ctx.local_type_hint(id),
             Some(HirType::String | HirType::StringLiteral(_))
         ),
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
@@ -301,6 +315,221 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// True when a DECLARATION says this expression is a `string`: a `string`
+/// field on a class, interface or object-type alias (`this.tag`, `r.kind`), a
+/// method whose declared return type is `string`, an element of a `string[]`.
+///
+/// This is deliberately NOT folded into [`is_definitely_string_expr`], and the
+/// distinction is the whole point. Perry does not enforce annotations at
+/// runtime, so a declaration is evidence, not proof — the same gap #7831 is
+/// closing on the numeric side, where a declared-`number` field that actually
+/// held a string made `fadd` propagate the string's NaN payload and
+/// `typeof (v * 2)` answer `"string"`.
+///
+/// So this predicate has exactly ONE consumer: the two-operand
+/// `a + b` concat in `expr::binary`, which lowers to `js_string_concat_box`.
+/// That helper tag-dispatches both operands and hands ANY non-string pair
+/// straight to `js_dynamic_string_or_number_add`, so every combination of
+/// runtime values — string+string, string+number, number+number — produces
+/// exactly the result the dynamic path would have produced. The declaration
+/// therefore selects a *lowering*, never an *answer*.
+///
+/// The places that must NOT use it, and why:
+/// - the `l ^ r` arm of `+` lowers through `js_string_concat_value` /
+///   `js_value_concat_string`, which take an already-unboxed `StringHeader*`
+///   and cannot tell a lie from a string;
+/// - the N-way chain fold formats each part as a string, so an all-declared
+///   chain of numbers would concatenate where the spec adds;
+/// - the `Map` string-key fast paths in `expr::math_simple` key a lookup on
+///   the claim.
+///
+/// Each of those keeps [`is_definitely_string_expr`] — but note that predicate
+/// is NOT purely structural either, which is #7837: its `LocalGet` arm trusts
+/// `let s: string`, and its `.toString()` / `.slice()` / … arm matches on the
+/// method NAME with no look at the receiver. Use
+/// [`string_value_is_runtime_guaranteed`] below when what you need is a claim
+/// about the bits.
+pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_definitely_string_expr(ctx, e) {
+        return true;
+    }
+    if let Expr::LocalGet(id) = e {
+        return matches!(
+            ctx.local_type_hint(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        );
+    }
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    {
+        if matches!(
+            super::refine::declared_property_type_from_annotation(ctx, object, property),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ) {
+            return true;
+        }
+    }
+    matches!(
+        e,
+        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
+    ) && matches!(
+        static_type_of(ctx, e),
+        Some(HirType::String) | Some(HirType::StringLiteral(_))
+    )
+}
+
+/// Does this expression's string-ness say something about the BITS, or is it
+/// just an erased TypeScript annotation repeated back? (#7837)
+///
+/// `is_definitely_string_expr` mixes two very different kinds of evidence.
+/// Most of its arms name a runtime entry point that CONSTRUCTS a string —
+/// a literal, `String(x)`, `JSON.stringify`, `path.join`, `os.arch()`. Those
+/// are proofs. Two are not:
+///
+/// * **`LocalGet`** trusts `let s: string`, and Perry does not enforce
+///   declared types at runtime (CLAUDE.md, Known Limitations). `const s:
+///   string = (42 as any)` type-checks and puts a number in the slot.
+/// * **the `.toString()` / `.slice()` / `.replace()` … arm** matches on the
+///   METHOD NAME alone, with no look at the receiver. `Array.prototype.slice`
+///   returns an array; `({toString(){return 5}}).toString()` returns a number.
+///
+/// This answers `true` only for the first kind, so `+` can keep the concat
+/// lowering where the string is real and dispatch on the tag where it is a
+/// claim. The whitelist is deliberately **closed**: an arm nobody has thought
+/// about answers `false` and gets guarded, which costs one predictable
+/// compare, whereas defaulting the other way costs a silent wrong answer.
+pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::LocalGet(id) => matches!(
+            ctx.stable_local_type_proof(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ),
+        Expr::String(_)
+        | Expr::WtfString(_)
+        | Expr::StringCoerce(_)
+        | Expr::TypeOf(_)
+        | Expr::ArrayJoin { .. }
+        | Expr::JsonStringify(_)
+        | Expr::JsonStringifyPretty { .. }
+        | Expr::JsonStringifyFull(..)
+        | Expr::StringFromCodePoint(_)
+        | Expr::StringFromCharCode(_)
+        | Expr::StringFromCharCodeSpread(_)
+        | Expr::StringRaw { .. }
+        | Expr::FsReadFileSync(_)
+        | Expr::FsReadFileBinary(_)
+        | Expr::PathSep
+        | Expr::PathDelimiter
+        | Expr::PathJoin(..)
+        | Expr::PathDirname(_)
+        | Expr::PathBasename(_)
+        | Expr::PathExtname(_)
+        | Expr::PathResolve(_)
+        | Expr::PathNormalize(_)
+        | Expr::PathResolveJoin(..)
+        | Expr::PathWin32Join(..)
+        | Expr::PathToNamespacedPath(_)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::ToNamespacedPath
+                | perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin,
+            ..
+        }
+        | Expr::ProcessVersion
+        | Expr::ProcessCwd
+        | Expr::ProcessTitle
+        | Expr::OsArch
+        | Expr::OsType
+        | Expr::OsPlatform
+        | Expr::OsRelease
+        | Expr::OsHostname
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
+        // A string METHOD is a proof only when the receiver is one: every name
+        // in `is_definitely_string_expr`'s list also exists on `Array` or on a
+        // user object, where it returns something else entirely.
+        Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(
+                property.as_str(),
+                "toString"
+                    | "toLowerCase"
+                    | "toUpperCase"
+                    | "trim"
+                    | "trimStart"
+                    | "trimEnd"
+                    | "slice"
+                    | "substring"
+                    | "substr"
+                    | "charAt"
+                    | "repeat"
+                    | "replace"
+                    | "replaceAll"
+                    | "padStart"
+                    | "padEnd"
+                    | "concat"
+                    | "normalize"
+                    | "toFixed"
+                    | "toPrecision"
+                    | "toExponential"
+            ) =>
+            {
+                string_value_is_runtime_guaranteed(ctx, object)
+            }
+            _ => false,
+        },
+        // `a + b` really is a string whenever ONE side really is: the spec's
+        // `+` concatenates on either operand being a string, whatever the
+        // other holds.
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } => {
+            string_value_is_runtime_guaranteed(ctx, left)
+                || string_value_is_runtime_guaranteed(ctx, right)
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            string_value_is_runtime_guaranteed(ctx, then_expr)
+                && string_value_is_runtime_guaranteed(ctx, else_expr)
+        }
+        Expr::PropertyGet {
+            object, property, ..
+        } if is_process_namespace_version_property(object, property) => true,
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => matches!(
+            crate::lower_call::guarded_path_type(ctx, e),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ),
+        _ => false,
+    }
+}
+
+/// The expression reads as a string to `is_definitely_string_expr`, but the
+/// only evidence is a declared type or a receiver-blind name guess (#7837).
+///
+/// The string mirror of `numeric_proof_is_declared_only` (#7773/#7831), and
+/// the same policy: **a static type selects a lowering, never an answer.**
+pub(crate) fn string_proof_is_declared_only(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    is_definitely_string_expr(ctx, e) && !string_value_is_runtime_guaranteed(ctx, e)
+}
+
 /// Resolve the declared type of `<object>.<field>` when `object` is a
 /// known user class or interface that declares (or inherits) a field
 /// named `field`. Returns `None` when the receiver isn't a tracked
@@ -314,7 +543,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => {
-            match ctx.local_types.get(id) {
+            match ctx.stable_local_type_proof(id) {
                 Some(HirType::String | HirType::StringLiteral(_)) => true,
                 // Union(String, Null/Void) — nullable strings are still
                 // strings at runtime when non-null. The ?. and != null
@@ -543,3 +772,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

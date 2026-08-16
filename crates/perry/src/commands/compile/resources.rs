@@ -24,13 +24,14 @@ const BACKEND_PACKAGE_METADATA_FILE: &str = "perry-backend-package.json";
 /// the deepest directory that holds an anchor; if none found within
 /// the bound, returns the starting input unchanged.
 pub(super) fn find_project_root_for_resources(start: &Path, watch_for_perry_toml: bool) -> PathBuf {
+    let fallback = start.to_path_buf();
     let mut project_root = start.to_path_buf();
     for _ in 0..5 {
         if project_root.join("package.json").exists() {
-            break;
+            return project_root;
         }
         if watch_for_perry_toml && project_root.join("perry.toml").exists() {
-            break;
+            return project_root;
         }
         if let Some(parent) = project_root.parent() {
             project_root = parent.to_path_buf();
@@ -38,7 +39,43 @@ pub(super) fn find_project_root_for_resources(start: &Path, watch_for_perry_toml
             break;
         }
     }
-    project_root
+    fallback
+}
+
+/// Copy conventional resource directories next to a standalone executable.
+///
+/// Standalone builds use `perry.toml` as a project anchor just like the rest of
+/// the compile pipeline.  The old inline implementation only looked for
+/// `package.json`, so an app with only `perry.toml` could select an unrelated
+/// ancestor package and recursively copy its assets after the linker had
+/// already finished (#6899).
+pub(super) fn copy_standalone_resource_dirs(input: &Path, dest_dir: &Path) {
+    let Some(source_dir) = input
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    let project_root = find_project_root_for_resources(&source_dir, true);
+    let output_resolved = if dest_dir.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        dest_dir.to_path_buf()
+    };
+    let output_canon = output_resolved
+        .canonicalize()
+        .unwrap_or_else(|_| output_resolved.clone());
+    let project_canon = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.clone());
+
+    // Copying a resource directory onto itself truncates files before reading
+    // them. It is also unnecessary when the executable already lives at the
+    // project root.
+    if output_canon != project_canon {
+        copy_bundle_resource_dirs(&project_root, dest_dir);
+    }
 }
 
 /// Recursive copy used by the per-target bundle writers. Mirrors the
@@ -603,5 +640,47 @@ mod native_resource_tests {
             fs::read(package_resource_dir.join("d3d12/compute.hlsl.dxil")).unwrap(),
             b"dxil"
         );
+    }
+}
+
+#[cfg(test)]
+mod project_resource_tests {
+    use std::fs;
+
+    use super::{copy_standalone_resource_dirs, find_project_root_for_resources};
+
+    #[test]
+    fn project_root_falls_back_to_start_when_no_anchor_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = dir.path().join("one/two/three");
+        fs::create_dir_all(&start).unwrap();
+
+        assert_eq!(find_project_root_for_resources(&start, true), start);
+    }
+
+    #[test]
+    fn standalone_resources_prefer_nearest_perry_toml_over_ancestor_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("packages/demo");
+        let src = app.join("src");
+        let output = app.join("dist");
+        fs::create_dir_all(app.join("assets")).unwrap();
+        fs::create_dir_all(dir.path().join("resources")).unwrap();
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        fs::write(dir.path().join("package.json"), "{}\n").unwrap();
+        fs::write(app.join("perry.toml"), "[perry]\n").unwrap();
+        fs::write(app.join("assets/app.txt"), "app\n").unwrap();
+        fs::write(dir.path().join("resources/ancestor.txt"), "ancestor\n").unwrap();
+        let input = src.join("main.ts");
+        fs::write(&input, "console.log('hello');\n").unwrap();
+
+        copy_standalone_resource_dirs(&input, &output);
+
+        assert_eq!(
+            fs::read_to_string(output.join("assets/app.txt")).unwrap(),
+            "app\n"
+        );
+        assert!(!output.join("resources/ancestor.txt").exists());
     }
 }

@@ -125,6 +125,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_native_arena_alloc", I64, &[I64]);
     module.declare_function("js_native_arena_view", I64, &[I64, I32, I64, I64]);
     module.declare_function("js_native_pod_view", I64, &[I64, I64, I64, I64, I64, I64]);
+    module.declare_function("js_native_pod_view_length", DOUBLE, &[DOUBLE]);
     module.declare_function("js_native_abi_check_pod_view_data_ptr", PTR, &[DOUBLE, I64]);
     module.declare_function(
         "js_native_abi_check_pod_view_record_count",
@@ -886,6 +887,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // (returned wrapped in `js_promise_resolved`). See
     // `crates/perry-runtime/src/object.rs::js_create_namespace`.
     module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR]);
+    module.declare_function("js_finalize_namespace", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
     module.declare_function("js_promise_finally", I64, &[I64, I64]);
@@ -931,6 +933,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // ──────────────────────────────────────────────────────────────────
     // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
     module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
+    // Normalize a Request/Response subclass object (for example NextResponse)
+    // to its native Fetch registry handle; bare handles pass through.
+    module.declare_function("js_fetch_unwrap_handle", DOUBLE, &[DOUBLE]);
     // js_response_body_init_ptr(body_value_f64) -> string_ptr (i64): drains a
     // ReadableStream body to bytes, else falls back to string coercion.
     module.declare_function("js_response_body_init_ptr", I64, &[DOUBLE]);

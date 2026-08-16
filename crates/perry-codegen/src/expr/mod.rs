@@ -63,8 +63,9 @@ pub(crate) use buffer_access::{
     lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
-    alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
-    buffer_view_lowered_value, downgrade_buffer_alias, downgrade_buffer_aliases_in_expr,
+    alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
+    buffer_access_materialization_reason, buffer_view_lowered_value, downgrade_buffer_alias,
+    downgrade_buffer_aliases_in_expr, invalidate_buffer_view_pointer,
     invalidate_native_owned_views_for_dispose, native_arena_canonical_owner_id,
     record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };
@@ -123,17 +124,24 @@ pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
     emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
     emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
-    lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
-    lower_stream_super_init,
+    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
+    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
 // bulky `record_lowered_value*` method family, the shadow-slot free helpers,
 // and the `lower_expr` dispatch table moved into siblings to keep this file
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
+#[cfg(test)]
+mod array_push_guard_tests;
+#[cfg(test)]
+mod class_field_barrier_tests;
 mod dispatch;
+#[cfg(test)]
+mod index_set_barrier_tests;
 mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
@@ -170,7 +178,8 @@ pub(crate) use slot_rep::{
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use scalar_slot_root::{
-    root_entry_alloca, root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+    entry_init_load_rooted_global, root_entry_alloca, root_scalar_replaced_slot,
+    root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
     current_closure_ptr_value, emit_persistent_shadow_root_barrier,
@@ -218,11 +227,26 @@ pub(crate) struct FnCtx<'a> {
     pub native_facts: &'a NativeRegionFactGraph,
     /// Map from HIR LocalId → LLVM alloca pointer (e.g. `%r3`).
     pub locals: std::collections::HashMap<u32, String>,
-    /// Map from HIR LocalId → static HIR Type. Used by `is_string_expr` and
-    /// future type-aware dispatch sites (Phase B's "native instance flag
-    /// tracking" extension). Populated from function params and `Stmt::Let`
-    /// declarations as they're lowered.
+    /// Map from HIR LocalId → static HIR Type. This is an erased TypeScript
+    /// hint, not evidence about the value currently in the slot. Read it only
+    /// through [`FnCtx::local_type_hint`], whose exceptional consumers are
+    /// audited by `scripts/local_binding_type_audit.py`.
+    /// Populated from function params and `Stmt::Let` declarations as they're
+    /// lowered.
     pub local_types: std::collections::HashMap<u32, HirType>,
+    /// Runtime-derived type/kind evidence for the value installed by a local's
+    /// initializer. Unlike `local_types`, this map never receives a declared
+    /// annotation or a type inferred from one.
+    pub proven_local_types: std::collections::HashMap<u32, HirType>,
+    /// Immutable CSE/local aliases of a property read from another local,
+    /// recorded as `alias_id -> (owner_id, property)`. Guarded discriminant
+    /// narrowing uses this only after proving the owner at runtime; the alias
+    /// itself contributes no type evidence.
+    pub guarded_discriminant_aliases: std::collections::HashMap<u32, (u32, String)>,
+    /// Module-global proofs used only by cross-thread admission. These are
+    /// collected from structural initializers with module-wide write
+    /// invalidation; ordinary local type predicates do not consult them.
+    pub module_global_proven_types: &'a std::collections::HashMap<u32, HirType>,
     /// Bindings assigned after declaration anywhere in this region.
     ///
     /// A TypeScript annotation describes the source-level contract, but an
@@ -714,6 +738,20 @@ pub(crate) struct FnCtx<'a> {
     /// lowering keeps the NaN-safe guarded `toint32_wrap` for these.
     pub not_bigint_locals: &'a std::collections::HashSet<u32>,
 
+    /// #8105: LocalIds proven to hold a JS **Number by construction** — every
+    /// write into the local is an expression the spec guarantees evaluates to
+    /// a Number. Unlike [`FnCtx::stable_local_type_proof`], this survives
+    /// reassignment, which is the whole point: `let x = 0.0; … x = x * x - …`
+    /// had no numeric proof at all, so every `x * x` bailed to the
+    /// BigInt-aware `js_dynamic_mul`.
+    ///
+    /// A JS Number's Perry representation IS its raw double (numbers carry no
+    /// NaN-box tag), so membership licenses both halves of the numeric fast
+    /// path: skipping the dynamic helper AND skipping the residual
+    /// `js_number_coerce`. Structural, never a declared type — see
+    /// `collectors::collect_number_by_construction_locals`.
+    pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
+
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`
@@ -744,6 +782,24 @@ pub(crate) struct FnCtx<'a> {
     /// protected temporary this function lowers.
     pub temp_roots: crate::rooting::TempRootPool,
 
+    /// #7773/#7506: LocalIds whose `Number`/`Int32` value came from an
+    /// initializer whose numeric answer is only a declared type — `const v =
+    /// o.x` on an `x: number` field, or `const sum = o.x + o.y`. This includes
+    /// both `Any` locals refined by codegen and locals the HIR already typed as
+    /// numeric.
+    ///
+    /// The `Any` refinement remains load-bearing (without it every ordinary
+    /// field read loses the numeric fast path), but both it and an HIR numeric
+    /// type can copy a declared field type rather than prove a runtime value.
+    /// The local then reads as `is_numeric_expr`, which licenses a bare `fadd`
+    /// / `fmul` on whatever the slot holds — and arithmetic on a NaN-boxed
+    /// value PRESERVES ITS PAYLOAD, so a string laundered in through `as any`
+    /// came back out of a multiply still tagged as a string.
+    ///
+    /// Consumed by `type_analysis::numeric_proof_is_declared_only`, which turns
+    /// the trust into a four-instruction runtime tag test instead.
+    pub declared_only_numeric_locals: std::collections::HashSet<u32>,
+
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
     /// the inline bump-allocator path. The slot lives in the function
@@ -766,6 +822,11 @@ pub(crate) struct FnCtx<'a> {
     /// at function entry (via `entry_init_load_global`), and
     /// subsequent sites for the same class load from the slot.
     pub class_keys_slots: std::collections::HashMap<String, String>,
+
+    /// Per-class cached ShapeId global slots, paired one-for-one with
+    /// [`Self::class_keys_slots`]. Shape ids are scalar metadata rather than GC
+    /// pointers, so these entry-hoisted copies need no shadow-slot binding.
+    pub class_shape_slots: std::collections::HashMap<String, String>,
 
     /// Per-arr-local cached `arr.length` slots — populated by
     /// `lower_for` when it spots the well-known shape
@@ -973,6 +1034,10 @@ pub(crate) struct FnCtx<'a> {
     /// dispatch statically-proven sites to the raw-ABI symbol.
     pub spec_abi_functions: &'a std::collections::HashMap<u32, crate::codegen::SpecFnPlan>,
 
+    /// Constructively verified return facts for specialized module functions.
+    /// Consumed only when the current call's arguments prove the same plan.
+    pub spec_return_proofs: &'a std::collections::HashMap<u32, HirType>,
+
     /// Phase 2 pre-pass output (`collectors/spec_abi_sites.rs`): LocalIds
     /// proven to permanently hold one specific non-view typed array. A call
     /// arg `LocalGet(id)` matches a `TaPtr` slot only when `id` is here AND in
@@ -984,6 +1049,15 @@ pub(crate) struct FnCtx<'a> {
     /// `stmt::lower_top_level_stmts`). A proven binding is only usable at call
     /// sites it dominates; closure bodies get their own (empty) set.
     pub spec_ta_ready: std::collections::HashSet<u32>,
+
+    /// Parameters of THIS body that the specialized entry binds as a raw
+    /// LLVM `i32` (`SpecParamRep::I32`). Their JS value is an exact integer
+    /// inside the signed 32-bit range by calling convention — never
+    /// fractional, never `-0`, never NaN — which is the leaf fact
+    /// `lower_call/func_ref.rs` composes into a raw-`i32` argument proof for
+    /// a (typically self-recursive) call back into the same entry. Empty in
+    /// the generic body, in module init, and in every closure.
+    pub spec_i32_params: std::collections::HashSet<u32>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -1230,7 +1304,8 @@ pub(crate) struct FnCtx<'a> {
     pub typed_i1_closure_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
     pub typed_string_closures: &'a std::collections::HashSet<u32>,
-    pub typed_string_closure_capture_counts: &'a std::collections::HashMap<u32, usize>,
+    pub typed_closure_capture_reps:
+        &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
 
     /// True if `perry_transform::unroll_static_loops` expanded any
     /// static-trip-count for-loop in the function this FnCtx is lowering
@@ -1257,10 +1332,11 @@ pub(crate) struct FnCtx<'a> {
     /// `JsonParseTyped` codegen. Each entry is the full LLVM IR line
     /// `@<name> = private unnamed_addr constant [N x i8] c"..."` to
     /// append after the function finishes. Mirrors the `ic_globals`
-    /// drain pattern. Also: counter for unique names at each call
-    /// site in this function.
+    /// drain pattern. Globals use `ic_site_counter` as their module-wide site
+    /// identity: function bodies can be emitted more than once (for example a
+    /// specialised ABI body plus its boxed body), so a per-function counter
+    /// would collide across those emissions.
     pub typed_parse_rodata: Vec<String>,
-    pub typed_parse_counter: u32,
 
     /// (Issue #50) Per-function row aliases. When a function declares
     /// `let krow = X[i]` where `X` is in `flat_const_arrays`, this map
@@ -1604,8 +1680,8 @@ pub(crate) struct ElementShapeLoopFact {
     /// SSA name of the elements base pointer (`arr_handle + 8`), derived in
     /// the preheader AFTER the guard call, so it cannot be a pre-move address.
     pub elements_base: String,
-    /// SSA name of the hoisted `@perry_class_keys_<class>` load.
-    pub expected_keys: String,
+    /// SSA name of the hoisted canonical ShapeId load.
+    pub expected_shape_id: String,
     /// Slow clone's preheader label. The per-element residual check (see
     /// `expr::element_shape_guard`) branches here on a miss; the slow clone
     /// re-executes the current iteration, which is safe because the matcher
@@ -1614,9 +1690,6 @@ pub(crate) struct ElementShapeLoopFact {
     /// property name -> packed slot index, every entry a declared raw-f64
     /// candidate validated by the matcher.
     pub fields: std::collections::BTreeMap<String, u32>,
-    /// Largest packed slot index the loop touches — the per-element
-    /// `field_count` check covers every tracked access with one compare.
-    pub max_field_index: u32,
     /// #7771: the body's `const r = arr[counter]` binding, when the matcher
     /// admitted the element-binding form. Inside the fast clone the `Let`
     /// itself emits nothing (`stmt/let_stmt.rs`) and every `r.field` read
@@ -1625,6 +1698,10 @@ pub(crate) struct ElementShapeLoopFact {
     /// binds `r` generically. `None` for the single-statement accumulator
     /// form.
     pub element_binding: Option<u32>,
+    /// Mutable accumulator whose current value the preheader proved is a
+    /// Number. The matcher admits only assignments that preserve this fact,
+    /// and the fact exists only while lowering the guarded fast clone.
+    pub numeric_accumulator: u32,
 }
 
 /// Find the innermost active element-shape loop fact covering a
@@ -1717,6 +1794,48 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 }
 
 impl<'a> FnCtx<'a> {
+    /// Return runtime-derived initializer evidence only when no write anywhere
+    /// in this region can have invalidated it.
+    ///
+    /// This deliberately uses the conservative whole-region answer rather
+    /// than statement order: a missed optimization is safe, while using a
+    /// type after a non-dominating write is a wrong-code bug (#7846). Declared
+    /// annotations are never inserted into this map, so a successful lookup is
+    /// both provenance-checked and write-stable.
+    pub(crate) fn stable_local_type_proof(&self, id: &u32) -> Option<&HirType> {
+        if self.reassigned_locals.contains(id) {
+            None
+        } else {
+            self.proven_local_types.get(id)
+        }
+    }
+
+    /// Return the binding's erased TypeScript type even if the binding is
+    /// reassigned.
+    ///
+    /// This escape hatch is for sites whose independent representation proof
+    /// or runtime guard validates the current value. Every production call is
+    /// inventoried by `scripts/local_binding_type_audit.py`; adding one without
+    /// an allowlist rationale fails CI.
+    pub(crate) fn local_type_hint(&self, id: &u32) -> Option<&HirType> {
+        self.local_types.get(id)
+    }
+
+    /// Snapshot a binding's runtime-derived proof so a branch-scoped narrowing
+    /// can be undone EXACTLY.
+    ///
+    /// This is restore bookkeeping, not evidence: the value is only ever
+    /// written back into `proven_local_types`, never consumed as a type fact,
+    /// so it deliberately does not go through `stable_local_type_proof`. That
+    /// accessor answers `None` for a reassigned binding, which as a *snapshot*
+    /// would silently DROP the entry on restore instead of restoring it — a
+    /// narrowing that outlives its branch, which is the wrong-code shape this
+    /// module exists to prevent. Inventoried by
+    /// `scripts/local_binding_type_audit.py` like the other two accessors.
+    pub(crate) fn snapshot_guarded_proof(&self, id: &u32) -> Option<HirType> {
+        self.proven_local_types.get(id).cloned()
+    }
+
     pub(crate) fn has_imported_extern_binding(&self, name: &str) -> bool {
         self.imported_vars.contains(name)
             || self.import_function_prefixes.contains_key(name)
@@ -1908,6 +2027,8 @@ mod array_push;
 mod arrays_finds;
 mod bigint_set;
 mod binary;
+#[cfg(test)]
+mod boolean_number_tests;
 mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
@@ -1920,6 +2041,8 @@ mod dyn_extern_i18n;
 mod env_clones;
 mod fs_await;
 mod index_get;
+#[cfg(test)]
+mod index_get_claim_tests;
 mod masked_window;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
@@ -1930,6 +2053,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 #[cfg(test)]
 mod computed_store_rooting_tests;
 mod index_set;
+mod index_set_guarded;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
@@ -1945,7 +2069,7 @@ mod new_dynamic;
 mod objects_arrays_lit;
 mod os_uri_dates;
 pub(crate) mod property_get;
-mod property_set;
+pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;
 mod static_field_meta;
 mod static_method;
@@ -2225,7 +2349,7 @@ fn is_plain_f64_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.i32_counter_slots.contains_key(&id)
         && ctx.locals.contains_key(&id)
         && matches!(
-            ctx.local_types.get(&id),
+            ctx.stable_local_type_proof(&id),
             Some(HirType::Number | HirType::Int32)
         )
 }
@@ -2235,7 +2359,69 @@ fn is_plain_i1_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && ctx.i1_local_slots.contains_key(&id)
-        && matches!(ctx.local_types.get(&id), Some(HirType::Boolean))
+        && matches!(ctx.stable_local_type_proof(&id), Some(HirType::Boolean))
+}
+
+/// Whether `expr` has an existing raw-`i1` proof strong enough to apply
+/// JavaScript's Boolean-to-Number conversion without inspecting a boxed
+/// `JSValue` at runtime.
+///
+/// A declared `boolean` is deliberately not enough: TypeScript annotations do
+/// not constrain values that arrive through `any`. The local arm therefore
+/// requires the representation-first `i1` shadow, which is removed as soon as
+/// a write cannot itself be lowered to `i1`.
+pub(crate) fn can_lower_proven_boolean_to_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Bool(_) => true,
+        Expr::LocalGet(id) => {
+            is_plain_i1_local(ctx, *id) || is_compiler_private_async_i1_control_local(ctx, *id)
+        }
+        _ => false,
+    }
+}
+
+/// Apply `ToNumber` to a guard-proven Boolean as the native `i1 -> f64`
+/// conversion. This keeps arithmetic and relational consumers out of both the
+/// NaN-box round trip and `js_number_coerce` / `js_rel_*`.
+pub(crate) fn try_lower_proven_boolean_to_number(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+) -> Result<Option<String>> {
+    if !can_lower_proven_boolean_to_number(ctx, expr) {
+        return Ok(None);
+    }
+    let Some(boolean) = lower_expr_value(ctx, expr)? else {
+        anyhow::bail!("proven native boolean did not lower to a native value");
+    };
+    if !matches!(boolean.rep, NativeRep::I1) {
+        anyhow::bail!(
+            "proven native boolean lowered as {}, expected i1",
+            boolean.rep.name()
+        );
+    }
+
+    let value = ctx.block().uitofp(I1, &boolean.value, DOUBLE);
+    let lowered = LoweredValue::f64(value.clone());
+    let local_id = match expr {
+        Expr::LocalGet(id) => Some(*id),
+        _ => None,
+    };
+    ctx.record_lowered_value(
+        "BooleanToNumber",
+        local_id,
+        "ordinary_expr_value.boolean_to_number_f64",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            "proof=native_i1".to_string(),
+            "conversion=uitofp".to_string(),
+        ],
+    );
+    Ok(Some(value))
 }
 
 pub(crate) fn is_compiler_private_async_i32_control_local(ctx: &FnCtx<'_>, id: u32) -> bool {
@@ -2260,6 +2446,40 @@ pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<O
         return Ok(Some(ctx.block().load(I64, &slot)));
     }
     Ok(None)
+}
+
+/// Load a compiler-private async i32 control cell directly.
+///
+/// These cells are allocated by `Stmt::PreallocateBoxes` before the generated
+/// state-machine closures are created. Unlike a general user capture, the
+/// pointer is therefore compiler-minted and its pointee representation is
+/// proven: the `I32Box` value is the first (and only) field. Keep ordinary
+/// boxes on the checked runtime path; this helper is deliberately reachable
+/// only from the `is_compiler_private_async_i32_control_local` arms below.
+pub(crate) fn load_async_i32_control_cell(ctx: &mut FnCtx<'_>, cell: &str) -> String {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().load(I32, &ptr)
+}
+
+/// Store a compiler-private async i32 control cell directly. See
+/// `load_async_i32_control_cell` for the allocation/provenance proof.
+pub(crate) fn store_async_i32_control_cell(ctx: &mut FnCtx<'_>, cell: &str, value: &str) {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().store(I32, value, &ptr);
+}
+
+/// Load a compiler-private async boolean control cell directly. `BoolBox`'s
+/// value is a Rust `bool`, represented as LLVM i1 at the FFI boundary.
+pub(crate) fn load_async_i1_control_cell(ctx: &mut FnCtx<'_>, cell: &str) -> String {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().load(I1, &ptr)
+}
+
+/// Store a compiler-private async boolean control cell directly. See
+/// `load_async_i1_control_cell` for the representation proof.
+pub(crate) fn store_async_i1_control_cell(ctx: &mut FnCtx<'_>, cell: &str, value: &str) {
+    let ptr = ctx.block().inttoptr(I64, cell);
+    ctx.block().store(I1, value, &ptr);
 }
 
 pub(crate) fn box_i1_for_compat_shadow(ctx: &mut FnCtx<'_>, value: &str) -> String {
@@ -2346,7 +2566,7 @@ fn lower_async_i32_control_const_compare(
     let Some(ptr) = load_boxed_local_pointer(ctx, id)? else {
         return Ok(None);
     };
-    let value = ctx.block().call(I32, "js_i32_box_get", &[(I64, &ptr)]);
+    let value = load_async_i32_control_cell(ctx, &ptr);
     let constant_s = constant.to_string();
     let (lhs, rhs) = if local_on_left {
         (value.as_str(), constant_s.as_str())
@@ -2390,6 +2610,26 @@ fn lower_numeric_binary_value(
         return Ok(None);
     }
     if !is_numeric_expr(ctx, left) || !is_numeric_expr(ctx, right) {
+        return Ok(None);
+    }
+
+    // #7773: `is_numeric_expr` answering `true` is not always a PROOF — for a
+    // class-field read, an array element, or a local refined from one, it is
+    // just the declared type repeated back, and nothing enforces declared types
+    // at runtime. This tier emits a bare `fadd`/`fmul` with no residual coerce
+    // at all, and arithmetic on a NaN-BOXED value propagates the payload
+    // instead of producing NaN — so a string laundered into a `x: number` slot
+    // came back out of `v * 2` still a string (`typeof` said `"string"`).
+    //
+    // Hand those to `binary::lower`, which has both remedies: the runtime tag
+    // test that keeps `+` on the spec's string-concat dispatch, and the
+    // residual `js_number_coerce` that gives every other operator its
+    // `ToNumber`. Same hand-off shape as the two Mod cases below, and for the
+    // same reason — it must run before operand lowering so an `Ok(None)` emits
+    // no dead loads or duplicate records.
+    if crate::type_analysis::numeric_proof_is_declared_only(ctx, left)
+        || crate::type_analysis::numeric_proof_is_declared_only(ctx, right)
+    {
         return Ok(None);
     }
 
@@ -2687,6 +2927,63 @@ fn lower_compare_value(
     if let Some(lowered) = lower_async_i32_control_const_compare(ctx, op, left, right)? {
         return Ok(Some(lowered));
     }
+    // #5497 Lever E: Boolean relational operands already held as native i1 do
+    // not need to be NaN-boxed and sent through the full Abstract Relational
+    // Comparison helper. For a Boolean paired with another proven Boolean or
+    // a canonical raw f64, ToPrimitive/ToNumber is exactly `uitofp i1` and the
+    // comparison is a native `fcmp`.
+    //
+    // Keep annotation-only booleans and non-canonical numeric reads out. A
+    // `boolean`/`number` declaration may hold an arbitrary value through
+    // `any`, and only the dynamic helper preserves that case.
+    let left_bool = can_lower_proven_boolean_to_number(ctx, left);
+    let right_bool = can_lower_proven_boolean_to_number(ctx, right);
+    let relational = matches!(
+        op,
+        CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+    );
+    if relational
+        && (left_bool || right_bool)
+        && (left_bool || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left))
+        && (right_bool || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, right))
+    {
+        let left_value = if left_bool {
+            try_lower_proven_boolean_to_number(ctx, left)?
+                .expect("left_bool proved native Boolean lowering")
+        } else {
+            lower_expr(ctx, left)?
+        };
+        let right_value = if right_bool {
+            try_lower_proven_boolean_to_number(ctx, right)?
+                .expect("right_bool proved native Boolean lowering")
+        } else {
+            lower_expr(ctx, right)?
+        };
+        let predicate = match op {
+            CompareOp::Lt => "olt",
+            CompareOp::Le => "ole",
+            CompareOp::Gt => "ogt",
+            CompareOp::Ge => "oge",
+            _ => unreachable!("relational gate checked above"),
+        };
+        let lowered = LoweredValue::i1(ctx.block().fcmp(predicate, &left_value, &right_value));
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.boolean_numeric_compare_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![
+                format!("op={op:?}"),
+                "proof=native_i1_and_canonical_f64".to_string(),
+            ],
+        );
+        return Ok(Some(lowered));
+    }
     if matches!(op, CompareOp::Eq | CompareOp::Ne)
         && is_bool_expr(ctx, left)
         && is_bool_expr(ctx, right)
@@ -2866,7 +3163,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value = ctx.block().call(I32, "js_i32_box_get", &[(I64, &ptr)]);
+            let value = load_async_i32_control_cell(ctx, &ptr);
             let lowered = LoweredValue::i32(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -2886,8 +3183,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value_i32 = ctx.block().call(I32, "js_bool_box_get", &[(I64, &ptr)]);
-            let value = ctx.block().icmp_ne(I32, &value_i32, "0");
+            let value = load_async_i1_control_cell(ctx, &ptr);
             let lowered = LoweredValue::i1(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -2954,8 +3250,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i32 = lower_i32_control_store_value(ctx, value)?;
-            ctx.block()
-                .call_void("js_i32_box_set", &[(I64, &ptr), (I32, &value_i32)]);
+            store_async_i32_control_cell(ctx, &ptr, &value_i32);
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             record_int_facts_for_local_set(ctx, *id, value);
             let lowered = LoweredValue::i32(value_i32);
@@ -2980,9 +3275,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i1 = lower_i1_control_store_value(ctx, value)?;
-            let value_i32 = ctx.block().zext(I1, &value_i1, I32);
-            ctx.block()
-                .call_void("js_bool_box_set", &[(I64, &ptr), (I32, &value_i32)]);
+            store_async_i1_control_cell(ctx, &ptr, &value_i1);
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             let lowered = LoweredValue::i1(value_i1);
             ctx.record_lowered_value(

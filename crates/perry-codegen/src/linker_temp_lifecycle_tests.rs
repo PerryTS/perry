@@ -121,7 +121,7 @@ fn successful_compile_leaves_nothing_behind() {
     };
 
     for nth in 0..3 {
-        let bytes = compile_ll_to_object_in(&root, &test_ir(nth), None, CLEAN)
+        let bytes = compile_ll_to_object_in(&root, &test_ir(nth), None, CLEAN, false)
             .unwrap_or_else(|e| panic!("compile {nth} failed: {e:#}"));
         assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
         assert_eq!(
@@ -162,7 +162,7 @@ fn concurrent_compiles_of_identical_ir_both_succeed_and_leave_nothing() {
             .map(|_| {
                 let root = root.clone();
                 let ir = ir.clone();
-                s.spawn(move || compile_ll_to_object_in(&root, &ir, None, CLEAN))
+                s.spawn(move || compile_ll_to_object_in(&root, &ir, None, CLEAN, false))
             })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
@@ -196,7 +196,7 @@ fn failed_compile_keeps_the_ll_for_diagnosis() {
         return;
     };
 
-    let err = compile_ll_to_object_in(&root, "this is not LLVM IR\n", None, CLEAN)
+    let err = compile_ll_to_object_in(&root, "this is not LLVM IR\n", None, CLEAN, false)
         .expect_err("clang must reject non-IR input");
     let message = format!("{err:#}");
     assert!(
@@ -251,7 +251,7 @@ fn keep_ir_retains_the_whole_scratch_dir() {
         keep: true,
         debug_symbols: false,
     };
-    compile_ll_to_object_in(&root, &test_ir(7), None, policy).expect("compile failed");
+    compile_ll_to_object_in(&root, &test_ir(7), None, policy, false).expect("compile failed");
 
     let left = entries(&root);
     assert_eq!(left.len(), 1, "expected one kept scratch dir: {left:?}");
@@ -260,6 +260,40 @@ fn keep_ir_retains_the_whole_scratch_dir() {
         assert!(
             kept.iter().any(|n| n.ends_with(want)),
             "PERRY_LLVM_KEEP_IR must retain the {want}: {kept:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn keep_ir_retains_the_whole_scratch_dir_under_native_roots() {
+    // The `native_roots: false` case above exercises the byte-returning arm.
+    // Under statepoints the plan asks for `-S`, so a DIFFERENT arm handles the
+    // compile: it writes assembly, assembles to `plan.obj_path`, and keeps the
+    // scratch dir. That arm is the ordinary path on every statepoint target,
+    // and it was the untested one — which is how it came to retain the object
+    // without ever printing `kept object:` (#8087).
+    let Some(root) = temp_root_if_clang_available("keep-native-roots") else {
+        return;
+    };
+    let policy = TempFilePolicy {
+        keep: true,
+        debug_symbols: false,
+    };
+    if compile_ll_to_object_in(&root, &test_ir(11), None, policy, true).is_err() {
+        // A host whose assembler cannot serve the compact-map rewrite is not a
+        // failure of this contract; skip rather than assert on a missing tool.
+        let _ = fs::remove_dir_all(&root);
+        return;
+    }
+
+    let left = entries(&root);
+    assert_eq!(left.len(), 1, "expected one kept scratch dir: {left:?}");
+    let kept = entries(&root.join(&left[0]));
+    for want in [".ll", ".o"] {
+        assert!(
+            kept.iter().any(|n| n.ends_with(want)),
+            "PERRY_LLVM_KEEP_IR must retain the {want} under native roots: {kept:?}"
         );
     }
     let _ = fs::remove_dir_all(&root);
@@ -283,7 +317,7 @@ fn debug_symbols_do_not_change_the_temp_file_lifetime() {
         debug_symbols: true,
     };
     for nth in 0..2 {
-        compile_ll_to_object_in(&root, &test_ir(9 + nth), None, policy)
+        compile_ll_to_object_in(&root, &test_ir(9 + nth), None, policy, false)
             .unwrap_or_else(|e| panic!("-g compile {nth} failed: {e:#}"));
         assert_eq!(
             entries(&root),
@@ -441,4 +475,36 @@ fn elf_compile_with(
         return None;
     }
     fs::read(&obj).ok()
+}
+
+#[test]
+fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
+    // The leak that turned `repsel-census` red on main for eight consecutive
+    // nightlies: 58 compiles left 58 `perry_llvm_scratch_<pid>_<counter>`
+    // directories, one per compile.
+    //
+    // Why the tests above did not see it. They drive `compile_ll_to_object_in`,
+    // which takes the CLANG path, and clang's cleanup has always been a
+    // `remove_dir_all`. The in-process backend removed the two files it knew
+    // about and left the directory — harmless while clang was the default, a
+    // leak per compile once in-process became it.
+    //
+    // The explicit native-roots decision is what makes this test non-vacuous.
+    // Only the statepoint backends route through assembly, and only that arm
+    // CREATES the scratch dir; `false` would exercise a path that never creates
+    // the directory this regression is meant to observe.
+    let Some(root) = temp_root_if_clang_available("inprocess_statepoint") else {
+        return;
+    };
+    for nth in 0..3 {
+        let bytes = compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN, true)
+            .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
+        assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
+        assert_eq!(
+            entries(&root),
+            Vec::<String>::new(),
+            "in-process compile {nth} left a scratch directory behind"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
 }

@@ -26,6 +26,7 @@ from benchmarks.benchmark_gate import ArtifactError, load_artifact, validate_art
 
 
 DEFAULT_ARTIFACT = ROOT / "benchmarks/results/public-node-bun-v1.json"
+MEASUREMENT_CONFIG = ROOT / "benchmarks/public-baseline-config.json"
 README = ROOT / "README.md"
 SUITE_RESULTS = ROOT / "benchmarks/suite/results/RESULTS.md"
 README_START = "<!-- public-node-bun:start -->"
@@ -35,24 +36,37 @@ SOURCE_PATHS = (
     "benchmarks/suite/*.ts",
     "benchmarks/json_polyglot/*.ts",
     "benchmarks/app-patterns/kernels/*.ts",
+    "benchmarks/honest_bench/scripts/gen_image.py",
+    "benchmarks/honest_bench/scripts/gen_json.py",
+    "benchmarks/honest_bench/workloads/1_json_pipeline/node/*.ts",
+    "benchmarks/honest_bench/workloads/1_json_pipeline/perry/*.ts",
+    "benchmarks/honest_bench/workloads/3_image_convolution/node/*.ts",
+    "benchmarks/honest_bench/workloads/3_image_convolution/perry/*.ts",
 )
 HARNESS_PATHS = (
-    "benchmarks/public_baseline.py",
-    "benchmarks/run_public_baseline.sh",
-    "benchmarks/compare.sh",
-    "benchmarks/verify_benchmark_output.py",
-    "benchmarks/benchmark_gate.py",
-    "benchmarks/polyglot/run_all.sh",
-    "benchmarks/json_polyglot/run.sh",
-    "benchmarks/app-patterns/run.sh",
-    "benchmarks/honest_bench/run.sh",
-    "benchmarks/honest_bench/harness",
-    "benchmarks/honest_bench/scripts",
-    "benchmarks/honest_bench/workloads",
+    # #7282: these are the declarative inputs that can change what is
+    # measured. The large shell/Python drivers are plumbing: error messages,
+    # output formatting, and cleanup fixes must not demand a two-hour rerun.
+    # Assembly cross-checks every component's recorded sample/warmup metadata
+    # against this config, so a driver cannot silently ignore it.
+    "benchmarks/public-baseline-config.json",
     "benchmarks/honest_bench/results/expected.json",
 )
+# The currently published artifact was proven fresh under the broader path set
+# before #7282 narrowed it. Accept exactly that old->new digest transition so
+# this bookkeeping change does not itself demand a two-hour regeneration. Any
+# subsequent edit to either new input set misses the exact destination digest
+# and hard-fails normally; the next real refresh records the new hashes and no
+# longer takes this migration path.
+_SOURCE_FINGERPRINT_MIGRATION = (
+    "65a1218e02c95b4aa8ed22065ca33e4653addcd81a77a4fb1a810e5153e07887",
+    "b689e1e57d9a7c216497d4d033f8d96f6c35de9edcfc32fb046b8ddad51fc66b",
+)
+_HARNESS_FINGERPRINT_MIGRATION = (
+    "28117b86b2bcca9cc4e6f418f156bfcce0b4bf0851698c3e88525737221df49b",
+    "513dba8ff9eaf931edc8a5fc01a0093a1156c31b0b6c9cc1218f710405e315e0",
+)
 RUNTIMES = ("perry", "node", "bun")
-PINNED_VERSIONS = {"node": "v22.23.1", "bun": "1.3.14"}
 REFRESH_COMMAND = "./benchmarks/run_public_baseline.sh"
 EXPECTED_COMPONENT_BENCHMARKS = {
     "polyglot": {
@@ -127,7 +141,7 @@ def _is_resolved_path(value: Any) -> bool:
     absolute path — :func:`portable_path` deliberately emits repo-relative paths.
     """
     text = str(value or "")
-    return bool(text) and (os.path.isabs(text) or os.sep in text)
+    return bool(text) and (os.path.isabs(text) or "/" in text or "\\" in text)
 
 
 def _cargo_profile_tables(data: bytes) -> bytes:
@@ -162,8 +176,16 @@ def _cargo_profile_tables(data: bytes) -> bytes:
     return b"".join(kept)
 
 
+def _normalize_checkout_newlines(data: bytes) -> bytes:
+    """Make text fingerprints independent of Git's checkout policy."""
+    return data.replace(b"\r\n", b"\n")
+
+
 def _fingerprint_bytes(name: str) -> bytes:
-    data = (ROOT / name).read_bytes()
+    # Every fingerprint input is text. Git may materialize it as CRLF on a
+    # Windows checkout even though the canonical blob (and Linux/macOS
+    # checkouts) uses LF; that transport detail must not invalidate evidence.
+    data = _normalize_checkout_newlines((ROOT / name).read_bytes())
     if name == "Cargo.toml":
         # The version normalization stays: `[workspace.package] version` is not
         # in a profile table, but keeping the substitution makes the intent
@@ -217,6 +239,81 @@ def _load(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ArtifactError(f"could not load {path}: {exc}") from exc
+
+
+def load_measurement_config(path: Path = MEASUREMENT_CONFIG) -> dict[str, Any]:
+    """Load and validate the declarative inputs for public measurements."""
+    config = _load(path)
+    if config.get("schema_version") != 1:
+        raise ArtifactError("public measurement config: unsupported schema")
+
+    toolchains = config.get("toolchains")
+    if not isinstance(toolchains, dict):
+        raise ArtifactError("public measurement config: missing toolchains")
+    for runtime in ("node", "bun"):
+        if not isinstance(toolchains.get(runtime), str) or not toolchains[runtime]:
+            raise ArtifactError(
+                f"public measurement config: invalid {runtime} toolchain pin"
+            )
+
+    quiet = config.get("quiet_host")
+    if not isinstance(quiet, dict):
+        raise ArtifactError("public measurement config: missing quiet_host")
+    maximum = quiet.get("maximum_cpu_active_percent")
+    seconds = quiet.get("consecutive_seconds")
+    if not isinstance(maximum, (int, float)) or not 0 < maximum <= 100:
+        raise ArtifactError("public measurement config: invalid CPU-active maximum")
+    if not isinstance(seconds, int) or seconds < 1:
+        raise ArtifactError("public measurement config: invalid quiet-host duration")
+
+    components = config.get("components")
+    if not isinstance(components, dict):
+        raise ArtifactError("public measurement config: missing components")
+    for name in ("suite", "polyglot", "json_polyglot", "app_patterns", "honest_bench"):
+        component = components.get(name)
+        if not isinstance(component, dict):
+            raise ArtifactError(f"public measurement config: missing {name}")
+        measured = component.get("measured_runs")
+        if not isinstance(measured, int) or measured < 2:
+            raise ArtifactError(
+                f"public measurement config: {name}.measured_runs must be at least 2"
+            )
+    for name in ("app_patterns", "honest_bench"):
+        warmup = components[name].get("warmup_runs")
+        if not isinstance(warmup, int) or warmup < 0:
+            raise ArtifactError(
+                f"public measurement config: {name}.warmup_runs must be non-negative"
+            )
+    if components["honest_bench"].get("workloads") != [1, 3]:
+        raise ArtifactError(
+            "public measurement config: honest_bench workloads must match the published 1,3 set"
+        )
+    return config
+
+
+def _validate_component_measurement_config(
+    components: Mapping[str, Any], config: Mapping[str, Any]
+) -> None:
+    """Reject an artifact produced with parameters other than the config."""
+    expected = config["components"]
+    for name in ("suite", "polyglot", "json_polyglot", "app_patterns", "honest_bench"):
+        actual_runs = components.get(name, {}).get("run_config", {}).get(
+            "requested_samples"
+        )
+        expected_runs = expected[name]["measured_runs"]
+        if actual_runs != expected_runs:
+            raise ArtifactError(
+                f"{name}: requested_samples {actual_runs!r} does not match public "
+                f"measurement config {expected_runs}"
+            )
+    for name in ("app_patterns", "honest_bench"):
+        actual_warmup = components[name].get("run_config", {}).get("warmup")
+        expected_warmup = expected[name]["warmup_runs"]
+        if actual_warmup != expected_warmup:
+            raise ArtifactError(
+                f"{name}: warmup {actual_warmup!r} does not match public "
+                f"measurement config {expected_warmup}"
+            )
 
 
 def _validate_component(component: Mapping[str, Any], suite: str) -> None:
@@ -338,6 +435,7 @@ def assemble(
     honest_results_path: Path,
     honest_metadata_path: Path,
 ) -> dict[str, Any]:
+    measurement_config = load_measurement_config()
     suite = load_artifact(suite_path)
     _validate_suite(suite)
     suite.setdefault("run_config", {})["warmup"] = (
@@ -354,6 +452,7 @@ def assemble(
     }
     for name in ("polyglot", "json_polyglot", "app_patterns"):
         _validate_component(components[name], name)
+    _validate_component_measurement_config(components, measurement_config)
 
     full_commit = _git("rev-parse", "HEAD")
     commits = {str(component.get("commit") or "") for component in components.values()}
@@ -368,9 +467,10 @@ def assemble(
         metadata = runtimes.get(runtime, {})
         if not metadata.get("available") or not metadata.get("version") or not metadata.get("command"):
             raise ArtifactError(f"suite: {runtime} metadata is incomplete")
-        if runtime in PINNED_VERSIONS and metadata["version"] != PINNED_VERSIONS[runtime]:
+        pinned_versions = measurement_config["toolchains"]
+        if runtime in pinned_versions and metadata["version"] != pinned_versions[runtime]:
             raise ArtifactError(
-                f"suite: expected {runtime} {PINNED_VERSIONS[runtime]}, found {metadata['version']}"
+                f"suite: expected {runtime} {pinned_versions[runtime]}, found {metadata['version']}"
             )
         executable = metadata["command"][0]
         if runtime == "perry":
@@ -422,8 +522,12 @@ def assemble(
             "publishable": True,
             "quiet_host": {
                 "metric": "aggregate CPU active percentage",
-                "maximum_percent": 25.0,
-                "consecutive_seconds": 60,
+                "maximum_percent": measurement_config["quiet_host"][
+                    "maximum_cpu_active_percent"
+                ],
+                "consecutive_seconds": measurement_config["quiet_host"][
+                    "consecutive_seconds"
+                ],
                 "checked_before_each_component": True,
             },
             "requirements": [
@@ -549,6 +653,7 @@ def render(artifact: Mapping[str, Any]) -> None:
 
 
 def validate_public(artifact: Mapping[str, Any], max_age_days: int) -> None:
+    measurement_config = load_measurement_config()
     if artifact.get("schema_version") != 1 or not artifact.get("policy", {}).get("publishable"):
         raise ArtifactError("public artifact is not publishable schema version 1")
     generated = datetime.fromisoformat(str(artifact["generated_at"]).replace("Z", "+00:00"))
@@ -560,17 +665,42 @@ def validate_public(artifact: Mapping[str, Any], max_age_days: int) -> None:
             f"public artifact is stale ({age.days} days old); regenerate it with {REFRESH_COMMAND}"
         )
     freshness = artifact.get("freshness", {})
-    if freshness.get("source_fingerprint") != tracked_fingerprint(SOURCE_PATHS):
+    recorded_source = freshness.get("source_fingerprint")
+    current_source = tracked_fingerprint(SOURCE_PATHS)
+    source_migrated = (recorded_source, current_source) == _SOURCE_FINGERPRINT_MIGRATION
+    if recorded_source != current_source and not source_migrated:
         raise ArtifactError(
             f"public artifact benchmark inputs changed; regenerate it with {REFRESH_COMMAND}"
         )
-    if freshness.get("harness_fingerprint") != tracked_fingerprint(HARNESS_PATHS):
+    recorded_harness = freshness.get("harness_fingerprint")
+    current_harness = tracked_fingerprint(HARNESS_PATHS)
+    harness_migrated = (
+        recorded_harness,
+        current_harness,
+    ) == _HARNESS_FINGERPRINT_MIGRATION
+    if recorded_harness != current_harness and not harness_migrated:
         raise ArtifactError(
             f"public artifact benchmark harness changed; regenerate it with {REFRESH_COMMAND}"
         )
     for name in ("polyglot", "json_polyglot", "app_patterns", "honest_bench"):
         _validate_component(artifact["components"][name], name)
     _validate_suite(artifact["components"]["suite"])
+    _validate_component_measurement_config(artifact["components"], measurement_config)
+    for runtime, expected_version in measurement_config["toolchains"].items():
+        actual_version = artifact.get("runtimes", {}).get(runtime, {}).get("version")
+        if actual_version != expected_version:
+            raise ArtifactError(
+                f"public artifact {runtime} version {actual_version!r} does not match "
+                f"measurement config {expected_version!r}"
+            )
+    quiet = artifact.get("policy", {}).get("quiet_host", {})
+    expected_quiet = measurement_config["quiet_host"]
+    if (
+        quiet.get("maximum_percent")
+        != expected_quiet["maximum_cpu_active_percent"]
+        or quiet.get("consecutive_seconds") != expected_quiet["consecutive_seconds"]
+    ):
+        raise ArtifactError("public artifact quiet-host policy does not match measurement config")
 
 
 def check(artifact: Mapping[str, Any], max_age_days: int) -> None:

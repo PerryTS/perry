@@ -7,7 +7,7 @@ use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use crate::expr::{
-    emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
+    effect_fact, emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
     nanbox_pointer_inline, FnCtx,
 };
 use crate::native_value::{
@@ -46,8 +46,7 @@ fn collect_guarded_numeric_arg_locals(ctx: &FnCtx<'_>, arg: &Expr) -> Option<Vec
                     || ctx.module_globals.contains_key(id)
                     || !ctx.locals.contains_key(id)
                     || !ctx
-                        .local_types
-                        .get(id)
+                        .local_type_hint(id)
                         .is_some_and(|ty| matches!(ty, Type::Number | Type::Int32))
                 {
                     return false;
@@ -82,7 +81,9 @@ fn local_can_use_public_arg_guard(ctx: &FnCtx<'_>, id: u32, expected: Type) -> b
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && ctx.locals.contains_key(&id)
-        && ctx.local_types.get(&id).is_some_and(|ty| *ty == expected)
+        // `GuardedI32Local` / `GuardedI1Local` emit public tag guards before
+        // entering the scalar clone, so reassignment cannot make this answer.
+        && ctx.local_type_hint(&id).is_some_and(|ty| *ty == expected)
 }
 
 fn scalar_method_arg_plan(ctx: &FnCtx<'_>, arg: &Expr, param_ty: &Type) -> ScalarMethodArgPlan {
@@ -268,6 +269,40 @@ fn scalar_method_return_note(method: &perry_hir::Function) -> &'static str {
     }
 }
 
+fn scalar_method_field_write(method: &perry_hir::Function) -> Option<&str> {
+    method.body.iter().find_map(|stmt| match stmt {
+        perry_hir::Stmt::Expr(Expr::PropertySet {
+            object, property, ..
+        }) if matches!(object.as_ref(), Expr::This) => Some(property.as_str()),
+        _ => None,
+    })
+}
+
+fn scalar_method_consumed_facts(
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    method: &perry_hir::Function,
+    fact_detail: &'static str,
+) -> Vec<NativeFactUse> {
+    let mut facts = vec![scalar_method_summary_fact(
+        receiver_id,
+        class_name,
+        property,
+        "consumed",
+        fact_detail,
+    )];
+    if let Some(field) = scalar_method_field_write(method) {
+        facts.push(effect_fact(
+            Some(receiver_id),
+            "consumed",
+            &format!("scalar_method_field_write:{class_name}.{field}"),
+            None,
+        ));
+    }
+    facts
+}
+
 fn lower_scalar_method_inline_body(
     ctx: &mut FnCtx<'_>,
     receiver_id: u32,
@@ -280,6 +315,7 @@ fn lower_scalar_method_inline_body(
 ) -> Result<String> {
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
+    let saved_proven_local_types = ctx.proven_local_types.clone();
     let saved_this_len = ctx.this_stack.len();
     let saved_class_len = ctx.class_stack.len();
     let saved_scalar_ctor_len = ctx.scalar_ctor_target.len();
@@ -289,6 +325,7 @@ fn lower_scalar_method_inline_body(
         ctx.block().store(DOUBLE, value, &slot);
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
+        ctx.proven_local_types.insert(param.id, param.ty.clone());
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -310,12 +347,20 @@ fn lower_scalar_method_inline_body(
                 ctx.block().store(DOUBLE, &value, &slot);
                 ctx.locals.insert(*id, slot);
                 ctx.local_types.insert(*id, ty.clone());
+                if let Some(proven) = crate::type_analysis::proven_type_from_init(ctx, init) {
+                    ctx.proven_local_types.insert(*id, proven);
+                }
+            }
+            perry_hir::Stmt::Expr(expr @ Expr::PropertySet { object, .. })
+                if matches!(object.as_ref(), Expr::This) =>
+            {
+                lower_expr(ctx, expr)?;
             }
             perry_hir::Stmt::Return(Some(expr)) => {
                 result = Some(lower_expr(ctx, expr)?);
                 break;
             }
-            _ => unreachable!("simple scalar method summary only accepts lets and one return"),
+            _ => unreachable!("simple scalar method summary only accepts straight-line statements"),
         }
     }
     let result = result.expect("simple scalar method summary must return a value");
@@ -325,6 +370,7 @@ fn lower_scalar_method_inline_body(
     ctx.scalar_ctor_target.truncate(saved_scalar_ctor_len);
     ctx.locals = saved_locals;
     ctx.local_types = saved_local_types;
+    ctx.proven_local_types = saved_proven_local_types;
 
     let lowered = LoweredValue {
         semantic: SemanticKind::JsValue,
@@ -334,6 +380,10 @@ fn lower_scalar_method_inline_body(
     };
     let mut notes = scalar_method_notes(class_name, property);
     notes.push(scalar_method_return_note(method).to_string());
+    if let Some(field) = scalar_method_field_write(method) {
+        notes.push("summary_effect=field_write".to_string());
+        notes.push(format!("summary_write_field={field}"));
+    }
     notes.extend(extra_notes);
     ctx.record_lowered_value_with_access_mode_and_facts(
         "ScalarMethodCall",
@@ -346,13 +396,7 @@ fn lower_scalar_method_inline_body(
         None,
         None,
         None,
-        vec![scalar_method_summary_fact(
-            receiver_id,
-            class_name,
-            property,
-            "consumed",
-            fact_detail,
-        )],
+        scalar_method_consumed_facts(receiver_id, class_name, property, method, fact_detail),
         Vec::new(),
         false,
         false,
@@ -374,6 +418,7 @@ fn lower_scalar_method_int32_inline_body(
 ) -> Result<String> {
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
+    let saved_proven_local_types = ctx.proven_local_types.clone();
     let saved_i32_slots = ctx.i32_counter_slots.clone();
     let saved_this_len = ctx.this_stack.len();
     let saved_class_len = ctx.class_stack.len();
@@ -384,6 +429,7 @@ fn lower_scalar_method_int32_inline_body(
         ctx.block().store(I32, value, &slot);
         ctx.i32_counter_slots.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
+        ctx.proven_local_types.insert(param.id, param.ty.clone());
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -405,6 +451,7 @@ fn lower_scalar_method_int32_inline_body(
                 ctx.block().store(I32, &value, &slot);
                 ctx.i32_counter_slots.insert(*id, slot);
                 ctx.local_types.insert(*id, ty.clone());
+                ctx.proven_local_types.insert(*id, Type::Int32);
             }
             perry_hir::Stmt::Return(Some(expr)) => {
                 raw_i32 = Some(lower_expr_as_i32(ctx, expr)?);
@@ -421,6 +468,7 @@ fn lower_scalar_method_int32_inline_body(
     ctx.scalar_ctor_target.truncate(saved_scalar_ctor_len);
     ctx.locals = saved_locals;
     ctx.local_types = saved_local_types;
+    ctx.proven_local_types = saved_proven_local_types;
     ctx.i32_counter_slots = saved_i32_slots;
 
     let lowered = LoweredValue {
@@ -545,44 +593,47 @@ fn materialize_scalar_receiver(
         .and_then(|parent| ctx.class_ids.get(parent).copied())
         .unwrap_or(0);
     let parent_class_id_str = parent_class_id.to_string();
-    let (obj_handle, has_stable_keys) =
-        if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-            let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
-                slot
-            } else {
-                let slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), slot.clone());
-                slot
-            };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
-            ctx.pending_declares.push((
-                "js_object_alloc_class_inline_keys".to_string(),
-                I64,
-                vec![I32, I32, I32, I64],
-            ));
-            let obj_handle = ctx.block().call(
-                I64,
-                "js_object_alloc_class_inline_keys",
-                &[
-                    (I32, &class_id_str),
-                    (I32, &parent_class_id_str),
-                    (I32, &field_count_str),
-                    (I64, &keys_ptr),
-                ],
-            );
-            emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
-            (obj_handle, true)
+    let (obj_handle, has_stable_keys) = if let Some(keys_global_name) =
+        ctx.class_keys_globals.get(class_name).cloned()
+    {
+        let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
+            slot
         } else {
-            (
-                ctx.block().call(
-                    I64,
-                    "js_object_alloc",
-                    &[(I32, &class_id_str), (I32, &field_count_str)],
-                ),
-                false,
-            )
+            let slot = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
+            ctx.class_keys_slots
+                .insert(class_name.to_string(), slot.clone());
+            slot
         };
+        let keys_ptr = ctx.block().load(I64, &keys_slot);
+        let shape_id = crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
+        ctx.pending_declares.push((
+            "js_object_alloc_class_inline_keys_stamped".to_string(),
+            I64,
+            vec![I32, I32, I32, I64, I32],
+        ));
+        let obj_handle = ctx.block().call(
+            I64,
+            "js_object_alloc_class_inline_keys_stamped",
+            &[
+                (I32, &class_id_str),
+                (I32, &parent_class_id_str),
+                (I32, &field_count_str),
+                (I64, &keys_ptr),
+                (I32, &shape_id),
+            ],
+        );
+        emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
+        (obj_handle, true)
+    } else {
+        (
+            ctx.block().call(
+                I64,
+                "js_object_alloc",
+                &[(I32, &class_id_str), (I32, &field_count_str)],
+            ),
+            false,
+        )
+    };
 
     for (field, slot) in field_slots {
         let value = ctx.block().load(DOUBLE, &slot);

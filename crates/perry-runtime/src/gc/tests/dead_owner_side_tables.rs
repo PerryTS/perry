@@ -6,6 +6,25 @@
 //! and assert the entry is gone — plus the two safety inverses (a LIVE owner's
 //! entries survive; a TENURED owner's entries survive a MINOR trace, which
 //! never marks the old generation and therefore proves nothing about it).
+//!
+//! ★ #7975 — THE PREMISE EVERY "IT IS PRUNED" CASE HERE DEPENDS ON. Arena
+//! block reset is all-or-nothing, so `gc::trace` force-MARKS every object in a
+//! block that still holds one reachable object
+//! (`mark_block_persisting_arena_objects`, `BLOCK_PERSIST_WINDOW`). An owner
+//! sharing its block with ANY live object is therefore not dead, and the prune
+//! *correctly* keeps its entry — a persisting block cannot recycle the
+//! address, so the entry is not stale. A case that lets a live tenant into its
+//! block does not test the prune; it fails on it.
+//!
+//! The tenant that actually turned up is the lazy `globalThis` realm bootstrap
+//! (~1.15 MB allocated, ~410 KB live), reached through the **process-global**
+//! memoized `Object.prototype` address that `set_property_attrs` and
+//! `js_object_set_field_by_name` resolve. It misses once per PROCESS, so which
+//! libtest thread pays for it is a scheduling accident: two cases here failed
+//! 200/200 alone and 0/200 behind a sibling. Use
+//! [`GcTestIsolationGuard::with_realm_bootstrapped`] in any case that reaches a
+//! realm-resolving API, and collect through [`full_gc_with_no_block_persistence`]
+//! so the premise fails as a premise instead of as the subject.
 
 use super::super::*;
 use super::support::*;
@@ -68,6 +87,39 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     obj
+}
+
+/// PREMISE GUARD for the "dead owner ⇒ entry pruned" cases (#7975).
+///
+/// "The entry is gone" only says something about the death prune when the owner
+/// was genuinely DEAD. Arena block reset is all-or-nothing, so
+/// `gc::trace::mark_block_persisting_arena_objects` force-MARKS every object in
+/// a block that still holds one reachable object — and a force-marked owner is
+/// *correctly* left registered, because a block that persists cannot recycle
+/// its address, so the entry is not stale. A case whose block picked up an
+/// unrelated live tenant therefore fails on the prune assertion and blames the
+/// prune for something the prune got right.
+///
+/// The mark itself is cleared again by the sweep, so nothing about it survives
+/// the collection for a test to read. `gc::trace`'s force-mark census is the
+/// one quantity that does, and it has exactly one satisfying path: it moves iff
+/// some block in the persist window held a reachable object.
+///
+/// Wrap the collection so the premise fails as a premise, before the subject
+/// assertion gets a chance to mis-name it.
+fn full_gc_with_no_block_persistence() {
+    let force_marks_before = crate::gc::block_persist_force_mark_count();
+    full_gc();
+    assert_eq!(
+        crate::gc::block_persist_force_mark_count(),
+        force_marks_before,
+        "test premise: block persistence force-marked objects during this \
+         collection, so an unrooted owner in one of those blocks is NOT dead \
+         and the prune correctly declines to drop its entry. Something \
+         reachable shares the owner's arena block — the lazy `globalThis` \
+         realm bootstrap is the one that turned up (#7975); see \
+         `GcTestIsolationGuard::with_realm_bootstrapped`"
+    );
 }
 
 fn util_types_is_map_iterator(addr: usize) -> bool {
@@ -259,7 +311,10 @@ fn test_array_named_dead_set_iterator_marker_does_not_brand_exact_eden_reuse() {
 
 #[test]
 fn test_dead_owner_descriptor_entries_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
+    // `set_property_attrs` below resolves the process-global memoized
+    // `Object.prototype` address, and a MISS runs the whole lazy `globalThis`
+    // bootstrap inside this test — see `with_realm_bootstrapped` (#7975).
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
     let (obj, _) = unsafe { alloc_nursery_test_object(0) };
     let addr = obj as usize;
     crate::object::set_property_attrs(
@@ -275,7 +330,7 @@ fn test_dead_owner_descriptor_entries_pruned_on_full_gc() {
     assert!(crate::object::get_property_attrs(addr, "frozenKey").is_some());
 
     // No roots: the owner is dead at the full trace.
-    full_gc();
+    full_gc_with_no_block_persistence();
 
     assert!(
         crate::object::get_property_attrs(addr, "frozenKey").is_none(),
@@ -393,6 +448,54 @@ fn test_dead_owner_symbol_property_entries_pruned_on_full_gc() {
     );
 }
 
+/// SABOTAGE CHECK for [`full_gc_with_no_block_persistence`] (#7975). Every
+/// "the premise held" verdict it gives is vacuous unless the census it reads
+/// can move — CLAUDE.md's fourth way a gate cannot fail.
+///
+/// Plant the exact shape the #7975 confounder had, minus the realm: one ROOTED
+/// object and one unrooted owner in the same arena block. Nothing here resolves
+/// `globalThis` (`closure_set_dynamic_prop` does not), so the planted tenant is
+/// the only reachable object in the persist window and the census has exactly
+/// one satisfying path.
+///
+/// Both halves are asserted: the census moves, AND the semantic consequence
+/// that makes the premise guard necessary in the first place — a force-marked
+/// owner is not dead, so the death prune correctly leaves its entry alone.
+#[test]
+fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let (live, _) = unsafe { alloc_nursery_test_object(0) };
+    js_shadow_slot_set(0, ptr_bits(live as usize));
+
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        8,
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    let dead = ptr as usize;
+    crate::closure::closure_set_dynamic_prop(dead, "memo", 42.0);
+    assert!(crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some());
+
+    let force_marks_before = crate::gc::block_persist_force_mark_count();
+    full_gc();
+
+    assert!(
+        crate::gc::block_persist_force_mark_count() > force_marks_before,
+        "block persistence must force-mark the unrooted neighbour of a rooted \
+         object — a census that cannot move makes every \
+         `full_gc_with_no_block_persistence` verdict in this file vacuous"
+    );
+    assert!(
+        crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some(),
+        "and the consequence the premise guard exists to name: a force-marked \
+         owner is NOT dead, so its side-table entry correctly survives — a case \
+         that hits this shape is failing on its premise, not on the prune"
+    );
+}
+
 #[test]
 fn test_dead_closure_side_table_entries_pruned_on_full_gc() {
     let _guard = GcTestIsolationGuard::new();
@@ -473,17 +576,22 @@ fn test_object_dead_payload_arm_clears_keys_index() {
         "a live keys_array's shape record must survive the prune"
     );
     crate::object::shapes::shape_drop(live_keys as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(live_keys);
 }
 
 #[test]
 fn test_dead_arguments_object_entry_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
+    // `js_arguments_object_alloc` reaches `js_object_set_field_by_name`, which
+    // resolves the process-global memoized `Object.prototype` address; a MISS
+    // runs the lazy `globalThis` bootstrap inside this test — see
+    // `with_realm_bootstrapped` (#7975).
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let obj = crate::object::js_arguments_object_alloc(undefined, undefined, 0);
     let addr = obj as usize;
     assert!(crate::object::test_arguments_object_registered(addr));
 
-    full_gc();
+    full_gc_with_no_block_persistence();
 
     assert!(
         !crate::object::test_arguments_object_registered(addr),
@@ -796,9 +904,10 @@ fn test_descriptor_meta_summary_survives_copied_minor_move() {
     js_shadow_slot_set(0, 0);
 }
 
-/// #6759 Phase C3a: an owned keys array's grow-realloc migrates the shape
-/// record (slot map + stable shape_id) to the new address instead of
-/// orphaning it.
+/// #8067: an owned keys array's append-reallocation may migrate its validated
+/// slot-index accelerator, but must neither repoint nor eagerly delete the old
+/// immutable descriptor. A sibling naming it remains valid; otherwise weak
+/// post-trace pruning eventually retires it.
 #[test]
 fn test_shape_record_migrates_on_owned_grow() {
     let _global = global_side_table_test_lock();
@@ -817,11 +926,19 @@ fn test_shape_record_migrates_on_owned_grow() {
     );
     assert_eq!(
         crate::object::shapes::test_shape_id_for_keys(new_addr),
-        Some(id),
-        "the record — including its stable shape_id — must move to the new address"
+        None,
+        "an append-reallocation must not repoint the old immutable descriptor"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id)
+            .expect("grow must not delete a potentially sibling-owned descriptor")
+            .keys,
+        old_addr as u64,
+        "an append-reallocation repointed the old immutable descriptor"
     );
     // Cleanup so the seeded address can't leak into later tests.
     crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(old_addr);
 }
 
 /// #6759 Phase C3a: GC evacuation MOVES a live keys array — the shape
@@ -856,7 +973,260 @@ fn test_shape_record_rekeys_on_copied_minor_move() {
     );
 
     crate::object::shapes::shape_drop(new_addr as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(new_addr);
     js_shadow_slot_set(0, 0);
+}
+
+/// #8067: the by-id table is weak. Churning shapes without any live object
+/// owners must return the descriptor census to baseline after a full trace;
+/// otherwise the descriptor's keys copy would make historical arrays immortal.
+#[test]
+fn test_dead_shape_descriptor_churn_returns_to_baseline_after_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+    let baseline = crate::object::shapes::test_shape_descriptor_count();
+    let mut ids = Vec::new();
+    for _ in 0..32 {
+        let keys = unsafe { alloc_nursery_test_array() };
+        ids.push(
+            crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+                .expect("shape range unexpectedly exhausted"),
+        );
+    }
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        baseline + ids.len(),
+        "test premise: churn must publish one descriptor per distinct keys array"
+    );
+
+    full_gc_with_no_block_persistence();
+
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        baseline,
+        "weak descriptor table retained dead shape keys"
+    );
+    assert!(
+        ids.into_iter()
+            .all(|id| crate::object::shapes::shape_descriptor_by_id(id).is_none()),
+        "a dead shape id still resolved after its keys array was reclaimed"
+    );
+}
+
+/// #8067: the header is the sole strong edge; a live stamped object's scan
+/// synchronizes its weak descriptor mirror. Two siblings share one descriptor;
+/// after copied-minor evacuation both headers and that descriptor must agree.
+#[test]
+fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    crate::object::shapes::test_clear_shape_table();
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let keys = unsafe { alloc_nursery_test_array() };
+    let old_keys = keys as usize;
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (a, _) = unsafe { alloc_nursery_test_object(0) };
+    let (b, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        (*a).keys_array = keys;
+        (*a).parent_class_id = id;
+        (*b).keys_array = keys;
+        (*b).parent_class_id = id;
+    }
+    assert_eq!(
+        crate::gc::test_gc_rewrite_slot_count(a as usize),
+        Some(1),
+        "a stamped object must enumerate only its authoritative header keys slot"
+    );
+    js_shadow_slot_set(0, ptr_bits(a as usize));
+    js_shadow_slot_set(1, ptr_bits(b as usize));
+
+    let _ = gc_collect_minor();
+
+    let a_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let b_after = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("live shared descriptor disappeared during evacuation");
+    unsafe {
+        assert_eq!((*a_after).parent_class_id, id);
+        assert_eq!((*b_after).parent_class_id, id);
+        assert_eq!((*a_after).keys_array, (*b_after).keys_array);
+        assert_ne!((*a_after).keys_array as usize, old_keys);
+        assert_eq!(descriptor.keys, (*a_after).keys_array as u64);
+    }
+    assert_eq!(
+        crate::object::shapes::test_shape_descriptor_count(),
+        1,
+        "two live siblings must retain exactly their one shared descriptor"
+    );
+    crate::object::shapes::shape_drop(descriptor.keys as usize as *const crate::array::ArrayHeader);
+    crate::object::shapes::test_drop_shape_descriptors(descriptor.keys as usize);
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}
+
+/// #8074 review: a forwarded array's from-space payload contains its forwarding
+/// address, not a usable `(length, capacity)` pair. Descriptor fact capture
+/// must resolve both values from the live array or the stale capacity word can
+/// truncate the logical count and make an immediate header rewrite fail closed.
+#[test]
+fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+
+    let old_keys = unsafe { alloc_nursery_test_array() };
+    let live_keys = unsafe { alloc_nursery_test_array() };
+    // `set_forwarding_address` stores this pointer over the old length/capacity
+    // pair. Pick a logical count one above the resulting stale capacity word,
+    // so the pre-fix mixed old/new read deterministically truncates it.
+    let stale_capacity = ((live_keys as u64) >> 32) as u32;
+    let logical_key_count = stale_capacity
+        .checked_add(1)
+        .expect("tracked array address unexpectedly fills the high u32");
+    unsafe {
+        (*old_keys).length = logical_key_count;
+        (*old_keys).capacity = logical_key_count;
+        (*live_keys).length = logical_key_count;
+        (*live_keys).capacity = logical_key_count;
+    }
+    let id = crate::object::shapes::shape_descriptor_ensure(old_keys, logical_key_count, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        (*owner).keys_array = old_keys;
+        (*owner).parent_class_id = id;
+    }
+
+    let old_header = unsafe { header_from_user_ptr(old_keys.cast()) } as *mut GcHeader;
+    let old_flags = unsafe { (*old_header).gc_flags };
+    let old_payload = unsafe { *(old_keys as *const u64) };
+    unsafe {
+        set_forwarding_address(old_header, live_keys.cast());
+        assert_eq!((*old_keys).capacity, stale_capacity);
+        assert!(
+            (*old_keys).capacity < logical_key_count,
+            "test premise: the stale capacity must truncate the live count"
+        );
+    }
+
+    let owner_header = unsafe { header_from_user_ptr(owner.cast()) } as *mut GcHeader;
+    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    let mut rewritten = 0usize;
+    unsafe {
+        visit_gc_layout_slot_descriptors(owner_header, &mut |descriptor| {
+            descriptor.visit_slots(&mut |slot| {
+                if slot.slot == header_keys_slot {
+                    *slot.slot = live_keys as u64;
+                    rewritten += 1;
+                }
+            });
+        });
+    }
+    assert_eq!(
+        rewritten, 1,
+        "the authoritative header edge must be rewritten once"
+    );
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("rewritten live descriptor disappeared");
+    assert_eq!(descriptor.keys, live_keys as u64);
+    assert_eq!(descriptor.logical_key_count, logical_key_count);
+    assert_eq!(descriptor.live_inline_slot_count, 0);
+
+    unsafe {
+        *(old_keys as *mut u64) = old_payload;
+        (*old_header).gc_flags = old_flags;
+    }
+    crate::object::shapes::test_clear_shape_table();
+}
+
+/// #8067 release fail-closed guard: descriptor fact capture must classify the
+/// keys word before reading ArrayHeader fields. A live GC_TYPE_OBJECT can
+/// carry a corrupt header edge and a real ShapeId at the same time; the
+/// authoritative header edge remains visible, but descriptor synchronization
+/// must skip without dereferencing that word.
+#[test]
+fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+
+    let valid_keys = unsafe { alloc_nursery_test_array() };
+    let id = crate::object::shapes::shape_descriptor_ensure(valid_keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let corrupt_keys = 0x2800_0203usize;
+    assert!(
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(corrupt_keys) }.is_none(),
+        "test premise: the plausible misaligned word is not an exact tracked allocation"
+    );
+    unsafe {
+        (*owner).keys_array = corrupt_keys as *mut crate::array::ArrayHeader;
+        (*owner).parent_class_id = id;
+    }
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+
+    assert_eq!(
+        crate::gc::test_gc_rewrite_slot_count(owner as usize),
+        Some(1),
+        "only the authoritative corrupt header slot may be enumerated"
+    );
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+        .expect("invalid header facts must not retire the unrelated descriptor");
+    assert_eq!(descriptor.keys, valid_keys as u64);
+    assert_eq!(descriptor.logical_key_count, 0);
+    assert_eq!(descriptor.live_inline_slot_count, 0);
+
+    js_shadow_slot_set(0, 0);
+    crate::object::shapes::test_drop_shape_descriptors(valid_keys as usize);
+}
+
+/// #8067: DirtyHeaderSlotScan retains enumerated raw slot pointers between
+/// budgeted work units. Descriptor-table growth in that mutator window must
+/// not invalidate any saved pointer, so a stamped object's enumeration may
+/// contain its stable ObjectHeader slot but never a HashMap bucket address.
+#[test]
+fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::shapes::test_clear_shape_table();
+    let frame = js_shadow_frame_push(1);
+
+    let keys_before = unsafe { alloc_nursery_test_array() };
+    js_shadow_slot_set(0, ptr_bits(keys_before as usize));
+    let id = crate::object::shapes::shape_descriptor_ensure(keys_before, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let keys = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
+    unsafe {
+        (*owner).keys_array = keys;
+        (*owner).parent_class_id = id;
+    }
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+    let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)
+        .expect("tracked object must have a rewrite descriptor");
+    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    assert_eq!(
+        saved_slots,
+        vec![header_keys_slot as usize],
+        "deferred work retained a descriptor-table bucket address"
+    );
+
+    for i in 0..1024usize {
+        let fake_keys = 0x8067_1000_0000_0000usize + i * 0x1000;
+        crate::object::shapes::shape_descriptor_ensure(fake_keys as *const _, 0, 0)
+            .expect("shape range unexpectedly exhausted during reallocation fixture");
+    }
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let slots_after = crate::gc::test_gc_rewrite_slot_addresses(owner_after as usize)
+        .expect("rooted object must remain enumerable after table growth");
+    assert_eq!(
+        slots_after,
+        vec![header_keys_slot as usize],
+        "descriptor-table growth changed the stable authoritative slot address"
+    );
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_frame_pop(frame);
+    crate::object::shapes::test_clear_shape_table();
 }
 
 /// #6759 Phase B: the meta record is kept alive by its owner (the header
@@ -880,4 +1250,115 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
          prototype — must survive a full collection"
     );
     js_shadow_slot_set(0, 0);
+}
+
+// ── FUNCTION_CLASS_IDS (#8040) ──────────────────────────────────────────────
+//
+// The synthetic-class table is keyed by a function value's NaN-boxed closure
+// ADDRESS, and — unlike every other table in this file — it is *rekeyed* when
+// its key object moves (`scan_function_class_id_keys_mut`). So a key that
+// outlives its closure does not merely leak: the next collection follows the
+// forwarding pointer of whatever object now occupies the address and rebinds
+// the class id onto it.
+
+fn alloc_nursery_test_closure() -> usize {
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        8,
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    ptr as usize
+}
+
+#[test]
+fn test_dead_function_class_id_key_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::test_clear_class_side_table_roots();
+
+    let addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8040);
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(addr))),
+        0x8200_8040,
+        "test premise: the synthetic class id must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8040),
+        0,
+        "a dead closure's FUNCTION_CLASS_IDS key must be pruned"
+    );
+}
+
+#[test]
+fn test_live_function_class_id_key_survives_and_is_rekeyed_on_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let addr = alloc_nursery_test_closure();
+    js_shadow_slot_set(0, ptr_bits(addr));
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8041);
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(moved, ptr_bits(addr), "test premise: the closure must move");
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8041),
+        moved,
+        "a LIVE closure's key must be rekeyed to its new address, not pruned"
+    );
+}
+
+/// The #8040 shape, end to end: a dead key that survives one collection is
+/// re-pointed at the next tenant of its address, and the collection after that
+/// follows THAT object's forwarding pointer.
+#[test]
+fn test_dead_function_class_id_key_cannot_follow_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(dead_addr), 0x8200_8042);
+
+    let _ = gc_collect_minor();
+
+    let replacement = alloc_nursery_test_closure();
+    assert_eq!(
+        replacement, dead_addr,
+        "test premise: the copied-minor Eden reset must reuse the exact address"
+    );
+    js_shadow_slot_set(0, ptr_bits(replacement));
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(replacement))),
+        0,
+        "an unrelated closure allocated at the recycled address must not inherit \
+         the dead function's synthetic class id"
+    );
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(
+        moved,
+        ptr_bits(replacement),
+        "test premise: the replacement must move"
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(moved)),
+        0,
+        "and the stale key must not have been REKEYED onto the replacement's new \
+         address by the metadata rewrite pass"
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_count(),
+        0,
+        "no FUNCTION_CLASS_IDS entry may outlive its closure"
+    );
 }

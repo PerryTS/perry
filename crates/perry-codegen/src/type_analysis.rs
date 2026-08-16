@@ -38,7 +38,8 @@ pub(crate) use numeric::{
 pub(crate) use pod::{
     add_operands_have_pod_materialization_hazard,
     expr_may_return_boxed_value_from_raw_f64_fallback, expression_has_numeric_length,
-    is_fixed_width_buffer_numeric_read, is_numeric_typed_array_class, pod_record_field_is_numeric,
+    is_fixed_width_buffer_numeric_read, is_numeric_typed_array_class,
+    numeric_proof_is_declared_only, pod_record_field_is_numeric,
     scalar_replaced_array_element_is_raw_f64, scalar_replaced_field_is_raw_f64,
     scalar_replaced_field_raw_f64_store_state,
 };
@@ -51,13 +52,15 @@ pub(crate) use predicates::{
 #[cfg(test)]
 pub(crate) use predicates::tuple_index_literal;
 pub(crate) use refine::{
-    compute_auto_captures, is_crypto_digest_chain, is_global_constructor_expr,
-    is_process_namespace_version_property, refine_type_from_init,
+    compute_auto_captures, declared_array_property_claim, is_crypto_digest_chain,
+    is_global_constructor_expr, is_process_namespace_version_property, proven_type_from_init,
+    refine_type_from_init,
 };
 pub(crate) use strings::{
-    class_name_extends_url_search_params, is_definitely_string_expr, is_map_expr, is_set_expr,
-    is_string_expr, is_url_search_params_expr, is_url_search_params_subclass_expr,
-    map_static_type_args, set_static_type_args,
+    class_name_extends_url_search_params, is_declared_string_expr, is_definitely_string_expr,
+    is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    is_url_search_params_subclass_expr, map_static_type_args, set_static_type_args,
+    string_proof_is_declared_only, string_value_is_runtime_guaranteed,
 };
 
 #[cfg(test)]

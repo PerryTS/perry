@@ -3,8 +3,8 @@
 //! accept arbitrary properties, so a live stream-band handle must too. Split
 //! out of `streams.rs` to keep that file under the file-size gate.
 
+use super::gc::{visit_stream_value_slot, StreamRootVisitor};
 use super::subclass::js_stream_handle_kind;
-use super::visit_stream_value_slot;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -69,7 +69,7 @@ pub(crate) fn stream_expando_clear(id: usize) {
 }
 
 /// #5437: GC-trace expando values. Called from `scan_stream_roots_mut`.
-pub(crate) fn scan_expando_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+pub(crate) fn scan_expando_roots<V: StreamRootVisitor>(visitor: &mut V) {
     if let Ok(mut map) = STREAM_EXPANDO.lock() {
         for entries in map.values_mut() {
             for (_, bits) in entries.iter_mut() {

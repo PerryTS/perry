@@ -1,8 +1,8 @@
 use perry_hir::{walker::walk_expr_children, Expr};
 
 use crate::native_value::{
-    AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
-    LoweredValue, MaterializationReason, NativeOwnedViewFact,
+    AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot,
+    LengthSource, LoweredValue, MaterializationReason, NativeOwnedViewFact,
 };
 use crate::types::{I32, I64, I8, PTR};
 
@@ -109,6 +109,36 @@ pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: Mater
         id,
         owner_alias_invalidation_reason(&reason),
     );
+}
+
+/// Mark a cached data pointer as unusable after an operation changes which
+/// storage the receiver aliases. Alias state alone cannot express this: the
+/// pointer is stale, not merely shared.
+pub(crate) fn invalidate_buffer_view_pointer(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    reason: MaterializationReason,
+) {
+    let affected_ids = if let Some(data_slot) = ctx
+        .buffer_view_slots
+        .get(&id)
+        .map(|view| view.data_slot.clone())
+    {
+        ctx.buffer_view_slots
+            .iter()
+            .filter_map(|(view_id, view)| (view.data_slot == data_slot).then_some(*view_id))
+            .collect::<Vec<_>>()
+    } else {
+        vec![id]
+    };
+    for affected_id in affected_ids {
+        if let Some(view) = ctx.buffer_view_slots.get_mut(&affected_id) {
+            view.pointer_state = BufferViewPointerState::Invalidated {
+                reason: reason.clone(),
+            };
+        }
+        downgrade_buffer_alias(ctx, affected_id, reason.clone());
+    }
 }
 
 fn owner_alias_invalidation_reason(reason: &MaterializationReason) -> MaterializationReason {
@@ -233,12 +263,27 @@ pub(crate) fn native_owned_fact_for_view(view: &BufferViewSlot) -> Option<Native
         .map(|native| native.fact(view.element_width_bytes, alias_group))
 }
 
-pub(crate) fn attach_native_owned_view_fact(ctx: &mut FnCtx<'_>, view: &BufferViewSlot) {
-    let Some(fact) = native_owned_fact_for_view(view) else {
+pub(crate) fn attach_buffer_view_facts(ctx: &mut FnCtx<'_>, view: &BufferViewSlot) {
+    if let Some(record) = ctx.native_rep_records.last_mut() {
+        record.buffer_view_pointer_state = Some(view.pointer_state.clone());
+        record.native_owned_view = native_owned_fact_for_view(view);
+    }
+}
+
+pub(crate) fn attach_buffer_view_pointer_state_for_expr(ctx: &mut FnCtx<'_>, expr: &Expr) {
+    let Expr::LocalGet(id) = expr else {
+        return;
+    };
+    let Some(state) = ctx
+        .buffer_view_slots
+        .get(id)
+        .map(|view| view.pointer_state.clone())
+    else {
         return;
     };
     if let Some(record) = ctx.native_rep_records.last_mut() {
-        record.native_owned_view = Some(fact);
+        record.local_id = Some(*id);
+        record.buffer_view_pointer_state = Some(state);
     }
 }
 
@@ -285,6 +330,7 @@ pub(crate) fn update_buffer_view_for_assignment(
                 alias: AliasState::MayAlias,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                pointer_state: BufferViewPointerState::Stable,
                 // Reassignment refresh: `Uint8ArrayNew` with a non-literal arg
                 // can be the view form (`new Uint8Array(buffer)`), so the
                 // inline-storage proof is not re-established here.

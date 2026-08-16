@@ -669,6 +669,50 @@ mod tests {
         );
     }
 
+    /// #7358 — the manifest features above are necessary but not sufficient:
+    /// Cargo resolves features over the package set selected by one command.
+    /// A release build of an ext staticlib alone can therefore bundle a
+    /// runtime/shared-dependency set that differs from the separately-built
+    /// stdlib archive. The link deduper cannot drop that whole second copy,
+    /// leaving HTTP attached to an async reactor the JS event loop never
+    /// drives. Keep the shipping workflow's package set paired with the
+    /// compiler and both static wrapper crates.
+    #[test]
+    fn release_ext_builds_share_the_shipped_runtime_feature_set() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root reachable from CARGO_MANIFEST_DIR");
+        let workflow =
+            std::fs::read_to_string(workspace_root.join(".github/workflows/release-packages.yml"))
+                .expect("read release-packages workflow");
+        let step = workflow
+            .split("- name: Build native ext libraries (Unix)")
+            .nth(1)
+            .and_then(|tail| tail.split("- name: Build UI library (macOS)").next())
+            .expect("native ext release step remains present");
+        let command: String = step
+            .lines()
+            .skip_while(|line| !line.trim_start().starts_with("cargo build "))
+            .take_while(|line| !line.contains("|| echo"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+
+        for package in ["perry", "perry-runtime-static", "perry-stdlib-static"] {
+            assert!(
+                tokens.windows(2).any(|pair| pair == ["-p", package]),
+                "#7358: release ext build must select `{package}` in the same Cargo \
+                 invocation so its bundled runtime matches the shipped archives; got:\n{command}"
+            );
+        }
+        assert!(
+            tokens.windows(2).any(|pair| pair == ["-p", "\"$name\""]),
+            "native ext release command stopped selecting the loop's crate: {command}"
+        );
+    }
+
     #[test]
     fn upstream_pin_parses() {
         let raw = r#"

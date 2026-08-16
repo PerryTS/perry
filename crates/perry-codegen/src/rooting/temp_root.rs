@@ -410,29 +410,25 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 ///    to still looks like a number here. Those per-function facts are sound for
 ///    a genuine local and not for a global, so a global is never inert.
 ///
-/// What this does NOT defend against is a *lying annotation*: `let n: number`
-/// that is handed an object anyway. Nothing here catches that — but nothing
-/// else in the compiler does either, and it is not this predicate's assumption
-/// to make good on. `collect_pointer_typed_locals` reserves root slots from the
-/// same declared type, so such a local has no shadow slot and the precise scan
-/// cannot see the object at all; the value is already unrooted long before any
-/// coercion of it reaches a poll decision. Honesty of scalar annotations is a
-/// standing invariant of the precise-root design, inherited here rather than
-/// introduced.
+/// A declaration is deliberately absent from this judgment. The type arm uses
+/// only runtime-derived initializer evidence; `integer_locals` is the separate
+/// whole-write structural proof for literal-seeded recurrences. A lying scalar
+/// annotation therefore retains its root and cannot make coercion look inert.
 pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
-        && matches!(
-            ctx.local_types.get(&id),
-            Some(
-                HirType::Number
-                    | HirType::Int32
-                    | HirType::Boolean
-                    | HirType::Null
-                    | HirType::Void
-                    | HirType::Never
-            )
-        )
+        && (ctx.integer_locals.contains(&id)
+            || matches!(
+                ctx.stable_local_type_proof(&id),
+                Some(
+                    HirType::Number
+                        | HirType::Int32
+                        | HirType::Boolean
+                        | HirType::Null
+                        | HirType::Void
+                        | HirType::Never
+                )
+            ))
 }
 
 /// Already-lowered operand values kept alive across work whose shape the

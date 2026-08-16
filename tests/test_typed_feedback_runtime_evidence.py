@@ -49,7 +49,8 @@ class TypedFeedbackRuntimeEvidenceTest(unittest.TestCase):
         perry = resolve_perry()
         with tempfile.TemporaryDirectory() as temp:
             temp_path = Path(temp)
-            binary = temp_path / "typed-feedback-runtime-evidence"
+            executable_suffix = ".exe" if os.name == "nt" else ""
+            binary = temp_path / f"typed-feedback-runtime-evidence{executable_suffix}"
             trace_path = temp_path / "nested" / "typed-feedback-trace.json"
 
             compile_env = {**os.environ, "PERRY_NO_CACHE": "1", "PERRY_TYPED_FEEDBACK": "1"}

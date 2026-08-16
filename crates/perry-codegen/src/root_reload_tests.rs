@@ -909,3 +909,103 @@ fn a_capture_set_to_a_different_index_does_not_suppress_the_reload() {
         "a set to a DIFFERENT capture index must not suppress this reload"
     );
 }
+
+/// Every name in [`NON_COLLECTING`] must be a symbol the runtime actually
+/// exports.
+///
+/// The list is consulted by exact string match against an LLVM callee, so a
+/// name that matches nothing is inert — which is precisely why seven of them
+/// accumulated undetected. Six were aspirational (`js_value_is_object`,
+/// `js_typeof_tag`, …); the seventh, `js_gc_layout_note_slot`, was a
+/// transposition of the real, hot `js_gc_note_slot_layout`, and it cost a root
+/// reload at every emitted slot-layout note — including the one per guarded
+/// array element store.
+///
+/// Nothing could distinguish the two cases, because the fallback for an
+/// unrecognised helper is safe-direction (treat as collecting ⇒ insert a
+/// reload), so the only symptom was a permanent, quiet pessimisation. This
+/// makes a misspelling a test failure.
+#[test]
+fn every_non_collecting_entry_is_a_real_runtime_export() {
+    let mut sources = String::new();
+    for crate_dir in ["perry-runtime", "perry-stdlib"] {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(crate_dir)
+            .join("src");
+        collect_rust_sources(&root, &mut sources);
+    }
+    assert!(
+        sources.len() > 1_000_000,
+        "runtime sources did not load (read {} bytes); the test would pass \
+         vacuously",
+        sources.len()
+    );
+
+    let phantom: Vec<&str> = NON_COLLECTING
+        .iter()
+        .copied()
+        .filter(|name| !declares_extern_c_fn(&sources, name))
+        .collect();
+    assert!(
+        phantom.is_empty(),
+        "NON_COLLECTING names with no `extern \"C\" fn` definition in \
+         perry-runtime/perry-stdlib — a name that matches no callee is inert, \
+         so a typo here is a silent pessimisation rather than a failure: \
+         {phantom:?}"
+    );
+}
+
+/// Append every `.rs` file under `dir` to `out`.
+fn collect_rust_sources(dir: &std::path::Path, out: &mut String) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                out.push_str(&text);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+/// Is there an `extern "C" fn <name>` definition in `sources`?
+///
+/// Deliberately matches the definition, not a mention: every phantom this
+/// catches was *mentioned* — in this list and in the checker's twin of it.
+fn declares_extern_c_fn(sources: &str, name: &str) -> bool {
+    sources
+        .match_indices("extern \"C\" fn ")
+        .any(|(at, marker)| {
+            let rest = &sources[at + marker.len()..];
+            rest.strip_prefix(name)
+                .is_some_and(|tail| !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+        })
+}
+
+/// The two real slot-layout note exports must be present, spelled the way the
+/// runtime exports them (`gc/layout.rs`) and `gc_call_effects.rs` matches them.
+///
+/// Pinned by name rather than left to the existence test above, because the bug
+/// this replaces was a *missing* entry, and "no phantom members" is satisfied
+/// by an empty set.
+#[test]
+fn the_slot_layout_note_helpers_are_non_collecting() {
+    for name in ["js_gc_note_slot_layout", "js_gc_note_slot_layout_aware"] {
+        assert!(
+            NON_COLLECTING.contains(&name),
+            "{name} is emitted per guarded element/field store; leaving it out \
+             forces a root reload at every one of them"
+        );
+    }
+    assert!(
+        !NON_COLLECTING.contains(&"js_gc_layout_note_slot"),
+        "js_gc_layout_note_slot is not a symbol in this tree — it was a \
+         transposition of js_gc_note_slot_layout"
+    );
+}

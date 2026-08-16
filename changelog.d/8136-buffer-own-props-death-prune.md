@@ -1,0 +1,9 @@
+### Fixed
+
+- **A dead buffer's own-property entry was never pruned, so the GC kept retaining its expando closure forever.** `finalize_collected_dead_buffer` prunes eleven address-keyed side tables under the banner "drop every registry/side-table entry keyed by a dead buffer's address"; the own-property table added by #6406 (`buf.foo = v`) was not one of them. Its only clear site was `register_buffer`, which fires only when the recycled address is re-issued to another *buffer* — so an entry whose address is never reused, or is reused by a plain object, survived for the life of the process.
+
+  That leaked one permanent entry per property-carrying `Buffer`/`DataView` ever created, and — unlike the identity registries beside it — this table is *traced*: `scan_buffer_own_props_roots_mut` visits the stored values in every GC phase, so a dead buffer's expando closure and everything it captured stayed reachable. The surviving entry's key is also a dead address that the scanner keeps handing to `visit_metadata_usize_slot`, which resolves it against whatever now occupies those bytes — the #6080 ABA class this function exists to prevent, in the one table it did not cover.
+
+  Three tests in `crates/perry-runtime/src/gc/tests/buffer_side_tables.rs`, each watched fail with the prune reverted: `test_dead_buffer_own_property_entry_pruned_on_full_gc` (`left: Some(7.0)`, `right: None`), `test_buffer_own_props_table_drains_after_owners_die` (the leak regression — "514 owners remain, expected at most the pre-test 2", which a per-address probe cannot show), and `test_live_buffer_keeps_its_own_properties_across_full_gc`, the control that keeps the prune from passing by dropping everything and which stays green under the same sabotage.
+
+  Found while bisecting #8117's two `pass -> crash` gap regressions; it is **not** a fix for those. They are Linux-only SIGSEGVs that bisect to #7314, and neither has been shown to depend on this table.

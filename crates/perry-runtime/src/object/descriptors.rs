@@ -614,8 +614,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                             }
                         }
                         _ => {
-                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, name);
-                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
+                            if crate::closure::closure_has_own_dynamic_prop(ptr, name) {
+                                let dynv = crate::closure::closure_get_own_dynamic_prop(ptr, name)
+                                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                                 let attrs = registered
                                     .unwrap_or(super::PropertyAttrs::new(true, true, true));
                                 Some((
@@ -632,6 +633,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let Some((value, writable, enumerable, configurable)) = resolved else {
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     };
+                    let value_handle = scope.root_nanbox_f64(value);
                     let packed = b"value\0writable\0enumerable\0configurable";
                     let desc = js_object_alloc_with_shape(
                         0x0D_E5_C0,
@@ -642,7 +644,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let header_size = std::mem::size_of::<ObjectHeader>();
                     let fields = (desc as *mut u8).add(header_size) as *mut f64;
                     // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-                    *fields = value;
+                    *fields = value_handle.get_nanbox_f64();
                     *fields.add(1) = f64::from_bits(if writable { TAG_TRUE } else { TAG_FALSE });
                     *fields.add(2) = f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
                     *fields.add(3) =
@@ -1119,6 +1121,24 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 false,
             );
             return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+        }
+        // #8149: a registered BUFFER receiver the arm above did not claim — a
+        // node `Buffer` (never `mark_as_uint8array`-tagged, so absent from the
+        // typed-array owner set), an `ArrayBuffer`, or a `DataView`. Without
+        // this the generic walk below reads a `BufferHeader` as an
+        // `ObjectHeader`; `Object.getOwnPropertyNames(Buffer.from([1,2,3]))`
+        // answered `[]` where node lists the byte indices.
+        if obj_jv.is_pointer() {
+            let addr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if let Some(keys) = super::field_get_set::enumeration::registered_buffer_own_keys(addr)
+            {
+                let mut out = crate::array::js_array_alloc(keys.len().max(1) as u32);
+                for name in keys {
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    out = crate::array::js_array_push(out, crate::value::JSValue::string_ptr(key));
+                }
+                return f64::from_bits((out as u64) | 0x7FFD_0000_0000_0000);
+            }
         }
         // Date / RegExp / Error exotic instances: expando keys (including
         // non-enumerable ones) + per-kind builtin own slots.
@@ -1714,6 +1734,14 @@ pub(crate) unsafe fn nm_get_own_descriptor(
         let value = crate::process::process_metadata_property("permission")
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         return Some(build_data_descriptor(value, false, true, false));
+    }
+    if module_name == "module" {
+        return Some(build_data_descriptor(
+            f64::from_bits(value.bits()),
+            true,
+            true,
+            false,
+        ));
     }
     Some(build_data_descriptor(
         f64::from_bits(value.bits()),

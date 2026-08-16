@@ -32,6 +32,7 @@ pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
             | "Set"
             | "WeakMap"
             | "WeakSet"
+            | "EventTarget"
             | "Array"
             | "ArrayBuffer"
             | "SharedArrayBuffer"
@@ -1080,6 +1081,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     &parent_ctor.params,
                     &lowered_args,
+                    super_args,
                     parent_capture_fill,
                 );
 

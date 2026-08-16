@@ -31,7 +31,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::BigInt(_) => true,
         // `BigInt(x)` always returns a bigint.
         Expr::BigIntCoerce(_) => true,
-        Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::BigInt)),
+        Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::BigInt)),
         Expr::StaticMethodCall {
             class_name,
             method_name,
@@ -140,10 +140,28 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // operands, the non-BigInt bitwise fast path.
         Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
         Expr::BufferIndexGet { .. } | Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(HirType::Number) | Some(HirType::Int32)
-        ),
+        Expr::LocalGet(id) => {
+            ctx.element_shape_loop_facts
+                .iter()
+                .rev()
+                .any(|fact| fact.numeric_accumulator == *id)
+                || ctx.integer_locals.contains(id)
+                || ctx.unsigned_i32_locals.contains(id)
+                || ctx.int_valued_i64_locals.contains_key(id)
+                || matches!(
+                    ctx.stable_local_type_proof(id),
+                    Some(HirType::Number) | Some(HirType::Int32)
+                )
+                // #8105: the reassignment-tolerant proof. Every arm above
+                // either needs the local to be write-once
+                // (`stable_local_type_proof` answers `None` the moment it is
+                // reassigned) or is an integer-range fact, so a plain
+                // fractional accumulator — `let x = 0.0; … x = x * x - y * y
+                // + cx` — had NO numeric proof and every `x * x` bailed to
+                // the BigInt-aware `js_dynamic_mul`. This set proves the
+                // value is a Number from the WRITES, so reassignment is fine.
+                || ctx.number_by_construction_locals.contains(id)
+        }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle
         // incorrectly (NaN compared with 0.0 is unordered → false).
@@ -176,7 +194,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // would silently produce NaN.
         Expr::Update { id, .. } => {
             matches!(
-                ctx.local_types.get(id),
+                ctx.stable_local_type_proof(id),
                 Some(HirType::Number) | Some(HirType::Int32)
             ) || ctx.integer_locals.contains(id)
                 || ctx.unsigned_i32_locals.contains(id)
@@ -280,6 +298,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if matches!(
+                crate::lower_call::guarded_path_type(ctx, e),
+                Some(HirType::Number | HirType::Int32)
+            ) {
+                return true;
+            }
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
@@ -401,7 +425,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
-            match ctx.local_types.get(arr_id) {
+            match ctx.stable_local_type_proof(arr_id) {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
                 }
@@ -468,9 +492,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///
 /// Structurally admitted:
 /// * numeric literals;
-/// * `Binary` arithmetic/bitwise when the whole node is `is_numeric_expr` AND
-///   `is_provably_not_bigint` (a possibly-BigInt chain routes through the
-///   BIGINT-boxed dynamic helpers — those results are NaN-boxed pointers);
+/// * `Binary` arithmetic/bitwise when the whole node is `is_numeric_expr`, is
+///   `is_provably_not_bigint`, and does not inherit a declared-only numeric
+///   proof (a possibly-BigInt chain routes through BIGINT-boxed dynamic
+///   helpers, while a declared-only `+` may return a boxed string);
 /// * `Unary` Neg/Pos/BitNot over a non-BigInt operand;
 /// * `Update` (++/--) when numeric per `is_numeric_expr`;
 /// * the `Math.*` family / `Date.now` (Rust-computed f64s);
@@ -483,7 +508,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
-        Expr::Binary { .. } => is_numeric_expr(ctx, e) && is_provably_not_bigint(ctx, e),
+        Expr::Binary { .. } => {
+            is_numeric_expr(ctx, e)
+                && is_provably_not_bigint(ctx, e)
+                && !crate::type_analysis::numeric_proof_is_declared_only(ctx, e)
+        }
         Expr::Unary { op, operand } => {
             matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                 && is_provably_not_bigint(ctx, operand)
@@ -603,7 +632,8 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
     // Already-proven primitives: a real Number/Int32, a Boolean, or a String
     // are all definitionally non-BigInt.
-    if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || is_definitely_string_expr(ctx, e) {
+    if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || string_value_is_runtime_guaranteed(ctx, e)
+    {
         return true;
     }
     match e {
@@ -721,6 +751,13 @@ pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// so letting it widen the divisor would introduce a UB window that
 /// `integer_locals` alone does not open. The dividend has no such constraint.
 pub(crate) fn is_integer_valued_divisor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::LocalGet(id) | Expr::Update { id, .. }
+            if ctx.int_valued_i64_locals.contains_key(id)
+    ) {
+        return false;
+    }
     integer_magnitude_bits_inner(ctx, e, false).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
 }
 
@@ -831,7 +868,7 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::MapHas { .. }
         | Expr::MapDelete { .. } => true,
         Expr::ArrayIncludes { .. } => true,
-        Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::Boolean)),
+        Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::Boolean)),
         _ => false,
     }
 }

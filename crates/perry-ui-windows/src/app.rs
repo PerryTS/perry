@@ -2,6 +2,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
@@ -40,12 +46,33 @@ extern "C" {
     fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
 }
 
-/// Timer ID for periodic tick that processes setTimeout/setInterval queues.
-const TICK_TIMER_ID: usize = 9998;
-
 /// Timer ID fired when `PERRY_UI_TEST_MODE=1` — writes a screenshot (if configured)
 /// and exits cleanly so doc-example programs can be verified in CI without a human.
 const TEST_EXIT_TIMER_ID: usize = 9997;
+
+/// Cross-thread runtime work and display-link ticks are posted to the UI
+/// queue, then executed after wndproc unwinds. `WM_APP` avoids collisions with
+/// control-private `WM_USER` messages.
+#[cfg(target_os = "windows")]
+const WM_PERRY_RUNTIME_WAKE: u32 = WM_APP + 1;
+#[cfg(target_os = "windows")]
+const WM_PERRY_FRAME: u32 = WM_APP + 2;
+
+/// Keep media polling and incremental GC alive even when an application has
+/// no JS timers. Runtime deadlines can select a shorter wait, and producer
+/// notifications interrupt it immediately through `WM_PERRY_RUNTIME_WAKE`.
+const MAINTENANCE_HEARTBEAT_MS: u32 = 50;
+
+/// Bound the display-link thread even when DwmFlush reports success without
+/// waiting for a composition boundary (for example in a remote session).
+const FRAME_INTERVAL_MS: u64 = 16;
+
+/// Cross-thread producers can notify once per promise resolution. Collapse a
+/// burst to one queue message; the UI thread clears this before draining work,
+/// so a notification racing the drain posts the next turn instead of getting
+/// lost or flooding the Win32 queue.
+#[cfg(target_os = "windows")]
+static RUNTIME_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Global DPI scale factor (1.0 at 96 DPI, 1.5 at 144 DPI, 2.0 at 192 DPI).
 static DPI_SCALE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -109,10 +136,6 @@ pub(crate) fn ensure_dpi_initialized() {
     });
 }
 
-thread_local! {
-    static TIMER_TICK_NEEDED: std::cell::Cell<bool> = std::cell::Cell::new(false);
-}
-
 /// Extract a &str from a *const StringHeader pointer.
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
@@ -124,6 +147,190 @@ fn str_from_header(ptr: *const u8) -> &'static str {
         let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
     }
+}
+
+/// Convert Perry's closest timer deadline into the bounded wait used by the
+/// Win32 pump. Fractional milliseconds round up so an early wake never fires a
+/// timer before its deadline; a negative/non-finite value means maintenance is
+/// the only clock still running.
+fn runtime_wait_timeout_ms(next_wake_ms: f64) -> u32 {
+    if !next_wake_ms.is_finite() || next_wake_ms < 0.0 {
+        return MAINTENANCE_HEARTBEAT_MS;
+    }
+    next_wake_ms
+        .ceil()
+        .clamp(0.0, MAINTENANCE_HEARTBEAT_MS as f64) as u32
+}
+
+fn maintenance_service_due(elapsed: std::time::Duration) -> bool {
+    elapsed >= std::time::Duration::from_millis(MAINTENANCE_HEARTBEAT_MS as u64)
+}
+
+fn frame_loop_sleep_duration(
+    vsync_succeeded: bool,
+    elapsed: std::time::Duration,
+) -> Option<std::time::Duration> {
+    let interval = std::time::Duration::from_millis(FRAME_INTERVAL_MS);
+    if !vsync_succeeded {
+        // Preserve the bounded fallback used when desktop composition is not
+        // available. DwmFlush failures normally return immediately.
+        return Some(interval);
+    }
+    (elapsed < interval).then(|| interval - elapsed)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "C" fn post_runtime_wake(ctx: *mut c_void) {
+    if ctx.is_null() || RUNTIME_WAKE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // The context is the HWND value, not a pointer to host-owned memory, so it
+    // remains safe to copy from any producer thread. If shutdown won the race,
+    // PostMessageW simply fails against the destroyed window.
+    if PostMessageW(Some(HWND(ctx)), WM_PERRY_RUNTIME_WAKE, WPARAM(0), LPARAM(0)).is_err() {
+        RUNTIME_WAKE_PENDING.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct FrameDriver {
+    stop: Arc<AtomicBool>,
+    message_pending: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "windows")]
+impl FrameDriver {
+    fn start(hwnd: HWND) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let message_pending = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread_pending = Arc::clone(&message_pending);
+        // HWND's windows-rs wrapper is not Send; the integer handle is. The
+        // driver only posts messages and never dereferences window state.
+        let hwnd_value = hwnd.0 as isize;
+        let thread = std::thread::Builder::new()
+            .name("perry-dwm-frame".into())
+            .spawn(move || {
+                while !thread_stop.load(Ordering::Acquire) {
+                    let iteration_started = std::time::Instant::now();
+                    let vsync_succeeded = crate::dwm::wait_for_vsync();
+                    if let Some(delay) =
+                        frame_loop_sleep_duration(vsync_succeeded, iteration_started.elapsed())
+                    {
+                        std::thread::sleep(delay);
+                    }
+                    if thread_stop.load(Ordering::Acquire)
+                        || perry_runtime::frame::js_frame_has_pending() == 0
+                        || thread_pending.swap(true, Ordering::AcqRel)
+                    {
+                        continue;
+                    }
+                    let posted = unsafe {
+                        PostMessageW(
+                            Some(HWND(hwnd_value as *mut c_void)),
+                            WM_PERRY_FRAME,
+                            WPARAM(0),
+                            LPARAM(0),
+                        )
+                    };
+                    if posted.is_err() {
+                        thread_pending.store(false, Ordering::Release);
+                    }
+                }
+            })
+            .ok();
+        Self {
+            stop,
+            message_pending,
+            thread,
+        }
+    }
+
+    fn message_consumed(&self) {
+        self.message_pending.store(false, Ordering::Release);
+    }
+
+    fn is_running(&self) -> bool {
+        self.thread.is_some()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for FrameDriver {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn service_runtime_deadlines() {
+    unsafe {
+        js_callback_timer_tick();
+        js_interval_timer_tick();
+    }
+    perry_runtime::event_pump::perry_poll();
+    // Preserve the previous 2 ms incremental-GC maintenance budget, but run it
+    // at a deadline/wake boundary instead of after a fixed UI timer message.
+    unsafe {
+        js_gc_step_us(2_000, std::ptr::null_mut());
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn service_runtime_deadlines_and_reset(last_service: &mut std::time::Instant) {
+    service_runtime_deadlines();
+    *last_service = std::time::Instant::now();
+}
+
+#[cfg(target_os = "windows")]
+fn service_frame() {
+    unsafe {
+        js_frame_pump_default();
+    }
+    // An onFrame callback can resolve promises; drain them in the same turn.
+    perry_runtime::event_pump::perry_poll();
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn dispatch_ui_message(msg: &MSG) {
+    // WM_HOTKEY is posted to the thread message queue, not to a window.
+    if msg.message == WM_HOTKEY {
+        let hotkey_id = msg.wParam.0 as i32;
+        GLOBAL_HOTKEY_CALLBACKS.with(|cbs| {
+            if let Some(cb_ptr) = cbs.borrow().get(&hotkey_id) {
+                unsafe {
+                    js_closure_call0(*cb_ptr);
+                }
+            }
+        });
+        return;
+    }
+    if (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
+        && try_handle_shortcut(msg.wParam.0 as u16)
+    {
+        return;
+    }
+    // Issue #1864: continuous onKeyDown/onKeyUp dispatch. Runs after the
+    // shortcut check so a menu hotkey still wins.
+    if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+        crate::keyboard::dispatch_message(msg.wParam.0 as u16, msg.lParam.0 as isize, true);
+    } else if msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP {
+        crate::keyboard::dispatch_message(msg.wParam.0 as u16, msg.lParam.0 as isize, false);
+    }
+    // Dialog-style keyboard navigation. IsDialogMessageW performs its own
+    // translate+dispatch when it handles the message.
+    if (WM_KEYFIRST..=WM_KEYLAST).contains(&msg.message) && wants_dialog_navigation(msg.hwnd) {
+        let root = GetAncestor(msg.hwnd, GA_ROOT);
+        if !root.0.is_null() && IsDialogMessageW(root, msg).as_bool() {
+            return;
+        }
+    }
+    let _ = TranslateMessage(msg);
+    DispatchMessageW(msg);
 }
 
 pub(crate) struct AppEntry {
@@ -453,17 +660,6 @@ pub fn app_run(app_handle: i64) {
             }
         });
 
-        // Start a periodic timer to tick setTimeout/setInterval queues
-        APPS.with(|apps| {
-            let apps = apps.borrow();
-            let idx = (app_handle - 1) as usize;
-            if idx < apps.len() {
-                unsafe {
-                    let _ = SetTimer(Some(apps[idx].hwnd), TICK_TIMER_ID, 50, None);
-                }
-            }
-        });
-
         // PERRY_UI_TEST_MODE: schedule a one-shot exit timer so CI can verify
         // that the app launched without a human keeping it open.
         if perry_ui_testkit::is_test_mode() {
@@ -523,95 +719,105 @@ pub fn app_run(app_handle: i64) {
             }
         }
 
-        // Message loop
-        unsafe {
-            let mut msg = MSG::default();
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                // WM_HOTKEY is posted to the thread message queue, not to a window
-                if msg.message == 0x0312 {
-                    // WM_HOTKEY
-                    let hotkey_id = msg.wParam.0 as i32;
-                    GLOBAL_HOTKEY_CALLBACKS.with(|cbs| {
-                        if let Some(cb_ptr) = cbs.borrow().get(&hotkey_id) {
-                            unsafe {
-                                js_closure_call0(*cb_ptr);
-                            }
+        let main_hwnd = APPS.with(|apps| {
+            let apps = apps.borrow();
+            apps.get((app_handle - 1) as usize).map(|app| app.hwnd)
+        });
+        if let Some(main_hwnd) = main_hwnd {
+            let frame_driver = FrameDriver::start(main_hwnd);
+            RUNTIME_WAKE_PENDING.store(false, Ordering::Release);
+            unsafe {
+                perry_runtime::event_pump::perry_set_wake_callback(
+                    Some(post_runtime_wake),
+                    main_hwnd.0,
+                );
+            }
+
+            // Deadline-aware message loop (#6617). The old blocking
+            // GetMessageW + 50 ms WM_TIMER made every timer and async wake wait
+            // for the heartbeat and drove onFrame at 20 fps. Perry's nearest
+            // JS deadline now bounds MsgWaitForMultipleObjectsEx, producer
+            // notifications post an immediate wake, and DwmFlush posts a
+            // separate coalesced frame message.
+            unsafe {
+                let mut last_service = std::time::Instant::now();
+                'message_loop: loop {
+                    let timeout =
+                        runtime_wait_timeout_ms(perry_runtime::event_pump::perry_next_wake_ms());
+                    let wait = MsgWaitForMultipleObjectsEx(
+                        None,
+                        timeout,
+                        QS_ALLINPUT,
+                        MWMO_INPUTAVAILABLE,
+                    );
+                    if wait == WAIT_FAILED {
+                        break;
+                    }
+                    if wait == WAIT_TIMEOUT || maintenance_service_due(last_service.elapsed()) {
+                        service_runtime_deadlines_and_reset(&mut last_service);
+                        // Thread creation can fail under extreme resource
+                        // pressure. Retain the old maintenance-clock behavior
+                        // as a degraded fallback instead of starving onFrame.
+                        if !frame_driver.is_running()
+                            && perry_runtime::frame::js_frame_has_pending() != 0
+                        {
+                            service_frame();
                         }
-                    });
-                    continue;
-                }
-                // Check keyboard shortcuts
-                if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
-                    if try_handle_shortcut(msg.wParam.0 as u16) {
-                        continue;
                     }
-                }
-                // Issue #1864: continuous onKeyDown/onKeyUp dispatch.
-                // Runs after the shortcut check so a menu hotkey still wins.
-                if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
-                    crate::keyboard::dispatch_message(
-                        msg.wParam.0 as u16,
-                        msg.lParam.0 as isize,
-                        true,
-                    );
-                } else if msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP {
-                    crate::keyboard::dispatch_message(
-                        msg.wParam.0 as u16,
-                        msg.lParam.0 as isize,
-                        false,
-                    );
-                }
-                // Dialog-style keyboard navigation (Tab / Shift-Tab / arrow
-                // keys between WS_TABSTOP controls). A raw GetMessage →
-                // DispatchMessage pump never runs the dialog manager, so
-                // every control's WS_TABSTOP bit was dead and Tab did
-                // nothing in Perry windows. IsDialogMessageW performs its
-                // own translate+dispatch when it handles a message, so skip
-                // the normal dispatch then. Deliberately AFTER the shortcut
-                // and onKeyDown/onKeyUp dispatch above: app shortcuts still
-                // win, and JS key events still observe Tab presses.
-                if (WM_KEYFIRST..=WM_KEYLAST).contains(&msg.message)
-                    && wants_dialog_navigation(msg.hwnd)
-                {
-                    let root = GetAncestor(msg.hwnd, GA_ROOT);
-                    if !root.0.is_null() && IsDialogMessageW(root, &msg).as_bool() {
-                        continue;
+
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        if msg.message == WM_QUIT {
+                            break 'message_loop;
+                        }
+                        if msg.message == WM_PERRY_RUNTIME_WAKE {
+                            RUNTIME_WAKE_PENDING.store(false, Ordering::Release);
+                            service_runtime_deadlines_and_reset(&mut last_service);
+                            continue;
+                        }
+                        if msg.message == WM_PERRY_FRAME {
+                            frame_driver.message_consumed();
+                            service_frame();
+                            if maintenance_service_due(last_service.elapsed()) {
+                                service_runtime_deadlines_and_reset(&mut last_service);
+                            }
+                            continue;
+                        }
+                        dispatch_ui_message(&msg);
+                        // UI callbacks can resolve promises without going
+                        // through a timer; make those microtasks observable in
+                        // the same message turn.
+                        perry_runtime::event_pump::perry_poll();
+                        // PeekMessageW may never observe an empty queue during
+                        // drags, resizes, or key repeat. Check inside the drain
+                        // as well as after the wait so timers and GC retain a
+                        // maintenance floor under continuous input.
+                        if maintenance_service_due(last_service.elapsed()) {
+                            service_runtime_deadlines_and_reset(&mut last_service);
+                        }
                     }
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-                // Process setTimeout/setInterval callbacks outside wndproc to avoid re-entrancy
-                if TIMER_TICK_NEEDED.with(|t| t.replace(false)) {
-                    unsafe {
-                        js_callback_timer_tick();
-                        js_interval_timer_tick();
-                        // Issue #1865: perry/ui `onFrame` display-link
-                        // callbacks. Real DwmFlush-aligned vsync driver is
-                        // a follow-up.
-                        js_frame_pump_default();
-                        // #6183 (2026-07-09 GC audit): spend a bounded idle
-                        // budget on any active budgeted GC cycle at the pump
-                        // boundary — the JS stack is fully unwound here, so
-                        // this is a precise-root safepoint. A 2 ms slice per
-                        // tick drains collection debt incrementally instead of
-                        // letting an alloc-point collection land unbounded on
-                        // this (main/UI) thread mid-interaction.
-                        js_gc_step_us(2_000, std::ptr::null_mut());
-                    }
-                }
-                // perry/media (#351) — UI-thread state poll for active
-                // MediaPlayer instances. Internally throttled to ~10 Hz.
-                crate::media_playback::pump_tick();
-                #[cfg(feature = "geisterhand")]
-                {
-                    extern "C" {
-                        fn perry_geisterhand_pump();
-                    }
-                    unsafe {
+
+                    // perry/media (#351) — UI-thread state poll for active
+                    // MediaPlayer instances. Internally throttled to ~10 Hz.
+                    crate::media_playback::pump_tick();
+                    #[cfg(feature = "geisterhand")]
+                    {
+                        extern "C" {
+                            fn perry_geisterhand_pump();
+                        }
                         perry_geisterhand_pump();
                     }
                 }
             }
+
+            // Clear the cross-thread callback before the HWND/frame-driver
+            // lifetime ends. A racing notify sees either the null callback or
+            // a still-valid integer HWND and PostMessageW fails harmlessly.
+            unsafe {
+                perry_runtime::event_pump::perry_set_wake_callback(None, std::ptr::null_mut());
+            }
+            RUNTIME_WAKE_PENDING.store(false, Ordering::Release);
+            drop(frame_driver);
         }
     }
 
@@ -1079,12 +1285,6 @@ pub fn handle_timer(hwnd: HWND, timer_id: usize) {
         return;
     }
 
-    // Periodic tick — just flag it, actual processing happens in message loop
-    if timer_id == TICK_TIMER_ID {
-        TIMER_TICK_NEEDED.with(|t| t.set(true));
-        return;
-    }
-
     // PERRY_UI_TEST_MODE exit: capture screenshot (if configured), then exit.
     if timer_id == TEST_EXIT_TIMER_ID {
         unsafe {
@@ -1462,7 +1662,11 @@ unsafe extern "system" fn wnd_proc(
 
 #[cfg(test)]
 mod dpi_tests {
-    use super::{dpi_scale_from_dpi, scale_logical_px_by};
+    use super::{
+        dpi_scale_from_dpi, frame_loop_sleep_duration, maintenance_service_due,
+        runtime_wait_timeout_ms, scale_logical_px_by,
+    };
+    use std::time::Duration;
 
     #[test]
     fn converts_logical_window_sizes_at_common_scales() {
@@ -1479,6 +1683,39 @@ mod dpi_tests {
         assert_eq!(dpi_scale_from_dpi(0), 1.0);
         assert_eq!(dpi_scale_from_dpi(72), 1.0);
         assert_eq!(scale_logical_px_by(100.0, 0.0), 100);
+    }
+
+    #[test]
+    fn message_pump_wait_tracks_runtime_deadlines_and_keeps_maintenance_cap() {
+        assert_eq!(runtime_wait_timeout_ms(-1.0), 50);
+        assert_eq!(runtime_wait_timeout_ms(f64::NAN), 50);
+        assert_eq!(runtime_wait_timeout_ms(0.0), 0);
+        assert_eq!(runtime_wait_timeout_ms(0.1), 1);
+        assert_eq!(runtime_wait_timeout_ms(16.1), 17);
+        assert_eq!(runtime_wait_timeout_ms(500.0), 50);
+    }
+
+    #[test]
+    fn continuous_input_cannot_starve_the_maintenance_heartbeat() {
+        assert!(!maintenance_service_due(Duration::from_millis(49)));
+        assert!(maintenance_service_due(Duration::from_millis(50)));
+        assert!(maintenance_service_due(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn frame_loop_keeps_a_floor_when_dwm_flush_returns_quickly() {
+        assert_eq!(
+            frame_loop_sleep_duration(true, Duration::from_millis(1)),
+            Some(Duration::from_millis(15))
+        );
+        assert_eq!(
+            frame_loop_sleep_duration(true, Duration::from_millis(16)),
+            None
+        );
+        assert_eq!(
+            frame_loop_sleep_duration(false, Duration::from_millis(1)),
+            Some(Duration::from_millis(16))
+        );
     }
 }
 

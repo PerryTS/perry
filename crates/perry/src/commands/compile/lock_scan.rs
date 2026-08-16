@@ -21,7 +21,7 @@ use anyhow::Result;
 use crate::OutputFormat;
 
 use super::resolve::{has_perry_native_library, parse_native_library_manifest};
-use super::{is_android_target, CompilationContext};
+use super::{is_android_target, windows_target_arch, CompilationContext};
 
 /// #498 - discover every `perry.nativeLibrary` archive a build of
 /// the project at `project_root` would consume. Scans every
@@ -145,6 +145,9 @@ fn derive_target_key(target: Option<&str>) -> String {
     if is_android_target(target) {
         return "android".to_string();
     }
+    if let Some(windows) = windows_target_arch(target) {
+        return format!("windows-{}", windows.lock_token());
+    }
     match target {
         None => format!("{}-{}", std::env::consts::OS, arch),
         Some("macos") => format!("macos-{}", arch),
@@ -153,7 +156,6 @@ fn derive_target_key(target: Option<&str>) -> String {
         Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {
             format!("linux-{}", arch)
         }
-        Some("windows") | Some("windows-winui") => format!("windows-{}", arch),
         Some("ios") => "ios".to_string(),
         Some("ios-simulator") => "ios-simulator".to_string(),
         Some("tvos") => "tvos".to_string(),
@@ -253,6 +255,7 @@ mod lock_integration_tests {
         assert!(derive_target_key(Some("macos")).starts_with("macos-"));
         assert!(derive_target_key(Some("linux")).starts_with("linux-"));
         assert!(derive_target_key(Some("windows")).starts_with("windows-"));
+        assert_eq!(derive_target_key(Some("windows-aarch64")), "windows-arm64");
     }
 
     #[test]

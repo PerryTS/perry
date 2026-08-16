@@ -162,6 +162,7 @@ fn shadow_hygiene_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -220,6 +221,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -339,6 +341,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -399,6 +402,7 @@ fn reassigned_any_shadow_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -474,6 +478,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -557,6 +562,7 @@ fn closure_captured_write_shadow_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -885,9 +891,10 @@ fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
     );
     assert!(
         main_ir.contains(
-            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4"
+            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic, align 4"
         ) && main_ir.contains("shadow.root.barrier"),
-        "an inactive incremental collector should skip the TLS-backed root barrier call"
+        "the relaxed global gate should let an inactive incremental collector skip the \
+         TLS-backed root barrier call"
     );
 }
 
@@ -1037,9 +1044,28 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
         fn_ir.contains("call ptr @js_shadow_frame_enter(i32 2)"),
         "captured Any local written to a pointer inside a closure must keep its outer slot"
     );
+    // The analysis half of the contract, stated positively: the captured
+    // write IS visible, so `value` is boxed and its writes route through the
+    // box cell.
     assert!(
-        fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
-        "boxed captured local should bind its outer shadow slot to the box slot"
+        fn_ir.contains("call i64 @js_box_alloc_bits"),
+        "a captured-and-mutated local must be boxed:\n{fn_ir}"
+    );
+    // #8132: the box-pointer slot itself is deliberately NOT bound. The slot
+    // only ever holds a `js_box_alloc_bits` result — a `std::alloc` cell
+    // outside the GC heap that no collector phase moves or frees, whose
+    // contents the box-registry scanner traces — so binding it rooted
+    // nothing and (under RS4GC) cost a relocation of the box pointer at
+    // every statepoint it stayed live across. Slot 0 is `value`'s.
+    assert!(
+        !fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
+        "#8132: a boxed local's box-pointer slot must not be bound as a GC root:\n{fn_ir}"
+    );
+    // The discriminating control: `writer` (slot 1) holds a movable closure
+    // and must still bind — if binds were skipped wholesale this fails.
+    assert!(
+        fn_ir.contains("call void @js_shadow_slot_bind(i32 1, ptr %"),
+        "the unboxed closure local must still bind its shadow slot:\n{fn_ir}"
     );
 }
 
@@ -1114,8 +1140,36 @@ fn canonical_str_shadow_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
+}
+
+fn declared_string_lie_self_append_module() -> Module {
+    let mut module = canonical_str_shadow_module();
+    module.name = "declared_string_lie_self_append.ts".to_string();
+    module.functions[0].name = "probe_declared_string_lie".to_string();
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::String,
+            mutable: true,
+            // Models `let value: string = (42 as any)`: the annotation selects
+            // the string self-append lowering, but the slot bits are numeric.
+            init: Some(Expr::Number(42.0)),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(1)),
+                right: Box::new(Expr::Number(1.0)),
+            }),
+        )),
+        Stmt::Return(Some(Expr::LocalGet(1))),
+    ];
+    module
 }
 
 /// Phase 3a invariants (default flag state, `PERRY_CANONICAL_STR_LOCALS` on):
@@ -1156,7 +1210,7 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     }
     let heap_arm_start = block_def_offset(fn_ir, "strapp.heap");
     let heap_arm_end =
-        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rcold") + 1;
+        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rnotheap") + 1;
     let heap_arm = &fn_ir[heap_arm_start..heap_arm_end];
     assert!(
         heap_arm.contains("call i64 @js_string_append"),
@@ -1176,5 +1230,32 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     assert!(
         !fn_ir.contains("plen.check_gc"),
         "canonical-Str .length must not fall into the generic receiver tower:\n{fn_ir}"
+    );
+}
+
+/// #7841: a TypeScript annotation may select the self-append lowering, but it
+/// cannot decide whether `+` means numeric addition or string concatenation.
+/// The real slot tag makes that decision at runtime. Keep the load-bearing
+/// heap-string arm direct while routing the annotation-lie arm through the
+/// spec-complete dynamic operator.
+#[test]
+fn declared_string_self_append_keeps_dynamic_lie_arm() {
+    let _pin = NativeRootsPin::shadow();
+    let ir = String::from_utf8(
+        compile_module(&declared_string_lie_self_append_module(), empty_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(
+        &ir,
+        "perry_fn_declared_string_lie_self_append_ts__probe_declared_string_lie",
+    );
+
+    assert!(
+        fn_ir.contains("call i64 @js_string_append"),
+        "a real heap-string destination must retain the in-place append arm:\n{fn_ir}"
+    );
+    assert!(
+        fn_ir.contains("call double @js_dynamic_string_or_number_add"),
+        "a non-string destination must use the actual runtime `+` operator:\n{fn_ir}"
     );
 }

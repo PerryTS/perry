@@ -139,6 +139,7 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -209,6 +210,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -273,26 +275,161 @@ fn large_local_array_push_inbounds_store_emits_precise_slot_barrier() {
         "fixture should allocate a large local array outside the inline small-literal path"
     );
 
-    let inbounds_pos = ir
-        .find("\napush.inbounds.")
-        .expect("optimized local push should emit an in-bounds fast block");
-    let push_ir = &ir[inbounds_pos + 1..];
-    let inbounds_end = push_ir
-        .find("\napush.realloc.")
-        .expect("in-bounds push block should precede the realloc block");
-    let inbounds_ir = &push_ir[..inbounds_end];
-    let store_pos = inbounds_ir
-        .find("store double")
+    // #7708: the store->note->barrier ordering is asserted over the CFG region
+    // reachable from `apush.inbounds`, NOT over the text between two block
+    // labels. The barrier has already migrated once into a dedicated
+    // `apush.barrier.*` block downstream of `apush.realloc` -- a legal
+    // block-structure change that a text slice bounded by those labels is
+    // structurally unable to see (this test sat red for two days over exactly
+    // that; the #7698 fix documents the same failure shape on the
+    // class-field-store side). A census that cannot distinguish "the subject
+    // vanished" from "the subject moved" is a gate that cannot fail honestly.
+    let region = apush_region_from_inbounds(&ir);
+    assert!(
+        region
+            .first_visit_order
+            .first()
+            .is_some_and(|b| b.starts_with("apush.inbounds.")),
+        "optimized local push should emit an in-bounds fast block"
+    );
+    let store_at = region
+        .position_of("store double")
         .expect("optimized push should emit a direct element store");
-    let layout_pos = inbounds_ir
-        .find("call void @js_gc_note_slot_layout")
+    let layout_at = region
+        .position_of("call void @js_gc_note_slot_layout")
         .expect("optimized push store should keep slot layout notes");
-    let barrier_pos = inbounds_ir
-        .find("call void @js_write_barrier_slot")
+    let barrier_at = region
+        .position_of("call void @js_write_barrier_slot")
         .expect("optimized push direct store must remember old-born parent slots");
 
-    assert!(store_pos < layout_pos);
-    assert!(layout_pos < barrier_pos);
+    assert!(
+        store_at.0 == 0,
+        "the direct element store must live in the in-bounds block itself, \
+         not a successor; found it in {}",
+        region.first_visit_order[store_at.0]
+    );
+    assert!(
+        store_at < layout_at,
+        "slot-layout note must come at or after the direct store on the \
+         in-bounds path (store in {}, note in {})",
+        region.first_visit_order[store_at.0],
+        region.first_visit_order[layout_at.0]
+    );
+    assert!(
+        layout_at < barrier_at,
+        "the write barrier must come after the layout note on the in-bounds \
+         path (note in {}, barrier in {})",
+        region.first_visit_order[layout_at.0],
+        region.first_visit_order[barrier_at.0]
+    );
+}
+
+/// The `apush.*` region reachable from the push's `apush.inbounds` block, in
+/// first-visit (breadth-first) order, with block-relative marker positions.
+///
+/// Successors are read from `label %name` operands, and the walk stays inside
+/// `apush.*`-prefixed blocks: the region ends where the push's own control
+/// flow rejoins the surrounding function, so a marker found here is on the
+/// push path and nowhere else.
+struct ApushRegion {
+    first_visit_order: Vec<String>,
+    block_text: Vec<String>,
+}
+
+impl ApushRegion {
+    /// `(block_index_in_first_visit_order, byte_offset_in_block)` of the first
+    /// occurrence of `needle`, or `None`. The tuple ordering makes "earlier
+    /// block, then earlier within the block" the comparison the asserts use.
+    fn position_of(&self, needle: &str) -> Option<(usize, usize)> {
+        self.block_text
+            .iter()
+            .enumerate()
+            .find_map(|(i, text)| text.find(needle).map(|off| (i, off)))
+    }
+}
+
+fn apush_region_from_inbounds(ir: &str) -> ApushRegion {
+    let mut blocks: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, String)> = None;
+    for line in ir.lines() {
+        if let Some(label) = line.strip_suffix(':') {
+            if !label.is_empty()
+                && !label.contains(' ')
+                && label
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+            {
+                if let Some(done) = current.take() {
+                    blocks.push(done);
+                }
+                current = Some((label.to_string(), String::new()));
+                continue;
+            }
+        }
+        if let Some((_, text)) = current.as_mut() {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    if let Some(done) = current.take() {
+        blocks.push(done);
+    }
+
+    let entry = blocks
+        .iter()
+        .map(|(name, _)| name.clone())
+        .find(|name| name.starts_with("apush.inbounds."))
+        .expect("optimized local push should emit an in-bounds fast block");
+
+    let successors = |name: &str| -> Vec<String> {
+        blocks
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, text)| {
+                let mut out = Vec::new();
+                let mut rest = text.as_str();
+                while let Some(pos) = rest.find("label %") {
+                    let tail = &rest[pos + "label %".len()..];
+                    let target: String = tail
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_')
+                        .collect();
+                    if !target.is_empty() {
+                        out.push(target);
+                    }
+                    rest = tail;
+                }
+                out
+            })
+            .unwrap_or_default()
+    };
+
+    let mut order: Vec<String> = Vec::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    queue.push_back(entry);
+    while let Some(name) = queue.pop_front() {
+        if order.contains(&name) || !name.starts_with("apush.") {
+            continue;
+        }
+        order.push(name.clone());
+        for succ in successors(&name) {
+            queue.push_back(succ);
+        }
+    }
+    let block_text = order
+        .iter()
+        .map(|name| {
+            blocks
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    ApushRegion {
+        first_visit_order: order,
+        block_text,
+    }
 }
 
 #[test]

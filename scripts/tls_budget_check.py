@@ -194,6 +194,7 @@ def self_test() -> int:
 
     cases = [
         ("over budget", report(2000, 10000, 40), good_stats, 5.0, 2000, 20, 20),
+        ("zero-root profile", report(0, 0, 40), good_stats, 5.0, 2000, 20, 20),
         ("too few samples", report(10, 500, 40), good_stats, 5.0, 2000, 20, 20),
         ("stripped/narrow", report(10, 10000, 3), good_stats, 5.0, 2000, 20, 20),
         ("no stats line", report(10, 10000, 40), "", 5.0, 2000, 20, 20),

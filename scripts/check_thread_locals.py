@@ -74,7 +74,7 @@ import os
 import re
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 REPO = Path(__file__).resolve().parent.parent
 ALLOWLIST = REPO / "scripts" / "thread_local_cold_allowlist.json"
@@ -94,6 +94,35 @@ DECL_RE = re.compile(
 # itself and the macro's expansion target, so they cannot be written with the
 # macro without infinite regress.
 EXCLUDED = {"crates/perry-runtime/src/tls_hot.rs"}
+
+
+def repo_relative(path: PurePath, root: PurePath) -> str:
+    """Return a stable repository-relative key on every host platform."""
+    return path.relative_to(root).as_posix()
+
+
+def read_source(path: Path) -> str:
+    """Read a repository file as UTF-8 on every host (#7977).
+
+    A bare `Path.read_text()` decodes with `locale.getencoding()`, which is
+    cp1252 on a GitHub Windows runner. Fifteen files under
+    `crates/perry-runtime/src` carry a byte that cp1252 has no mapping for
+    (0x81/0x8d/0x8f/0x90/0x9d), so the walk died on `i18n.rs` with a
+    `UnicodeDecodeError` before the checker examined a single declaration —
+    taking the whole `windows-build` job, and the eleven steps behind it,
+    down with it. The sources are UTF-8; say so.
+    """
+    return path.read_text(encoding="utf-8")
+
+
+def write_source(path: Path, text: str) -> None:
+    """Write a file as UTF-8 with LF endings on every host (#7977).
+
+    `newline=""` suppresses Windows' `\\n` -> `\\r\\n` translation so
+    `--update` produces the same allowlist bytes everywhere.
+    """
+    path.write_text(text, encoding="utf-8", newline="")
+
 
 # `#[cfg(test)] mod <stem>;` — the whole file is a test module.
 CFG_TEST_MOD_RE = re.compile(
@@ -159,15 +188,15 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
                 if not name.endswith(".rs"):
                     continue
                 path = Path(dirpath) / name
-                rel = str(path.relative_to(root))
-                src = path.read_text()
+                rel = repo_relative(path, root)
+                src = read_source(path)
                 parent = path.parent if name in ("lib.rs", "mod.rs") else path.with_suffix("")
                 gated = set(CFG_TEST_MOD_RE.findall(src))
                 edges = []
                 for stem in set(ANY_MOD_RE.findall(src)):
                     for candidate in (parent / f"{stem}.rs", parent / stem / "mod.rs"):
                         if candidate.exists():
-                            edges.append((str(candidate.relative_to(root)), stem in gated))
+                            edges.append((repo_relative(candidate, root), stem in gated))
                 declares[rel] = edges
 
     test_only = {child for edges in declares.values() for child, gated in edges if gated}
@@ -213,8 +242,8 @@ def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
                 if not name.endswith(".rs"):
                     continue
                 path = Path(dirpath) / name
-                rel = str(path.relative_to(root))
-                src = path.read_text()
+                rel = repo_relative(path, root)
+                src = read_source(path)
                 hot_declarations += sum(
                     len(DECL_RE.findall(body)) for body in block_bodies(src, HOT_RE)
                 )
@@ -227,7 +256,7 @@ def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
 
 
 def hot_slot_capacity(root: Path) -> int:
-    src = (root / "crates/perry-runtime/src/tls_hot.rs").read_text()
+    src = read_source(root / "crates/perry-runtime/src/tls_hot.rs")
     m = re.search(r"pub const HOT_SLOT_CAPACITY: usize = (\d+);", src)
     if not m:
         raise SystemExit("could not read HOT_SLOT_CAPACITY from tls_hot.rs")
@@ -236,7 +265,7 @@ def hot_slot_capacity(root: Path) -> int:
 
 def verify(root: Path, crates: list[str], allowlist_path: Path) -> list[str]:
     raw, hot_declarations = scan(root, crates)
-    recorded = json.loads(allowlist_path.read_text())["files"]
+    recorded = json.loads(read_source(allowlist_path))["files"]
     problems = []
 
     for rel, count in sorted(raw.items()):
@@ -278,7 +307,7 @@ def verify(root: Path, crates: list[str], allowlist_path: Path) -> list[str]:
 
 def write_allowlist(root: Path, crates: list[str], allowlist_path: Path) -> None:
     raw, hot_declarations = scan(root, crates)
-    allowlist_path.write_text(
+    write_source(allowlist_path, 
         json.dumps(
             {
                 "_comment": (
@@ -301,22 +330,25 @@ def write_allowlist(root: Path, crates: list[str], allowlist_path: Path) -> None
 def self_test() -> int:
     """Prove the checker can say no, in both directions."""
     failures = []
+    windows_root = PureWindowsPath(r"C:\perry")
+    if repo_relative(windows_root / "crates" / "runtime.rs", windows_root) != "crates/runtime.rs":
+        failures.append("repository-relative keys are not normalized on Windows")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         src_dir = root / "crates/perry-runtime/src"
         src_dir.mkdir(parents=True)
-        (src_dir / "tls_hot.rs").write_text(
+        write_source(src_dir / "tls_hot.rs", 
             "pub const HOT_SLOT_CAPACITY: usize = 768;\n"
             "thread_local! { static HOT: u8 = const { 0 }; }\n"
         )
-        (src_dir / "cold.rs").write_text("thread_local! { static A: u8 = const { 0 }; }\n")
-        (src_dir / "hot.rs").write_text(
+        write_source(src_dir / "cold.rs", "thread_local! { static A: u8 = const { 0 }; }\n")
+        write_source(src_dir / "hot.rs", 
             "crate::perry_thread_local! { static B: u8 = const { 0 }; }\n"
         )
         allowlist = root / "allow.json"
 
         write_allowlist(root, CRATES, allowlist)
-        recorded = json.loads(allowlist.read_text())
+        recorded = json.loads(read_source(allowlist))
         if "crates/perry-runtime/src/tls_hot.rs" in recorded["files"]:
             failures.append("tls_hot.rs must be excluded from the allowlist")
         if recorded["_hot_declarations"] != 1:
@@ -327,13 +359,13 @@ def self_test() -> int:
             failures.append("a freshly written allowlist must verify clean")
 
         # 1. A new raw declaration in an unlisted file must fail.
-        (src_dir / "new.rs").write_text("thread_local! { static C: u8 = const { 0 }; }\n")
+        write_source(src_dir / "new.rs", "thread_local! { static C: u8 = const { 0 }; }\n")
         if not verify(root, CRATES, allowlist):
             failures.append("a new raw `thread_local!` in an unlisted file passed")
         (src_dir / "new.rs").unlink()
 
         # 2. A second raw declaration in an already-listed file must fail.
-        (src_dir / "cold.rs").write_text(
+        write_source(src_dir / "cold.rs", 
             "thread_local! { static A: u8 = const { 0 }; }\n"
             "thread_local! { static D: u8 = const { 0 }; }\n"
         )
@@ -341,7 +373,7 @@ def self_test() -> int:
             failures.append("a raw `thread_local!` added to a listed file passed")
 
         # 3. A stale entry must fail.
-        (src_dir / "cold.rs").write_text(
+        write_source(src_dir / "cold.rs", 
             "crate::perry_thread_local! { static A: u8 = const { 0 }; }\n"
         )
         if not verify(root, CRATES, allowlist):
@@ -349,20 +381,20 @@ def self_test() -> int:
 
         # 4. Blowing the slot ceiling must fail.
         write_allowlist(root, CRATES, allowlist)
-        (src_dir / "hot.rs").write_text(
+        write_source(src_dir / "hot.rs", 
             "crate::perry_thread_local! {\n"
             + "".join(f"    static H{i}: u8 = const {{ 0 }};\n" for i in range(800))
             + "}\n"
         )
         if not any("HOT_SLOT_CAPACITY" in p for p in verify(root, CRATES, allowlist)):
             failures.append("exceeding HOT_SLOT_CAPACITY passed")
-        (src_dir / "hot.rs").write_text(
+        write_source(src_dir / "hot.rs", 
             "crate::perry_thread_local! { static B: u8 = const { 0 }; }\n"
         )
 
         # 5. The three `#[cfg(test)]` shapes are out of scope — and, the half
         #    that can go wrong quietly, REMOVING the gate puts them back in it.
-        (src_dir / "cold.rs").write_text("thread_local! { static A: u8 = const { 0 }; }\n")
+        write_source(src_dir / "cold.rs", "thread_local! { static A: u8 = const { 0 }; }\n")
         write_allowlist(root, CRATES, allowlist)
         gated = {
             "attribute": "#[cfg(test)]\nthread_local! { static G: u8 = const { 0 }; }\n",
@@ -373,23 +405,23 @@ def self_test() -> int:
             ),
         }
         for shape, body in gated.items():
-            (src_dir / "gated.rs").write_text(body)
+            write_source(src_dir / "gated.rs", body)
             if verify(root, CRATES, allowlist):
                 failures.append(f"a `#[cfg(test)]` {shape} declaration was counted")
-            (src_dir / "gated.rs").write_text(body.replace("#[cfg(test)]\n", ""))
+            write_source(src_dir / "gated.rs", body.replace("#[cfg(test)]\n", ""))
             if not verify(root, CRATES, allowlist):
                 failures.append(f"an UNGATED {shape} declaration passed")
         (src_dir / "gated.rs").unlink()
 
         # 6. A whole file declared `#[cfg(test)] mod <stem>;` is out of scope,
         #    and drops back in when the parent stops gating it.
-        (src_dir / "probes.rs").write_text(
+        write_source(src_dir / "probes.rs", 
             "thread_local! { static G: u8 = const { 0 }; }\n"
         )
-        (src_dir / "lib.rs").write_text("#[cfg(test)]\nmod probes;\n")
+        write_source(src_dir / "lib.rs", "#[cfg(test)]\nmod probes;\n")
         if verify(root, CRATES, allowlist):
             failures.append("a `#[cfg(test)] mod <stem>;` file was counted")
-        (src_dir / "lib.rs").write_text("mod probes;\n")
+        write_source(src_dir / "lib.rs", "mod probes;\n")
         if not verify(root, CRATES, allowlist):
             failures.append("an ungated `mod <stem>;` file passed")
 
@@ -411,7 +443,7 @@ def main() -> int:
         return self_test()
     if args.update:
         write_allowlist(REPO, CRATES, ALLOWLIST)
-        print(f"wrote {ALLOWLIST.relative_to(REPO)}")
+        print(f"wrote {ALLOWLIST.relative_to(REPO).as_posix()}")
         return 0
 
     problems = verify(REPO, CRATES, ALLOWLIST)

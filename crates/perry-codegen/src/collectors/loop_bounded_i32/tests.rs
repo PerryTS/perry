@@ -129,10 +129,8 @@ fn bare_loop_counter_with_literal_bound_is_admitted() {
 }
 
 #[test]
-fn bare_accumulator_is_not_admitted() {
-    // The other half of #7110, and the half that must STAY denied:
-    // `sum = sum + 1` is a step, but no loop guard constrains `sum`, so
-    // nothing bounds it. 13_factorial's `sum` really does reach 4.995e10.
+fn accumulator_bounded_by_trip_count_times_step_is_admitted() {
+    // #7123: 1,000,000 trips * magnitude 1, from entry value zero, fits i32.
     let stmts = vec![
         let_mut(1, Some(Expr::Integer(0))),
         counting_for(
@@ -147,9 +145,209 @@ fn bare_accumulator_is_not_admitted() {
     ];
     let got = run(&stmts);
     assert!(
-        !got.contains(&1),
-        "bare accumulator must stay denied: {got:?}"
+        got.contains(&1),
+        "bounded accumulator must promote: {got:?}"
     );
+}
+
+#[test]
+fn accumulator_whose_true_total_leaves_i32_is_rejected() {
+    // Three iterations are enough to reach 3,000,000,000. This is the
+    // runtime-observable sabotage shape: deleting the final range check wraps.
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        counting_for(
+            2,
+            0,
+            Expr::Integer(3),
+            vec![set(
+                1,
+                bin(
+                    BinaryOp::Add,
+                    Expr::LocalGet(1),
+                    Expr::Integer(1_000_000_000),
+                ),
+            )],
+        ),
+    ];
+    let got = run(&stmts);
+    assert!(
+        !got.contains(&1),
+        "overflowing accumulator was admitted: {got:?}"
+    );
+}
+
+#[test]
+fn inclusive_non_unit_trip_count_uses_the_final_iteration() {
+    // `i = 0; i <= 8; i += 4` executes at 0, 4, and 8. Omitting the inclusive
+    // endpoint would under-count this as two iterations and unsafely admit the
+    // 800M accumulator; the 700M control still fits after all three writes.
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        let_mut(2, Some(Expr::Integer(0))),
+        Stmt::For {
+            init: Some(Box::new(let_mut(3, Some(Expr::Integer(0))))),
+            condition: Some(cmp(CompareOp::Le, Expr::LocalGet(3), Expr::Integer(8))),
+            update: Some(Expr::LocalSet(
+                3,
+                Box::new(bin(BinaryOp::Add, Expr::LocalGet(3), Expr::Integer(4))),
+            )),
+            body: vec![
+                set(
+                    1,
+                    bin(BinaryOp::Add, Expr::LocalGet(1), Expr::Integer(700_000_000)),
+                ),
+                set(
+                    2,
+                    bin(BinaryOp::Add, Expr::LocalGet(2), Expr::Integer(800_000_000)),
+                ),
+            ],
+        },
+    ];
+    let got = run(&stmts);
+    assert!(got.contains(&1), "three 700M steps still fit: {got:?}");
+    assert!(
+        !got.contains(&2),
+        "inclusive endpoint was omitted from the trip count: {got:?}"
+    );
+}
+
+#[test]
+fn factorial_modulo_counterexample_is_rejected_by_its_magnitude() {
+    // 1e8 * (|1000| - 1) is above i32. The real program reaches 4.995e10;
+    // using the conservative 9.99e10 bound must still refuse it.
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        counting_for(
+            2,
+            0,
+            Expr::Integer(100_000_000),
+            vec![set(
+                1,
+                bin(
+                    BinaryOp::Add,
+                    Expr::LocalGet(1),
+                    bin(BinaryOp::Mod, Expr::LocalGet(2), Expr::Integer(1000)),
+                ),
+            )],
+        ),
+    ];
+    assert!(!run(&stmts).contains(&1));
+}
+
+#[test]
+fn bit_mask_step_uses_the_literal_mask_as_its_magnitude() {
+    // 1000 * 255 fits, so `acc += x & 255` is bounded even though the value of
+    // x itself is not known to this range analysis.
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        counting_for(
+            2,
+            0,
+            Expr::Integer(1000),
+            vec![set(
+                1,
+                bin(
+                    BinaryOp::Add,
+                    Expr::LocalGet(1),
+                    bin(BinaryOp::BitAnd, Expr::LocalGet(9), Expr::Integer(255)),
+                ),
+            )],
+        ),
+    ];
+    assert!(run(&stmts).contains(&1));
+}
+
+#[test]
+fn nested_loop_trip_counts_multiply() {
+    // 40,000 * 40,000 additions fit, but 50,000 * 50,000 do not. This catches
+    // an implementation that takes the inner bound without the outer count.
+    let nested = |bound| {
+        vec![
+            let_mut(1, Some(Expr::Integer(0))),
+            counting_for(
+                2,
+                0,
+                Expr::Integer(bound),
+                vec![counting_for(
+                    3,
+                    0,
+                    Expr::Integer(bound),
+                    vec![set(
+                        1,
+                        bin(BinaryOp::Add, Expr::LocalGet(1), Expr::Integer(1)),
+                    )],
+                )],
+            ),
+        ]
+    };
+    assert!(run(&nested(40_000)).contains(&1));
+    assert!(!run(&nested(50_000)).contains(&1));
+}
+
+#[test]
+fn another_loop_bounded_local_can_bound_the_step() {
+    // `iter` has interval [0, 100]. The accumulator write executes at most
+    // 800 * 800 times, so its worst-case magnitude is 64,000,000.
+    let iter_loop = Stmt::While {
+        condition: cmp(CompareOp::Lt, Expr::LocalGet(4), Expr::Integer(100)),
+        body: vec![set(
+            4,
+            bin(BinaryOp::Add, Expr::LocalGet(4), Expr::Integer(1)),
+        )],
+    };
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        counting_for(
+            2,
+            0,
+            Expr::Integer(800),
+            vec![counting_for(
+                3,
+                0,
+                Expr::Integer(800),
+                vec![
+                    let_mut(4, Some(Expr::Integer(0))),
+                    iter_loop,
+                    set(1, bin(BinaryOp::Add, Expr::LocalGet(1), Expr::LocalGet(4))),
+                ],
+            )],
+        ),
+    ];
+    assert!(run(&stmts).contains(&1));
+}
+
+#[test]
+fn an_unknown_enclosing_loop_rejects_the_accumulator() {
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![set(
+                1,
+                bin(BinaryOp::Add, Expr::LocalGet(1), Expr::Integer(1)),
+            )],
+        },
+    ];
+    assert!(!run(&stmts).contains(&1));
+}
+
+#[test]
+fn any_write_outside_a_bounded_loop_rejects_the_accumulator() {
+    let stmts = vec![
+        let_mut(1, Some(Expr::Integer(0))),
+        counting_for(
+            2,
+            0,
+            Expr::Integer(10),
+            vec![set(
+                1,
+                bin(BinaryOp::Add, Expr::LocalGet(1), Expr::Integer(1)),
+            )],
+        ),
+        set(1, bin(BinaryOp::Add, Expr::LocalGet(1), Expr::Integer(1))),
+    ];
+    assert!(!run(&stmts).contains(&1));
 }
 
 #[test]

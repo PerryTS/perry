@@ -26,10 +26,7 @@
 use std::ffi::c_void;
 use std::hint::black_box;
 
-#[repr(C)]
-struct UnwindContext {
-    _private: [u8; 0],
-}
+use crate::eh::UnwindContext;
 
 unsafe extern "C" {
     fn _Unwind_Backtrace(

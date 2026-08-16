@@ -1,14 +1,16 @@
-// Repsel Phase 1, #7110: canonical unboxed i32 storage for a monotone loop
-// induction variable — a counter that is NOT used as an array index and is NOT
-// in `strictly_i32_bounded_locals` (`i++` disqualifies a local there, #6072).
+// Repsel Phase 1, #7110/#7123: canonical unboxed i32 storage for monotone loop
+// induction variables and accumulators bounded by trip count times step
+// magnitude. These locals are NOT used as array indices and are NOT in
+// `strictly_i32_bounded_locals` (`i++`/self-addition disqualify them there).
 //
 // Byte-compared against `node --experimental-strip-types`. Every number below
 // is chosen so that a WRONG answer is loud rather than plausible: the values
 // sit on the i32 boundary, where an unsound admission wraps to a large negative
 // instead of drifting by one.
 //
-// The three functions the analysis must REFUSE (`overshoot`, `runtimeBound`,
-// `accumulate`) are the point of this file as much as the ones it admits. An
+// The functions the analysis must REFUSE (`overshoot`, `runtimeBound`, and the
+// overflowing accumulator) are the point of this file as much as the ones it
+// admits. An
 // i32 slot for any of them prints a wrapped negative here, and Node prints the
 // true value. Keep them.
 
@@ -111,12 +113,21 @@ function runtimeBound(limit: number): number {
   return i;
 }
 
-// A bare accumulator has no guard bounding it. `benchmarks/suite/13_factorial.ts`
-// is the same shape at 1e8 iterations, where the true total is 49,950,000,000.
-function accumulate(): number {
+// #7123 admits the bounded counterpart: 4096 * 1 fits in i32.
+function boundedAccumulator(): number {
   let sum = 0;
   for (let i = 0; i < ROUNDS; i++) {
-    sum = sum + 1000000;
+    sum = sum + 1;
+  }
+  return sum;
+}
+
+// Three writes of one billion leave i32 immediately. If the range check is
+// removed, canonical storage wraps and this prints a different number.
+function overflowingAccumulator(): number {
+  let sum = 0;
+  for (let i = 0; i < 3; i++) {
+    sum = sum + 1000000000;
   }
   return sum;
 }
@@ -162,6 +173,7 @@ console.log("twoSteps:" + twoSteps());
 console.log("observed:" + observed());
 console.log("overshoot:" + overshoot());
 console.log("runtimeBound:" + runtimeBound(2147483653));
-console.log("accumulate:" + accumulate());
+console.log("boundedAccumulator:" + boundedAccumulator());
+console.log("overflowingAccumulator:" + overflowingAccumulator());
 console.log("bigStepOverflow:" + bigStepOverflow());
 console.log("bigStepUnderflow:" + bigStepUnderflow());

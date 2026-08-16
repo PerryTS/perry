@@ -139,6 +139,7 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_typed_i1_arg_to_raw", I32, &[DOUBLE]);
     module.declare_function("js_typed_string_arg_guard", I32, &[DOUBLE]);
     module.declare_function("js_typed_string_arg_to_raw", I64, &[DOUBLE]);
+    module.declare_function("js_param_type_guard", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_native_abi_check_f32", F32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i32", I32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i64", I64, &[DOUBLE]);

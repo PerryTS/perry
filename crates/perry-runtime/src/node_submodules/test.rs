@@ -81,7 +81,12 @@ fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
 
 fn make_closure(func: *const u8, arity: u32, captures: u32) -> *mut crate::closure::ClosureHeader {
     js_register_closure_arity(func, arity);
-    js_closure_alloc(func, captures)
+    let closure = js_closure_alloc(func, captures);
+    // Optimized Windows links may fold identical COMDAT function bodies, so
+    // the function-pointer registry is not a stable identity for reflective
+    // metadata. Pin the requested arity to this closure instance as well.
+    crate::object::set_builtin_closure_length(closure as usize, arity);
+    closure
 }
 
 fn closure_value(func: *const u8, arity: u32) -> f64 {
@@ -97,6 +102,7 @@ fn closure_value_with_id(func: *const u8, arity: u32, id: i64) -> f64 {
 fn rest_closure_value_with_id(func: *const u8, fixed_arity: u32, id: i64) -> f64 {
     js_register_closure_rest(func, fixed_arity);
     let closure = js_closure_alloc(func, 1);
+    crate::object::set_builtin_closure_length(closure as usize, fixed_arity);
     js_closure_set_capture_ptr(closure, 0, id);
     boxed_ptr(closure)
 }

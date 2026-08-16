@@ -273,9 +273,10 @@ fn test_fresh_closure_capture_slots_are_initialized_7154() {
 /// `object/field_set_by_name/tail.rs`'s two "#7154 publication order" sites.
 ///
 /// `perry_ffi::alloc_object()` calls `js_object_alloc(0, 0)`: `field_count =
-/// 0` with `INLINE_SLOT_FLOOR` (4) physical slots undefined-initialized.
+/// 0` with `INLINE_SLOT_FLOOR` physical slots undefined-initialized.
 /// `js_object_set_field(obj, 0, pointer_value)` passes the bounds check
-/// (`0 < max(field_count, 4)`) and stores the pointer, but — unlike
+/// (`0 < max(field_count, INLINE_SLOT_FLOOR)`) and stores the pointer, but —
+/// unlike
 /// `tail.rs`'s by-name writer — never bumps `field_count`. The collector's
 /// view of the payload (`object::gc_field_slot_range`, and downstream
 /// `heap_payload_slot_selection`'s `payload.is_empty()` short-circuit) is

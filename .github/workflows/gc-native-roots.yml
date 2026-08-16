@@ -104,6 +104,56 @@
 #                               an entry reading "deleted" for a name still
 #                               greppable in the tree makes the whole list
 #                               look stale.
+# ── STATUS as of #7970 (read before believing a red run) ───────────────────
+#
+# This workflow had NEVER had a successful run on any branch. Three of its four
+# arms failed, for three unrelated reasons, and they are NOT one bug:
+#
+#   macos-14      GATE DEFECT, fixed here. The in-process step asserted
+#                 evacuation liveness without setting `PERRY_GC_DIAG=1`, and
+#                 `[gc-copy-minor]` — the assert's only input — is printed only
+#                 under that flag. So the arm reported "evacuated NOTHING (0
+#                 copying minors)" on every run since it was written. Measured
+#                 on macOS aarch64 at b847afd1c: with the flag, the same binary
+#                 under the same GC env reports 75 copying minors and 16277
+#                 objects copied, and the whole step passes. The collector was
+#                 never the problem.
+#
+#   ubuntu-24.04-arm  REAL DEFECT, filed as #7984 and FIXED (#7997).
+#                 `PERRY_STACKMAP_WALKER=verify` caught the fast fp-chain
+#                 walker and the unwinder resolving the same root 96 bytes
+#                 apart, and the fast walker — the one that runs when `verify`
+#                 is off — was the wrong one. Two blind spots in
+#                 `fp_to_sp_offset`, both only reachable with SVE on, which is
+#                 what `-mcpu=native` turns on for a Neoverse-class core and
+#                 nothing on macOS or x86-64 ever does: a callee-save store
+#                 ended the prologue's stack-adjustment run, and
+#                 `addvl sp, sp, #-N` was not decoded at all. The 96 was never
+#                 a constant — it is that frame's missed tail, and it scales
+#                 with the vector length (208 at VL = 64 B).
+#
+#                 This arm should now be GREEN. If it goes red again, read the
+#                 report `verify` prints before assuming a regression: it names
+#                 the frame, the base register, both resolved bases and the
+#                 prologue words, which is enough to say which walker is wrong
+#                 without a second run.
+#
+#   windows-latest    FIXES LANDED; GREEN RUN PENDING. #8017 stopped linking the official archive's
+#                 incompatible /MT + rpmalloc static objects, restricted
+#                 inkwell to Perry's x86/AArch64 targets, and linked the
+#                 archive's LLVM-C.dll instead. #7985's release follow-up
+#                 keeps that DLL beside perry.exe in the Windows zip/npm
+#                 package. A SECOND, separate failure in the same arm —
+#                 Git-bash `tar` reading `D:\a\_temp` as a remote host — was
+#                 fixed by #8028, which normalizes shell paths with `cygpath`
+#                 and exports native Windows paths for Perry. `--force-local`
+#                 was ineffective with the runner's bsdtar.
+#
+# So: all known defects now have fixes in the intended combined state, but the
+# windows-latest arm remains unproven until a complete run measures it. Per
+# CLAUDE.md this becomes a promotion candidate only AFTER one complete green
+# run demonstrates all four arms; do not add it to branch protection based on
+# a comment.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
@@ -111,13 +161,35 @@ on:
   # filter would mean the job never runs at all — CLAUDE.md's second way a gate
   # cannot fail. Cancellation is deliberately NOT set here: a `main` run that
   # gets cancelled by the next merge is the third way.
+  #
+  # And the FOURTH way is what `push: branches: [main]` turned out to be here:
+  # STARVED (#7856). Neither cancelled nor failing — simply never scheduled,
+  # because fourteen workflows enqueued ~29 jobs on every one of 58 daily merges
+  # against a repo that runs ~9 jobs at a time. The post-merge arm is now a
+  # staggered six-hourly sweep; the pull-request arm is unchanged, so every PR is
+  # still measured. ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "37 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: gc-native-roots-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # ***#7966: KEY EVERY MAIN-LINE RUN ON `github.run_id`, NOT `github.sha`.***
+  # The previous expression read `github.event_name == 'push' && github.sha ||
+  # github.ref`. That was #7205's fix and it keyed on the event being `push` --
+  # correct while the main-line arm WAS `push: branches: [main]`. #7856 moved the
+  # main-line arm to `schedule:`, which falls through to `github.ref` (constant
+  # `refs/heads/main`), so every scheduled run shared one group again and #7205
+  # came straight back. Measured 2026-08-12 on all ten scheduled gates, the same
+  # shape every time: oldest run `queued` holding the group, the two after it
+  # `cancelled` with `jobs: 0`, newest `pending`. `github.run_id` is unique per
+  # run, so schedule / tag-push / workflow_dispatch each get a group of their own
+  # and none can supersede another. PR runs keep the shared per-ref group and
+  # keep superseding themselves, which is still what we want.
+  group: gc-native-roots-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   # Same shape as llvm-inprocess (#7357), and for the same measured reason.
   #
   # This workflow had NO concurrency group at all, so nothing ever superseded a
@@ -193,8 +265,8 @@ jobs:
     # llvm-inprocess feature, which cargo cannot share with the build above.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
       - uses: dtolnay/rust-toolchain@stable
@@ -206,6 +278,55 @@ jobs:
         run: |
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
           cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+
+      # #8075/#8038 are loader shapes, not standalone-executable probes: the
+      # runtime and stdlib are process-wide providers, generated frames live in
+      # a later-loaded app-only dylib, and full GC runs from a clean host
+      # boundary. The gate owns the exact two-module JSON/Buffer fixture plus
+      # #8038's streamed Response fixture. It requires 32,768 valid responses,
+      # >=10 full collections, retained and temporary Buffer classifications,
+      # concurrent producers serialized on one Perry executor, reclaimed
+      # temporary bytes, a flat live slope, and exact normal/forced-GC Response
+      # output including two chunks, EOF, headers, cookies, and rejection.
+      - name: Provider dylib host-boundary GC and Response
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: scripts/gc_provider_dylib_gate.sh
+
+      # The two aarch64 walkers, over a frame this repository wrote, on the host
+      # that has to walk it.
+      #
+      # Until this step, NOTHING `cargo test` runs ever called `fp_chain::visit`
+      # or `unwind::visit` — their only exercise anywhere was `verify` mode in
+      # the step further down, inside a workflow that has never had a successful
+      # run on any branch (#7970). The unit tests cover the decoder and the
+      # matcher; the step that turns a `(register, offset)` pair into a stack
+      # address had none, which is why #7984 could only ever be found by
+      # compiling TypeScript and collecting.
+      #
+      # This asks the same question in seconds and without a compiler: given a
+      # frame whose layout is known — the aarch64-ELF one, where LLVM puts the
+      # `x29,x30` pair below the other callee-saves, and the Mach-O one, where
+      # it sits at the top — do both walkers land on the word the record names?
+      # It runs BEFORE the probe matrix so a walker defect is reported as a
+      # walker defect rather than as an oracle diff twenty minutes later.
+      - name: Walker agreement (aarch64 hosts)
+        if: ${{ !cancelled() && matrix.arch == 'aarch64' && runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo test --profile perry-dev -p perry-runtime --lib gc::roots::stack_maps \
+            -- --test-threads=1 | tee /tmp/walker-agreement.log
+          # `--lib <filter>` is a substring match, so a rename makes it select
+          # nothing and `cargo test` still exits 0 having run zero tests — a
+          # gate that cannot fail. Require each test by name, including the
+          # sabotage arm that proves the sentinel check discriminates.
+          for name in both_walkers_resolve_an_sp_root_in_an_elf_shaped_frame \
+                      both_walkers_resolve_an_sp_root_in_a_darwin_shaped_frame \
+                      a_wrong_frame_offset_is_caught; do
+            grep -q "walker_agreement::$name ... ok" /tmp/walker-agreement.log \
+              || { echo "::error::$name did not run — the filter matched nothing"; exit 1; }
+          done
+
       - name: Probe matrix, RS4GC mode, forced evacuation
         if: ${{ !cancelled() }}
         run: |
@@ -230,11 +351,29 @@ jobs:
             # archive — one directory, so opt and clang cannot skew.
             exe=".exe"
             llvm_ver=22.1.3
-            llvm_root="$RUNNER_TEMP/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
+            # Git Bash exposes RUNNER_TEMP as a native `D:\...` path. Convert
+            # it before any Unix tool sees it: the runner's bsdtar still treats
+            # `D:` as a remote host even when passed GNU tar's --force-local.
+            runner_temp_posix="$(cygpath -u "$RUNNER_TEMP")"
+            llvm_root="$runner_temp_posix/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
             if [ ! -x "$llvm_root/bin/opt.exe" ]; then
-              curl -sSL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" \
+              curl -sSL --retry 3 -o "$runner_temp_posix/llvm.tar.xz" \
                 "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_ver/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc.tar.xz"
-              tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+              # The old --force-local workaround was ineffective because the
+              # Windows runner supplies bsdtar, not GNU tar. Passing the
+              # cygpath-normalized archive and destination avoids the remote
+              # `host:path` grammar entirely. The previous failure was:
+              #     tar (child): Cannot connect to D: resolve failed
+              #     xz: (stdin): File format not recognized
+              #     tar: Error is not recoverable: exiting now      (exit 2)
+              # Verify extraction rather than trusting it: a half-extracted
+              # tree otherwise becomes a misleading tool-pair error below.
+              tar -xJf "$runner_temp_posix/llvm.tar.xz" -C "$runner_temp_posix"
+              if [ ! -x "$llvm_root/bin/opt.exe" ]; then
+                echo "::error::extracted $runner_temp_posix/llvm.tar.xz but $llvm_root/bin/opt.exe is still missing — the archive layout changed, or the download was truncated"
+                ls -la "$runner_temp_posix" | head -20
+                exit 1
+              fi
             fi
             llvm_bin="$llvm_root/bin"
           else
@@ -250,11 +389,20 @@ jobs:
             echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
             exit 1
           fi
-          export PERRY_LLVM_OPT="$llvm_bin/opt$exe"
-          export PERRY_LLVM_CLANG="$llvm_bin/clang$exe"
+          llvm_opt="$llvm_bin/opt$exe"
+          llvm_clang="$llvm_bin/clang$exe"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Shell tools need the POSIX path above, while native perry.exe
+            # reads these environment values directly as Windows PathBufs.
+            export PERRY_LLVM_OPT="$(cygpath -w "$llvm_opt")"
+            export PERRY_LLVM_CLANG="$(cygpath -w "$llvm_clang")"
+          else
+            export PERRY_LLVM_OPT="$llvm_opt"
+            export PERRY_LLVM_CLANG="$llvm_clang"
+          fi
           echo "RS4GC toolchain: $llvm_bin"
-          "$PERRY_LLVM_OPT" --version | head -2
-          "$PERRY_LLVM_CLANG" --version | head -2
+          "$llvm_opt" --version | head -2
+          "$llvm_clang" --version | head -2
 
           pass=0
           total=0
@@ -443,7 +591,7 @@ jobs:
                 "/tmp/rs4gc-$name" > "/tmp/walker-$name-$mode.out" \
                                   2> "/tmp/walker-$name-$mode.err" \
                 || { echo "::error::$name crashed under PERRY_STACKMAP_WALKER=$mode"; \
-                     tail -20 "/tmp/walker-$name-$mode.err"; exit 1; }
+                     tail -120 "/tmp/walker-$name-$mode.err"; exit 1; }
               diff "/tmp/rs4gc-$name.oracle" "/tmp/walker-$name-$mode.out" \
                 || { echo "::error::$name diverged from the pinned oracle under PERRY_STACKMAP_WALKER=$mode"; exit 1; }
               checked=$((checked+1))
@@ -538,12 +686,31 @@ jobs:
           ./target/perry-dev/perry "$probe" -o /tmp/inproc-09-control
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09-control > /tmp/inproc-09.control.out 2>/dev/null
+          # PERRY_GC_DIAG=1 is LOAD-BEARING, not decoration: `[gc-copy-minor]`
+          # is emitted only under it, and that line is the entire input to
+          # `gc_evacuation_liveness_assert.py`. Without it the assert reads an
+          # empty trace and reports "evacuated NOTHING (0 copying minors, 0
+          # objects copied)" no matter what the collector actually did — so
+          # this arm could never pass, which is a large part of why
+          # `gc-native-roots` has never had a green run (#7970).
+          #
+          # Measured on macOS aarch64 at this commit: with the flag, the same
+          # binary under the same GC env reports 75 copying minors and 16277
+          # objects copied. The collector was evacuating the whole time; the
+          # gate was asserting on telemetry it had not switched on. The sibling
+          # call site in the walker-trace step above always set it — this one
+          # was missed.
+          #
+          # `--probe` likewise: without it the failure message says the literal
+          # `<probe>`, which is what the 2026-08-11 logs show.
+          PERRY_GC_DIAG=1 \
           PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09 > /tmp/inproc-09.out 2> /tmp/inproc-09.err
           diff /tmp/inproc-09.control.out /tmp/inproc-09.out \
             || { echo "::error::in-process RS4GC diverged from the shadow-stack control"; exit 1; }
-          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err
+          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err \
+            --probe "09_try_catch_roots (in-process RS4GC)"
 
           # And it must be RS4GC doing the lowering, not a per-function bail to
           # the bridge -- which would make this arm green while testing the

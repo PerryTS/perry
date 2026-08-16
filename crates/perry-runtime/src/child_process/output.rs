@@ -122,9 +122,9 @@ pub(crate) fn cp_io_error_code(e: &std::io::Error) -> &'static str {
 }
 
 /// Node's `errno` is the negative libc errno value for the failure code.
-pub(crate) fn cp_errno_number(code: &str) -> f64 {
+pub(crate) fn cp_errno_number(_code: &str) -> f64 {
     #[cfg(unix)]
-    let n = match code {
+    let n = match _code {
         "ENOENT" => libc::ENOENT,
         "EACCES" => libc::EACCES,
         "EEXIST" => libc::EEXIST,

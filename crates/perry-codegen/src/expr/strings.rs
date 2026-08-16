@@ -11,8 +11,8 @@ use super::FnCtx;
 /// `js_node_submodule_namespace`. The label uses a per-invocation
 /// counter so multiple call sites in the same function don't collide.
 pub(crate) fn emit_string_literal_global(ctx: &mut FnCtx<'_>, text: &str) -> String {
-    let idx = ctx.typed_parse_counter;
-    ctx.typed_parse_counter += 1;
+    let idx = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
     let func_part: String = ctx
         .func
         .name

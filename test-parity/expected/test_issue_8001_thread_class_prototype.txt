@@ -1,0 +1,3 @@
+main: main
+spawn agent: undefined/agent/true match: true
+main after: main

@@ -4,7 +4,6 @@
 //! Provides run(), getStore(), enterWith(), exit(), and disable().
 
 use perry_runtime::array::{js_array_length, ArrayHeader};
-use perry_runtime::async_context;
 use perry_runtime::closure::{is_closure_ptr, js_closure_call_array, ClosureHeader};
 
 use crate::common::{get_handle_mut, register_handle, Handle};
@@ -13,6 +12,20 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+// Keep the active context in the single perry-runtime provider.  These must be
+// extern calls rather than Rust-path calls: in app-only dylib deployments the
+// stdlib is a separate image, and linking its own perry-runtime dependency
+// would create a second ACTIVE_CONTEXT that promise/timer schedulers cannot
+// see (#8037).
+extern "C" {
+    fn js_async_context_als_run_enter(handle: i64, store: f64);
+    fn js_async_context_als_exit_enter(handle: i64);
+    fn js_async_context_als_scope_leave();
+    fn js_async_context_als_get_store(handle: i64) -> f64;
+    fn js_async_context_als_enter_with(handle: i64, store: f64);
+    fn js_async_context_als_clear(handle: i64);
+}
 
 /// #3092 — `AsyncLocalStorage#run`/`#exit` must reject a non-callable callback
 /// with a `TypeError`, matching Node (which throws through its function-apply
@@ -96,12 +109,9 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     // A context guard mirrors the pop below: if the callback throws,
     // `js_throw` applies the guard while unwinding so the catch site still
     // observes the pre-`run` store (#788, Node restores via try/finally).
-    async_context::push_store(handle, store);
-    async_context::push_context_guard(async_context::ContextGuardAction::PopStore(handle));
+    js_async_context_als_run_enter(handle, store);
     let result = call_with_forwarded_args(cb, args_array);
-    if let Some(action) = async_context::pop_context_guard() {
-        async_context::apply_context_guard(action);
-    }
+    js_async_context_als_scope_leave();
 
     result
 }
@@ -111,9 +121,7 @@ pub unsafe extern "C" fn js_async_local_storage_run(
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_get_store(handle: Handle) -> f64 {
     if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
-        if let Some(store) = async_context::get_store(handle) {
-            return store;
-        }
+        return unsafe { js_async_context_als_get_store(handle) };
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -123,7 +131,7 @@ pub extern "C" fn js_async_local_storage_get_store(handle: Handle) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_enter_with(handle: Handle, store: f64) {
     if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
-        async_context::enter_with(handle, store);
+        unsafe { js_async_context_als_enter_with(handle, store) };
     }
 }
 
@@ -141,27 +149,15 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
     // without disturbing the saved store (#3092).
     let cb = validate_callback(callback);
 
-    let saved = if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
-        Some(async_context::take_store(handle))
-    } else {
-        None
-    };
-
-    // Guarded like run(): a throwing callback must still restore the saved
-    // store stack at the catch site (#788).
-    let guarded = saved.is_some();
-    if let Some(saved) = saved {
-        async_context::push_context_guard(async_context::ContextGuardAction::RestoreStores(
-            handle, saved,
-        ));
+    let guarded = get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some();
+    if guarded {
+        js_async_context_als_exit_enter(handle);
     }
 
     let result = call_with_forwarded_args(cb, args_array);
 
     if guarded {
-        if let Some(action) = async_context::pop_context_guard() {
-            async_context::apply_context_guard(action);
-        }
+        js_async_context_als_scope_leave();
     }
 
     result
@@ -172,6 +168,6 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_disable(handle: Handle) {
     if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
-        async_context::clear_store(handle);
+        unsafe { js_async_context_als_clear(handle) };
     }
 }

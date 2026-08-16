@@ -358,6 +358,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // Circular-reference detection (mirrors the pretty/array-replacer paths).
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -519,6 +520,7 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // #7269: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`,
     // issue #233) before any header read — mirrors the resolution in
     // `dispatch_pointer_with_replacer`'s array arm and
@@ -923,6 +925,7 @@ pub(crate) unsafe fn stringify_object_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // Same deref-safety gate the plain path applies in `is_object_pointer`: the
     // `field_count` / `keys_array` reads below load straight through `ptr`, so an
     // in-range-but-unmapped garbage address (a denormal double that survived the
@@ -1056,6 +1059,7 @@ pub(crate) unsafe fn stringify_array_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // #7269: resolve GC_FLAG_FORWARDED array-growth stubs before any header
     // read. `ptr_is_tracked_heap_object` below only confirms the address is a
     // live tracked allocation — a forwarded stub still passes that check
@@ -1129,6 +1133,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    check_stringify_nesting_depth(depth);
     // Circular reference check
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -1315,6 +1320,7 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    check_stringify_nesting_depth(depth);
     // #5989: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`, issue
     // #233) so a stale pre-grow pointer serializes the current grown array —
     // mirrors the resolution in `dispatch_pointer_with_replacer`'s array arm.

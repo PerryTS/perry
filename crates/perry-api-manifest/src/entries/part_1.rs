@@ -1488,6 +1488,34 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Promise,
     ),
+    // #6827 — public native layout profile. The three layout helpers are
+    // compiler intrinsics (their generic POD type is erased before runtime);
+    // NativeArena is a runtime-backed constructor value.
+    intrinsic(method_sig(
+        "perry/native",
+        "sizeof",
+        false,
+        None,
+        &[],
+        TypeSpec::Number,
+    )),
+    intrinsic(method_sig(
+        "perry/native",
+        "alignof",
+        false,
+        None,
+        &[],
+        TypeSpec::Number,
+    )),
+    intrinsic(method_sig(
+        "perry/native",
+        "offsetof",
+        false,
+        None,
+        &[p_str("field")],
+        TypeSpec::Number,
+    )),
+    property("perry/native", "NativeArena"),
     // `perry/gc` — explicit GC control. `collect()` runs a full collection
     // (same as the global `gc()`), `minor()` runs a nursery-only collection
     // and returns the freed byte count, `idleHint()` runs a threshold-due

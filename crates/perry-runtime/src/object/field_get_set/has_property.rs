@@ -561,6 +561,41 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         // buffer (not `TYPED_ARRAY_REGISTRY`), so the typed-array arm above misses
         // them. A Buffer is a `Uint8Array`, so `in` consults numeric indices
         // (bounds) and the own/inherited members property-get can resolve.
+        // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
+        // registered buffer with NO integer-indexed own properties, and no
+        // `length` / `BYTES_PER_ELEMENT` slot either — node's `0 in dv` and
+        // `"length" in dv` are both `false`. Asked ABOVE the byte-bounds arm,
+        // which answers `true` for every in-range index unconditionally. An
+        // index STORE does create an ordinary own property, so consult the
+        // expando table before answering `false`.
+        if crate::buffer::is_registered_buffer(obj_addr as usize)
+            && crate::buffer::is_non_indexed_buffer_view(obj_addr as usize)
+        {
+            if let Some(name) = crate::buffer::canonical_index_key(f64::from_bits(key_val.bits())) {
+                return if crate::buffer::buffer_has_own_prop(obj_addr as usize, &name) {
+                    nanbox_true
+                } else {
+                    nanbox_false
+                };
+            }
+            if key_val.is_any_string() {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    if matches!(name, "length" | "BYTES_PER_ELEMENT") {
+                        return nanbox_false;
+                    }
+                    if is_canonical_numeric_index_string(name) {
+                        return if crate::buffer::buffer_has_own_prop(obj_addr as usize, name) {
+                            nanbox_true
+                        } else {
+                            nanbox_false
+                        };
+                    }
+                }
+            }
+        }
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
             let buf = obj_addr as *const crate::buffer::BufferHeader;
             let len = crate::buffer::js_buffer_length(buf);

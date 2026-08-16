@@ -36,7 +36,10 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
-use super::{can_lower_expr_as_i32, lower_expr_as_i32, lower_expr_native, FnCtx};
+use super::{
+    attach_buffer_view_facts, can_lower_expr_as_i32, is_numeric_expr, lower_expr,
+    lower_expr_as_i32, lower_expr_native, FnCtx,
+};
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::native_value::{
     BoundsState, BufferAccessMode, BufferElem, BufferIndexUnit, ExpectedNativeRep, LoweredValue,
@@ -116,7 +119,8 @@ pub(crate) fn local_is_proven_int_store_view(ctx: &FnCtx<'_>, id: u32) -> bool {
         return false;
     }
     ctx.buffer_view_slots.get(&id).is_some_and(|view| {
-        view.storage_inline_proven
+        view.pointer_state.is_stable()
+            && view.storage_inline_proven
             && view.native_owned.is_none()
             && view.index_unit == BufferIndexUnit::Element
             && view.alias.allows_noalias()
@@ -146,7 +150,8 @@ fn proven_view_for(
         return None;
     };
     let view = ctx.buffer_view_slots.get(id)?.clone();
-    if !view.storage_inline_proven
+    if !view.pointer_state.is_stable()
+        || !view.storage_inline_proven
         || view.native_owned.is_some()
         || view.index_unit != BufferIndexUnit::Element
     {
@@ -225,6 +230,10 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
     let Some((id, view)) = proven_view_for(ctx, object, index) else {
         return Ok(None);
     };
+    // #7640 section E audit: `proven_view_for` only reads compile-time facts;
+    // no receiver value or backing-store pointer has been materialized yet.
+    // Lower the index expression first, then load `data_slot` below, so even a
+    // collecting proven index leaves no movable or raw address live.
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
     let (data_ptr, len) = load_data_and_len(ctx, &view);
 
@@ -302,6 +311,7 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
         false,
         vec!["proven_view=checked_inline; guards=none".to_string()],
     );
+    attach_buffer_view_facts(ctx, &view);
     Ok(Some(result))
 }
 
@@ -344,10 +354,15 @@ pub(crate) fn try_lower_proven_view_checked_store(
     {
         return Ok(None);
     }
-    if matches!(view.elem, BufferElem::F32 | BufferElem::F64)
-        && !crate::type_analysis::is_numeric_expr(ctx, value)
-    {
-        return Ok(None);
+    if matches!(view.elem, BufferElem::F32 | BufferElem::F64) {
+        let numeric_candidate = crate::codegen::typed_arg_is_guard_candidate(
+            ctx,
+            crate::codegen::TypedParamRep::F64,
+            value,
+        );
+        if !numeric_candidate {
+            return Ok(None);
+        }
     }
 
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
@@ -358,6 +373,15 @@ pub(crate) fn try_lower_proven_view_checked_store(
             ExpectedNativeRep::I32
         };
         lower_expr_native(ctx, value, expected)?
+    } else if !is_numeric_expr(ctx, value) {
+        // Source metadata may select this checked store, but only the live
+        // value may supply raw bytes. Avoid `lower_expr_native(F64)`'s legacy
+        // annotation shortcut and perform explicit ToNumber coercion.
+        let boxed = lower_expr(ctx, value)?;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)]);
+        LoweredValue::f64(coerced)
     } else {
         lower_expr_native(ctx, value, ExpectedNativeRep::F64)?
     };
@@ -438,5 +462,6 @@ pub(crate) fn try_lower_proven_view_checked_store(
         false,
         vec!["proven_view=checked_inline; guards=none".to_string()],
     );
+    attach_buffer_view_facts(ctx, &view);
     Ok(Some(value_native))
 }

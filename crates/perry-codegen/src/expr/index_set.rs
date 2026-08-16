@@ -42,9 +42,9 @@ use crate::types::{DOUBLE, I32, I64};
 use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
 use super::{
     array_kind_fact, array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_access_materialization_reason, emit_array_numeric_write_note_on_block,
-    emit_jsvalue_slot_store_on_block, emit_root_nanbox_store_on_block,
-    emit_typed_feedback_register_site, emit_write_barrier,
+    attach_buffer_view_pointer_state_for_expr, buffer_access_materialization_reason,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_root_nanbox_store_on_block, emit_typed_feedback_register_site, emit_write_barrier,
     expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_store, lower_expr,
     lower_expr_as_i32, lower_expr_native, lower_index_set_fast, lower_typed_array_store,
     materialize_js_value, nanbox_pointer_inline, raw_f64_layout_fact, unbox_str_handle,
@@ -128,8 +128,12 @@ fn lower_value_for_dynamic_index_set(
 /// typed-array object (data at byte 16): a type-confused write, not a missed
 /// optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
+        _ => crate::type_analysis::static_type_of(ctx, object),
+    };
     matches!(
-        crate::type_analysis::static_type_of(ctx, object),
+        ty,
         Some(perry_hir::types::Type::Named(name)) if matches!(
             name.as_str(),
             "Int8Array"
@@ -251,6 +255,15 @@ fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr)
     is_numeric_expr(ctx, index)
         && !numeric_index_has_integer_array_index_proof(ctx, index)
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
+}
+
+/// Whether a value is worth routing through the numeric-array store guard.
+///
+/// A source type is only a candidate here: both guarded store tiers validate
+/// the live JSValue before a raw-f64 store and retain the boxed fallback.  It
+/// must never be reused to elide layout notes or write barriers.
+fn guarded_numeric_array_store_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    crate::codegen::typed_arg_is_guard_candidate(ctx, crate::codegen::TypedParamRep::F64, value)
 }
 
 fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
@@ -852,22 +865,50 @@ pub(crate) fn lower(
                     ));
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let idx_double = lower_expr(ctx, index)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let result = blk.call(
-                        DOUBLE,
-                        "js_typed_array_index_set_dynamic",
-                        &[
-                            (I64, &arr_i64),
-                            (DOUBLE, &idx_double),
-                            (DOUBLE, &val_double),
-                        ],
+                    return rooting::with_operands_rooted(
+                        ctx,
+                        &[object, index, value],
+                        |ctx, vals| {
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
+                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            let result = blk.call(
+                                DOUBLE,
+                                "js_typed_array_index_set_dynamic",
+                                &[(I64, &arr_i64), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                            );
+                            let slow = LoweredValue::js_value(result.clone());
+                            ctx.record_lowered_value_with_access_mode(
+                                "TypedArraySet",
+                                None,
+                                "TypedArraySet.slow_path",
+                                &slow,
+                                Some(BoundsState::Unknown),
+                                None,
+                                Some(BufferAccessMode::DynamicFallback),
+                                Some(buffer_access_materialization_reason(ctx, object)),
+                                false,
+                                false,
+                                vec!["typed_array_fallback=untracked_or_unproven".to_string()],
+                            );
+                            attach_buffer_view_pointer_state_for_expr(ctx, object);
+                            Ok(result)
+                        },
                     );
-                    let slow = LoweredValue::js_value(result.clone());
+                }
+
+                // Stores fall back for untracked views, unknown bounds, unsafe
+                // conversions, and Uint8ClampedArray's ToUint8Clamp semantics.
+                return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
+                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    let idx_i32 = blk.fptosi(DOUBLE, &vals[1], I32);
+                    blk.call_void(
+                        "js_typed_array_set",
+                        &[(I64, &arr_i64), (I32, &idx_i32), (DOUBLE, &vals[2])],
+                    );
+                    let slow = LoweredValue::js_value(vals[2].clone());
                     ctx.record_lowered_value_with_access_mode(
                         "TypedArraySet",
                         None,
@@ -881,37 +922,9 @@ pub(crate) fn lower(
                         false,
                         vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                     );
-                    return Ok(result);
-                }
-
-                // Stores fall back for untracked views, unknown bounds, unsafe
-                // conversions, and Uint8ClampedArray's ToUint8Clamp semantics.
-                let arr_box = lower_expr(ctx, object)?;
-                let idx_double = lower_expr(ctx, index)?;
-                let val_double = lower_expr(ctx, value)?;
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                blk.call_void(
-                    "js_typed_array_set",
-                    &[(I64, &arr_i64), (I32, &idx_i32), (DOUBLE, &val_double)],
-                );
-                let slow = LoweredValue::js_value(val_double.clone());
-                ctx.record_lowered_value_with_access_mode(
-                    "TypedArraySet",
-                    None,
-                    "TypedArraySet.slow_path",
-                    &slow,
-                    Some(BoundsState::Unknown),
-                    None,
-                    Some(BufferAccessMode::DynamicFallback),
-                    Some(buffer_access_materialization_reason(ctx, object)),
-                    false,
-                    false,
-                    vec!["typed_array_fallback=untracked_or_unproven".to_string()],
-                );
-                return Ok(val_double);
+                    attach_buffer_view_pointer_state_for_expr(ctx, object);
+                    Ok(vals[2].clone())
+                });
             }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
                 if let Some(store) = lower_buffer_store(
@@ -931,21 +944,20 @@ pub(crate) fn lower(
                     ));
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let idx_double = lower_expr(ctx, index)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_typed_array_index_set_dynamic",
-                        &[
-                            (I64, &arr_i64),
-                            (DOUBLE, &idx_double),
-                            (DOUBLE, &val_double),
-                        ],
-                    ));
+                    return rooting::with_operands_rooted(
+                        ctx,
+                        &[object, index, value],
+                        |ctx, vals| {
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(&vals[0]);
+                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            Ok(blk.call(
+                                DOUBLE,
+                                "js_typed_array_index_set_dynamic",
+                                &[(I64, &arr_i64), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                            ))
+                        },
+                    );
                 }
             }
             // #5525: when the receiver's static type is genuinely unknown
@@ -984,29 +996,34 @@ pub(crate) fn lower(
                 Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
             ) || is_string_expr(ctx, index);
             if recv_unknown && !index_is_static_string_or_symbol {
-                let obj_box = lower_expr(ctx, object)?;
-                let idx_d = lower_expr(ctx, index)?;
-                // Keep the RHS on the js_value_bits evidence contract even on
-                // the #5525 inline typed-array route — the slow edge hands the
-                // boxed value to `js_dyn_index_set` unchanged, and the fast
-                // edge's per-kind conversion matches the runtime store exactly.
-                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                return rooting::with_operands_rooted_across(
                     ctx,
-                    value,
-                    "index_set.dynamic_value_bits",
-                    "polymorphic_index_set_helper_edge",
-                )?;
-                // #5525 follow-up: guarded inline typed-array element STORE at the
-                // access site, mirroring the inline read in index_get.rs. Removes
-                // the per-element out-of-line `js_dyn_index_set` call +
-                // `lookup_typed_array_kind` for bcrypt's `P[i]=`/`S[i]=` writes,
-                // falling back to `js_dyn_index_set` on any guard miss.
-                return Ok(lower_inline_dyn_typed_array_set(
-                    ctx,
-                    &obj_box,
-                    &idx_d,
-                    &val_double,
-                ));
+                    &[object, index],
+                    &[value],
+                    |ctx| {
+                        // Keep the RHS on the js_value_bits evidence contract even
+                        // on the #5525 inline typed-array route — the slow edge
+                        // hands the boxed value to `js_dyn_index_set` unchanged.
+                        lower_value_for_dynamic_index_set(
+                            ctx,
+                            value,
+                            "index_set.dynamic_value_bits",
+                            "polymorphic_index_set_helper_edge",
+                        )
+                    },
+                    |ctx, vals, (val_double, _val_bits)| {
+                        // #5525 follow-up: guarded inline typed-array element STORE
+                        // at the access site, falling back to `js_dyn_index_set` on
+                        // any guard miss. #7640: both the receiver and key are
+                        // re-read after the allocating RHS.
+                        Ok(lower_inline_dyn_typed_array_set(
+                            ctx,
+                            &vals[0],
+                            &vals[1],
+                            &val_double,
+                        ))
+                    },
+                );
             }
             // Issue #637 / hono r2 followup: `arr[stringKey] = val` where
             // the index is statically string-typed (e.g. `for (const i in
@@ -1210,8 +1227,9 @@ pub(crate) fn lower(
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                         let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
                         let value_is_numeric = is_numeric_expr(ctx, value);
-                        let require_numeric_layout = value_is_numeric
-                            && expr_has_numeric_pointer_free_array_layout(ctx, object);
+                        let require_numeric_layout =
+                            guarded_numeric_array_store_candidate(ctx, value)
+                                && expr_has_numeric_pointer_free_array_layout(ctx, object);
                         // #7640 section A: the receiver was lowered, then the
                         // index, then — the hazard — the VALUE, with no
                         // rooting decision at all. `classify_for_length_hoist`'s
@@ -1431,8 +1449,8 @@ pub(crate) fn lower(
                 let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                 let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
                 let value_is_numeric = is_numeric_expr(ctx, value);
-                let require_numeric_layout =
-                    value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, object);
+                let require_numeric_layout = guarded_numeric_array_store_candidate(ctx, value)
+                    && expr_has_numeric_pointer_free_array_layout(ctx, object);
                 let local_id = if let Expr::LocalGet(id) = object.as_ref() {
                     Some(*id)
                 } else {
@@ -1564,10 +1582,59 @@ pub(crate) fn lower(
                             }
                         }
                     } else {
+                        let idx_i32 = {
+                            let blk = ctx.block();
+                            blk.fptosi(DOUBLE, &idx_double, I32)
+                        };
+                        // The receiver is not a stack local (`this.vals[i] = v`,
+                        // `obj.arr[i] = v`), so `lower_index_set_fast` cannot
+                        // serve it — it needs a slot to write a realloc'd head
+                        // back to. A STRICTLY in-bounds store changes no head
+                        // and no length, so it needs no writeback and can be
+                        // inlined here; everything else still goes to the
+                        // extend helper below. Feedback-emission builds keep
+                        // the out-of-line call so observation stays complete.
+                        if !super::typed_feedback_emission_enabled() {
+                            let arr_box = arr_box.clone();
+                            let val_double = val_double.clone();
+                            let idx_i32c = idx_i32.clone();
+                            let feedback_site_id = feedback_site_id.clone();
+                            super::index_set_guarded::emit_guarded_inbounds_array_store(
+                                ctx,
+                                &arr_box,
+                                &idx_i32,
+                                &val_double,
+                                "idxset.recv_prop",
+                                layout_note_needed,
+                                write_barrier_needed,
+                                value_is_numeric,
+                                |ctx| {
+                                    let blk = ctx.block();
+                                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                    blk.call(
+                                        I64,
+                                        "js_typed_feedback_array_set_f64_extend",
+                                        &[
+                                            (I64, &feedback_site_id),
+                                            (I64, &arr_handle),
+                                            (I32, &idx_i32c),
+                                            (DOUBLE, &val_double),
+                                        ],
+                                    );
+                                    if write_barrier_needed {
+                                        let val_bits =
+                                            ctx.block().bitcast_double_to_i64(&val_double);
+                                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            return Ok(val_double);
+                        }
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         // Issue #637 followup / hono r2: use the extend variant
                         // so `arr[i] = X` for i >= length grows the array per
                         // JS spec, instead of silently no-op'ing (which the

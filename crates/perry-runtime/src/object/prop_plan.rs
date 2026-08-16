@@ -45,11 +45,51 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// match.
 static PROP_PLAN_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-/// Invalidate every cached store plan. Cheap (one relaxed add); callers are
+/// The SEMANTIC half of [`PROP_PLAN_EPOCH`]: bumped by exactly the events that
+/// change what a property lookup would ANSWER — descriptor installs and clears,
+/// `delete`, per-instance prototype recording, class-prototype-object
+/// registration, parent-static linking. Deliberately NOT bumped by garbage
+/// collection.
+///
+/// The store/read-plan caches need the GC bump because they memoize a
+/// (keys_array address, interned key pointer) → slot mapping, and a collection
+/// can relocate either identity. A cache that instead re-derives its addresses
+/// from live objects on every lookup — and only COMPARES them against what it
+/// recorded — does not: a relocation shows up as an address mismatch, which is
+/// a miss, and GC never adds or removes a property. Keying such a cache on the
+/// full epoch is not merely wasteful, it is a performance CLIFF: the
+/// incremental collector's root scan bumps the epoch at loop-poll cadence, so
+/// the entry is invalid on essentially every lookup and the "cache" degrades
+/// into an unconditional recompute. Measured on `gc-handoff/apps/asyncpipe.ts`:
+/// +35 % instructions versus baseline, against −24.6 % with the recompute
+/// eliminated (#7910).
+static PROP_PLAN_SEMANTIC_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Invalidate every cached store plan. Cheap (two relaxed adds); callers are
 /// rare, cold paths by construction.
 #[inline]
 pub(crate) fn prop_plan_epoch_bump() {
     PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
+    PROP_PLAN_SEMANTIC_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Invalidate cached store plans for a reason that is NOT a semantic property
+/// change: a collection moved interned keys or pruned dead owners' side-table
+/// entries. Bumps only the pointer-identity epoch.
+#[inline]
+pub(crate) fn prop_plan_gc_epoch_bump() {
+    PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Current SEMANTIC epoch — see [`PROP_PLAN_SEMANTIC_EPOCH`]. Exposed so other
+/// caches whose validity rests on the same set of property-changing events can
+/// key on it rather than growing a parallel counter with its own — separately
+/// fallible — set of mutation hooks. First consumer: the `Object.prototype`
+/// "has no `then`" verdict behind the promise assimilation fast path
+/// (`promise::then_probe`, #7910).
+#[inline]
+pub(crate) fn prop_plan_semantic_epoch() -> u64 {
+    PROP_PLAN_SEMANTIC_EPOCH.load(Ordering::Relaxed)
 }
 
 #[derive(Clone, Copy)]

@@ -68,6 +68,7 @@ PLATFORMS=(
   "linux-x64-musl:perry-linux-x86_64-musl:libperry_ui_gtk4.a"
   "linux-arm64-musl:perry-linux-aarch64-musl:libperry_ui_gtk4.a"
   "win32-x64:perry-windows-x86_64:perry_ui_windows.lib"
+  "win32-arm64:perry-windows-aarch64:perry_ui_windows.lib"
 )
 
 # Unix libs shared across platforms (runtime + stdlib). The UI lib is
@@ -239,7 +240,16 @@ for entry in "${PLATFORMS[@]}"; do
   mkdir -p "$pkg_dir/bin" "$pkg_dir/lib"
 
   if [ "$kind" = "win" ]; then
+    # #7985: perry.exe imports the official LLVM archive's LLVM-C.dll to avoid
+    # mixing its /MT + rpmalloc static objects with Rust's /MD runtime. The DLL
+    # must stay beside the executable: Windows searches that directory first,
+    # and npm installs do not inherit CI's C:\llvm\bin PATH entry.
+    if [ ! -f "$src_dir/LLVM-C.dll" ]; then
+      echo "  error: $artifact is missing LLVM-C.dll required by perry.exe (#7985)" >&2
+      exit 1
+    fi
     cp "$src_dir/perry.exe" "$pkg_dir/bin/perry.exe"
+    cp "$src_dir/LLVM-C.dll" "$pkg_dir/bin/LLVM-C.dll"
     for lib in "${WIN_CORE_LIBS[@]}" "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done

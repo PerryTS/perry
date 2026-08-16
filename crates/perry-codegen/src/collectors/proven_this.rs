@@ -68,14 +68,11 @@
 //!
 //! * `method_direct.fast` (`lower_call/method_override.rs`) sits behind
 //!   `js_method_direct_shape_guard` / `js_typed_feedback_method_direct_call_guard`,
-//!   whose contract includes `receiver.keys_array == expected_keys` — a raw
-//!   POINTER compare (`typed_feedback/guards.rs`). The only code path
-//!   `js_object_delete_field` has for a `GC_TYPE_OBJECT` instance with a
-//!   keys array clones a FRESH keys array and repoints `keys_array` at it
-//!   (`perry-runtime/src/object/delete_rest.rs`; `Reflect.deleteProperty`
-//!   shares the same function) — for ANY key, declared or not, from ANY
-//!   module. The pointer compare can therefore never pass on a post-delete
-//!   instance, regardless of what this admission check saw.
+//!   whose contract includes `receiver.ShapeId == expected_shape_id`
+//!   (`typed_feedback/guards.rs`). `js_object_delete_field` publishes a
+//!   semantic successor ShapeId (`perry-runtime/src/object/delete_rest.rs`;
+//!   `Reflect.deleteProperty` shares the same function), so the guard can
+//!   never pass on a post-delete instance regardless of module boundaries.
 //! * The Phase 3b guard-free `Ptr<Shape>` receiver arm needs no runtime
 //!   check at all, because rule 2's containment already rules out the alias
 //!   existing in the first place: creating one — `let other = o`, passing

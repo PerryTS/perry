@@ -34,10 +34,15 @@ use crate::types::{DOUBLE, I32, I64};
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
     if is_numeric_expr(ctx, cond_expr)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
+        // Keep bare binding truthiness independent of binding-level type
+        // evidence, including any future provenance extensions. Constructed
+        // numeric expressions stay inline; slot values use the total runtime
+        // predicate (#7846).
+        && !matches!(cond_expr, Expr::LocalGet(_))
     {
         return ctx.block().fcmp("one", cond_val, "0.0");
     }
-    if is_bool_expr(ctx, cond_expr) {
+    if is_bool_expr(ctx, cond_expr) && !matches!(cond_expr, Expr::LocalGet(_)) {
         // The lowered cond_val is *normally* NaN-boxed TAG_TRUE or TAG_FALSE,
         // but for optional `boolean` parameters that the caller didn't pass,
         // codegen pads the missing arg with TAG_UNDEFINED at the call site
@@ -51,6 +56,10 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         // `includeComponents=true` overload variant — the function returned
         // an `Array<{entity, components}>` of length 0 and downstream
         // assertions on the entity count fired.
+        //
+        // A bare local is also excluded above: a declared `boolean` can hold
+        // any runtime value, so its annotation may select this predicate but
+        // cannot license a tag equality as the answer.
         //
         // Use `bits == TAG_TRUE` instead, which is also two ALU ops and
         // correctly reports `false` for both TAG_FALSE and TAG_UNDEFINED.
@@ -72,6 +81,10 @@ pub(crate) fn lower_conditional(
     then_expr: &Expr,
     else_expr: &Expr,
 ) -> Result<String> {
+    let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
+    let saved_guarded_proof = branch_proofs
+        .as_ref()
+        .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
     let cond = lower_expr(ctx, condition)?;
     let cond_bool = lower_truthy(ctx, &cond, condition);
 
@@ -86,17 +99,39 @@ pub(crate) fn lower_conditional(
     ctx.block().cond_br(&cond_bool, &then_label, &else_label);
 
     ctx.current_block = then_idx;
+    if let Some((id, Some(proof), _)) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     let then_val = lower_expr(ctx, then_expr)?;
     let then_after_label = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
 
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = saved_guarded_proof.as_ref() {
+            ctx.proven_local_types.insert(*id, proof.clone());
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
+    }
+
     ctx.current_block = else_idx;
+    if let Some((id, _, Some(proof))) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     let else_val = lower_expr(ctx, else_expr)?;
     let else_after_label = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
+    }
+
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = saved_guarded_proof {
+            ctx.proven_local_types.insert(*id, proof);
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
     }
 
     ctx.current_block = merge_idx;

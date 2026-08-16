@@ -9,7 +9,9 @@ use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
-use crate::native_value::{AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource};
+use crate::native_value::{
+    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+};
 use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
@@ -321,6 +323,139 @@ fn emit_public_typed_function_trampoline(
         .ret(DOUBLE, &fallback_value);
 }
 
+/// Public JSValue entry for a declaration-guarded full-body clone. Unknown
+/// and indirect callers always land here; the unchanged generic body is a
+/// separate internal fallback. Proven same-module call sites bypass this
+/// wrapper and call the specialized symbol directly.
+fn emit_public_spec_function_trampoline(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+    plan: &SpecFnPlan,
+) {
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let arg_names: Vec<String> = f.params.iter().map(|p| format!("%arg{}", p.id)).collect();
+    let spec_name = spec_function_name(public_name, &plan.reps);
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    // This is deliberately an optimization boundary. Inlining a routing
+    // diamond into generic callers duplicates both the specialized and
+    // fallback call graphs and recreates the issue's performance cliff.
+    wf.no_inline = true;
+    let _ = wf.create_block("entry");
+
+    let mut guard: Option<String> = None;
+    {
+        let blk = wf.block_mut(0).unwrap();
+        for ((arg, rep), descriptor) in arg_names
+            .iter()
+            .zip(plan.reps.iter())
+            .zip(plan.guards.iter())
+        {
+            let rep_guard = match rep {
+                crate::collectors::SpecParamRep::I32 => {
+                    Some(emit_typed_arg_guard(blk, TypedParamRep::I32, arg))
+                }
+                crate::collectors::SpecParamRep::F64 => {
+                    Some(emit_typed_arg_guard(blk, TypedParamRep::F64, arg))
+                }
+                crate::collectors::SpecParamRep::Boxed => None,
+                // Guarded plans never carry TaPtr: its raw pointer contract is
+                // admitted only by construction at a direct call site.
+                crate::collectors::SpecParamRep::TaPtr { .. } => Some("false".to_string()),
+            };
+            if let Some(ok) = rep_guard {
+                guard = Some(match guard {
+                    Some(prev) => blk.and(I1, &prev, &ok),
+                    None => ok,
+                });
+            }
+            if let Some(descriptor) = descriptor {
+                let raw = blk.call(
+                    I32,
+                    "js_param_type_guard",
+                    &[
+                        (DOUBLE, arg.as_str()),
+                        (PTR, &format!("@{}", descriptor.descriptor_name)),
+                        (I32, &descriptor.descriptor.len().to_string()),
+                    ],
+                );
+                let ok = blk.icmp_ne(I32, &raw, "0");
+                guard = Some(match guard {
+                    Some(prev) => blk.and(I1, &prev, &ok),
+                    None => ok,
+                });
+            }
+        }
+    }
+
+    let Some(guard) = guard else {
+        // Plan construction requires either a raw scalar guard or an ordinary
+        // descriptor. Stay conservative if that invariant is ever weakened.
+        let call_args: Vec<(LlvmType, &str)> =
+            arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+        let value = wf
+            .block_mut(0)
+            .unwrap()
+            .call(DOUBLE, generic_body_name, &call_args);
+        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
+        return;
+    };
+
+    let fast_idx = wf.num_blocks();
+    let fast_label = wf.create_block("spec_public.fast").label.clone();
+    let fallback_idx = wf.num_blocks();
+    let fallback_label = wf.create_block("spec_public.fallback").label.clone();
+    wf.block_mut(0)
+        .unwrap()
+        .cond_br(&guard, &fast_label, &fallback_label);
+
+    let mut raw_args: Vec<(LlvmType, String)> = Vec::with_capacity(arg_names.len());
+    {
+        let blk = wf.block_mut(fast_idx).unwrap();
+        for (arg, rep) in arg_names.iter().zip(plan.reps.iter()) {
+            match rep {
+                crate::collectors::SpecParamRep::Boxed => {
+                    raw_args.push((DOUBLE, arg.clone()));
+                }
+                crate::collectors::SpecParamRep::I32 => {
+                    raw_args.push((I32, emit_typed_arg_to_raw(blk, TypedParamRep::I32, arg)))
+                }
+                crate::collectors::SpecParamRep::F64 => {
+                    raw_args.push((DOUBLE, emit_typed_arg_to_raw(blk, TypedParamRep::F64, arg)))
+                }
+                crate::collectors::SpecParamRep::TaPtr { .. } => {
+                    let bits = blk.bitcast_double_to_i64(arg);
+                    raw_args.push((I64, blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64)));
+                }
+            }
+        }
+    }
+    let fast_args: Vec<(LlvmType, &str)> = raw_args
+        .iter()
+        .map(|(ty, arg)| (*ty, arg.as_str()))
+        .collect();
+    let fast_value = wf
+        .block_mut(fast_idx)
+        .unwrap()
+        .call(DOUBLE, &spec_name, &fast_args);
+    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
+
+    let fallback_args: Vec<(LlvmType, &str)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+    let fallback_value =
+        wf.block_mut(fallback_idx)
+            .unwrap()
+            .call(DOUBLE, generic_body_name, &fallback_args);
+    wf.block_mut(fallback_idx)
+        .unwrap()
+        .ret(DOUBLE, &fallback_value);
+}
+
 /// Compile a single user function into the module.
 pub(super) fn compile_function(
     llmod: &mut LlModule,
@@ -347,6 +482,15 @@ pub(super) fn compile_function(
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let guarded_public_plan = if typed_public_trampoline.is_none() && spec_entry.is_none() {
+        cross_module
+            .spec_abi_functions
+            .get(&f.id)
+            .filter(|plan| matches!(plan.dispatch, crate::codegen::SpecDispatch::Guarded))
+            .cloned()
+    } else {
+        None
+    };
     let llvm_name = if let Some(plan) = spec_entry {
         // Spec entries are an ADDITIONAL internal symbol next to the ordinary
         // public body — never combined with the typed_abi trampoline scheme
@@ -354,7 +498,7 @@ pub(super) fn compile_function(
         debug_assert!(typed_public_trampoline.is_none());
         debug_assert_eq!(plan.reps.len(), f.params.len());
         spec_function_name(&public_llvm_name, &plan.reps)
-    } else if typed_public_trampoline.is_some() {
+    } else if typed_public_trampoline.is_some() || guarded_public_plan.is_some() {
         generic_function_body_name(&public_llvm_name)
     } else {
         public_llvm_name.clone()
@@ -382,7 +526,7 @@ pub(super) fn compile_function(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
-    if typed_public_trampoline.is_some() || spec_entry.is_some() {
+    if typed_public_trampoline.is_some() || guarded_public_plan.is_some() || spec_entry.is_some() {
         lf.linkage = "internal".to_string();
     }
 
@@ -414,7 +558,13 @@ pub(super) fn compile_function(
     // async-to-generator pre-pass (was_plain_async=true). Inlining the
     // rewritten wrapper into its caller breaks GC-root coverage of the
     // step closure's iter capture, hanging async chains (issue #447).
-    if f.body.len() <= 8 && !f.is_async && !f.is_generator && !f.was_plain_async {
+    let specialized_entry = spec_entry.is_some();
+    if !specialized_entry
+        && f.body.len() <= 8
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async
+    {
         lf.force_inline = true;
     }
     // Inline-hot-small (PERRY_INLINE_HOT_SMALL, default ON): bias — do not
@@ -426,7 +576,18 @@ pub(super) fn compile_function(
     // functions (the hint would be redundant) and async/generator forms.
     // Try-containing functions are ordinary inline candidates since #7302
     // (invoke-EH removed the setjmp-era noinline requirement).
-    if !lf.force_inline
+    // #7834: record the raw admission, before the `inline_hint` window narrows
+    // it. `lower_call/new_alloc.rs` uses this to decide the inline-bump
+    // allocation, which wants "is this code hot" and not "may LLVM's inline
+    // threshold move" — an `alwaysinline` callee is excluded from the latter
+    // and is the hottest possible case for the former.
+    lf.hot_loop_callee = cross_module.hot_loop_callees.contains(&f.id);
+    // #7871: the allocator's hotness set. Set from the same well-ordered point
+    // as `hot_loop_callee` (before the entry block exists and before any
+    // expression is lowered), for the same reason.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
+    if !specialized_entry
+        && !lf.force_inline
         && inline_hot_small_enabled()
         && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
         && !f.is_async
@@ -592,6 +753,49 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    let spec_i32_params: HashSet<u32> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .filter_map(|(p, rep)| {
+                    matches!(rep, crate::collectors::SpecParamRep::I32).then_some(p.id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // A specialized body may consume parameter type evidence only when its
+    // entry contract established it. Raw reps are proven by construction;
+    // ordinary boxed params are proven by `js_param_type_guard` on the sole
+    // direct route to this clone. The public body still starts with an empty
+    // map and therefore remains the conservative fallback for annotation lies.
+    let spec_param_proofs: HashMap<u32, perry_hir::types::Type> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .zip(plan.guards.iter())
+                .filter_map(|((param, rep), guard)| {
+                    let proof = match (guard, rep) {
+                        (Some(guard), _) => guard.proof.clone(),
+                        (None, crate::collectors::SpecParamRep::I32) => {
+                            perry_hir::types::Type::Int32
+                        }
+                        (None, crate::collectors::SpecParamRep::F64) => {
+                            perry_hir::types::Type::Number
+                        }
+                        (None, crate::collectors::SpecParamRep::TaPtr { kind, .. }) => {
+                            perry_hir::types::Type::Named(
+                                spec_ta_kind_class_name(*kind)?.to_string(),
+                            )
+                        }
+                        (None, crate::collectors::SpecParamRep::Boxed) => return None,
+                    };
+                    Some((param.id, proof))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // `--opt-report` (#6952): attribute every representation decision the
     // collectors below make to this function. No-op when the report is off.
     //
@@ -606,7 +810,7 @@ pub(super) fn compile_function(
             .return_shape_class(f.id)
             .is_some(),
     );
-    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_lens(
+    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
         &f.body,
         &f.params,
         &flat_const_ids,
@@ -620,6 +824,7 @@ pub(super) fn compile_function(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
         &spec_ta_lens,
+        &spec_i32_params,
     );
 
     if let Some(plan) = spec_entry {
@@ -689,6 +894,9 @@ pub(super) fn compile_function(
         native_facts: &native_facts,
         locals,
         local_types,
+        proven_local_types: spec_param_proofs,
+        guarded_discriminant_aliases: HashMap::new(),
+        module_global_proven_types: &cross_module.module_global_proven_types,
         reassigned_locals: crate::collectors::reassigned_locals(&f.body),
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
@@ -767,14 +975,17 @@ pub(super) fn compile_function(
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
+        number_by_construction_locals: native_facts.number_by_construction_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
         temp_roots: crate::rooting::TempRootPool::default(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
+        class_shape_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
@@ -802,8 +1013,10 @@ pub(super) fn compile_function(
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
+        spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
+        spec_i32_params: spec_i32_params.clone(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -862,12 +1075,11 @@ pub(super) fn compile_function(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
-        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
+        typed_closure_capture_reps: &cross_module.typed_closure_capture_reps,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
         typed_parse_rodata: Vec::new(),
-        typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
         buffer_view_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),
@@ -950,6 +1162,7 @@ pub(super) fn compile_function(
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                pointer_state: BufferViewPointerState::Stable,
                 // Declared-type hoist only — the construction form is unknown,
                 // so no inline-storage proof.
                 storage_inline_proven: false,
@@ -1019,6 +1232,7 @@ pub(super) fn compile_function(
                         None => LengthSource::Unknown,
                     }),
                     native_owned: None,
+                    pointer_state: BufferViewPointerState::Stable,
                     storage_inline_proven: true,
                 },
             );
@@ -1076,6 +1290,8 @@ pub(super) fn compile_function(
     }
     if let Some(kind) = typed_public_trampoline {
         emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
+    } else if let Some(plan) = guarded_public_plan.as_ref() {
+        emit_public_spec_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, plan);
     }
     Ok(())
 }

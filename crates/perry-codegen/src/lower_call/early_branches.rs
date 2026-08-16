@@ -267,7 +267,7 @@ pub fn try_lower_index_get_call(
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
-            || crate::type_analysis::is_definitely_string_expr(ctx, index);
+            || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, index);
 
         // #7210 (3): receiver, key and every argument are lowered in strict
         // sequence — each held as a bare SSA register while the rest lower,
@@ -380,8 +380,25 @@ pub fn try_lower_closure_typed_local_call(
     // pointer from the closure header and invokes it with the closure
     // as the first arg followed by the user args.
     if let Expr::LocalGet(id) = callee {
-        if matches!(ctx.local_types.get(id), Some(HirType::Function(_))) {
+        // The checked closure-unbox path below validates the current callee;
+        // the erased type only decides whether to try that guarded dispatch.
+        if matches!(ctx.local_type_hint(id), Some(HirType::Function(_))) {
+            // #7803: the callee outlives the arguments here too, and this is
+            // the arm on the failing stack — `core/schemas.ts` closure 138,
+            // whose callee is a mutable-capture box read (`js_box_get_bits`)
+            // held across the argument lowering below and then unmasked into
+            // `closure_handle`. root_reload.rs's #7664 note is about exactly
+            // that unmask: it is where the value leaves the tracked domain, so
+            // a stale `recv_box` produces a stale handle no relocation fixes,
+            // and the sink is `js_closure_call1` — "value is not a function".
+            //
+            // A root rather than a reload for the same reason as the other two
+            // arms: re-lowering `LocalGet` below the arguments re-reads the box
+            // and would observe an assignment an argument made, when JS
+            // resolved the callee before them.
+            let mut callee_group = crate::rooting::open_rooted_group(1);
             let recv_box = lower_expr(ctx, callee)?;
+            let callee_root = callee_group.adopt(ctx, callee, &recv_box, true);
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
@@ -406,6 +423,9 @@ pub fn try_lower_closure_typed_local_call(
                     lowered_args.len()
                 );
             }
+            // Re-read below the argument lowering, THEN unmask: the unmask
+            // must consume the post-relocation address.
+            let recv_box = callee_group.reread(ctx, callee_root)?;
             let closure_handle = {
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
@@ -508,28 +528,8 @@ pub fn try_lower_closure_typed_local_call(
                     let typed_i1_param_reps = if ctx.typed_i1_closures.contains(&func_id) {
                         if let Some(reps) = ctx.typed_i1_closure_param_reps.get(&func_id) {
                             let matches_args = reps.len() == args.len()
-                                && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
-                                    crate::codegen::TypedParamRep::F64 => {
-                                        crate::type_analysis::is_numeric_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::I32 => {
-                                        matches!(
-                                            crate::type_analysis::static_type_of(ctx, arg),
-                                            Some(HirType::Int32)
-                                        ) || matches!(
-                                            arg,
-                                            Expr::Integer(n)
-                                                if (i64::from(i32::MIN)
-                                                    ..=i64::from(i32::MAX))
-                                                    .contains(n)
-                                        )
-                                    }
-                                    crate::codegen::TypedParamRep::I1 => {
-                                        crate::type_analysis::is_bool_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::StringRef => {
-                                        crate::type_analysis::is_definitely_string_expr(ctx, arg)
-                                    }
+                                && args.iter().zip(reps.iter()).all(|(arg, rep)| {
+                                    crate::codegen::typed_arg_is_guard_candidate(ctx, *rep, arg)
                                 });
                             matches_args.then(|| reps.clone())
                         } else {
@@ -538,6 +538,11 @@ pub fn try_lower_closure_typed_local_call(
                     } else {
                         None
                     };
+                    let typed_capture_reps = ctx
+                        .typed_closure_capture_reps
+                        .get(&func_id)
+                        .cloned()
+                        .unwrap_or_default();
                     let fast_value = if let Some(typed_param_reps) = typed_f64_param_reps {
                         let typed_fn = crate::codegen::typed_f64_closure_name(&closure_fn);
                         let generic_closure_fn =
@@ -548,6 +553,16 @@ pub fn try_lower_closure_typed_local_call(
                             numeric_guard = Some(match numeric_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            numeric_guard = Some(match numeric_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 
@@ -638,6 +653,16 @@ pub fn try_lower_closure_typed_local_call(
                             typed_guard = Some(match typed_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 
@@ -732,24 +757,15 @@ pub fn try_lower_closure_typed_local_call(
                                 None => ok,
                             });
                         }
-                        let capture_count = ctx
-                            .typed_string_closure_capture_counts
-                            .get(&func_id)
-                            .copied()
-                            .unwrap_or(0);
-                        if capture_count > 0 {
-                            if let Some(capture_guard) =
-                                crate::codegen::emit_typed_string_capture_guard(
-                                    ctx.block(),
-                                    &closure_handle,
-                                    capture_count,
-                                )
-                            {
-                                typed_guard = Some(match typed_guard {
-                                    Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
-                                    None => capture_guard,
-                                });
-                            }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
+                            });
                         }
 
                         let typed_idx = ctx.new_block("closure_direct.typed_string");
@@ -846,6 +862,16 @@ pub fn try_lower_closure_typed_local_call(
                             typed_guard = Some(match typed_guard {
                                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                                 None => ok,
+                            });
+                        }
+                        if let Some(capture_guard) = crate::codegen::emit_typed_capture_guard(
+                            ctx.block(),
+                            &closure_handle,
+                            &typed_capture_reps,
+                        ) {
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                None => capture_guard,
                             });
                         }
 
@@ -1005,6 +1031,9 @@ pub fn try_lower_closure_typed_local_call(
                     if let Some(prev) = prev_this {
                         crate::rooting::implicit_this_restore(ctx, prev);
                     }
+                    // Below both arms' calls, in the merge that post-dominates
+                    // them — which is why this group is `open_rooted_group`.
+                    callee_group.release(ctx);
                     return Ok(Some(merged));
                 }
             }
@@ -1020,6 +1049,7 @@ pub fn try_lower_closure_typed_local_call(
             }
             let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
             crate::rooting::implicit_this_restore(ctx, prev_this);
+            callee_group.release(ctx);
             return Ok(Some(result));
         }
     }

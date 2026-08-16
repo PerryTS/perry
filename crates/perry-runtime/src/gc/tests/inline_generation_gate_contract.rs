@@ -28,10 +28,12 @@
 //! `barrier_child_prologue`'s `incremental_mark_barrier_value` — the
 //! insertion/SATB shading, which is not a generational question at all. A zero
 //! count *proves* this thread's `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null,
-//! because `incremental_mark_barrier_enable` installs the thread-local BEFORE
-//! incrementing the count; a non-zero count must force the call even for a
-//! nursery parent. `the_incremental_clause_forces_the_call_for_a_young_parent`
-//! pins that, and fails if the clause is dropped.
+//! because `incremental_mark_barrier_enable` increments the count BEFORE
+//! installing the thread-local and disable clears the pointer BEFORE
+//! decrementing the count; a non-zero count must force the call even for a
+//! nursery parent. The emitted LLVM `monotonic` load is this Rust model's
+//! `Relaxed` load. `the_incremental_clause_forces_the_call_for_a_young_parent`
+//! pins the clause, and fails if it is dropped.
 
 use super::super::*;
 use super::support::*;
@@ -70,7 +72,7 @@ fn codegen_tenured_comparand_matches_the_runtime_flag() {
 ///
 /// * the size-independent born-old wrapper (`arena_alloc_gc_old_born_tenured`),
 /// * the large-object arm of the ordinary nursery allocator, which diverts
-///   anything over `LARGE_OBJECT_THRESHOLD_BYTES` straight into old-gen,
+///   anything over `large_object_threshold_for_type` straight into old-gen,
 /// * `buffer_alloc`, which is old-gen because its bytes are handed to FFI.
 ///
 /// The survivor/evacuation paths (`gc/copying.rs`, `gc/oldgen.rs`) set the bit
@@ -82,8 +84,12 @@ fn every_old_gen_birth_path_sets_tenured() {
 
     let born_tenured =
         crate::arena::arena_alloc_gc_old_born_tenured(64, 8, GC_TYPE_OBJECT) as usize;
+    // Sized from the SAME function the allocator consults, so the fixture
+    // follows a future retune of either threshold instead of silently ceasing
+    // to be an old-gen birth (which is how this assertion would stop covering
+    // its invariant rather than fail).
     let large = crate::arena::arena_alloc_gc(
-        crate::gc::LARGE_OBJECT_THRESHOLD_BYTES + 64,
+        crate::gc::large_object_threshold_for_type(GC_TYPE_OBJECT) + 64,
         8,
         GC_TYPE_OBJECT,
     ) as usize;
@@ -121,7 +127,7 @@ unsafe fn gated_slot_store(
 ) -> bool {
     *fields = child_bits;
     let flags = (*header_from_user_ptr(parent as *const u8)).gc_flags;
-    let active = crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst);
+    let active = crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed);
     if gate(flags, active) {
         js_write_barrier_slot(ptr_bits(parent as usize), fields as u64, child_bits);
         return true;

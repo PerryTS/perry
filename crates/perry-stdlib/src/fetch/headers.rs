@@ -9,6 +9,11 @@
 
 use super::*;
 
+extern "C" {
+    fn js_symbol_well_known_iterator() -> f64;
+    fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64;
+}
+
 /// new Headers() — returns NaN-boxed POINTER_TAG handle as f64.
 /// See `handle_to_f64` / `handle_id` for the encoding contract.
 #[no_mangle]
@@ -68,12 +73,8 @@ fn gc_type_for_raw_ptr(raw: i64) -> Option<u8> {
 }
 
 fn has_sync_iterator(value: f64) -> bool {
-    let iter_wk = perry_runtime::symbol::well_known_symbol("iterator");
-    if iter_wk.is_null() {
-        return false;
-    }
-    let sym = f64::from_bits(JSValue::pointer(iter_wk as *const u8).bits());
-    let iter_fn = unsafe { perry_runtime::symbol::js_object_get_symbol_property(value, sym) };
+    let sym = unsafe { js_symbol_well_known_iterator() };
+    let iter_fn = unsafe { js_object_get_symbol_property(value, sym) };
     if iter_fn.to_bits() == TAG_UNDEFINED {
         return false;
     }

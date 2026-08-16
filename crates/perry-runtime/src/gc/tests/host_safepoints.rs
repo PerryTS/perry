@@ -292,3 +292,245 @@ fn host_safepoint_trace_reports_normal_incremental_budgeted_steps() {
         );
     }
 }
+
+/// #7909: a budgeted cycle started at a host safepoint for NURSERY pressure
+/// locks the moving minor out for as long as it stays active — and it can stay
+/// active forever.
+///
+/// # The bug this documents
+///
+/// `gc_runtime_safepoint()` starts a budgeted cycle as soon as any trigger is
+/// due, including the young-generation scavenge cap. That cycle is
+/// `low_pause_non_moving` by construction, so it cannot evacuate and cannot
+/// lower the quantity `young_scavenge_cap_due()` tests. Meanwhile
+/// `gc_safepoint_moving_minor` rejects every safepoint at its `budgeted` entry
+/// guard. If the host's step cadence is too slow to finish the cycle, the two
+/// facts compose into a stall: the trigger stays due, the collector that could
+/// clear it never runs, and the mutator pays the SATB mark barrier for the rest
+/// of the process with nothing collected.
+///
+/// Measured on `gc-handoff/apps/asyncpipe.ts` (`PERRY_GC_DIAG=1`, the
+/// `[gc-incremental]` line this branch adds): **1 cycle started, 15 steps, 0
+/// completions, still active at exit, mark barrier armed 37 ms of a 127 ms
+/// program, zero collections** — 11.8 % of the program's instructions.
+///
+/// This test pins the **lockout half only**, on a trigger the budgeted cycle
+/// CAN discharge (whole-arena bytes). That composition is intended: a cycle
+/// that will finish owns the collector while it runs. What was the defect is
+/// the *other* trigger — the young-gen scavenge cap, which no budgeted cycle
+/// can lower — and that arm is closed by
+/// `a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it`
+/// below. Keep both: this one states what the lockout costs, that one states
+/// when it is allowed to be paid.
+#[test]
+fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_armed() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    make_arena_pressure(&trigger_guard, b"host_safepoint_7909_live");
+
+    // ★ Live-subject half #1: the pressure is real. Without this every
+    // assertion below is equally satisfied by a fixture with nothing due —
+    // CLAUDE.md, the fourth way a gate cannot fail.
+    assert!(
+        crate::arena::arena_total_bytes() >= GC_NEXT_TRIGGER_BYTES.with(|t| t.get()),
+        "fixture must present a due arena trigger"
+    );
+
+    let starts_before = super::super::instruments::incremental_cycle_starts();
+    let blocked_before = super::super::instruments::moving_safepoints_blocked_by_budgeted();
+    let armed_before = super::super::instruments::mark_barrier_armed_us();
+
+    let started = gc_runtime_safepoint();
+
+    // ★ Live-subject half #2: a cycle really was started by this call.
+    assert_eq!(started.status, JS_GC_STEP_STATUS_ACTIVE);
+    assert_eq!(
+        super::super::instruments::incremental_cycle_starts(),
+        starts_before + 1,
+        "the instrument must count the cycle the host safepoint just started"
+    );
+    assert!(gc_budgeted_cycle_active());
+
+    // The composition: with that cycle active, the precise safepoint is
+    // rejected, and rejected for the `budgeted` reason specifically.
+    assert!(
+        !super::super::gc_safepoint_moving_minor(),
+        "an active budgeted cycle must lock the moving minor out"
+    );
+    assert_eq!(
+        super::super::instruments::moving_safepoints_blocked_by_budgeted(),
+        blocked_before + 1,
+        "the block must be attributed to the budgeted cycle, not to a transient guard"
+    );
+
+    // And the barrier is armed for the whole time the cycle is open. `>=` not
+    // `>`: the window is measured in microseconds and a fast machine can open
+    // and read it inside one tick. What must hold is that the instrument is
+    // running at all, which the arm-event count states exactly.
+    assert!(
+        super::super::instruments::mark_barrier_arm_events() > 0,
+        "an active incremental cycle must have armed the SATB mark barrier"
+    );
+    assert!(super::super::instruments::mark_barrier_armed_us() >= armed_before);
+
+    // Drive it to completion so the shared thread state is left clean, and take
+    // the opportunity to pin the other end of the instrument.
+    let completions_before = super::super::instruments::incremental_completions();
+    let completed = complete_host_safepoint_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(
+        super::super::instruments::incremental_completions(),
+        completions_before + 1,
+        "the instrument must count the completion too, or `starts > completions` \
+         could never be read as a stall"
+    );
+    assert!(!gc_budgeted_cycle_active());
+}
+
+/// ★ #7909: a host safepoint must NOT start a budgeted cycle whose only due
+/// trigger is the young-generation scavenge cap.
+///
+/// # The defect this closes
+///
+/// `young_scavenge_cap_due()` tests `copying_from_space_in_use_bytes()`. A
+/// budgeted cycle is `low_pause_non_moving` by construction, sweeps in place,
+/// and therefore **cannot lower that quantity** — so the trigger survives the
+/// cycle it started. Meanwhile the cycle blocks `gc_safepoint_moving_minor` at
+/// its `budgeted` entry guard, which is the one collector that *can* lower it.
+/// If the host cadence cannot finish the cycle (2048 work units per microtask
+/// drain; `gc-handoff/apps/asyncpipe.ts` reaches ~15 drains after the cap goes
+/// due) the composition is permanent and completely silent: `cycle_starts=1
+/// steps=14 completions=0 active_at_exit=true`, the SATB mark barrier armed for
+/// 22.9 ms of a 127 ms program, and **zero** `[gc]` lines because the trace is
+/// written by the completion path.
+///
+/// # Why this is a test and not a knob
+///
+/// The defect is currently *unreached* on the shipped corpus — #7933/#7939 took
+/// `asyncpipe`'s young survival to ~25‰, so the 16 MB cap never goes due there.
+/// That is a property of one week's allocation profile, not of the collector:
+/// `PERRY_GC_SCAVENGE_NURSERY_MB=4` reproduces the original signature exactly on
+/// today's `main`. Closing the issue on those numbers would delete the knowledge
+/// and let the next allocation-rate change silently re-expose it.
+///
+/// # Why the control phase is not optional
+///
+/// "No cycle was started" is satisfied by a fixture where nothing was due at
+/// all, which is the failure mode this repo keeps paying for. So phase 1 asserts
+/// the cap is due *and* that neither other trigger is, and phase 2 then makes
+/// the whole-arena trigger due **on the same thread, with the same heap** and
+/// asserts a cycle DOES start. Only the trigger differs between the two phases,
+/// so the pair discriminates "declines this trigger" from "declines everything".
+#[test]
+fn a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    // Real young-gen occupancy, then a cap that the occupancy clears. The
+    // override is per-thread and next to its reader (support.rs's rule); moving
+    // `PERRY_GC_SCAVENGE_NURSERY_MB` would be a process-wide environment write.
+    let live = live_test_string(b"nursery_cap_7909_live");
+    js_shadow_slot_set(0, string_bits(live));
+    for _ in 0..6_000 {
+        let _ = young_leaf();
+    }
+    let _cap = super::super::policy::ScavengeNurseryCapTestGuard::due_at_bytes(1);
+
+    // ── phase 1: cap-only pressure ───────────────────────────────────────────
+    // ★ Live subject: the cap is genuinely due...
+    assert!(
+        crate::arena::copying_from_space_in_use_bytes() > 0,
+        "fixture must have young-gen occupancy for the cap to test"
+    );
+    assert!(
+        super::super::policy::young_scavenge_cap_due(),
+        "fixture must present a due young-gen scavenge cap"
+    );
+    // ...and it is the ONLY thing due, so the refusal below can only be about it.
+    assert!(
+        crate::arena::arena_total_bytes() < super::super::policy::next_arena_trigger_base(),
+        "the whole-arena trigger must NOT be due in phase 1"
+    );
+    assert!(
+        malloc_object_count() < GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.get()),
+        "the malloc trigger must NOT be due in phase 1"
+    );
+
+    let starts_before = super::super::instruments::incremental_cycle_starts();
+    let deferrals_before = super::super::instruments::budgeted_step_nursery_cap_deferrals();
+
+    let declined = gc_runtime_safepoint();
+
+    assert_eq!(
+        declined.status, JS_GC_STEP_STATUS_IDLE,
+        "a cap-only host safepoint must report idle, not an active cycle"
+    );
+    assert_eq!(
+        super::super::instruments::incremental_cycle_starts(),
+        starts_before,
+        "no budgeted cycle may be started for a trigger it cannot discharge"
+    );
+    assert!(
+        !gc_budgeted_cycle_active(),
+        "no budgeted cycle may be left active by a cap-only safepoint"
+    );
+    // ★ The refusal is attributed, not merely absent: without this the assertion
+    // above is also satisfied by every other reason a start can be skipped
+    // (reentrant, start-blocked, nothing due).
+    assert_eq!(
+        super::super::instruments::budgeted_step_nursery_cap_deferrals(),
+        deferrals_before + 1,
+        "the refusal must be counted as the nursery-cap deferral specifically"
+    );
+    // The deferral hands the pressure to the precise safepoint, exactly as the
+    // alloc-point arm does — otherwise a compute loop would never poll for it.
+    assert!(
+        GC_SAFEPOINT_PENDING.with(|pending| pending.get()),
+        "declining the cycle must arm the precise safepoint instead"
+    );
+
+    // ★ The point of the whole fix: the collector that CAN discharge the cap is
+    // reachable. Under the defect this returns false, for the `budgeted` reason.
+    let blocked_before = super::super::instruments::moving_safepoints_blocked_by_budgeted();
+    assert!(
+        super::super::gc_safepoint_moving_minor(),
+        "the moving minor must not be locked out by a cycle that was never started"
+    );
+    assert_eq!(
+        super::super::instruments::moving_safepoints_blocked_by_budgeted(),
+        blocked_before,
+        "no safepoint may be rejected for `budgeted` when no cycle is active"
+    );
+
+    // ── phase 2 (control): the SAME fixture, a discharge-able trigger ────────
+    // Same thread, same heap, same guards — only the due trigger differs. A
+    // cycle must start here, or phase 1 proves nothing.
+    trigger_guard.make_arena_trigger_due();
+    assert!(
+        crate::arena::arena_total_bytes() >= super::super::policy::next_arena_trigger_base(),
+        "control phase must present a due whole-arena trigger"
+    );
+
+    let started = gc_runtime_safepoint();
+    assert_eq!(
+        started.status, JS_GC_STEP_STATUS_ACTIVE,
+        "a whole-arena trigger IS discharge-able by a budgeted cycle and must still start one"
+    );
+    assert_eq!(
+        super::super::instruments::incremental_cycle_starts(),
+        starts_before + 1,
+        "the control must start exactly one cycle"
+    );
+    assert_eq!(
+        super::super::instruments::budgeted_step_nursery_cap_deferrals(),
+        deferrals_before + 1,
+        "the control must NOT be counted as a nursery-cap deferral"
+    );
+
+    // Leave the shared thread state clean.
+    let completed = complete_host_safepoint_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert!(!gc_budgeted_cycle_active());
+}

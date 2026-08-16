@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use super::is_android_target;
+use super::{is_android_target, is_windows_target};
 
 /// The output file a compile targets when no `-o` was given.
 ///
@@ -60,12 +60,6 @@ pub(super) fn default_output_path(
     } else {
         PathBuf::from(stem)
     }
-}
-
-/// `--target windows*`, or a native build on a Windows host.
-fn is_windows_target(target: Option<&str>) -> bool {
-    matches!(target, Some("windows") | Some("windows-winui"))
-        || (target.is_none() && cfg!(target_os = "windows"))
 }
 
 /// `--target macos` or any embedded-Apple target, or a native build on a
@@ -130,6 +124,10 @@ mod tests {
     fn windows_target_defaults_to_exe() {
         assert_eq!(exe(Some("windows"), "app"), PathBuf::from("app.exe"));
         assert_eq!(exe(Some("windows-winui"), "app"), PathBuf::from("app.exe"));
+        assert_eq!(
+            exe(Some("windows-aarch64"), "app"),
+            PathBuf::from("app.exe")
+        );
     }
 
     /// The unix/native executable shape must stay a bare, extension-less name.

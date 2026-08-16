@@ -26,32 +26,97 @@
 //! *pre*-#7019 non-moving collector.
 //!
 //! What this test pins is the observable that distinguishes those two worlds:
-//! `copied_objects > 0`. Asserting "a GC cycle happened" does not — the broken
-//! build collected too. Exit 0 does not either; the broken build exited 0.
+//! a non-in-place copying minor relocated at least one object. Asserting "a GC
+//! cycle happened" does not — the broken build collected too. Exit 0 does not
+//! either; the broken build exited 0.
 
 use std::path::PathBuf;
 use std::process::Command;
+
+// `Command` inherits the test runner's environment. Several of these knobs
+// affect generated code as well as runtime collector policy, so clear the
+// established override family from BOTH subprocesses before applying this
+// test's intended heap-limit arm.
+const GC_ENV_OVERRIDES: &[&str] = &[
+    "PERRY_GEN_GC",
+    "PERRY_GC_SCAVENGE",
+    "PERRY_GC_SCAVENGE_NURSERY_MB",
+    "PERRY_GC_MOVING_SAFEPOINT",
+    "PERRY_GC_MOVING_LOOP_POLLS",
+    "PERRY_GC_FORCE_EVACUATE",
+    "PERRY_CONSERVATIVE_STACK_SCAN",
+    "PERRY_WRITE_BARRIERS",
+    "PERRY_GC_INCREMENTAL",
+    "PERRY_GC_HEAP_LIMIT",
+];
+
+fn remove_gc_env_overrides(command: &mut Command) {
+    for key in GC_ENV_OVERRIDES {
+        command.env_remove(key);
+    }
+}
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// Sum of every `[gc-copy-minor] ran copied_objects=N` in the collector's
-/// `PERRY_GC_DIAG` output. This is the copying minor's OWN counter: the
+/// Sum objects relocated by `[gc-copy-minor] ran ...` records in the
+/// collector's `PERRY_GC_DIAG` output. This uses the copying minor's OWN
+/// `copied_objects` and `promoted_objects` counters: the
 /// `moved_objects=` counter that also appears there belongs to the C4b
 /// evacuation policy inside the mark-sweep collector, a different collector
 /// entirely, and summing the two is how a green result was once reported for a
 /// run that scavenged nothing (#7025).
-fn copied_objects(stderr: &str) -> u64 {
+///
+/// The diagnostic is a key/value record, not a positional format. Ordinary
+/// object-by-object promotion relocates survivors just like a nursery copy;
+/// whole-block `in_place=true` promotion deliberately does not move them.
+fn copy_minor_relocated_objects(stderr: &str) -> u64 {
     stderr
         .lines()
-        .filter_map(|line| line.strip_prefix("[gc-copy-minor] ran copied_objects="))
-        .filter_map(|rest| {
-            rest.split_whitespace()
-                .next()
-                .and_then(|n| n.parse::<u64>().ok())
+        .filter_map(|line| line.strip_prefix("[gc-copy-minor] ran "))
+        .map(|fields| {
+            let mut in_place = false;
+            let mut copied = 0;
+            let mut promoted = 0;
+
+            for field in fields.split_whitespace() {
+                let Some((key, value)) = field.split_once('=') else {
+                    continue;
+                };
+                match key {
+                    "in_place" => in_place = value == "true",
+                    "copied_objects" => copied = value.parse::<u64>().unwrap_or(0),
+                    "promoted_objects" => promoted = value.parse::<u64>().unwrap_or(0),
+                    _ => {}
+                }
+            }
+
+            if in_place {
+                0
+            } else {
+                copied + promoted
+            }
         })
         .sum()
+}
+
+#[test]
+fn copy_minor_parser_reads_current_field_order() {
+    let stderr = "[gc-copy-minor] ran in_place=false survival_permille=350 copied_objects=17 copied_bytes=272 promoted_objects=0 promoted_bytes=0\n";
+    assert_eq!(copy_minor_relocated_objects(stderr), 17);
+}
+
+#[test]
+fn copy_minor_parser_counts_object_by_object_promotions() {
+    let stderr = "[gc-copy-minor] ran in_place=false copied_objects=0 promoted_objects=23 promoted_bytes=368\n";
+    assert_eq!(copy_minor_relocated_objects(stderr), 23);
+}
+
+#[test]
+fn copy_minor_parser_rejects_in_place_promotion() {
+    let stderr = "[gc-copy-minor] ran in_place=true copied_objects=0 promoted_objects=999 promoted_bytes=15984\n";
+    assert_eq!(copy_minor_relocated_objects(stderr), 0);
 }
 
 #[test]
@@ -80,15 +145,16 @@ console.log("checksum:", checksum);
     )
     .expect("write entry");
 
-    let compile = Command::new(perry_bin())
+    let mut compile_command = Command::new(perry_bin());
+    compile_command
         .current_dir(dir.path())
         .arg("compile")
         .arg(&entry)
         .arg("-o")
         .arg(&output)
-        .arg("--no-cache")
-        .output()
-        .expect("run perry compile");
+        .arg("--no-cache");
+    remove_gc_env_overrides(&mut compile_command);
+    let compile = compile_command.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -96,8 +162,10 @@ console.log("checksum:", checksum);
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new(&output)
-        .current_dir(dir.path())
+    let mut run_command = Command::new(&output);
+    run_command.current_dir(dir.path());
+    remove_gc_env_overrides(&mut run_command);
+    let run = run_command
         // 8 MB is the pressure setting `scripts/gc_repsel_matrix.sh` uses, and
         // the one on which the copying minor was measured to never run.
         .env("PERRY_GC_HEAP_LIMIT", "8")
@@ -117,9 +185,9 @@ console.log("checksum:", checksum);
         "the workload must still produce its result under a heap limit"
     );
 
-    let copied = copied_objects(&stderr);
+    let relocated = copy_minor_relocated_objects(&stderr);
     assert!(
-        copied > 0,
+        relocated > 0,
         "no copying minor ran under PERRY_GC_HEAP_LIMIT=8 (#7024). The \
          allocation-point deferral to the precise-root safepoint is \
          unreachable again — check that the moving-defer allowance is still a \

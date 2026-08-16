@@ -24,7 +24,9 @@
 //! `a_collection_free_construction_emits_no_this_slot_root` needed the pin even
 //! though it was *passing*, because under the post-#7370 native-roots default
 //! its `!contains("@js_shadow_slot_bind")` is true of every program (hazard 4:
-//! the gate ran, its subject did not).
+//! the gate ran, its subject did not). Since #7876 every class-key cache also
+//! has one function-lifetime bind; that negative asserts there is exactly that
+//! one bind rather than no bind anywhere in the function.
 //!
 //! The rest of this file is lowering-INDEPENDENT and deliberately unpinned.
 //!
@@ -141,6 +143,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -1312,9 +1315,11 @@ fn a_collection_free_construction_emits_no_this_slot_root() {
          instance temp root — the `this`-slot bind is gated on the same \
          predicate",
     );
-    assert!(
-        !f.contains("@js_shadow_slot_bind"),
-        "an inert construction must not grow the shadow frame for a `this` \
-         slot that cannot go stale (#7202):\n{f}"
+    assert_eq!(
+        f.matches("@js_shadow_slot_bind").count(),
+        1,
+        "an inert construction needs only #7876's function-lifetime class-key \
+         root; it must not grow the shadow frame for a `this` slot that cannot \
+         go stale (#7202):\n{f}"
     );
 }

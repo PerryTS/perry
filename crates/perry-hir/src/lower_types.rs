@@ -54,6 +54,15 @@ fn native_arena_global_is_shadowed(ctx: &LoweringContext) -> bool {
         || ctx.lookup_class("NativeArena").is_some()
 }
 
+fn is_native_arena_constructor_ident(ctx: &LoweringContext, ident: &ast::Ident) -> bool {
+    let name = ident.sym.as_ref();
+    (name == "NativeArena" && !native_arena_global_is_shadowed(ctx))
+        || matches!(
+            ctx.lookup_native_module(name),
+            Some(("perry/native", Some("NativeArena")))
+        )
+}
+
 fn native_arena_owner_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name) if name == "NativeArena" || name == "NativeArenaOwner")
 }
@@ -62,7 +71,7 @@ fn expr_may_infer_to_native_arena_owner(expr: &ast::Expr, ctx: &LoweringContext)
     match expr {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
-            if name == "NativeArena" && !native_arena_global_is_shadowed(ctx) {
+            if is_native_arena_constructor_ident(ctx, ident) {
                 return true;
             }
             ctx.lookup_local_type(name)
@@ -81,7 +90,7 @@ fn expr_may_infer_to_native_arena_owner(expr: &ast::Expr, ctx: &LoweringContext)
             matches!(
                 (member.obj.as_ref(), method.sym.as_ref()),
                 (ast::Expr::Ident(obj), "alloc")
-                    if obj.sym.as_ref() == "NativeArena" && !native_arena_global_is_shadowed(ctx)
+                    if is_native_arena_constructor_ident(ctx, obj)
             )
         }
         ast::Expr::Member(member) if matches!(member.obj.as_ref(), ast::Expr::This(_)) => {
@@ -151,9 +160,8 @@ fn infer_native_arena_call_return_type(
     };
     let method_name = method.sym.as_ref();
 
-    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "NativeArena")
+    if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if is_native_arena_constructor_ident(ctx, obj))
         && method_name == "alloc"
-        && !native_arena_global_is_shadowed(ctx)
     {
         return Some(Type::Named("NativeArena".to_string()));
     }
@@ -598,10 +606,37 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 }
                 if let Some(type_args) = new_expr.type_args.as_ref() {
                     if !type_args.params.is_empty() {
+                        // ★ Resolve through `ctx` — NOT the context-free
+                        // `extract_ts_type`. Monomorphization keys a class
+                        // specialization on the type args lowered at the `new`
+                        // itself (`lower/expr_new.rs`, which passes `Some(ctx)`
+                        // and therefore EXPANDS type aliases). If the inferred
+                        // declared type keeps the unexpanded alias, the two
+                        // manglings disagree and every consumer that resolves a
+                        // `Generic` back to its specialization
+                        // (`type_analysis/predicates.rs::receiver_class_name` ->
+                        // `generate_specialized_name`) misses and silently
+                        // degrades to the generic TEMPLATE class.
+                        //
+                        // That miss is not a wrong answer — the emitted
+                        // class-id + keys-token guard simply never passes — but
+                        // it makes the guarded direct-dispatch arm permanently
+                        // DEAD, so every method call on such a binding takes
+                        // the full `js_native_call_method_by_id` path. On
+                        // `gc-handoff/apps/pipeline.ts` (`Registry<Stage,
+                        // number>`, `type Stage = (r: Record) => Record`) that
+                        // was 53.8% of the program's samples.
+                        //
+                        // Only ALIASES diverge: `mangle_type` maps
+                        // `Named(n) -> n`, so a class or interface argument
+                        // round-trips and was always correct; `type S = string`
+                        // (-> "str"), a function alias (-> "fn"), an object
+                        // alias (-> "obj") and a union alias (-> "union_…")
+                        // did not.
                         let args: Vec<Type> = type_args
                             .params
                             .iter()
-                            .map(|t| extract_ts_type(t))
+                            .map(|t| extract_ts_type_with_ctx(t, Some(ctx)))
                             .collect();
                         return Type::Generic {
                             base: name,
@@ -1440,6 +1475,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
 }
 
 mod extract;
+mod generic_alias_specialization_tests;
 
 pub(crate) use extract::{
     extract_binding_type, extract_member_class_name, extract_param_type_with_ctx, extract_ts_type,

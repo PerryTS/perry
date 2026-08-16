@@ -5,6 +5,7 @@
 //! returns the trimmed string), so codegen must lower these without erroring.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_hir::types::Type;
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn empty_opts() -> CompileOptions {
@@ -92,6 +93,7 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -118,6 +120,110 @@ fn string_trim_with_extra_arg_compiles() {
     assert!(
         ir.contains("js_string_trim"),
         "expected trim lowering to emit js_string_trim"
+    );
+}
+
+/// #7673: `make(): any` may return a Zod schema (or any user object) whose own
+/// `trim` method returns that object. A builtin-shaped NAME needs a runtime
+/// string-tag proof before it can select the static String lowering.
+#[test]
+fn any_call_result_trim_emits_string_tag_dispatch() {
+    let receiver = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "make".to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let stmt = Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(receiver),
+            property: "trim".to_string(),
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    });
+    let mut opts = empty_opts();
+    opts.import_function_prefixes
+        .insert("make".to_string(), "schema_ts".to_string());
+    let ir = String::from_utf8(
+        compile_module(&module_with_init(vec![stmt]), opts)
+            .expect("an Any-receiver trim call must compile through runtime dispatch"),
+    )
+    .unwrap();
+
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
+        "the non-string arm must use runtime method dispatch:\n{ir}"
+    );
+    assert!(
+        ir.contains("lshr i64")
+            && ir.contains("32767")
+            && ir.contains("32761")
+            && ir.contains("call i64 @js_string_trim"),
+        "the string arm must be guarded by heap and short-string tags:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_string_coerce_method_this"),
+        "a tag-proven string must not be coerced again:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("= call double @perry_fn_schema_ts__make(")
+            .count(),
+        2,
+        "the receiver must be evaluated once in the init body (plus the generated extern wrapper):\n{ir}"
+    );
+}
+
+/// An invalid static String arity must not make an Any receiver fail codegen:
+/// the value may be a user object whose colliding method accepts that arity.
+#[test]
+fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
+    let receiver = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "make".to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let stmt = Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(receiver),
+            property: "split".to_string(),
+        }),
+        args: vec![
+            Expr::String(",".to_string()),
+            Expr::Number(2.0),
+            Expr::Number(3.0),
+        ],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    });
+    let mut opts = empty_opts();
+    opts.import_function_prefixes
+        .insert("make".to_string(), "factory_ts".to_string());
+    let ir = String::from_utf8(
+        compile_module(&module_with_init(vec![stmt]), opts)
+            .expect("an invalid String arity on an Any receiver must use generic dispatch"),
+    )
+    .unwrap();
+
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
+        "the call must use generic runtime method dispatch:\n{ir}"
+    );
+    assert!(
+        !ir.contains("anystr.string") && !ir.contains("call i64 @js_string_split"),
+        "an unsupported static String arity must bypass the tag diamond:\n{ir}"
     );
 }
 

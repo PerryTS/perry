@@ -339,13 +339,15 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     let mut candidates = report::candidate_seeds(stmts, boxed_vars, module_globals, &preamble);
     // #7034 §4: `const r = producer(...)` where `producer` carries a
     // return-shape fact is provenance of `new`-strength (module doc, rule 1).
-    let return_seeded = super::ptr_shape_returns::find_return_shape_candidates(
+    let return_seeds = super::ptr_shape_returns::find_return_shape_candidates(
         stmts,
         boxed_vars,
         module_globals,
+        classes,
         module_dispatch,
         &mut candidates,
     );
+    let return_seeded = &return_seeds.seeded;
     // #7034 §3: `const r = A[i]` at an in-bounds site on an element-shape-
     // proven local array is provenance of `new C(...)` strength (module doc,
     // rule 2's array-element exception). The seeds are already filtered for
@@ -418,7 +420,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         const_local_inits: HashMap::new(),
         disq_reasons: HashMap::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
-        return_seeded: &return_seeded,
+        return_seeded,
         element_seeded: &element_seeded,
         element_facts,
         in_closure: false,
@@ -628,6 +630,42 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             }
         }
     }
+    // #7170 R2: a dynamic method call names one implementation only while
+    // its receiver keeps the exact shape/containment fact that licensed the
+    // resolution. Candidate discovery runs before the full use, constructor,
+    // and method-body proofs, so enforce that dependency after every ordinary
+    // rejection (including element-group all-or-nothing). Iterate to a
+    // fixpoint for chains such as `a.makeB().makeC()` represented by bound
+    // intermediate locals.
+    loop {
+        let doomed_roots: Vec<u32> = return_seeds
+            .method_receivers
+            .iter()
+            .filter_map(|(result, receiver)| {
+                (out.contains_key(result) && !out.contains_key(receiver)).then_some(*result)
+            })
+            .collect();
+        if doomed_roots.is_empty() {
+            break;
+        }
+        for root in doomed_roots {
+            let doomed: Vec<u32> = roots
+                .iter()
+                .filter_map(|(member, member_root)| (*member_root == root).then_some(*member))
+                .collect();
+            for member in doomed {
+                if out.remove(&member).is_some() {
+                    report::deny_local(
+                        member,
+                        &names,
+                        &depths,
+                        candidates.get(&member).map(String::as_str),
+                        report::RETURN_METHOD_RECEIVER_UNPROVEN,
+                    );
+                }
+            }
+        }
+    }
     out
 }
 
@@ -735,6 +773,21 @@ pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
         out.extend(class.fields.iter().map(|f| f.name.clone()));
     }
     out
+}
+
+/// Whether one class in the resolved chain declares the same instance method
+/// name more than once. Overrides in different classes are intentional and
+/// remain resolvable by the prototype chain; duplicate declarations within a
+/// single class are different because JavaScript selects the last declaration
+/// while several Perry symbol/collector paths still select the first.
+pub(super) fn chain_has_duplicate_method_names(chain: &[&Class]) -> bool {
+    chain.iter().any(|class| {
+        let mut names = HashSet::new();
+        class
+            .methods
+            .iter()
+            .any(|method| !names.insert(method.name.as_str()))
+    })
 }
 
 /// name -> (owning class name, method function), first (most-derived) wins —
@@ -895,13 +948,12 @@ impl<'a> UseWalk<'a> {
                     // is the CALL. It records no `new_args` — the constructor
                     // ran in the callee, so the numeric-field proof stands
                     // down for these candidates entirely (see the `'cand`
-                    // loop). The argument expressions are ordinary values;
-                    // walk them so OTHER candidates passed there still escape.
+                    // loop). Walk the complete call so OTHER candidates passed
+                    // as arguments still escape and a tracked method receiver
+                    // records the call for pass 3's `this`-flow audit.
                     if self.return_seeded.contains(id) {
-                        if let Some(Expr::Call { args, .. }) = init.as_ref() {
-                            for a in args {
-                                self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
-                            }
+                        if let Some(call @ Expr::Call { .. }) = init.as_ref() {
+                            self.walk_expr(call);
                             return;
                         }
                     }
@@ -1875,6 +1927,9 @@ mod numeric;
 use numeric::{
     collect_numeric_by_construction_locals, prove_group_numeric_fields, prove_numeric_fields,
 };
+// #8105: the same locals fixpoint, consumed outside the `Ptr<Shape>` pass by
+// `collectors/number_by_construction.rs`.
+pub(in crate::collectors) use numeric::collect_numeric_by_construction_locals as collect_numeric_by_construction_locals_for_type_analysis;
 
 /// Conservative "cannot be a BigInt" for the spec Number-path argument.
 fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {

@@ -35,7 +35,7 @@ pub(crate) fn native_namespace_or_create(module_name: &str, namespace_obj: f64) 
     js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
 }
 
-pub(crate) fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic::AtomicU64) -> f64 {
+pub(crate) fn create_cached_sub_namespace(name: &str, cache: &super::super::RealmAtomicU64) -> f64 {
     let cached = cache.load(Ordering::Relaxed);
     if cached != 0 {
         return f64::from_bits(cached);
@@ -43,7 +43,9 @@ pub(crate) fn create_cached_sub_namespace(name: &str, cache: &std::sync::atomic:
 
     let result = create_sub_namespace(name);
     // GC_STORE_AUDIT(ROOT): os constants caches are mutable roots visited by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(cache, result.to_bits(), Ordering::Relaxed);
+    cache.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, result.to_bits(), Ordering::Relaxed);
+    });
     result
 }
 
@@ -109,11 +111,9 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
     }
     let value = crate::value::js_nanbox_pointer(arr as i64);
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &crate::object::HTTP_METHODS_CACHE,
-        value.to_bits(),
-        Ordering::Relaxed,
-    );
+    crate::object::HTTP_METHODS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, value.to_bits(), Ordering::Relaxed);
+    });
     value
 }
 
@@ -710,10 +710,8 @@ pub(crate) unsafe fn create_fs_constants_object() -> f64 {
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
     // GC_STORE_AUDIT(ROOT): FS_CONSTANTS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &crate::object::FS_CONSTANTS_CACHE,
-        result.to_bits(),
-        Ordering::Relaxed,
-    );
+    crate::object::FS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, result.to_bits(), Ordering::Relaxed);
+    });
     result
 }

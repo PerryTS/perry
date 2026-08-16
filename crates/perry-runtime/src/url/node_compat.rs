@@ -239,6 +239,15 @@ mod tests {
         assert!(href.ends_with("/x.txt"), "href {href:?}");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn legacy_verbatim_import_meta_url_decodes_as_drive_path() {
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let path =
+            super::js_url_file_url_to_path(str_f64("file:////?/C:/project/bundle.mjs"), undefined);
+        assert_eq!(super::string_from_js_value(path), "C:\\project\\bundle.mjs");
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn file_url_conversions_default_to_posix_elsewhere() {
@@ -358,6 +367,23 @@ fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
 
     let Some(after_scheme) = url_string.strip_prefix("file:") else {
         throw_url_type_error_with_code("The URL must be of scheme file", "ERR_INVALID_URL_SCHEME");
+    };
+
+    // Compatibility for objects compiled before Perry normalized Windows
+    // verbatim paths in import.meta.url. Those objects contain
+    // `file:////?/C:/...`; normalize the Win32 `\\?\` decoration before URL
+    // query parsing sees its question mark.
+    let normalized_after_scheme;
+    let after_scheme = if windows {
+        let slash_trimmed = after_scheme.trim_start_matches('/');
+        if let Some(rest) = slash_trimmed.strip_prefix("?/") {
+            normalized_after_scheme = format!("///{rest}");
+            normalized_after_scheme.as_str()
+        } else {
+            after_scheme
+        }
+    } else {
+        after_scheme
     };
 
     let (host, pathname) = if let Some(authority_and_path) = after_scheme.strip_prefix("//") {
@@ -497,7 +523,13 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let path = get_string_content(path_f64);
     let windows = options_windows_flag(options_f64);
 
-    let href = if windows {
+    let href = path_to_file_url_string(&path, windows);
+    let obj = create_url_object(&href);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+pub(crate) fn path_to_file_url_string(path: &str, windows: bool) -> String {
+    if windows {
         // Win32 (#2975). UNC paths (`\\host\share\...`) become
         // `file://host/share/...`; everything else is a (drive-letter) path
         // with `\` separators rewritten to `/`.
@@ -536,9 +568,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
         } else {
             format!("file:///{}", encoded)
         }
-    };
-    let obj = create_url_object(&href);
-    crate::value::js_nanbox_pointer(obj as i64)
+    }
 }
 
 /// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument

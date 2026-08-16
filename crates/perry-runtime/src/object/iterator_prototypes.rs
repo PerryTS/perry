@@ -37,13 +37,30 @@ use super::{
 use crate::value::JSValue;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-// GC-rooted singleton slots. Scanned in `object/mod.rs::scan_object_cache_roots_mut`.
-pub(crate) static ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static ARRAY_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static MAP_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static SET_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static STRING_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+// GC-rooted singleton slots. Each realm builds its own tower in its own arena;
+// the process-global handles resolve to per-agent atomics and are scanned in
+// `object/mod.rs::scan_object_cache_roots_mut` (#8002).
+crate::perry_thread_local! {
+    static ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static MAP_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static SET_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+}
+
+pub(crate) static ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static ARRAY_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static MAP_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&MAP_ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static SET_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&SET_ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
 
 /// Dispatch `method` on the implicit-`this` iterator instance, routing by class
 /// id to the matching existing iterator dispatcher. Shared by the per-family
@@ -156,6 +173,11 @@ fn chain_to(child: *mut ObjectHeader, parent: *mut ObjectHeader) {
 /// Build the shared `%IteratorPrototype%` and the four family prototypes,
 /// storing them in the GC-rooted slots. Idempotent.
 fn build_iterator_prototypes() {
+    // The tower is reachable lazily from the first iterator allocation, not
+    // only from globalThis bootstrap. Keep its raw locals stable across the
+    // allocating method/tag installs, just like the generator and TypedArray
+    // intrinsic builders (#7251).
+    let _no_move = crate::gc::GcSuppressScope::new();
     // Shared %IteratorPrototype% — carries [Symbol.iterator] returning `this`.
     let shared = js_object_alloc(0, 0);
     if shared.is_null() {

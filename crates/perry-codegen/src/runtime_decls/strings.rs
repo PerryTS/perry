@@ -33,6 +33,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_concat_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_value_concat_string", I64, &[DOUBLE, I64]);
 
+    // #7837: the same two fused concats, but with the STRING side passed
+    // NaN-boxed instead of pre-unboxed, so the helper can tell a real string
+    // from a `let s: string` that holds a number and pick the spec's operator.
+    // `js_string_add_value(l_box, r_box) -> box`  (string believed on the left)
+    // `js_value_add_string(l_box, r_box) -> box`  (string believed on the right)
+    module.declare_function("js_string_add_value", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_value_add_string", DOUBLE, &[DOUBLE, DOUBLE]);
+
     // N-way string concat (v0.5.769): collapses a left-spine of pairwise
     // string-typed Add nodes (`a + b + c + ...`) into a single allocation.
     // First arg is a stack-allocated array of N NaN-boxed `f64` values;
@@ -926,7 +934,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
     module.declare_function("js_process_set_source_maps_enabled", DOUBLE, &[DOUBLE]);
     module.declare_function("js_module_is_builtin", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_module_find_package_json", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_module_find_package_json",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_module_find_source_map", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_module_source_map_new", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_module_register", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_module_register_hooks", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_next_tick", VOID, &[I64, I64]);
@@ -1019,7 +1033,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, I32, I32, I64],
     );
+    module.declare_function(
+        "js_object_alloc_class_inline_keys_stamped",
+        I64,
+        &[I32, I32, I32, I64, I32],
+    );
     module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
+    module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
     // Inline bump-allocator state accessor + slow path. The codegen
     // calls `js_inline_arena_state` once per JS function entry, caches
     // the returned pointer in a stack slot, and reads/writes the

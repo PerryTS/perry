@@ -72,9 +72,103 @@
 //! `Atomics.waitAsync`, and the AppKit text reads. Programs that use them get
 //! today's behaviour; compute- and JSON-shaped programs get the walk removed.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED};
+
+crate::perry_thread_local! {
+    static COPYING_WALK_PHASE: Cell<Option<&'static str>> =
+        const { Cell::new(None) };
+}
+
+/// RAII label for the walk that is about to call into `move_young`.
+///
+/// The pin-latch abort used to print only the garbage header. On #7803/#7990
+/// that header is *incoherent* (INTERNED on a Map, a 2 GiB nursery size), so
+/// the interesting fact is which walk followed the stale slot. Set around
+/// each mark/rewrite walk in `copying.rs`; read by
+/// [`pinned_young_move_report`].
+pub(super) struct CopyingWalkPhaseGuard {
+    prev: Option<&'static str>,
+}
+
+impl CopyingWalkPhaseGuard {
+    pub(super) fn enter(name: &'static str) -> Self {
+        let prev = COPYING_WALK_PHASE.with(|c| c.replace(Some(name)));
+        Self { prev }
+    }
+}
+
+impl Drop for CopyingWalkPhaseGuard {
+    fn drop(&mut self) {
+        COPYING_WALK_PHASE.with(|c| c.set(self.prev));
+    }
+}
+
+fn copying_walk_phase() -> Option<&'static str> {
+    COPYING_WALK_PHASE.with(|c| c.get())
+}
+
+/// The native stack-map slot the walker is currently visiting, so the
+/// pin-latch abort can name the OWNING FRAME — the compiled function, its
+/// statepoint record and the slot address — instead of only the walk phase.
+///
+/// §35's cut left exactly this gap: `mutable_root_slots/native_stack` says a
+/// statepoint live bundle held the stale pointer, and the mutator backtrace
+/// lists every candidate frame without saying which one. The walker resolves
+/// all of it (`ResolvedRoot` in roots/stack_maps.rs) and then threw it away
+/// one call before the latch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeRootSlotContext {
+    /// The frame's return address the record was matched on.
+    pub(crate) ip: usize,
+    /// Start of the compiled function owning the matched record.
+    pub(crate) function_address: usize,
+    /// The record's base register (29 = FP, 31 = SP on aarch64).
+    pub(crate) dwarf_reg: u16,
+    /// The record's frame offset from that base.
+    pub(crate) offset: i32,
+    /// Resolved slot address (base register + offset).
+    pub(crate) slot_addr: usize,
+}
+
+crate::perry_thread_local! {
+    static NATIVE_ROOT_SLOT: Cell<Option<NativeRootSlotContext>> =
+        const { Cell::new(None) };
+}
+
+/// Set around each native stack-map slot visit; cleared after. Two `Cell`
+/// stores per slot, no allocation — the walk body already does strictly more
+/// per slot than this.
+#[inline]
+pub(crate) fn set_native_root_slot_context(context: Option<NativeRootSlotContext>) {
+    NATIVE_ROOT_SLOT.with(|c| c.set(context));
+}
+
+pub(crate) fn native_root_slot_context() -> Option<NativeRootSlotContext> {
+    NATIVE_ROOT_SLOT.with(|c| c.get())
+}
+
+/// Best-effort symbol name for an address, via `dladdr` — same approach as
+/// `eh_walker.rs`. `PERRY_KEEP_SYMBOLS=1` binaries resolve their own
+/// `perry_closure_*` symbols; stripped ones print only the address.
+#[cfg(unix)]
+fn symbol_near(addr: usize) -> Option<String> {
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } == 0
+        || info.dli_sname.is_null()
+    {
+        return None;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) };
+    Some(name.to_string_lossy().into_owned())
+}
+
+#[cfg(not(unix))]
+fn symbol_near(_addr: usize) -> Option<String> {
+    None
+}
 
 /// Has any object in a space the copying minor relocates ever been pinned?
 ///
@@ -251,6 +345,270 @@ pub(crate) fn test_reset_young_pin_latch() {
     YOUNG_PIN_EVER.store(false, Ordering::Release);
 }
 
+/// Is this header self-consistent, given what each flag is allowed to mean?
+///
+/// Returns `None` when nothing contradicts, or `Some(reason)` when the header
+/// cannot describe a live object of the type it claims. Used by the
+/// `move_young` pin-latch abort: the flags and type it already has in hand are
+/// the *only* evidence that exists at the instant of the fault, and they
+/// separate "the young-pin latch is incomplete" from "the copier followed a
+/// dangling pointer into recycled memory" — two faults with completely
+/// different investigations that the abort used to report identically.
+pub(super) fn header_incoherence(obj_type: u8, size: u32, flags: u8) -> Option<String> {
+    use super::types::{GC_FLAG_INTERNED, GC_HEADER_SIZE, GC_TYPE_MAX, GC_TYPE_STRING};
+    if obj_type == 0 || obj_type > GC_TYPE_MAX {
+        return Some(format!(
+            "obj_type={obj_type} is outside the defined range 1..={GC_TYPE_MAX}"
+        ));
+    }
+    if flags & GC_FLAG_INTERNED != 0 && obj_type != GC_TYPE_STRING {
+        return Some(format!(
+            "GC_FLAG_INTERNED is set, but it is written in exactly one place \
+             (string/intern.rs) and only on GC_TYPE_STRING — never on {}",
+            gc_type_label(obj_type)
+        ));
+    }
+    let total = size as usize;
+    if total < GC_HEADER_SIZE || total > super::copying::MAX_YOUNG_MOVE_BYTES {
+        return Some(format!(
+            "size={total} is outside the range a nursery-resident object can \
+             have ({GC_HEADER_SIZE}..={})",
+            super::copying::MAX_YOUNG_MOVE_BYTES
+        ));
+    }
+    None
+}
+
+/// The `move_young` pin-latch abort's body: what happened, what the header
+/// says about which fault this is, and the candidates in the order the
+/// evidence separates them.
+///
+/// # Why this is not one sentence naming one cause
+///
+/// It was, and the cause it named was wrong. #7645's original text asserted
+/// "some site sets `GC_FLAG_PINNED` without going through `gc::pin_object`"
+/// and told the reader to run `scripts/gc_pin_sites.py`. On the tree where the
+/// abort was next observed (#7990, zod dep-corpus, ~1 run in 16) that tool
+/// reports **OK** — every pin does originate in `pin_object`, and both of its
+/// allowlisted exceptions are test-only and unreachable from a user program.
+/// So the message sent every reader at a hypothesis its own tool refutes,
+/// which costs more than saying nothing.
+pub(super) fn pinned_young_move_report(
+    header_addr: usize,
+    obj_type: u8,
+    size: u32,
+    flags: u8,
+) -> String {
+    let mut out = format!(
+        "[gc-pin-latch] FATAL: copying minor is about to relocate a PINNED young \
+         object on a preflight-skipped cycle. header={header_addr:#x} \
+         obj_type={obj_type} ({}) size={size} flags={flags:#04x} ({})\n",
+        gc_type_label(obj_type),
+        flag_names(flags),
+    );
+    match header_incoherence(obj_type, size, flags) {
+        Some(reason) => {
+            out.push_str(&format!(
+                "  header coherence: INCONSISTENT — {reason}.\n  \
+                 So this is probably NOT a live pinned object and the young-pin latch \
+                 is probably innocent: the copier reached a header in memory that used \
+                 to hold something else, i.e. a slot that was not rooted across a \
+                 collection (#7154 class). Chase THAT first:\n    \
+                 PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 \
+                 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800\n  \
+                 (the default depth of 4 quarantines four retired page-sets; a value \
+                 can cross hundreds of collections between its last valid observation \
+                 and its stale use, and then the default misses it silently.)\n",
+            ));
+        }
+        None => {
+            out.push_str(
+                "  header coherence: consistent — the flags and type do not contradict, \
+                 so this reads as a real pinned object in a space the copying minor \
+                 relocates.\n",
+            );
+        }
+    }
+    out.push_str(&format!(
+        "  copying walk phase: {}\n",
+        copying_walk_phase().unwrap_or("(unset — not inside a named walk)")
+    ));
+    // #7803: name the owning frame. Only the native stack-map walk sets this;
+    // for every other phase it prints as absent rather than as a stale value.
+    match native_root_slot_context() {
+        Some(context) => {
+            let function = symbol_near(context.function_address)
+                .unwrap_or_else(|| "<no symbol — stripped binary>".to_string());
+            out.push_str(&format!(
+                "  native root slot: owner={function} fn={:#x} ip={:#x} \
+                 reg={} offset={} slot_addr={:#x} raw_bits={:#018x}\n",
+                context.function_address,
+                context.ip,
+                context.dwarf_reg,
+                context.offset,
+                context.slot_addr,
+                // Re-read the slot: the raw word says whether the value was
+                // NaN-boxed (and with which tag) or bare — the deref above
+                // only saw the masked address.
+                // Same hazard as the neighborhood dump below: a native
+                // root-slot context can name an unmapped address, and this
+                // report is printed on the way to an abort.
+                if matches!(
+                    crate::arena::classify_heap_space(context.slot_addr),
+                    crate::arena::HeapSpace::Unknown
+                ) {
+                    0
+                } else {
+                    unsafe { *(context.slot_addr as *const u64) }
+                },
+            ));
+        }
+        None => out.push_str("  native root slot: (not visiting a native stack-map slot)\n"),
+    }
+    // #7803 target identification: the garbage "header" values this abort
+    // has printed were NaN-boxed VALUE words, which is what the memory looks
+    // like when the followed address points INTO live data rather than at an
+    // object start. Dump the neighborhood and, decisively, the live object
+    // that ENCLOSES the target (census + floor lookup — expensive, but this
+    // path is about to abort the process).
+    out.push_str("  target neighborhood (target-64 .. target+88):\n");
+    let target_user = header_addr + super::types::GC_HEADER_SIZE;
+    for delta in (-64i64..=88).step_by(8) {
+        let addr = (header_addr as i64 + delta) as usize;
+        // This path is about to abort the process, so a diagnostic that
+        // SIGSEGVs destroys the very report it exists to print. `header_addr`
+        // is a SUSPECT address by construction — that is why we are here — and
+        // the neighborhood walks 64 bytes below it, so neither the address nor
+        // its neighborhood is known to be mapped. Classify against the arena's
+        // page metadata (a real mapping check, not a magnitude guess) and print
+        // a placeholder rather than dereferencing. A stale from-space address —
+        // the #7803 case this dump is FOR — still classifies into a live space,
+        // so the diagnostic keeps working where it matters.
+        let readable = !matches!(
+            crate::arena::classify_heap_space(addr),
+            crate::arena::HeapSpace::Unknown
+        );
+        if !readable {
+            out.push_str(&format!(
+                "    {}{:<4} (unmapped — not in any arena space){}\n",
+                if delta < 0 { "-" } else { "+" },
+                delta.abs(),
+                if delta == 0 {
+                    "   <-- reported header"
+                } else {
+                    ""
+                }
+            ));
+            continue;
+        }
+        let bits = unsafe { *(addr as *const u64) };
+        out.push_str(&format!(
+            "    {}{:<4} {:#018x}{}\n",
+            if delta < 0 { "-" } else { "+" },
+            delta.abs(),
+            bits,
+            if delta == 0 {
+                "   <-- reported header"
+            } else {
+                ""
+            },
+        ));
+    }
+    let valid = super::trace::build_valid_pointer_set();
+    match valid.enclosing_object(target_user) {
+        Some(enclosing) if enclosing != target_user => {
+            let eh = (enclosing - super::types::GC_HEADER_SIZE) as *const super::types::GcHeader;
+            out.push_str(&format!(
+                "  ENCLOSING live object: user={enclosing:#x} obj_type={} ({}) size={} — the \
+                 followed address is +{} INTO it (an interior pointer, not a stale one)\n",
+                unsafe { (*eh).obj_type },
+                gc_type_label(unsafe { (*eh).obj_type }),
+                unsafe { (*eh).size },
+                target_user - enclosing,
+            ));
+        }
+        Some(_) => out.push_str(
+            "  enclosing-object check: target IS an object start (interior-pointer \
+             hypothesis rejected for this abort)\n",
+        ),
+        None => out.push_str(
+            "  enclosing-object check: target is inside no censused live object \
+             (dead/recycled memory — consistent with a genuinely stale slot)\n",
+        ),
+    }
+    // The collection is at a safepoint in the mutator. The frames below the
+    // copier name the compiled function whose statepoint live bundle (or
+    // shadow slot) held the stale pointer — #7803's missing owner.
+    out.push_str("  --- mutator backtrace at the latch ---\n");
+    out.push_str(&format!(
+        "{}\n  --- end mutator backtrace ---\n",
+        std::backtrace::Backtrace::force_capture()
+    ));
+    if flags & super::types::GC_FLAG_TENURED != 0 {
+        out.push_str(
+            "  note: GC_FLAG_TENURED next to a young space is NOT an anomaly. The \
+             non-moving generational path tenures in place — a tenured object stays \
+             physically in the nursery and the trace merely pretends it is old \
+             (gc/types.rs, GC_FLAG_TENURED).\n",
+        );
+    }
+    out.push_str(
+        "  candidates, in the order the evidence above separates them:\n   \
+         1. a slot that was not rooted across a collection point handed the copier a \
+            stale header (see the coherence verdict; docs/src/internals/gc-rooting-invariant.md).\n   \
+         2. `pin_object_non_young` was called on a young-arena object. Its debug_assert \
+            is compiled out of release builds, and only the `pin_object_non_young_\
+            call_sites_are_never_young` test checks the callers — a caller added \
+            without a case there is invisible.\n   \
+         3. `pin_object` classified the object Longlived/Old at pin time and it is young \
+            now. `gc/pin.rs` rests on spaces never flowing backwards.\n   \
+         4. the preflight-skip decision (`preflight_walks_decided`, gc/copying.rs) is \
+            wrong even though the latch is complete.\n   \
+         5. LAST: a pin site outside `gc::pin_object`. `python3 scripts/gc_pin_sites.py` \
+            decides this one, and on a clean tree it answers OK — which is why #7645's \
+            original text naming it as THE cause was misleading (#7990).",
+    );
+    out
+}
+
+/// Human-readable name for a `GcHeader::obj_type`.
+///
+/// `types::gc_type_name` is `#[cfg(feature = "diagnostics")]`, and this abort
+/// has to print the same text in every build — a fault report that degrades
+/// with the feature set is a fault report nobody can compare against.
+fn gc_type_label(obj_type: u8) -> &'static str {
+    super::types::gc_type_info(obj_type).map_or("unknown", |info| info.name)
+}
+
+/// Render `gc_flags` as the constant names it is made of, so a reader does not
+/// have to decode a hex byte against `gc/types.rs` by hand.
+fn flag_names(flags: u8) -> String {
+    use super::types::{
+        GC_FLAG_ARENA, GC_FLAG_FORWARDED, GC_FLAG_HAS_SURVIVED, GC_FLAG_INTERNED, GC_FLAG_MARKED,
+        GC_FLAG_PINNED, GC_FLAG_SHAPE_SHARED, GC_FLAG_TENURED,
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for (bit, name) in [
+        (GC_FLAG_MARKED, "MARKED"),
+        (GC_FLAG_ARENA, "ARENA"),
+        (GC_FLAG_PINNED, "PINNED"),
+        (GC_FLAG_SHAPE_SHARED, "SHAPE_SHARED"),
+        (GC_FLAG_INTERNED, "INTERNED"),
+        (GC_FLAG_TENURED, "TENURED"),
+        (GC_FLAG_HAS_SURVIVED, "HAS_SURVIVED"),
+        (GC_FLAG_FORWARDED, "FORWARDED"),
+    ] {
+        if flags & bit != 0 {
+            parts.push(name);
+        }
+    }
+    if parts.is_empty() {
+        "no flags".to_string()
+    } else {
+        parts.join("|")
+    }
+}
+
 /// `extern "C"` form of [`pin_object`] taking the **user** pointer, for crates
 /// that reach the runtime through FFI declarations rather than a Rust
 /// dependency edge (`perry-ui-macos`, which used to open-code
@@ -265,4 +623,93 @@ pub unsafe extern "C" fn js_gc_pin_user_ptr(user_ptr: *mut u8) {
         return;
     }
     pin_object(user_ptr.sub(super::types::GC_HEADER_SIZE) as *mut GcHeader);
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use crate::gc::types::{
+        GC_FLAG_ARENA, GC_FLAG_INTERNED, GC_FLAG_MARKED, GC_FLAG_PINNED, GC_FLAG_TENURED,
+        GC_TYPE_MAP, GC_TYPE_STRING,
+    };
+
+    /// The exact header #7990 reported, byte for byte:
+    /// `obj_type=8 size=731 flags=0x37`. The old message called this "a pinned
+    /// young Map" and sent the reader to `gc_pin_sites.py`, which answers OK.
+    /// The header itself says it is not a coherent Map at all.
+    #[test]
+    fn the_7990_header_is_reported_as_incoherent() {
+        let flags =
+            GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED | GC_FLAG_INTERNED | GC_FLAG_TENURED;
+        assert_eq!(flags, 0x37, "the issue's flags byte");
+        let reason = header_incoherence(GC_TYPE_MAP, 731, flags)
+            .expect("INTERNED on a Map contradicts string/intern.rs");
+        assert!(reason.contains("GC_FLAG_INTERNED"), "{reason}");
+
+        let report = pinned_young_move_report(0x2db2f681350, GC_TYPE_MAP, 731, flags);
+        assert!(report.contains("INCONSISTENT"), "{report}");
+        assert!(
+            report.contains("PERRY_GC_PROTECT_FROMSPACE_DEPTH=800"),
+            "{report}"
+        );
+        // The decoded flag names, so a reader never hand-decodes 0x37 again.
+        assert!(
+            report.contains("MARKED|ARENA|PINNED|INTERNED|TENURED"),
+            "{report}"
+        );
+    }
+
+    /// A coherent header must NOT be described as a stale pointer — the
+    /// verdict has to be able to come out both ways or it is decoration.
+    #[test]
+    fn a_coherent_pinned_young_header_is_not_blamed_on_a_stale_pointer() {
+        let flags = GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED;
+        assert!(header_incoherence(GC_TYPE_MAP, 64, flags).is_none());
+        let report = pinned_young_move_report(0x1000, GC_TYPE_MAP, 64, flags);
+        assert!(report.contains("header coherence: consistent"), "{report}");
+        assert!(!report.contains("INCONSISTENT"), "{report}");
+    }
+
+    #[test]
+    fn interned_on_a_string_is_coherent() {
+        let flags = GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED | GC_FLAG_INTERNED;
+        assert!(header_incoherence(GC_TYPE_STRING, 48, flags).is_none());
+    }
+
+    #[test]
+    fn out_of_range_type_and_size_are_caught() {
+        let flags = GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED;
+        assert!(header_incoherence(200, 64, flags).is_some());
+        assert!(header_incoherence(0, 64, flags).is_some());
+        // Smaller than a header, and larger than any nursery object.
+        assert!(header_incoherence(GC_TYPE_MAP, 2, flags).is_some());
+        assert!(header_incoherence(GC_TYPE_MAP, (1 << 20) + 1, flags).is_some());
+    }
+
+    /// The refuted hypothesis must not lead. #7645's text named the pin-site
+    /// scan as THE cause; it is now candidate 5 of 5, and the message says why.
+    #[test]
+    fn the_pin_site_scan_is_the_last_candidate_not_the_first() {
+        let flags = GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED;
+        let report = pinned_young_move_report(0x1000, GC_TYPE_MAP, 64, flags);
+        let scan = report.find("gc_pin_sites.py").expect("names the tool");
+        let rooting = report
+            .find("not rooted across a collection point")
+            .expect("names the rooting candidate");
+        assert!(
+            rooting < scan,
+            "the rooting candidate must precede the pin-site scan:\n{report}"
+        );
+        assert!(report.contains("5. LAST"), "{report}");
+    }
+
+    /// TENURED on a young object is normal, not evidence. The message has to
+    /// say so, because the issue flagged it as suspicious.
+    #[test]
+    fn tenured_on_a_young_object_is_explained_rather_than_flagged() {
+        let flags = GC_FLAG_MARKED | GC_FLAG_ARENA | GC_FLAG_PINNED | GC_FLAG_TENURED;
+        let report = pinned_young_move_report(0x1000, GC_TYPE_MAP, 64, flags);
+        assert!(report.contains("NOT an anomaly"), "{report}");
+        assert!(report.contains("tenures in place"), "{report}");
+    }
 }

@@ -22,8 +22,8 @@ So this checker asserts THREE things, not one:
      line, which on the gate's own invocation manifests as an aborting
      nonzero exit -- see `scripts/gc_parse_churn_layout_gate.sh`).
   2. LIVENESS      -- at least one copying minor actually relocated objects
-     (`copied_objects` summed across every `[gc-copy-minor] ran ...` line is
-     nonzero). A run that never triggers the moving collector cannot fail
+     (`copied_objects + promoted_objects` across non-in-place
+     `[gc-copy-minor] ran ...` lines is nonzero). A run that never triggers the moving collector cannot fail
      however broken the layout state is.
   3. EAGERNESS     -- the from-space scan's own `objects=` census reached at
      least `--records` objects. `js_json_parse`'s Auto mode routes a
@@ -58,7 +58,8 @@ from dataclasses import dataclass, field
 
 SUCCESS_SENTINEL = "PARSE_CHURN_LAYOUT_GATE_OK"
 MISMATCH_RE = re.compile(r"^MISMATCHES (\d+)$", re.MULTILINE)
-COPIED_OBJECTS_RE = re.compile(r"\[gc-copy-minor\] ran copied_objects=(\d+)")
+COPY_MINOR_LINE_RE = re.compile(r"^\[gc-copy-minor\] ran\s+(.*)$", re.MULTILINE)
+FIELD_RE = re.compile(r"\b([a-z_]+)=([^\s]+)")
 SCAN_LINE_RE = re.compile(r"^\[gc-fromspace-scan (\S+)\] objects=(\d+)", re.MULTILINE)
 OFFENDER_PHASES = {"OFFENDERS", "abort"}
 
@@ -109,12 +110,20 @@ def evaluate(exit_code: int, stdout: str, stderr: str, records: int) -> Verdict:
             f"real defect the from-space scan can miss."
         )
 
-    copied = [int(n) for n in COPIED_OBJECTS_RE.findall(stderr)]
-    total_copied = sum(copied)
-    if total_copied == 0:
+    moved = 0
+    for raw_fields in COPY_MINOR_LINE_RE.findall(stderr):
+        fields = dict(FIELD_RE.findall(raw_fields))
+        # #7744 whole-block promotion deliberately leaves every object at the
+        # same address. Ordinary promotion is an object-by-object copy and is
+        # relocation evidence just like `copied_objects` (#7657).
+        if fields.get("in_place") == "true":
+            continue
+        moved += int(fields.get("copied_objects", "0"))
+        moved += int(fields.get("promoted_objects", "0"))
+    if moved == 0:
         v.fail(
-            "no copying minor relocated anything (sum of every "
-            "'[gc-copy-minor] ran copied_objects=' line in stderr is 0). "
+            "no copying minor relocated anything (copied+promoted objects "
+            "across every non-in-place '[gc-copy-minor] ran' line is 0). "
             "The subject of this gate -- the moving collector -- never ran, "
             "so a clean scan proves nothing (CLAUDE.md's 'four ways a gate "
             "can be unable to fail', #4). Check PERRY_GC_MOVING_LOOP_POLLS=1 "
@@ -178,9 +187,9 @@ def _self_test() -> int:
 
     ok_stdout = "BLOB_BYTES 245781\nPARSED_LENGTH 4000\nCHURN_TOUCH 240000\nMISMATCHES 0\n" + SUCCESS_SENTINEL + "\n"
     ok_stderr = (
-        "[gc-copy-minor] ran copied_objects=537 copied_bytes=46112\n"
+        "[gc-copy-minor] ran in_place=false survival_permille=350 copied_objects=537 copied_bytes=46112 promoted_objects=0 promoted_bytes=0\n"
         "[gc-fromspace-scan clean] objects=6041 words=86354 fwd_owners_skipped=0 missing_rewrites=0 dangling=0 owners=0\n"
-        "[gc-copy-minor] ran copied_objects=612 copied_bytes=51200\n"
+        "[gc-copy-minor] ran in_place=false survival_permille=970 copied_objects=0 copied_bytes=0 promoted_objects=612 promoted_bytes=51200\n"
         "[gc-fromspace-scan clean] objects=9210 words=120000 fwd_owners_skipped=0 missing_rewrites=0 dangling=0 owners=0\n"
     )
     cases.append(("clean run passes", 0, ok_stdout, ok_stderr, 4000, True))
@@ -204,13 +213,19 @@ def _self_test() -> int:
     )
     cases.append(("no copying minor ever ran -> FAIL (liveness)", 0, ok_stdout, no_copy_stderr, 4000, False))
 
+    in_place_only_stderr = (
+        "[gc-copy-minor] ran in_place=true copied_objects=0 promoted_objects=4000\n"
+        "[gc-fromspace-scan clean] objects=6041 words=86354 fwd_owners_skipped=0 missing_rewrites=0 dangling=0 owners=0\n"
+    )
+    cases.append(("whole-block promotion moved nothing -> FAIL (liveness)", 0, ok_stdout, in_place_only_stderr, 4000, False))
+
     no_scan_stderr = "\n".join(
         line for line in ok_stderr.splitlines() if "gc-fromspace-scan" not in line
     )
     cases.append(("scan never ran at all -> FAIL (ABORT-alone-inert class)", 0, ok_stdout, no_scan_stderr, 4000, False))
 
     lazy_stderr = (
-        "[gc-copy-minor] ran copied_objects=4 copied_bytes=512\n"
+        "[gc-copy-minor] ran in_place=false copied_objects=4 copied_bytes=512 promoted_objects=0 promoted_bytes=0\n"
         "[gc-fromspace-scan clean] objects=9 words=88 fwd_owners_skipped=0 missing_rewrites=0 dangling=0 owners=0\n"
     )
     cases.append(("tape stayed lazy: scan sees ~9 objects not 4000 -> FAIL (eagerness/vacuity)", 0, ok_stdout, lazy_stderr, 4000, False))

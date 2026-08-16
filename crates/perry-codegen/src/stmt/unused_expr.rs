@@ -105,8 +105,8 @@ fn unused_binary_is_pure_nonthrowing(
             if l_num && r_num {
                 return true;
             }
-            let l_str = crate::type_analysis::is_definitely_string_expr(ctx, left);
-            let r_str = crate::type_analysis::is_definitely_string_expr(ctx, right);
+            let l_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, left);
+            let r_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, right);
             (l_str || r_str)
                 && unused_primitive_expr_is_nonthrowing(ctx, left)
                 && unused_primitive_expr_is_nonthrowing(ctx, right)
@@ -130,7 +130,7 @@ fn unused_binary_is_pure_nonthrowing(
 
 fn unused_primitive_expr_is_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> bool {
     crate::type_analysis::is_numeric_expr(ctx, expr)
-        || crate::type_analysis::is_definitely_string_expr(ctx, expr)
+        || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, expr)
         || crate::type_analysis::is_bool_expr(ctx, expr)
         || matches!(
             expr,

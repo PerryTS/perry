@@ -321,11 +321,12 @@ pub fn arena_total_bytes() -> usize {
     ARENA_TOTAL_BYTES.with(|t| t.get())
 }
 
-/// Get bytes currently in use (sum of `block.offset` across blocks).
-/// Used by adaptive GC to measure how much actual data the program is
-/// holding live, separately from how much arena space we've reserved.
-/// After a GC sweep that resets empty blocks, in-use bytes drop
-/// dramatically while reserved bytes stay constant.
+/// Get allocation high-water bytes (sum of `block.offset` across blocks).
+///
+/// This includes swept holes in partially-live blocks and is deliberately a
+/// placement/fragmentation quantity, not live heap usage. Consumers that need
+/// object occupancy (`heapUsed`, major-GC pacing) use
+/// [`arena_live_allocated_bytes`](super::arena_live_allocated_bytes).
 pub fn arena_in_use_bytes() -> usize {
     sync_inline_arena_state();
     let mut used: usize = 0;
@@ -379,6 +380,7 @@ pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) longlived: ArenaRegionTelemetry,
     pub(crate) old: ArenaRegionTelemetry,
     pub(crate) total_in_use_bytes: usize,
+    pub(crate) total_live_allocated_bytes: usize,
     pub(crate) total_reserved_bytes: usize,
     pub(crate) total_block_count: usize,
 }
@@ -387,8 +389,33 @@ pub(crate) struct ArenaTelemetrySnapshot {
 pub struct ArenaResetStats {
     pub reset_blocks: usize,
     pub reusable_bytes: usize,
+    /// Blocks removed from arena reservation accounting, whether retained in
+    /// the recycled pool or actually returned to the allocator.
+    pub removed_blocks: usize,
+    pub removed_bytes: usize,
+    /// Removed blocks retained as discarded, reusable mappings.
+    pub pooled_blocks: usize,
+    pub pooled_bytes: usize,
+    /// Removed blocks actually handed to `dealloc` in production.
     pub deallocated_blocks: usize,
     pub deallocated_bytes: usize,
+}
+
+impl ArenaResetStats {
+    pub(crate) fn record_block_release(&mut self, size: usize, release: ArenaBlockRelease) {
+        self.removed_blocks = self.removed_blocks.saturating_add(1);
+        self.removed_bytes = self.removed_bytes.saturating_add(size);
+        match release {
+            ArenaBlockRelease::Pooled => {
+                self.pooled_blocks = self.pooled_blocks.saturating_add(1);
+                self.pooled_bytes = self.pooled_bytes.saturating_add(size);
+            }
+            ArenaBlockRelease::Deallocated => {
+                self.deallocated_blocks = self.deallocated_blocks.saturating_add(1);
+                self.deallocated_bytes = self.deallocated_bytes.saturating_add(size);
+            }
+        }
+    }
 }
 
 fn arena_region_telemetry(arena: &Arena) -> ArenaRegionTelemetry {
@@ -432,6 +459,7 @@ pub(crate) fn arena_telemetry_snapshot() -> ArenaTelemetrySnapshot {
             + survivor1.in_use_bytes
             + longlived.in_use_bytes
             + old.in_use_bytes,
+        total_live_allocated_bytes: arena_live_allocated_bytes(),
         total_reserved_bytes: arena.reserved_bytes
             + survivor0.reserved_bytes
             + survivor1.reserved_bytes

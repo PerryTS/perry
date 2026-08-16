@@ -787,23 +787,12 @@ pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
     // `trap_next` untouched. The outer's chain reuse on its OWN
     // resumption is unaffected (this restore at function exit puts
     // `prev` back).
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: std::ptr::null_mut(),
-            current_step: ptr as usize,
-        });
-        old
-    });
-    let result = {
-        crate::closure::js_closure_call2(
-            ptr,
-            f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
-            f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
-        )
-    };
-    INLINE_TRAP.with(|c| c.set(prev));
-    result
+    call_async_step_body(
+        ptr,
+        f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
+        f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
+        std::ptr::null_mut(),
+    )
 }
 
 /// #6709. Entry point for an async-generator activation. Like
@@ -829,17 +818,7 @@ pub extern "C" fn js_async_generator_resume(
 ) -> f64 {
     let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
         as *mut crate::closure::ClosureHeader;
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: std::ptr::null_mut(),
-            current_step: ptr as usize,
-        });
-        old
-    });
-    let result = crate::closure::js_closure_call2(ptr, value, is_error);
-    INLINE_TRAP.with(|c| c.set(prev));
-    result
+    call_async_step_body(ptr, value, is_error, std::ptr::null_mut())
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -926,6 +905,23 @@ extern "C" fn async_step_fulfill_thunk(
     // cross-activation leak.
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
+    call_async_step_body(step, value, false_bits, captured_trap_next)
+}
+
+/// Invoke an async step while keeping every pointer needed after the call in
+/// mutable runtime roots. The step body is arbitrary user code and may relocate
+/// the activation promise as well as both pointers saved from the ambient
+/// `INLINE_TRAP`; re-read all three before restoring or forwarding.
+#[inline]
+fn call_async_step_body(
+    step: ClosurePtr,
+    value: f64,
+    is_error: f64,
+    captured_trap_next: *mut Promise,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let captured_h = scope.root_nanbox_f64(boxed_promise_or_undef(captured_trap_next));
+
     // #691 Phase 2: when this thunk is invoked from the pending-Promise
     // fallback in js_async_step_chain (await of a still-pending inner),
     // the runtime arrives here via Task::Inline dispatch which does NOT
@@ -940,10 +936,22 @@ extern "C" fn async_step_fulfill_thunk(
         });
         old
     });
-    let result = crate::closure::js_closure_call2(step, value, false_bits);
-    INLINE_TRAP.with(|c| c.set(prev));
-    forward_swallowed_rejection(result, captured_trap_next);
-    result
+    let prev_trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(prev.trap_next));
+    let prev_step_h =
+        scope.root_nanbox_f64(boxed_closure_or_undef(prev.current_step as ClosurePtr));
+
+    // `step` is needed only by this call and is never used afterward. Any
+    // future post-call use must root it and re-read its relocated address.
+    let result = crate::closure::js_closure_call2(step, value, is_error);
+    let result_h = scope.root_nanbox_f64(result);
+    INLINE_TRAP.with(|c| {
+        c.set(InlineTrap {
+            trap_next: unboxed_promise(&prev_trap_h),
+            current_step: unboxed_closure(&prev_step_h) as usize,
+        })
+    });
+    forward_swallowed_rejection(result_h.get_nanbox_f64(), unboxed_promise(&captured_h));
+    result_h.get_nanbox_f64()
 }
 
 /// #5941: a thunk-resumed step that exits through its internal catch arm
@@ -997,20 +1005,7 @@ extern "C" fn async_step_reject_thunk(
     // async_step_fulfill_thunk for the full rationale).
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
-    // #691 Phase 2: see async_step_fulfill_thunk — same TLS-setup
-    // requirement on the rejection path.
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: captured_trap_next,
-            current_step: step as usize,
-        });
-        old
-    });
-    let result = crate::closure::js_closure_call2(step, value, true_bits);
-    INLINE_TRAP.with(|c| c.set(prev));
-    forward_swallowed_rejection(result, captured_trap_next);
-    result
+    call_async_step_body(step, value, true_bits, captured_trap_next)
 }
 
 const AFA_RESULT_PROMISE: u32 = 0;
@@ -1406,4 +1401,177 @@ fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHea
 /// Reuses `js_string_from_bytes` so the result is GC-tracked.
 fn make_static_string(bytes: &[u8]) -> *const crate::string::StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    crate::perry_thread_local! {
+        // Test-only pre-forwarding addresses intentionally have no mutable-root
+        // scanner: rewriting them would defeat this relocation fixture. The
+        // test also mutates INLINE_TRAP and must run in the runtime suite's
+        // required single-threaded mode (`RUST_TEST_THREADS=1`).
+        static RELOCATION_CASE: std::cell::Cell<[usize; 7]> = const {
+            std::cell::Cell::new([0; 7])
+        };
+    }
+
+    unsafe fn copy_promise_to_old(source: *mut Promise) -> *mut Promise {
+        let destination = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<Promise>(),
+            std::mem::align_of::<Promise>(),
+            crate::gc::GC_TYPE_PROMISE,
+        ) as *mut Promise;
+        std::ptr::copy_nonoverlapping(source, destination, 1);
+        destination
+    }
+
+    unsafe fn copy_closure_to_old(
+        source: *const crate::closure::ClosureHeader,
+    ) -> *mut crate::closure::ClosureHeader {
+        let size = crate::closure::closure_payload_size((*source).capture_count as usize);
+        let destination = crate::arena::arena_alloc_gc_old(
+            size,
+            std::mem::align_of::<crate::closure::ClosureHeader>(),
+            crate::gc::GC_TYPE_CLOSURE,
+        ) as *mut crate::closure::ClosureHeader;
+        std::ptr::copy_nonoverlapping(source as *const u8, destination as *mut u8, size);
+        destination
+    }
+
+    unsafe fn forward(source: *mut u8, destination: *mut u8) {
+        let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::set_forwarding_address(header, destination);
+    }
+
+    extern "C" fn relocating_step(
+        _closure: *const crate::closure::ClosureHeader,
+        _value: f64,
+        _is_error: f64,
+    ) -> f64 {
+        let [captured_from, captured_to, previous_from, previous_to, step_from, step_to, rejected] =
+            RELOCATION_CASE.with(|case| case.get());
+        unsafe {
+            forward(captured_from as *mut u8, captured_to as *mut u8);
+            forward(previous_from as *mut u8, previous_to as *mut u8);
+            forward(step_from as *mut u8, step_to as *mut u8);
+        }
+
+        crate::gc::test_rewrite_runtime_handles_for_forwarded_objects();
+
+        // The real promise-root scanner rewrites the currently installed trap
+        // during a copying collection. Only the saved `prev` value is outside
+        // that scanner, which is the lifetime this test isolates.
+        INLINE_TRAP.with(|slot| {
+            let mut active = slot.get();
+            active.trap_next = captured_to as *mut Promise;
+            slot.set(active);
+        });
+
+        crate::value::js_nanbox_pointer(rejected as i64)
+    }
+
+    struct TrapGuard {
+        original_trap: InlineTrap,
+        forwarded_sources: [(*mut u8, usize); 3],
+    }
+
+    impl Drop for TrapGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (source, first_word) in self.forwarded_sources {
+                    source.cast::<usize>().write(first_word);
+                    let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                    (*header).gc_flags &= !crate::gc::GC_FLAG_FORWARDED;
+                }
+            }
+            INLINE_TRAP.with(|slot| slot.set(self.original_trap));
+            RELOCATION_CASE.with(|case| case.set([0; 7]));
+        }
+    }
+
+    #[test]
+    fn resumed_step_rereads_captured_and_saved_trap_roots_after_relocation() {
+        unsafe {
+            let captured_from = js_promise_new();
+            let captured_to = copy_promise_to_old(captured_from);
+            let previous_from = js_promise_new();
+            let previous_to = copy_promise_to_old(previous_from);
+            let previous_step_from =
+                crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
+            let previous_step_to = copy_closure_to_old(previous_step_from);
+            let rejected = js_promise_rejected(73.0);
+
+            let step = crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
+            let thunk = crate::closure::js_closure_alloc(async_step_fulfill_thunk as *const u8, 2);
+            crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
+            crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
+
+            let original = INLINE_TRAP.with(|slot| {
+                let original = slot.get();
+                slot.set(InlineTrap {
+                    trap_next: previous_from,
+                    current_step: previous_step_from as usize,
+                });
+                original
+            });
+            let forwarded_sources = [
+                captured_from as *mut u8,
+                previous_from as *mut u8,
+                previous_step_from as *mut u8,
+            ];
+            let forwarded_sources_with_words = forwarded_sources.map(|source| {
+                let first_word = source.cast::<usize>().read();
+                (source, first_word)
+            });
+            let guard = TrapGuard {
+                original_trap: original,
+                forwarded_sources: forwarded_sources_with_words,
+            };
+            RELOCATION_CASE.with(|case| {
+                case.set([
+                    captured_from as usize,
+                    captured_to as usize,
+                    previous_from as usize,
+                    previous_to as usize,
+                    previous_step_from as usize,
+                    previous_step_to as usize,
+                    rejected as usize,
+                ])
+            });
+
+            async_step_fulfill_thunk(thunk, 41.0);
+
+            assert_eq!(
+                (*captured_to).state,
+                PromiseState::Rejected,
+                "rejection forwarding must target the relocated activation promise"
+            );
+            let restored = INLINE_TRAP.with(|slot| slot.get());
+            assert_eq!(
+                restored.trap_next, previous_to,
+                "the restored trap promise must use its relocated address"
+            );
+            assert_eq!(
+                restored.current_step, previous_step_to as usize,
+                "the restored step closure must use its relocated address"
+            );
+
+            drop(guard);
+            for (source, first_word) in forwarded_sources_with_words {
+                assert_eq!(
+                    source.cast::<usize>().read(),
+                    first_word,
+                    "test teardown must restore the source object's first payload word"
+                );
+                let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                assert_eq!(
+                    (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED,
+                    0,
+                    "test teardown must clear the synthetic forwarding flag"
+                );
+            }
+        }
+    }
 }

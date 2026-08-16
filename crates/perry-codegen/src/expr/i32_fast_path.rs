@@ -13,7 +13,8 @@ use crate::native_value::{
     MaterializationReason, NativeRep,
 };
 use crate::type_analysis::{
-    expr_may_return_boxed_value_from_raw_f64_fallback, is_definitely_string_expr, is_numeric_expr,
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr,
+    string_value_is_runtime_guaranteed,
 };
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
@@ -583,7 +584,8 @@ fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr
     let Some(view) = ctx.buffer_view_slots.get(id) else {
         return false;
     };
-    if view.index_unit != BufferIndexUnit::Element
+    if !view.pointer_state.is_stable()
+        || view.index_unit != BufferIndexUnit::Element
         || !view.alias.allows_noalias()
         || view.scope_idx.is_none()
     {
@@ -1005,7 +1007,7 @@ fn native_expr_kind(e: &Expr) -> &'static str {
 }
 
 fn lower_expr_native_string_ref(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    if !is_definitely_string_expr(ctx, e) {
+    if !string_value_is_runtime_guaranteed(ctx, e) {
         bail!("cannot lower expression as native StringRef without a string proof");
     }
     let boxed = lower_expr(ctx, e)?;

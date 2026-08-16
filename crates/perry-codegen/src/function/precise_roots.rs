@@ -195,24 +195,24 @@ pub(super) fn lower_precise_roots_to_native_stack(
     slot_count: u32,
 ) -> String {
     let lines: Vec<&str> = ir.lines().collect();
-    let mut roots: Vec<Option<String>> = vec![None; slot_count as usize];
+    // A logical shadow slot can be rebound to a different physical alloca when
+    // disjoint source scopes reuse one LocalId (for example, the synthetic
+    // locals produced by `using` lowering). The runtime shadow stack needs only
+    // the currently bound address, but RS4GC roots physical allocas, so retain
+    // every address ever bound to the logical slot. Each is null-initialized
+    // below, making an inactive scope's alloca a harmless conservative root.
+    let mut roots: Vec<Vec<String>> = vec![Vec::new(); slot_count as usize];
     for line in &lines {
         if let Some((idx, ptr)) = parse_shadow_bind(line) {
-            if let Some(root) = roots.get_mut(idx) {
-                match root {
-                    Some(existing) => {
-                        debug_assert_eq!(
-                            existing, &ptr,
-                            "one precise-root slot must not bind two native allocas"
-                        );
-                    }
-                    None => *root = Some(ptr),
+            if let Some(slot_roots) = roots.get_mut(idx) {
+                if !slot_roots.contains(&ptr) {
+                    slot_roots.push(ptr);
                 }
             }
         }
     }
 
-    let root_ptrs: Vec<String> = roots.iter().flatten().cloned().collect();
+    let root_ptrs: Vec<String> = roots.into_iter().flatten().collect();
     let report = crate::statepoint_report::enabled().then(|| {
         crate::statepoint_report::FunctionRecord::new(
             function_name,
@@ -246,6 +246,116 @@ pub(super) fn lower_precise_roots_to_native_stack(
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::lower_precise_roots_to_native_stack;
+
+    /// #8132: the audited capture/box accessors must not become statepoints.
+    /// On the bundled-module-factory shape they were ~45% of one function's
+    /// 5.5k statepoints, each relocating every live GC value (~259 mean).
+    ///
+    /// The unknown callee beside them is the discriminating control: it MUST
+    /// be statepoint-wrapped, so this test fails in both directions — a leaf
+    /// marking that stops being applied (extra statepoints, the direct-call
+    /// assertions break) and an over-rotation that leafs everything (the
+    /// control's statepoint disappears).
+    #[test]
+    fn audited_capture_and_box_accessors_take_no_statepoint() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let target = crate::codegen::default_target_triple();
+        let mut module = crate::module::LlModule::new(target.clone());
+        use crate::types::{I32, I64, PTR, VOID};
+        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+        module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
+        module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+        module.declare_function("js_box_alloc_bits", I64, &[I64]);
+        module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
+        module.declare_function("js_map_alloc", I64, &[I32]);
+
+        let function = module.define_function("leaf_probe", I64, vec![]);
+        function.enable_shadow_frame(0);
+        let idx = function
+            .reserve_shadow_slot()
+            .expect("native pin reserves a precise-root slot");
+        let root = function.alloca_entry(I64);
+        function.entry_allocas_push_store(I64, "0", &root);
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(I32, &idx.to_string()), (PTR, &root)],
+        );
+        let entry = function.create_block("entry");
+        let dynamic = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
+        entry.store(I64, &dynamic, &root);
+        // The audited leaf calls, with the root live across every one.
+        let box_ptr = entry.call(I64, "js_box_alloc_bits", &[(I64, "0")]);
+        entry.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, "1")]);
+        let cap = entry.call(
+            I64,
+            "js_closure_get_capture_bits",
+            &[(I64, "0"), (I32, "0")],
+        );
+        entry.call_void(
+            "js_closure_set_capture_bits",
+            &[(I64, "0"), (I32, "0"), (I64, &cap)],
+        );
+        // Control: an unaudited callee stays a genuine safepoint.
+        let unknown = entry.call(I64, "js_map_alloc", &[(I32, "1")]);
+        let live = entry.load(I64, &root);
+        let acc = entry.xor(I64, &live, &cap);
+        let acc = entry.xor(I64, &acc, &box_ptr);
+        let acc = entry.xor(I64, &acc, &unknown);
+        entry.ret(I64, &acc);
+
+        let rewritten =
+            crate::inprocess::statepoint_rewritten_ir(&module.to_ir(), &target, "leaf_probe")
+                .expect("leaf probe must survive RS4GC");
+        // Exactly the two js_map_alloc calls become statepoints.
+        assert_eq!(
+            rewritten
+                .matches("@llvm.experimental.gc.statepoint")
+                .count(),
+            // one declare line + two wrapped call sites
+            3,
+            "only the two unaudited js_map_alloc calls may be statepoints:\n{rewritten}"
+        );
+        for direct in [
+            "call i64 @js_box_alloc_bits(",
+            "call void @js_box_set_bits(",
+            "call i64 @js_closure_get_capture_bits(",
+            "call void @js_closure_set_capture_bits(",
+        ] {
+            assert!(
+                rewritten.contains(direct),
+                "audited accessor must remain a direct call ({direct}):\n{rewritten}"
+            );
+        }
+        assert!(
+            !rewritten.contains("= call i64 @js_map_alloc("),
+            "the control callee must be statepoint-wrapped, not direct:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn one_logical_slot_can_root_disjoint_physical_allocas() {
+        let ir = r#"define void @f() {
+  %a = alloca i64
+  %b = alloca double
+  call void @js_shadow_slot_bind(i32 0, ptr %a)
+  call void @may_collect()
+  call void @js_shadow_slot_bind(i32 0, ptr %b)
+  call void @may_collect()
+  ret void
+}
+"#;
+
+        let lowered = lower_precise_roots_to_native_stack(ir, "f", 1);
+        assert!(lowered.contains("%a = alloca ptr addrspace(1)"));
+        assert!(lowered.contains("%b = alloca ptr addrspace(1)"));
+        assert!(!lowered.contains("@js_shadow_slot_bind"));
+    }
+}
+
 pub(super) fn retype_landing_pads_for_statepoints(ir: &str) -> String {
     const ITANIUM: &str = "landingpad { ptr, i32 } catch ptr null";
     if !ir.contains(ITANIUM) {

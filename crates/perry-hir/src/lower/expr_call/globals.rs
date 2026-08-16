@@ -262,8 +262,44 @@ pub(super) fn try_global_builtins(
                     args: vec![from, specifier],
                 }));
             }
-            // Wall 54: register an AOT-compiled module's exports under its
-            // absolute source path (emitted at the tail of each CJS wrapper).
+            // Wall 54: publish the initial CJS exports object before the body
+            // so a recursive path require can observe partial exports.
+            "__perry_register_path_module_partial" => {
+                let path = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                let exports = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "registerPathModulePartial".to_string(),
+                    args: vec![path, exports],
+                }));
+            }
+            // #6769: link `module.parent` before the wrapper body runs.
+            "__perry_link_path_module_parent" => {
+                let record = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "linkPathModuleParent".to_string(),
+                    args: vec![record],
+                }));
+            }
+            // Wall 54: publish an AOT-compiled module's final exports under
+            // its absolute source path (emitted at the tail of each wrapper).
             "__perry_register_path_module" => {
                 let path = if !args.is_empty() {
                     args.remove(0)
@@ -296,6 +332,22 @@ pub(super) fn try_global_builtins(
                     class_name: None,
                     object: None,
                     method: "requirePathModule".to_string(),
+                    args: vec![path],
+                }));
+            }
+            // Presence bit paired with `requirePathModule`: a real CommonJS
+            // module is allowed to export JavaScript `undefined`.
+            "__perry_has_path_module" => {
+                let path = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "hasPathModule".to_string(),
                     args: vec![path],
                 }));
             }

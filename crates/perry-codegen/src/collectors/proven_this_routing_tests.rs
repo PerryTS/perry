@@ -23,7 +23,7 @@
 //! Both routing sites are covered:
 //!
 //! * `lower_call/method_override.rs` — the guarded `method_direct.fast` arm,
-//!   dominated by the class-id + keys-token guard.
+//!   dominated by the class-id + ShapeId guard.
 //! * `lower_call/property_get/dynamic_dispatch.rs` — the Phase 3b guard-free
 //!   `Ptr<Shape>` receiver arm.
 //!
@@ -403,7 +403,7 @@ fn ptr_shape_local_module() -> Module {
 /// A module whose `probe(c: Counter)` calls both methods on a statically-typed
 /// parameter. A typed parameter is not a Phase 3b shape-proven local (no
 /// provenance, no containment), so both calls go through the *guarded* site:
-/// `emit_guarded_direct_method_call`, behind the class-id + keys-token guard.
+/// `emit_guarded_direct_method_call`, behind the class-id + ShapeId guard.
 fn guarded_site_module() -> Module {
     let mut m = Module::new("pshape_guarded.ts");
     m.classes = vec![counter_class()];
@@ -495,7 +495,7 @@ fn function_body(ir: &str, name_contains: &str) -> String {
 }
 
 /// Soundness ratchet (#7143): `method_direct.fast`'s `$pshape` call site is
-/// preceded, in its own function, by the keys-token shape guard.
+/// preceded, in its own function, by the ShapeId guard.
 ///
 /// `guarded_site_module`'s `probe(c: Counter)` receiver (`c`) is a plain
 /// typed PARAMETER — proven-`this`'s aliased-by-construction case, not a
@@ -511,25 +511,24 @@ fn function_body(ir: &str, name_contains: &str) -> String {
 /// (`lower_call/method_override.rs`) unconditionally emits
 /// `js_typed_feedback_method_direct_call_guard` (or, under `shape_only_guard`,
 /// `js_method_direct_shape_guard`) BEFORE any block that can reach the clone
-/// — both compare the receiver's live `keys_array` pointer against the
-/// class's canonical `@perry_class_keys_*` token, and `delete`'s only code
-/// path for a class instance always repoints `keys_array` at a freshly
-/// cloned array (`perry-runtime/src/object/delete_rest.rs`), from ANY
+/// — both compare the receiver's live ShapeId against the class's canonical
+/// `@perry_class_shape_id_*` value, and `delete` publishes a semantic
+/// successor descriptor (`perry-runtime/src/object/delete_rest.rs`), from ANY
 /// module. See `collectors/proven_this.rs`'s "`delete` is aliased across
 /// modules by construction" section for the full argument; this pins the
 /// IR shape it depends on, the same way
-/// `tower_route_is_guarded_by_the_class_keys_token` pins it for the #7142
+/// `tower_route_is_guarded_by_the_class_shape_id` pins it for the #7142
 /// tower site.
 ///
 /// This checks TEXTUAL precedence within `probe`'s body rather than walking
-/// block dominance (`tower_route_is_guarded_by_the_class_keys_token`'s
+/// block dominance (`tower_route_is_guarded_by_the_class_shape_id`'s
 /// approach) because `probe` calls two methods sequentially and the typed-f64
 /// arm nests the clone's call another level deep behind its OWN per-argument
 /// guard — precedence is the invariant that survives that nesting, and
 /// `probe` is this fixture's only method-dispatching function, so it is also
 /// the only place a `$pshape` callee name can appear in a `call` line.
 #[test]
-fn guarded_pshape_call_site_is_preceded_by_a_keys_token_guard() {
+fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
     let ir = emit(&guarded_site_module(), false);
     let calls = pshape_call_targets(&ir);
     assert!(
@@ -546,7 +545,7 @@ fn guarded_pshape_call_site_is_preceded_by_a_keys_token_guard() {
             || prefix.contains("call i32 @js_method_direct_shape_guard(");
         assert!(
             guarded,
-            "{target}: no keys-token guard call precedes it in `probe` — a \
+            "{target}: no ShapeId guard call precedes it in `probe` — a \
              post-`delete` receiver (deleted from through an alias in another \
              module, #7143) would reach this clone's stale fixed-slot loads \
              unguarded:\n{probe}"
@@ -770,16 +769,17 @@ fn tower_case_routes_to_proven_this_clone() {
 }
 
 /// Soundness ratchet (#7142): the routed call is dominated by a compare of the
-/// receiver's live `keys_array` against the class's `@perry_class_keys_*` token.
+/// receiver's authoritative ShapeId against `@perry_class_shape_id_*`.
 ///
 /// A `class_id` match alone is NOT a layout proof — `delete inst.f` compacts
 /// the packed slots while preserving `class_id`
 /// (`object/delete_rest.rs`), which is why #7141 refused to route this site at
 /// all. The compare below is the entire difference between sound and unsound,
-/// so it is traced end to end: global → entry-hoisted slot → reload in the
-/// guard block → `icmp eq i64` → the branch that enters the clone's block.
+/// so it is traced end to end: global → entry-hoisted scalar slot → reload in
+/// the guard block → `icmp eq i32` → the branch that enters the clone's block.
 #[test]
-fn tower_route_is_guarded_by_the_class_keys_token() {
+fn tower_route_is_guarded_by_the_class_shape_id() {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let ir = emit(&tower_site_module(), false);
     let bs = blocks(&ir);
     let clone = pshape_definitions(&ir)
@@ -800,35 +800,40 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
             panic!("nothing conditionally branches to {clone_block} — the clone is reached unguarded:\n{ir}")
         });
 
-    // 1. the class keys global is loaded once at function entry …
+    // 1. the class ShapeId global is loaded once at function entry …
     let global_load = ir
         .lines()
-        .find(|l| l.contains("= load i64, ptr @perry_class_keys_"))
-        .unwrap_or_else(|| panic!("the class keys token is never read:\n{ir}"));
+        .find(|l| l.contains("= load i32, ptr @perry_class_shape_id_"))
+        .unwrap_or_else(|| panic!("the class ShapeId is never read:\n{ir}"));
     let global_reg = global_load.trim().split(' ').next().expect("ssa name");
     // 2. … and parked in an entry slot …
     let store = ir
         .lines()
-        .find(|l| l.contains(&format!("store i64 {}, ptr ", global_reg)))
-        .unwrap_or_else(|| panic!("the hoisted keys token is never stored:\n{ir}"));
+        .find(|l| l.contains(&format!("store i32 {}, ptr ", global_reg)))
+        .unwrap_or_else(|| panic!("the hoisted ShapeId is never stored:\n{ir}"));
     let slot = store.rsplit(' ').next().expect("slot name");
+    assert!(
+        !ir.lines()
+            .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(slot)),
+        "a ShapeId scalar must not be registered as a moving GC root:\n{ir}"
+    );
     // 3. … which the guard block reloads …
     let expected = guard_body
         .iter()
         .find_map(|l| {
             let l = l.trim();
-            l.ends_with(&format!("load i64, ptr {}", slot))
+            l.ends_with(&format!("load i32, ptr {}", slot))
                 .then(|| l.split(' ').next().expect("ssa name").to_string())
         })
         .unwrap_or_else(|| {
-            panic!("the guard block never reads the hoisted keys token:\n{guard_body:#?}")
+            panic!("the guard block never reads the hoisted ShapeId:\n{guard_body:#?}")
         });
-    // 4. … and compares against the receiver's live keys_array.
+    // 4. … and compares against the receiver's live ShapeId.
     assert!(
         guard_body
             .iter()
-            .any(|l| l.contains("icmp eq i64") && l.contains(&expected)),
-        "the routed call is not dominated by a keys-token compare — a class_id \
+            .any(|l| l.contains("icmp eq i32") && l.contains(&expected)),
+        "the routed call is not dominated by a ShapeId compare — a class_id \
          match alone does not prove the packed layout (`delete` compacts slots \
          while preserving class_id):\n{guard_body:#?}"
     );
@@ -840,6 +845,22 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
             .iter()
             .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
         "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+    );
+}
+
+#[test]
+fn tower_class_shape_id_cache_is_a_native_scalar() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let ir = emit(&tower_site_module(), false);
+    let global_load = ir
+        .lines()
+        .find(|line| line.contains("= load i32, ptr @perry_class_shape_id_"))
+        .unwrap_or_else(|| panic!("the class ShapeId is never read:\n{ir}"));
+    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+    assert!(
+        ir.lines()
+            .any(|line| line.contains(&format!("store i32 {global_reg}, ptr "))),
+        "the class ShapeId must be cached as an i32 scalar:\n{ir}"
     );
 }
 

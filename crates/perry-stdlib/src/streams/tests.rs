@@ -161,9 +161,9 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
             1,
             ReadableStreamData {
                 state: ReadableState::Errored,
-                chunks: VecDeque::from([0x7FFD_0000_0000_1234]),
-                chunk_sizes: VecDeque::from([1.0]),
-                queue_total_size: 1.0,
+                chunks: VecDeque::from([0x7FFD_0000_0000_1234, 0x7FFA_0000_0000_2345]),
+                chunk_sizes: VecDeque::from([1.0, 1.0]),
+                queue_total_size: 2.0,
                 pending_reads: VecDeque::from([0x2345_6780 as *mut Promise]),
                 start_cb: 0x3456_7890,
                 pull_cb: 0,
@@ -186,10 +186,93 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
     scan_stream_roots(&mut |value| emitted.push(value.to_bits()));
 
     assert!(emitted.contains(&0x7FFD_0000_0000_1234));
+    assert!(emitted.contains(&0x7FFA_0000_0000_2345));
     assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
     assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
     assert!(emitted.contains(&0x7FFF_0000_0000_4567));
     READABLE_STREAMS.lock().unwrap().clear();
+}
+
+#[test]
+fn transform_root_scanner_writes_relocated_pointers_back() {
+    struct RelocatingVisitor;
+
+    impl super::gc::StreamRootVisitor for RelocatingVisitor {
+        fn visit_i64_slot(&mut self, slot: &mut i64) {
+            *slot += 0x1000;
+        }
+
+        fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) {
+            *slot = ((*slot as usize) + 0x1000) as *mut T;
+        }
+
+        fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) {
+            *slot += 0x1000;
+        }
+    }
+
+    let _serial = serial_guard();
+    transform::TRANSFORM_WRITE_RELEASES
+        .lock()
+        .unwrap()
+        .insert(0xA001, vec![0x2100]);
+    transform::TRANSFORM_PENDING_CLOSE
+        .lock()
+        .unwrap()
+        .insert(0xA002, 0x3100);
+    transform::TRANSFORM_BACKPRESSURED_JOBS
+        .lock()
+        .unwrap()
+        .insert(0xA003, vec![0x4100]);
+
+    super::gc::scan_transform_deferred_roots(&mut RelocatingVisitor);
+
+    assert_eq!(
+        transform::TRANSFORM_WRITE_RELEASES.lock().unwrap()[&0xA001],
+        vec![0x3100]
+    );
+    assert_eq!(
+        transform::TRANSFORM_PENDING_CLOSE.lock().unwrap()[&0xA002],
+        0x4100
+    );
+    assert_eq!(
+        transform::TRANSFORM_BACKPRESSURED_JOBS.lock().unwrap()[&0xA003],
+        vec![0x5100]
+    );
+
+    transform::TRANSFORM_WRITE_RELEASES
+        .lock()
+        .unwrap()
+        .remove(&0xA001);
+    transform::TRANSFORM_PENDING_CLOSE
+        .lock()
+        .unwrap()
+        .remove(&0xA002);
+    transform::TRANSFORM_BACKPRESSURED_JOBS
+        .lock()
+        .unwrap()
+        .remove(&0xA003);
+}
+
+#[test]
+fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
+    let streams_source = include_str!("../streams.rs");
+    for forbidden in [
+        "perry_runtime::array::js_",
+        "perry_runtime::closure::js_",
+        "perry_runtime::object::js_implicit_this_set",
+        "perry_runtime::promise::js_",
+    ] {
+        assert!(
+            !streams_source.contains(forbidden),
+            "streams.rs bypasses the provider ABI through {forbidden}"
+        );
+    }
+
+    let gc_source = include_str!("gc.rs");
+    assert!(!gc_source
+        .contains("perry_runtime::node_submodules::js_register_stream_consumer_callbacks"));
+    assert!(!gc_source.contains("perry_runtime::object::js_register_stream_expando_set"));
 }
 
 #[test]
@@ -298,4 +381,43 @@ fn pipe_through_rejects_locked_endpoints_before_starting() {
         )),
         Some("The options.signal property must be an AbortSignal")
     );
+}
+
+#[test]
+fn buffered_tee_demand_skips_only_the_cold_source_hop() {
+    let _serial = serial_guard();
+    // Keep this assertion about jobs scheduled by the calls below, not work
+    // left behind by an earlier stream test on the same worker thread.
+    perry_runtime::promise::js_promise_run_microtasks();
+
+    let buffered = alloc_readable(0, 0, 0, 1.0);
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get_mut(&buffered)
+        .unwrap()
+        .push_chunk(TAG_UNDEFINED, 1.0);
+    unsafe {
+        tee::tee_schedule_pull_demand(buffered);
+    }
+    let buffered_jobs = perry_runtime::promise::js_promise_run_microtasks();
+
+    let empty = alloc_readable(0, 0, 0, 1.0);
+    unsafe {
+        tee::tee_schedule_pull_demand(empty);
+    }
+    let empty_jobs = perry_runtime::promise::js_promise_run_microtasks();
+
+    assert_eq!(
+        buffered_jobs, 1,
+        "a pre-buffered source needs only the fanout reaction job"
+    );
+    assert_eq!(
+        empty_jobs, 2,
+        "an empty cold source must retain the Flight-calibrated demand hop"
+    );
+
+    let mut streams = READABLE_STREAMS.lock().unwrap();
+    streams.remove(&buffered);
+    streams.remove(&empty);
 }

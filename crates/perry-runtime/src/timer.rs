@@ -1116,24 +1116,55 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // #6287: timers phase (by deadline) before check phase (FIFO immediates).
     order_expired_callback_batch(&mut expired);
 
+    // #8036: draining removes the WHOLE expired batch from CALLBACK_TIMERS
+    // before the first callback runs. A callback can run arbitrary JS and the
+    // microtask checkpoint below can collect, so rooting only the timer being
+    // dispatched leaves every later callback, argument, and captured async
+    // context sitting in an ordinary Rust Vec the collector cannot see. With
+    // concurrent request timers, the first resolve callback's checkpoint moved
+    // the next resolve closure and the second timer called its from-space
+    // address (`TypeError: value is not a function`). Protect the complete
+    // detached batch for the complete dispatch loop.
+    let batch_scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handles: Vec<_> = expired
+        .iter()
+        .map(|timer| {
+            batch_scope.root_raw_const_ptr(timer.callback as *const crate::closure::ClosureHeader)
+        })
+        .collect();
+    let arg_handles: Vec<_> = expired
+        .iter()
+        .map(|timer| batch_scope.root_nanbox_f64_slice(&timer.args))
+        .collect();
+    let context_roots: Vec<_> = expired
+        .iter()
+        .map(|timer| crate::async_context::root_snapshot(&batch_scope, &timer.context))
+        .collect();
+
     let mut fired = 0;
     // Call the callbacks, forwarding any trailing args captured at
     // `setTimeout(fn, delay, ...args)` time. Refs #665.
-    for timer in expired {
+    for (index, mut timer) in expired.into_iter().enumerate() {
         if !timer.cleared {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let cb_handle =
-                scope.root_raw_const_ptr(timer.callback as *const crate::closure::ClosureHeader);
-            let arg_handles = scope.root_nanbox_f64_slice(&timer.args);
+            crate::async_context::refresh_snapshot_from_roots(
+                &mut timer.context,
+                &context_roots[index],
+            );
             let previous = crate::async_context::enter_context(&timer.context);
             let mut previous = previous;
-            let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+            let previous_roots = crate::async_context::root_snapshot(&batch_scope, &previous);
             crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
-            let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-            let cb = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
             let prev_this = crate::object::js_implicit_this_set(timer_handle_value(timer.id));
             enter_timer_callback_dispatch();
             with_timer_uncaught_trap(|| {
+                // Installing the timer receiver above is itself a collecting
+                // boundary. Re-read both roots inside the trap, immediately
+                // before dispatch, so this callback cannot be evacuated in
+                // between the handle read and js_closure_callN.
+                let a =
+                    crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles[index]);
+                let cb =
+                    callback_handles[index].get_raw_const_ptr::<crate::closure::ClosureHeader>();
                 match a.len() {
                     0 => {
                         js_closure_call0(cb);
@@ -1864,42 +1895,7 @@ pub(crate) fn test_clear_timer_scanner_roots(promise_before: usize, promise_afte
 }
 
 #[cfg(test)]
-mod drain_expired_tests {
-    use super::drain_expired_timers;
-
-    /// The single-pass partition must preserve the original order of BOTH
-    /// halves: expired entries fire in creation order (same-deadline Node
-    /// semantics) and survivors keep queue order for the next tick.
-    #[test]
-    fn timer_drain_partition_preserves_order() {
-        // (id, cleared, expired)
-        let mut queue = vec![
-            (1, false, true),
-            (2, false, false),
-            (3, true, true),
-            (4, false, true),
-            (5, false, false),
-            (6, true, false),
-            (7, false, true),
-        ];
-        let expired = drain_expired_timers(&mut queue, |t| t.1, |t| t.2);
-        let expired_ids: Vec<i32> = expired.iter().map(|t| t.0).collect();
-        let kept_ids: Vec<i32> = queue.iter().map(|t| t.0).collect();
-        assert_eq!(expired_ids, vec![1, 4, 7], "expired keep creation order");
-        assert_eq!(kept_ids, vec![2, 5], "survivors keep queue order");
-    }
-
-    #[test]
-    fn timer_drain_partition_empty_and_all_expired() {
-        let mut empty: Vec<i32> = Vec::new();
-        assert!(drain_expired_timers(&mut empty, |_| false, |_| true).is_empty());
-
-        let mut queue = vec![10, 20, 30];
-        let expired = drain_expired_timers(&mut queue, |_| false, |_| true);
-        assert_eq!(expired, vec![10, 20, 30]);
-        assert!(queue.is_empty());
-    }
-}
+mod drain_expired_tests;
 
 #[cfg(test)]
 mod expired_batch_order_tests {

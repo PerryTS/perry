@@ -35,6 +35,50 @@ pub fn arena_reset_all_blocks_to_zero() {
     });
 }
 
+/// Is layout-neutral from-space poisoning on? Parsed BY VALUE (#7993).
+fn poison_fromspace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_POISON_FROMSPACE").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
+/// Scribble every live byte of a retiring region with the quarantine's poison
+/// word, IN PLACE — no detach, no hold, no `mprotect`, so the blocks recycle
+/// into Eden exactly as they would have.
+///
+/// Only `[0, offset)` is touched: beyond the bump pointer there was never an
+/// object, and writing there would dirty pages the allocator has not faulted
+/// in yet, which would be a layout change of its own.
+fn poison_region_in_place(arena: &mut Arena) {
+    for block in arena.blocks.iter_mut() {
+        if block.data.is_null() || block.offset == 0 {
+            continue;
+        }
+        // SAFETY: `[data, data+offset)` is this block's allocated span, owned
+        // by the arena and dead at this point in the flip.
+        unsafe {
+            let words = block.offset / 8;
+            let p = block.data as *mut u64;
+            for i in 0..words {
+                p.add(i)
+                    .write(crate::arena::quarantine::QUARANTINE_POISON_WORD);
+            }
+            let tail = block.offset % 8;
+            let base = block.data as *mut u8;
+            for i in 0..tail {
+                base.add(words * 8 + i).write(
+                    (crate::arena::quarantine::QUARANTINE_POISON_WORD >> (8 * (i % 8))) as u8,
+                );
+            }
+        }
+    }
+}
+
 fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
@@ -88,6 +132,18 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
     eden + survivor
 }
 
+/// #7901: is `block_idx` inside the copying collector's from-space (Eden plus
+/// the ACTIVE survivor semispace)? The inactive semispace is to-space and is
+/// empty at sweep time, so it deliberately does not count.
+#[inline]
+pub(crate) fn block_in_copying_from_space(
+    block_idx: usize,
+    general_n: usize,
+    active_survivor: &std::ops::Range<usize>,
+) -> bool {
+    block_idx < general_n || active_survivor.contains(&block_idx)
+}
+
 pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
     let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
@@ -112,11 +168,42 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     if protect_fromspace_enabled() {
         return copying_quarantine_from_spaces_and_flip();
     }
+    // #7803: LAYOUT-NEUTRAL from-space poisoning, behind
+    // `PERRY_GC_POISON_FROMSPACE=1`.
+    //
+    // Note what this function does NOT do: `reset_region_to_zero` resets
+    // `block.offset`, it does not zero the bytes. Retired from-space therefore
+    // keeps the dead objects intact until new allocations bump over them, and
+    // THAT is why every existing instrument suppresses #7803:
+    //
+    //   unprotected  pages recycle into Eden, new objects overwrite the dead
+    //                ones, and a stale pointer reads A DIFFERENT OBJECT ->
+    //                property miss -> `undefined`. The failure.
+    //   quarantined  pages are held out of Eden, nothing overwrites them, a
+    //                stale pointer reads its own dead object, still intact,
+    //                and the program is CORRECT. The suppression.
+    //
+    // So the quarantine does not fail to catch the bug by bad luck; it hides
+    // it by construction, and `--debug-symbols` hides it for the same family
+    // of reasons (a different layout reuses different bytes). Both of the
+    // interventions that make #7803 vanish are LAYOUT interventions, while
+    // four separate rooting fixes left it untouched.
+    //
+    // This mode changes no layout at all — same pages, same order, same
+    // addresses, recycled at the same moment — and only scribbles the retired
+    // bytes first. A stale read then finds the poison word rather than a
+    // plausible object, which turns "wrong answer, cycles later, somewhere
+    // else" into a value that names itself at the point of use
+    // (`obj_type == QUARANTINE_POISON_OBJ_TYPE`).
+    let poison = poison_fromspace_enabled();
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
+        if poison {
+            poison_region_in_place(arena);
+        }
         let (blocks, bytes) = reset_region_to_zero(arena);
         reset_blocks += blocks;
         reusable_bytes = reusable_bytes.saturating_add(bytes);
@@ -134,6 +221,12 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     });
 
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
+    if poison {
+        with_survivor_arena_mut(active, |a| {
+            poison_region_in_place(a);
+            (0usize, 0usize)
+        });
+    }
     let (blocks, bytes) = with_survivor_arena_mut(active, reset_region_to_zero);
     reset_blocks += blocks;
     reusable_bytes = reusable_bytes.saturating_add(bytes);
@@ -142,8 +235,7 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     ArenaResetStats {
         reset_blocks,
         reusable_bytes,
-        deallocated_blocks: 0,
-        deallocated_bytes: 0,
+        ..ArenaResetStats::default()
     }
 }
 
@@ -258,8 +350,8 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             });
         }
 
-        // Gen-GC Phase C4b-δ: deallocate fully-idle blocks back to
-        // the OS. A block becomes a dealloc candidate when:
+        // Gen-GC Phase C4b-δ: release fully-idle blocks from arena
+        // accounting. A block becomes a release candidate when:
         //   - it's not the current allocator target
         //   - it's outside the `keep_low..=current` register-miss
         //     window (already excluded from reset above for the
@@ -269,9 +361,9 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         //     reset this cycle or never used since the prior reset),
         //   - it's not already a tombstone.
         // Each candidate's `dead_cycles` increments per cycle; once
-        // it reaches `DEALLOC_DEAD_CYCLES`, we hand the underlying
-        // allocation back to glibc/jemalloc/whatever via `dealloc`
-        // and leave a `data = null, size = 0` tombstone in the Vec
+        // it reaches `DEALLOC_DEAD_CYCLES`, we offer the underlying
+        // allocation to the bounded recycled pool (or call `dealloc`
+        // when the pool refuses it) and leave a null/zero tombstone in the Vec
         // so block-index semantics stay stable for the rest of the
         // GC cycle. Future allocations preferentially reuse
         // tombstoned slots (`Arena::alloc`'s slow path) before
@@ -281,14 +373,15 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         // Threshold tuning: 2 cycles. A block resets on cycle N
         // (`dead_cycles=1` after this loop), and on cycle N+1 either
         // gets reused (offset > 0, dead_cycles back to 0) or stays
-        // idle (`dead_cycles=2` ⇒ dealloc). Two cycles is the
+        // idle (`dead_cycles=2` ⇒ release). Two cycles is the
         // minimum that gives the bump allocator one cycle to reuse
         // a freshly-reset block before declaring it truly idle —
         // catches the `bench_json_roundtrip` case (only 2-3 GCs
         // per run) while still letting tight allocation loops keep
         // hot blocks alive across consecutive resets.
         const DEALLOC_DEAD_CYCLES: u32 = 2;
-        let mut deallocated_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut removed_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut release_stats = ArenaResetStats::default();
         for (i, block) in arena.blocks.iter_mut().enumerate() {
             if block.data.is_null() {
                 continue;
@@ -309,15 +402,10 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             if block.dead_cycles >= DEALLOC_DEAD_CYCLES {
                 let base = block.data as usize;
                 let size = block.size;
-                let layout = Layout::from_size_align(block.size, 16).unwrap();
                 unregister_block_generation(base, size);
-                deallocated_ranges.push((base, size));
-                // #4665: in test builds keep freed blocks mapped (no munmap) so
-                // unit tests holding raw GC pointers across a collection read stale
-                // bytes instead of SIGSEGV-ing on an unmapped page.
-                if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                    std::alloc::dealloc(block.data, layout);
-                }
+                removed_ranges.push((base, size));
+                let release = release_arena_block(block.data, block.size);
+                release_stats.record_block_release(size, release);
                 ARENA_TOTAL_BYTES.with(|t| t.set(t.get().saturating_sub(block.size)));
                 block.data = std::ptr::null_mut();
                 block.size = 0;
@@ -326,33 +414,29 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
             }
         }
         let reset_blocks = reset_block_ranges.len();
-        let deallocated_blocks = deallocated_ranges.len();
-        let deallocated_bytes: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
         let reusable_bytes: usize = reset_block_ranges
             .iter()
             .filter(|&&(base, _, _)| {
-                !deallocated_ranges
+                !removed_ranges
                     .iter()
-                    .any(|&(deallocated_base, _)| deallocated_base == base)
+                    .any(|&(removed_base, _)| removed_base == base)
             })
             .map(|&(_, _, used)| used)
             .sum();
         let stats = ArenaResetStats {
             reset_blocks,
             reusable_bytes,
-            deallocated_blocks,
-            deallocated_bytes,
+            ..release_stats
         };
 
-        if !deallocated_ranges.is_empty() {
-            // Drop free-list entries pointing into deallocated
-            // blocks — same reasoning as the reset path, but the
-            // memory is now gone, not just reusable.
+        if !removed_ranges.is_empty() {
+            // Drop free-list entries pointing into removed blocks — whether
+            // pooled or unmapped, they no longer belong to this arena.
             crate::gc::ARENA_FREE_LIST.with(|fl| {
                 let mut fl = fl.borrow_mut();
                 fl.retain(|&(ptr, _)| {
                     let p = ptr as usize;
-                    !deallocated_ranges
+                    !removed_ranges
                         .iter()
                         .any(|&(base, size)| p >= base && p < base + size)
                 });
@@ -360,21 +444,23 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
                 }
             });
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            if crate::gc::gc_diag_enabled() {
                 eprintln!(
-                    "[gc-dealloc] freed {} blocks ({} bytes) back to OS",
-                    deallocated_ranges.len(),
-                    deallocated_bytes
+                    "[gc-block-release] removed {} blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
+                    stats.removed_blocks,
+                    stats.removed_bytes,
+                    stats.pooled_bytes,
+                    stats.deallocated_bytes
                 );
             }
         }
 
-        if reset_block_ranges.is_empty() && deallocated_ranges.is_empty() {
+        if reset_block_ranges.is_empty() && removed_ranges.is_empty() {
             stats
         } else {
             // Walk back the `current` index to the first reset block —
             // i.e., one with `offset == 0`. Skip tombstones (data.is_null())
-            // — the inline allocator can't bump from a deallocated slot.
+            // — the inline allocator can't bump from a released slot.
             // If we just picked the first block with any free space we'd
             // land on the live block that still has 80 bytes left at the
             // end (not enough for a 96-byte class instance), and the next
@@ -388,7 +474,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                 }
             }
             // If `new_current` ended up pointing at a tombstone (the only
-            // remaining offset==0 entries are deallocated slots), keep
+            // remaining offset==0 entries are released slots), keep
             // `arena.current` where it was — the next `Arena::alloc` slow
             // path will tombstone-reuse a slot and update `current` then.
             if !arena.blocks[new_current].data.is_null() {
@@ -446,7 +532,7 @@ pub(crate) struct ArenaResetEmptyBlocksState {
     cursor: usize,
     changed: bool,
     reset_ranges: Vec<(usize, usize, usize)>,
-    deallocated_ranges: Vec<(usize, usize)>,
+    removed_ranges: Vec<(usize, usize)>,
     stats: ArenaResetStats,
 }
 
@@ -459,7 +545,7 @@ impl ArenaResetEmptyBlocksState {
             cursor: 0,
             changed: false,
             reset_ranges: Vec::new(),
-            deallocated_ranges: Vec::new(),
+            removed_ranges: Vec::new(),
             stats: ArenaResetStats::default(),
         }
     }
@@ -491,8 +577,9 @@ impl ArenaResetEmptyBlocksState {
                         self.subphase = GeneralResetSubphase::Finish;
                         continue;
                     }
-                    if let Some((base, size)) = self.process_dealloc_block(self.cursor) {
-                        self.deallocated_ranges.push((base, size));
+                    if let Some((base, size, release)) = self.process_dealloc_block(self.cursor) {
+                        self.removed_ranges.push((base, size));
+                        self.stats.record_block_release(size, release);
                         free_list_ranges.push((base, size));
                     }
                     self.cursor += 1;
@@ -549,7 +636,10 @@ impl ArenaResetEmptyBlocksState {
         })
     }
 
-    fn process_dealloc_block(&mut self, block_idx: usize) -> Option<(usize, usize)> {
+    fn process_dealloc_block(
+        &mut self,
+        block_idx: usize,
+    ) -> Option<(usize, usize, ArenaBlockRelease)> {
         let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
         if snapshot.data == 0 {
             return None;
@@ -586,35 +676,27 @@ impl ArenaResetEmptyBlocksState {
 
             let base = block.data as usize;
             let size = block.size;
-            let layout = Layout::from_size_align(block.size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
             self.changed = true;
-            Some((base, size))
+            Some((base, size, release))
         })
     }
 
     fn finish(&mut self) {
-        let deallocated_blocks = self.deallocated_ranges.len();
-        let deallocated_bytes: usize = self.deallocated_ranges.iter().map(|&(_, size)| size).sum();
         let reusable_bytes: usize = self
             .reset_ranges
             .iter()
             .filter(|&&(base, _, _)| {
                 !self
-                    .deallocated_ranges
+                    .removed_ranges
                     .iter()
-                    .any(|&(deallocated_base, _)| deallocated_base == base)
+                    .any(|&(removed_base, _)| removed_base == base)
             })
             .map(|&(_, _, used)| used)
             .sum();
@@ -622,8 +704,7 @@ impl ArenaResetEmptyBlocksState {
         self.stats = ArenaResetStats {
             reset_blocks: self.reset_ranges.len(),
             reusable_bytes,
-            deallocated_blocks,
-            deallocated_bytes,
+            ..self.stats
         };
 
         if !self.changed {
@@ -733,7 +814,7 @@ impl SurvivorArenaReclaimState {
             return;
         }
 
-        with_survivor_arena_mut(self.arena_idx, |arena| unsafe {
+        with_survivor_arena_mut(self.arena_idx, |arena| {
             let keep_idx = arena
                 .blocks
                 .get(arena.current)
@@ -782,21 +863,14 @@ impl SurvivorArenaReclaimState {
 
             let base = block.data as usize;
             let size = block.size;
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
-            self.stats.deallocated_blocks = self.stats.deallocated_blocks.saturating_add(1);
-            self.stats.deallocated_bytes = self.stats.deallocated_bytes.saturating_add(size);
+            self.stats.record_block_release(size, release);
         });
     }
 
@@ -862,16 +936,18 @@ impl SurvivorArenaReclaimDeadBlocksState {
         match self.active {
             0 => {
                 let before = self.state0.stats;
-                if self.state0.step(budget) {
-                    self.stats = self.add_delta(self.stats, before, self.state0.stats);
+                let finished = self.state0.step(budget);
+                self.stats = self.add_delta(self.stats, before, self.state0.stats);
+                if finished {
                     self.active = 1;
                 }
                 false
             }
             1 => {
                 let before = self.state1.stats;
-                if self.state1.step(budget) {
-                    self.stats = self.add_delta(self.stats, before, self.state1.stats);
+                let finished = self.state1.step(budget);
+                self.stats = self.add_delta(self.stats, before, self.state1.stats);
+                if finished {
                     self.active = 2;
                     return true;
                 }
@@ -907,6 +983,18 @@ impl SurvivorArenaReclaimDeadBlocksState {
                 .deallocated_bytes
                 .saturating_sub(before.deallocated_bytes),
         );
+        total.removed_blocks = total
+            .removed_blocks
+            .saturating_add(after.removed_blocks.saturating_sub(before.removed_blocks));
+        total.removed_bytes = total
+            .removed_bytes
+            .saturating_add(after.removed_bytes.saturating_sub(before.removed_bytes));
+        total.pooled_blocks = total
+            .pooled_blocks
+            .saturating_add(after.pooled_blocks.saturating_sub(before.pooled_blocks));
+        total.pooled_bytes = total
+            .pooled_bytes
+            .saturating_add(after.pooled_bytes.saturating_sub(before.pooled_bytes));
         total
     }
 }
@@ -969,6 +1057,7 @@ impl OldArenaReclaimDeadBlocksState {
                     self.finish();
                     OLD_GEN_RECLAIM_REUSABLE_BYTES
                         .with(|bytes| bytes.set(self.stats.reusable_bytes));
+                    OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(self.stats.pooled_bytes));
                     OLD_GEN_RECLAIM_RETURNED_BYTES
                         .with(|bytes| bytes.set(self.stats.deallocated_bytes));
                     self.subphase = RegionReclaimSubphase::Done;
@@ -1042,21 +1131,14 @@ impl OldArenaReclaimDeadBlocksState {
                 return;
             }
 
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
-            self.stats.deallocated_blocks = self.stats.deallocated_blocks.saturating_add(1);
-            self.stats.deallocated_bytes = self.stats.deallocated_bytes.saturating_add(size);
+            self.stats.record_block_release(size, release);
         });
     }
 
@@ -1137,21 +1219,14 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                 continue;
             }
 
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
-            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
-            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+            stats.record_block_release(size, release);
         }
 
         if changed {
@@ -1183,6 +1258,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
     });
 
     OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(stats.reusable_bytes));
+    OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(stats.pooled_bytes));
     OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(stats.deallocated_bytes));
     stats
 }
@@ -1240,21 +1316,14 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                 continue;
             }
 
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
-            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
-            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+            stats.record_block_release(size, release);
         }
 
         if changed {
@@ -1286,6 +1355,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
     });
 
     OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(stats.reusable_bytes));
+    OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(stats.pooled_bytes));
     OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(stats.deallocated_bytes));
     stats
 }
@@ -1295,7 +1365,7 @@ fn reclaim_dead_survivor_arena_blocks(
     block_start: usize,
     block_has_live: &[bool],
 ) -> ArenaResetStats {
-    with_survivor_arena_mut(arena_idx, |arena| unsafe {
+    with_survivor_arena_mut(arena_idx, |arena| {
         let keep_idx = arena
             .blocks
             .get(arena.current)
@@ -1340,21 +1410,14 @@ fn reclaim_dead_survivor_arena_blocks(
 
             let base = block.data as usize;
             let size = block.size;
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            // #4665: in test builds keep freed blocks mapped (no munmap) so
-            // unit tests holding raw GC pointers across a collection read stale
-            // bytes instead of SIGSEGV-ing on an unmapped page.
-            if !block_pool_put(block.data, block.size) && !cfg!(test) {
-                std::alloc::dealloc(block.data, layout);
-            }
+            let release = release_arena_block(block.data, block.size);
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.offset = 0;
             block.dead_cycles = 0;
-            stats.deallocated_blocks = stats.deallocated_blocks.saturating_add(1);
-            stats.deallocated_bytes = stats.deallocated_bytes.saturating_add(size);
+            stats.record_block_release(size, release);
         }
 
         if changed {
@@ -1394,6 +1457,10 @@ pub(crate) fn survivor_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> Are
     ArenaResetStats {
         reset_blocks: stats0.reset_blocks.saturating_add(stats1.reset_blocks),
         reusable_bytes: stats0.reusable_bytes.saturating_add(stats1.reusable_bytes),
+        removed_blocks: stats0.removed_blocks.saturating_add(stats1.removed_blocks),
+        removed_bytes: stats0.removed_bytes.saturating_add(stats1.removed_bytes),
+        pooled_blocks: stats0.pooled_blocks.saturating_add(stats1.pooled_blocks),
+        pooled_bytes: stats0.pooled_bytes.saturating_add(stats1.pooled_bytes),
         deallocated_blocks: stats0
             .deallocated_blocks
             .saturating_add(stats1.deallocated_blocks),

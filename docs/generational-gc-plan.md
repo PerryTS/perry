@@ -1,10 +1,10 @@
 # Plan: Generational GC for Perry
 
-**Status:** proposed, pre-implementation. Written 2026-04-24 after
-v0.5.206 (Step 2 lazy JSON parse complete). This doc captures the
-design before any code lands — the implementation is multi-week and
-touches codegen + runtime + GC in concert, so agreement on direction
-matters.
+> **Historical design and implementation log.** Written 2026-04-24 before the
+> work began; all phases later shipped. Do not use the proposed knobs or root
+> defaults below as current operations guidance. See
+> [the current collector page](src/internals/garbage-collector.md) for shipped
+> modes, supported controls, target-specific roots, and validation commands.
 
 **Goal:** structurally beat Bun on peak RSS for general (non-JSON)
 workloads. Today Perry's `bench_json_roundtrip` with lazy flag beats
@@ -98,7 +98,8 @@ correctness.
 
 ### Nursery layout
 
-- Per-thread, 2 MB default (configurable via `PERRY_NURSERY_MB` env).
+- Per-thread, 2 MB proposed default (the named nursery knob never shipped;
+  the current pacing control is documented on the current collector page).
 - Flat bump-allocator — same as today's arena but smaller.
 - Fills fast, resets on every minor GC.
 - Objects in nursery always have `GcHeader.gc_flags & GC_FLAG_YOUNG`.
@@ -279,7 +280,7 @@ addressable from elsewhere.
 5. **Don't yet rewrite references.** Compiled code following
    pointers to evacuated objects WILL crash because their nursery
    slots now hold forwarding pointers. Gate this whole phase on
-   a temporary `PERRY_GEN_GC_EVACUATE=1` env var so default
+   a temporary evacuation-policy env gate so default
    behavior is untouched.
 
 #### C4b-γ — Reference rewriting
@@ -305,7 +306,7 @@ qualify because their formerly-tenured occupants have moved.
 **Ship criterion C4b complete:** `bench_json_roundtrip` direct-
 path RSS ≤70 MB (down from current 109 MB) without time
 regression beyond 10%. Full test corpus clean under
-`PERRY_GEN_GC=1 PERRY_GEN_GC_EVACUATE=1`.
+`PERRY_GEN_GC=1` plus the temporary evacuation-policy gate.
 
 ### Phase D — Flip defaults + clean up conservative scanner
 
@@ -492,7 +493,7 @@ JS frames stay covered.
   per-object remembered-set. Better for write-heavy workloads.
   Defer until we have data showing the simple remembered-set
   approach is the bottleneck.
-- **Flip `PERRY_GEN_GC_EVACUATE=1` default:** evacuation is
+- **Flip the temporary evacuation-policy gate's default:** evacuation is
   correctness-safe and tested but a no-op on workloads where
   nothing tenures (so the work it does is overhead, not benefit).
   Flipping benefits from production-soak data on programs where

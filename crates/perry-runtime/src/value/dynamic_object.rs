@@ -235,6 +235,49 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     0.0
 }
 
+/// Read `.length` with ordinary JavaScript property semantics.
+///
+/// [`js_value_length_f64`] is deliberately numeric: array internals feed its
+/// result through `ToLength`, so a missing property historically collapses to
+/// zero there.  A source-level `receiver.length` read cannot use that sentinel
+/// when its inline layout guard misses.  TypeScript annotations are erased, so
+/// a receiver declared as an array may hold a number (whose `length` is
+/// `undefined`), an object with a non-numeric `length`, or a nullish value
+/// (which must throw).
+///
+/// Keep the SSO case here because the general dynamic property getter has no
+/// heap pointer to dispatch through.  Everything else delegates to that getter
+/// so Proxy traps, native handles, accessors, inherited properties, functions,
+/// buffers, typed arrays, and ordinary objects all share the normal property
+/// lookup rather than a second `.length` implementation.
+#[no_mangle]
+pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        crate::error::js_throw_type_error_property_access(
+            jsval.is_null() as u32,
+            b"length".as_ptr(),
+            6,
+        );
+    }
+
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
+        if matches!(
+            crate::builtins::boxed_primitive_to_string_tag(value),
+            Some("String")
+        ) {
+            return js_value_length_property_f64(payload);
+        }
+    }
+
+    if jsval.is_short_string() {
+        let string = crate::string::js_string_materialize_to_heap(value);
+        return crate::string::js_string_length(string) as f64;
+    }
+
+    unsafe { js_dynamic_object_get_property(value, b"length".as_ptr() as *const i8, 6) }
+}
+
 /// Unified object property access that handles both JS handle objects and native objects.
 /// Also handles strings for property access like `.length`.
 #[no_mangle]
@@ -364,6 +407,31 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         Err(_) => return f64::from_bits(TAG_UNDEFINED),
     };
 
+    // #7930: TypedArrayHeader starts with `length: u32`, at the same payload
+    // offset where ObjectHeader stores its object-type word. Classify the
+    // receiver through the authoritative side table before any header-shaped
+    // dispatch below: a two-element typed array otherwise reads as
+    // `OBJECT_TYPE_ERROR == 2`, so `.length` / `.byteLength` enter the Error
+    // branch and return `undefined` even though construction was correct.
+    //
+    // Delegate to the normal by-name typed-array path rather than duplicating
+    // its property semantics here. It gives an own expando/accessor precedence
+    // over the inherited `length` accessor and handles prototype mutations,
+    // indexed keys, `buffer`, and the remaining typed-array builtins. Creating
+    // the StringHeader may collect, so keep the old-generation typed-array
+    // receiver live and re-read its address after that allocation.
+    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_raw_const_ptr(ptr as *const crate::typedarray::TypedArrayHeader);
+        let (key, typed) = receiver.across_const(|| {
+            crate::string::js_string_from_bytes(name_slice.as_ptr(), name_slice.len() as u32)
+        });
+        return crate::object::js_object_get_field_by_name_f64(
+            typed as *const crate::object::ObjectHeader,
+            key,
+        );
+    }
+
     // Check if this is a ClosureHeader (CLOSURE_MAGIC at offset 12).
     // ClosureHeader layout: func_ptr (8B), capture_count u32 (4B), type_tag u32 (4B), captures at 16+
     // ObjectHeader layout: object_type u32 (4B), class_id u32 (4B), parent_class_id u32 (4B), field_count u32 (4B), keys_array (8B), ...
@@ -378,6 +446,16 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     if crate::buffer::is_registered_buffer(ptr as usize) {
         let buf = ptr as *const crate::buffer::BufferHeader;
         match property_name {
+            // #8149: `length` is a `%TypedArray%` slot. An `ArrayBuffer` /
+            // `SharedArrayBuffer` / `DataView` exposes only `byteLength`, so
+            // node answers `undefined` for `dv.length` and `ab.length`. Asked
+            // ABOVE the shared arm, which answers the byte count for both
+            // spellings. (`js_value_length_f64`, the deliberately-numeric
+            // sibling above, is left alone: its callers feed the result through
+            // `ToLength`, where `undefined` and `0` are the same answer.)
+            "length" if crate::buffer::is_non_indexed_buffer_view(ptr as usize) => {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
             "length" | "byteLength" => {
                 return (*buf).length as f64;
             }
@@ -759,6 +837,52 @@ mod length_handle_band_tests {
                 &mut cache,
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn property_length_preserves_missing_and_non_numeric_values() {
+        assert_eq!(
+            js_value_length_property_f64(42.0).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "a number has no length property"
+        );
+
+        let obj = crate::object::js_object_alloc(0, 1);
+        let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let seven = crate::string::js_string_from_bytes(b"seven".as_ptr(), 5);
+        let seven_value = crate::value::js_nanbox_string(seven as i64);
+        crate::object::js_object_set_field_by_name(obj, length_key, seven_value);
+        let boxed_obj = crate::value::js_nanbox_pointer(obj as i64);
+
+        assert_eq!(
+            js_value_length_property_f64(boxed_obj).to_bits(),
+            seven_value.to_bits(),
+            "a source-level property read must not coerce its value"
+        );
+    }
+
+    /// #7930: `TypedArrayHeader::length` shares payload offset zero with an
+    /// `ObjectHeader`'s type word. A two-element typed array must be classified
+    /// by its registry entry before that word can masquerade as
+    /// `OBJECT_TYPE_ERROR == 2` in the generic property getter.
+    #[test]
+    fn length_two_typed_array_never_enters_error_object_dispatch() {
+        let typed =
+            crate::typedarray::js_typed_array_new(crate::typedarray::KIND_INT32 as i32, 2.5);
+        assert_eq!(
+            crate::typedarray::js_typed_array_length(typed),
+            2,
+            "test premise: ToIndex truncates the fractional constructor length"
+        );
+
+        let boxed = crate::value::js_nanbox_pointer(typed as i64);
+        assert_eq!(js_value_length_property_f64(boxed), 2.0);
+        assert_eq!(
+            unsafe {
+                js_dynamic_object_get_property(boxed, b"byteLength".as_ptr() as *const i8, 10)
+            },
+            8.0
         );
     }
 }

@@ -1321,8 +1321,6 @@ fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
         });
     #[cfg(unix)]
     let shell = std::env::var("SHELL").unwrap_or_default();
-    #[cfg(not(unix))]
-    let shell = String::new();
 
     let string_value = |s: &str| -> JSValue {
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);

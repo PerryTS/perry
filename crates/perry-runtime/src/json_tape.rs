@@ -32,6 +32,9 @@
 use crate::value::JSValue;
 use std::cell::Cell;
 
+mod iterative;
+pub(crate) use iterative::materialize_iterative;
+
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
 /// already-traversed subtrees.
@@ -190,10 +193,8 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         }
     }
 
-    // Helper: skip a JSON string in place (past the closing quote).
-    // Returns `true` on success, `false` on EOF before closing quote.
-    // Honors `\"`, `\\`, and other escapes by swallowing the character
-    // after a backslash. Does NOT decode — just finds the boundary.
+    // Helper: validate and skip a JSON string in place (past the closing
+    // quote). Decoding remains deferred to materialization.
     #[inline(always)]
     fn skip_string(bytes: &[u8], pos: &mut usize) -> bool {
         debug_assert_eq!(bytes[*pos], b'"');
@@ -209,7 +210,21 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                 if *pos >= bytes.len() {
                     return false;
                 }
-                *pos += 1;
+                match bytes[*pos] {
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => *pos += 1,
+                    b'u' => {
+                        *pos += 1;
+                        if *pos + 4 > bytes.len()
+                            || !bytes[*pos..*pos + 4].iter().all(u8::is_ascii_hexdigit)
+                        {
+                            return false;
+                        }
+                        *pos += 4;
+                    }
+                    _ => return false,
+                }
+            } else if c < 0x20 {
+                return false;
             } else {
                 *pos += 1;
             }
@@ -217,19 +232,30 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         false
     }
 
-    // Helper: skip a JSON number (past its last digit/exponent).
+    // Helper: validate and skip a JSON number (past its last digit/exponent).
     #[inline(always)]
-    fn skip_number(bytes: &[u8], pos: &mut usize) {
+    fn skip_number(bytes: &[u8], pos: &mut usize) -> bool {
         if *pos < bytes.len() && bytes[*pos] == b'-' {
             *pos += 1;
         }
-        while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
-            *pos += 1;
+        match bytes.get(*pos) {
+            Some(b'0') => *pos += 1,
+            Some(b'1'..=b'9') => {
+                *pos += 1;
+                while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+                    *pos += 1;
+                }
+            }
+            _ => return false,
         }
         if *pos < bytes.len() && bytes[*pos] == b'.' {
             *pos += 1;
+            let fraction_start = *pos;
             while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
                 *pos += 1;
+            }
+            if *pos == fraction_start {
+                return false;
             }
         }
         if *pos < bytes.len() && (bytes[*pos] == b'e' || bytes[*pos] == b'E') {
@@ -237,10 +263,15 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
             if *pos < bytes.len() && (bytes[*pos] == b'+' || bytes[*pos] == b'-') {
                 *pos += 1;
             }
+            let exponent_start = *pos;
             while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
                 *pos += 1;
             }
+            if *pos == exponent_start {
+                return false;
+            }
         }
+        true
     }
 
     // Driver: expecting-value state. After emitting a value, the
@@ -378,7 +409,9 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                         state = State::AfterValue;
                     }
                     c if c == b'-' || c.is_ascii_digit() => {
-                        skip_number(bytes, &mut pos);
+                        if !skip_number(bytes, &mut pos) {
+                            return false;
+                        }
                         entries.push(TapeEntry {
                             offset: tok_off,
                             kind: KIND_NUMBER,
@@ -453,9 +486,10 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         }
     }
 
-    if !stack.is_empty() {
+    skip_ws(bytes, &mut pos);
+    if pos != bytes.len() || !stack.is_empty() {
         return false;
-    } // unclosed container
+    }
     if entries.is_empty() {
         return false;
     }
@@ -635,9 +669,16 @@ unsafe fn materialize_object(
     idx: &mut usize,
     end_idx: usize,
 ) -> JSValue {
+    let field_count = count_object_fields(source, *idx, end_idx);
     let obj = crate::object::js_object_alloc(0, 0);
+    // #8098: a lazily materialized tape record is `JSON.parse` output too — the
+    // >1 KB top-level-array payloads (HTTP bodies, ORM result sets) that the
+    // eager `DirectParser` never sees all arrive through here.
+    crate::object::mark_object_plain_ordinary(obj);
     let obj_handle = scope.root_raw_mut_ptr(obj);
     json_tape_safepoint(JsonTapeSafepoint::MaterializeObjectRooted, obj as usize);
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+    crate::object::reserve_object_spill(obj as usize, field_count);
     while *idx < end_idx {
         let Some(key_entry) = source.entry(*idx) else {
             break;
@@ -663,6 +704,32 @@ unsafe fn materialize_object(
     *idx = end_idx + 1;
     let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     JSValue::object_ptr(obj as *mut u8)
+}
+
+/// Count only this object's keys, hopping over nested values through their
+/// matching-container links. The walk allocates nothing, so it is safe for a
+/// lazy source whose backing pointers may be refreshed through a GC handle.
+unsafe fn count_object_fields(source: &TapeSource<'_, '_>, mut idx: usize, end_idx: usize) -> u32 {
+    let mut count = 0u32;
+    while idx < end_idx {
+        let Some(key) = source.entry(idx) else {
+            break;
+        };
+        if key.kind != KIND_KEY {
+            break;
+        }
+        count = count.saturating_add(1);
+        idx += 1;
+        let Some(value) = source.entry(idx) else {
+            break;
+        };
+        if value.kind == KIND_OBJ_START || value.kind == KIND_ARR_START {
+            idx = value.link as usize + 1;
+        } else {
+            idx += 1;
+        }
+    }
+    count
 }
 
 unsafe fn materialize_array(
@@ -1190,7 +1257,8 @@ pub unsafe fn alloc_lazy_array(
     // which can trigger, but the only live thing we hold across it is
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = crate::json_tape_store::allocate(tape_entries);
-    let raw = alloc_lazy_header_bytes();
+    let (raw, blob_str) =
+        blob_handle.across_const::<crate::StringHeader, _>(alloc_lazy_header_bytes);
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
     (*hdr).magic = LAZY_ARRAY_MAGIC;
@@ -1199,7 +1267,7 @@ pub unsafe fn alloc_lazy_array(
     // GC_STORE_AUDIT(POINTER_FREE): side-allocated tape bytes, not a heap edge —
     // no barrier, and deliberately absent from the LazyArray rewrite descriptor.
     (*hdr).tape = tape_ptr;
-    (*hdr).blob_str = blob_handle.get_raw_const_ptr::<crate::StringHeader>();
+    (*hdr).blob_str = blob_str;
     (*hdr).materialized = std::ptr::null_mut();
     (*hdr).materialized_elements = std::ptr::null_mut();
     (*hdr).materialized_bitmap = std::ptr::null_mut();
@@ -1442,10 +1510,10 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if i >= cached_length {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-
-    // Fast path 2: bitmap hit.
     let bitmap = (*hdr).materialized_bitmap;
     let cache = (*hdr).materialized_elements;
+
+    // Fast path 2: bitmap hit.
     if !bitmap.is_null() && !cache.is_null() {
         let word_idx = (i as usize) / 64;
         let bit_idx = (i as usize) % 64;
@@ -1745,8 +1813,6 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
         return (*hdr).materialized;
     }
     let cached_length = (*hdr).cached_length;
-    let bitmap = (*hdr).materialized_bitmap;
-    let cache = (*hdr).materialized_elements;
     // Same helper `lazy_get`'s scan-flip trigger consults, so the trigger
     // can never ask for a producer this function then declines.
     let cached_count = lazy_cached_count(hdr);

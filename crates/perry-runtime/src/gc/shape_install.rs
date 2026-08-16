@@ -152,6 +152,7 @@ pub(super) fn words_contain_slot(words: &[u64], slot: usize) -> bool {
 
 /// `LayoutSlotMask::from_words(words).is_empty()`.
 #[inline(always)]
+#[cfg(test)]
 pub(super) fn words_are_empty(words: &[u64]) -> bool {
     words.iter().all(|&w| w == 0)
 }

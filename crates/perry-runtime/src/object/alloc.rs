@@ -73,6 +73,32 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
+/// #8098: mark `obj` as an ORDINARY plain object — class-less, but with no
+/// per-object `[[Set]]` semantics of its own, so the object-write fast paths
+/// may treat it exactly like a class instance.
+///
+/// The mark is deliberately OPT-IN and set at BIRTH. `class_id == 0` is not a
+/// sufficient condition: a `URL` instance, `Object.prototype`, a module
+/// namespace, and a native-module receiver are all class-less, and the write
+/// guards used to exclude the whole class-less population wholesale rather than
+/// reason about them (`proxy/put_value.rs`, and the same three exclusions in
+/// `field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`). Only a
+/// birth site that has established its receiver is ordinary calls this; every
+/// other class-less receiver keeps taking the full `[[Set]]` walk.
+///
+/// The bit lives in `GcHeader::_reserved`, which survives evacuation
+/// (`gc/copying.rs` and `gc/oldgen.rs` carry the word across), is preserved by
+/// the survival-age (`0x0038`) and layout-state (`0xC000`) updates, and is
+/// already loaded by the generated write PIC for its blocking-flag test.
+#[inline]
+pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
+    if obj.is_null() {
+        return;
+    }
+    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*gc)._reserved |= crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+}
+
 /// `Object(value)` plain-call coercion (#3149, ECMAScript §20.1.1.1 / ToObject).
 ///
 /// Takes and returns a NaN-boxed JSValue (`f64`):
@@ -127,10 +153,12 @@ pub extern "C" fn js_object_alloc_with_parent(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    // Allocate at least 8 field slots to match js_object_set_field_by_name's alloc_limit
-    // assumption (max(field_count, 8)). Without this, empty objects ({}) with field_count=0
-    // would have 0 field slots but js_object_set_field_by_name writes up to 8 fields inline,
-    // causing heap buffer overflow into adjacent arena objects.
+    // Allocate at least INLINE_SLOT_FLOOR field slots to match
+    // js_object_set_field_by_name's alloc_limit assumption
+    // (max(field_count, INLINE_SLOT_FLOOR)). Without this, empty objects ({})
+    // with field_count=0 would have 0 field slots but
+    // js_object_set_field_by_name writes up to the floor inline, causing a heap
+    // buffer overflow into adjacent arena objects.
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
@@ -157,6 +185,7 @@ pub extern "C" fn js_object_alloc_with_parent(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
 
         ptr
     }
@@ -185,6 +214,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
     }
 
     ptr
@@ -219,6 +249,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
     }
 
     ptr
@@ -238,8 +269,8 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
 /// (`PERRY_LLVM_BITCODE_LINK=1`) inline the entire body — including
 /// the `arena_alloc_gc` call — into the user's `new ClassName()`
 /// site, eliminating function-call overhead from the hot loop.
-#[no_mangle]
-pub extern "C" fn js_object_alloc_class_inline_keys(
+#[inline]
+fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
@@ -289,6 +320,64 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+    ptr
+}
+
+/// Compatibility entry point for runtime callers that do not have a
+/// module-init ShapeId.
+///
+/// It mints the id from the canonical keys array instead of receiving it, so
+/// the instance is still stamped AT BIRTH. Leaving it to rung 1's lazy
+/// self-heal would split this class's population between stamped and newborn
+/// receivers, which the emitted PIC cannot tolerate — see
+/// `shapes::birth_stamp_object_shape`. The mint is one shape-table probe and
+/// this is not the compiled hot path (compiled `new C(…)` sites call
+/// `js_object_alloc_class_inline_keys_stamped` with a module-init id).
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_inline_keys(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+) -> *mut ObjectHeader {
+    let ptr =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
+    unsafe {
+        let key_count = if keys_array.is_null() {
+            0
+        } else {
+            (*keys_array).length
+        };
+        let id = crate::object::shapes::shape_id_for_keys_ensure(
+            keys_array as *const ArrayHeader,
+            key_count,
+        );
+        crate::object::shapes::birth_stamp_object_shape(ptr, id);
+    }
+    ptr
+}
+
+/// The compiled-class allocation entry point after #6759 C3 rung 2.
+///
+/// `shape_id` is minted once from the same canonical `keys_array` at module
+/// initialization. Installing it after the existing allocator returns keeps
+/// every allocation/rooting/layout invariant above in one implementation,
+/// while making a fresh class instance immediately usable by ShapeId guards.
+/// ShapeId exhaustion fail-stops during module initialization; no newborn can
+/// be published with a pointer/count fallback identity.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+    shape_id: u32,
+) -> *mut ObjectHeader {
+    let ptr =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
+    unsafe {
+        crate::object::shapes::birth_stamp_object_shape(ptr, shape_id);
     }
     ptr
 }
@@ -421,9 +510,9 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         .wrapping_mul(10007)
         .wrapping_add(field_count.wrapping_mul(100003))
         .wrapping_add(1000000);
-    let cached = shape_cache_get(shape_id);
-    let keys_arr = if !cached.is_null() {
-        cached
+    let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
+    let (keys_arr, runtime_shape_id) = if !cached.is_null() {
+        (cached, cached_runtime_id)
     } else {
         let keys_bytes =
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
@@ -451,11 +540,18 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             }
         }
         shape_cache_insert(shape_id, arr);
-        arr
+        (arr, shape_cache_get_with_id(shape_id).1)
     };
 
     unsafe {
         set_object_keys_array(ptr, keys_arr);
+        // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
+        // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
+        // and left this one lazily self-healing, which is a SPLIT population
+        // for every class that lands here — and a split population is a
+        // permanent PIC miss, not a slow start. See
+        // `shapes::birth_stamp_object_shape`.
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
     }
     remember_class_keys_array(class_id, field_count, keys_arr);
     ptr
@@ -518,9 +614,9 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     // from the own-only shape (`+ 2_000_000`) so it can't collide with the
     // `js_build_class_keys_array` / `js_object_alloc_class_with_keys` shapes.
     let shape_id = class_id.wrapping_mul(10007).wrapping_add(2_000_000);
-    let cached = shape_cache_get(shape_id);
-    let (merged_arr, field_count) = if !cached.is_null() {
-        (cached, unsafe { (*cached).length })
+    let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
+    let (merged_arr, field_count, runtime_shape_id) = if !cached.is_null() {
+        (cached, unsafe { (*cached).length }, cached_runtime_id)
     } else {
         let own_keys: Vec<&[u8]> = if own_packed_keys.is_null() || own_packed_keys_len == 0 {
             Vec::new()
@@ -558,7 +654,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             }
         }
         shape_cache_insert(shape_id, arr);
-        (arr, merged_len as u32)
+        (arr, merged_len as u32, shape_cache_get_with_id(shape_id).1)
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
@@ -580,6 +676,9 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         }
         set_object_keys_array(ptr, merged_arr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        // The dynamically-parented subclass shape needs the same birth stamp
+        // as every other class instance, or its sites split the same way.
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
     }
     remember_class_keys_array(class_id, field_count, merged_arr);
     ptr
@@ -686,9 +785,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         // newborn literals carry their stable identity immediately, so
         // typed_feedback tokens and the id-keyed FIELD_CACHE never see a
         // pre-stamp window for shape-cached objects.
-        if runtime_shape_id != 0 {
-            (*obj_ptr).parent_class_id = runtime_shape_id;
-        }
+        crate::object::shapes::birth_stamp_object_shape(obj_ptr, runtime_shape_id);
     }
 
     obj_handle.get_raw_mut_ptr::<ObjectHeader>()
@@ -1409,6 +1506,42 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         return target_f64;
     }
 
+    // #8149: a registered BUFFER source — a node `Buffer` / `Uint8Array` (whose
+    // own enumerable properties ARE its byte indices, so
+    // `{...Buffer.from([1,2,3])}` is `{"0":1,"1":2,"2":3}` in node), or an
+    // `ArrayBuffer` / `DataView` (which own only whatever the user assigned).
+    // A `BufferHeader` is not an `ObjectHeader`; the walk below reached the
+    // `try_read_gc_header` triage and answered `{}` for an arena-backed buffer,
+    // and an EXTERNAL one has no `GcHeader` at all, so the byte it reads there
+    // is allocator bookkeeping that can classify as anything. Enumerate through
+    // the shared buffer own-key helper instead.
+    if let Some(keys) =
+        crate::object::field_get_set::enumeration::registered_buffer_own_keys(src_raw)
+    {
+        // The key string and the write funnel both allocate, so the target can
+        // move on every iteration: read it through the handle AT the call
+        // (`with_mut_ptr`) rather than binding a pre-loop copy.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        for name in keys {
+            let value = crate::object::field_get_set::enumeration::registered_buffer_own_value(
+                src_raw, &name,
+            );
+            let value_h = scope.root_nanbox_f64(value);
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
+                object_assign_set_string_key(
+                    tgt,
+                    target_is_array,
+                    key_ptr,
+                    value_h.get_nanbox_f64(),
+                )
+            });
+        }
+        return tgt_h
+            .with_mut_ptr::<ObjectHeader, _>(|tgt| crate::value::js_nanbox_pointer(tgt as i64));
+    }
+
     // A function/closure source is NOT an `ObjectHeader`: reading `keys_array`
     // off it dereferences a bogus field, yielding a garbage `key_count` and a
     // runaway copy loop. Enumerate the closure's own *enumerable* dynamic props
@@ -1507,15 +1640,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     };
     let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
 
-    // #7341: a RegExp source must be skipped here, and the exotic guard above
-    // cannot do it. That guard classifies by GC type, and a RegExp is literally
-    // `gc_malloc(GC_TYPE_OBJECT)` (see `regex.rs`) — so unlike Map/Set/Date it
-    // passes `== GC_TYPE_OBJECT` and falls into the plain-object arm, where
-    // `(*src).keys_array` reads a `RegExpHeader` at `ObjectHeader`'s field
-    // offset. That is a type confusion: the slot it lands on is not a keys
-    // array, and `js_array_length` then reads a GcHeader at `garbage - 8`.
-    // Under from-space quarantine that address is a retired protected page and
-    // the process dies; unprotected it silently walks unrelated memory.
+    // #7341: a RegExp source has no ObjectHeader keys array and must not enter
+    // the plain-object copy arm. Its dedicated GC kind makes that decision
+    // without reading any native payload word.
     //
     // Per CopyDataProperties a RegExp exposes no own enumerable string keys
     // through this path (`source`/`flags`/`lastIndex` are prototype accessors
@@ -1523,10 +1650,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // `Object.assign({}, /x/g)` is `{}`. Any own expandos a user attached live
     // in the exotic-expando side table, which this raw walk never read anyway.
     //
-    // `is_regex_pointer` is the bounds-checked magic probe, safe on arbitrary
-    // payloads. Repro: `Object.assign({}, /x/g)` under
+    // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
-    if crate::regex::is_regex_pointer(src_raw as *const u8) {
+    if source_obj_type == crate::gc::GC_TYPE_REGEXP {
         return target_f64;
     }
 

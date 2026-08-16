@@ -426,6 +426,38 @@ object PerryBridge {
         seekBar.progress = progress
     }
 
+    // --- Spinner (Picker) callback ---
+
+    // `perry-ui-android`'s picker.rs has always called this, but it was never
+    // defined here and the Rust side discarded the resulting JNI error with
+    // `let _ =` — so `Picker`'s onChange could not fire on Android at all.
+    @JvmStatic
+    fun setSpinnerCallback(spinner: Spinner, callbackKey: Long) {
+        // Spinner calls the listener once when an adapter installs the initial
+        // selection, and again for every later `setAdapter` — `pickerAddItem`
+        // rebuilds the adapter per item. None of those is a user choice, so
+        // report only actual changes, with the first one taken as the baseline.
+        var reported = -1
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long
+            ) {
+                if (reported == -1) {
+                    reported = position
+                    return
+                }
+                if (position == reported) return
+                reported = position
+                nativeInvokeCallback1(callbackKey, position.toDouble())
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
     // --- Context menu ---
 
     @JvmStatic

@@ -28,11 +28,32 @@ name: eh-transport
 # `changes` job: a job skipped by `if:` still reports a check run.
 on:
   pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "32 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
 
 concurrency:
-  group: eh-transport-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # ***#7966: KEY EVERY MAIN-LINE RUN ON `github.run_id`, NOT `github.sha`.***
+  # The previous expression read `github.event_name == 'push' && github.sha ||
+  # github.ref`. That was #7205's fix and it keyed on the event being `push` --
+  # correct while the main-line arm WAS `push: branches: [main]`. #7856 moved the
+  # main-line arm to `schedule:`, which falls through to `github.ref` (constant
+  # `refs/heads/main`), so every scheduled run shared one group again and #7205
+  # came straight back. Measured 2026-08-12 on all ten scheduled gates, the same
+  # shape every time: oldest run `queued` holding the group, the two after it
+  # `cancelled` with `jobs: 0`, newest `pending`. `github.run_id` is unique per
+  # run, so schedule / tag-push / workflow_dispatch each get a group of their own
+  # and none can supersede another. PR runs keep the shared per-ref group and
+  # keep superseding themselves, which is still what we want.
+  group: eh-transport-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   # One group per main COMMIT, cancelling PR runs only. `cancel-in-progress:
   # false` alone does not protect a `main` run: GitHub allows at most one
   # PENDING run per group and cancels the previously pending one when a new run
@@ -55,7 +76,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          # Anything that is not a pull request (the scheduled `main` sweep, a
+          # release tag, a manual dispatch) measures unconditionally: there is no
+          # PR file list to filter on, and #7856's starvation is precisely what
+          # happens when a post-merge arm quietly declines to run. Testing for
+          # `= "push"` here was correct only while `push: branches: [main]` was
+          # the post-merge trigger; under the schedule it would fall through to
+          # the PR branch, dereference an empty PR number and fail the step.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -76,7 +104,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

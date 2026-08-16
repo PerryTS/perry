@@ -1,14 +1,9 @@
-//! Tail of `compile_module`: emits closure bodies, class methods +
-//! ctors + statics, wrapper symbols (function-value wrappers,
-//! ExternFuncRef closure wrappers, export-rename aliases + stubs,
-//! method closure-call wrappers), namespace globals + extern declares,
-//! the module entry function, and finally the string-pool init.
-//!
-//! Split out of `codegen/mod.rs` purely to keep mod.rs under the
-//! 2000-line LOC budget. No behavior changes — the function body
-//! below is a verbatim move of the original inline block.
+//! Emits `compile_module` artifacts: closures, classes, wrappers, namespace
+//! globals, the module entry function, and string-pool initialization.
+//! Split from `codegen/mod.rs` to keep the compiler pipeline navigable.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
@@ -22,7 +17,9 @@ use super::closure::{
     compile_typed_i32_closure, compile_typed_string_closure,
 };
 use super::entry::compile_module_entry;
-use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
+use super::helpers::{
+    function_body_returns_generator_object, sanitize, scoped_fn_name, unknown_func_wrapper_name,
+};
 use super::method::{
     compile_method, compile_static_method, compile_typed_f64_method,
     compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
@@ -54,6 +51,7 @@ use super::string_pool::emit_string_pool;
 /// in-prelude local names so the moved block reads unchanged once
 /// destructured.
 pub(super) struct ModuleArtifactsCtx<'a> {
+    pub progress: &'a super::CompileProgress,
     pub llmod: &'a mut LlModule,
     pub target_triple: &'a str,
     pub strings: &'a mut StringPool,
@@ -181,6 +179,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // (auto-reborrowed on each per-function call site below); the
     // rest are shared borrows.
     let ModuleArtifactsCtx {
+        progress,
         llmod,
         target_triple,
         strings,
@@ -230,8 +229,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     };
 
     let module_reassigned_locals = crate::collectors::reassigned_locals_in_module(hir);
+    progress.checkpoint("reassigned-local analysis");
 
-    for (func_id, closure_expr) in closures {
+    let closure_started = Instant::now();
+    let closure_progress_step = (closures.len() / 20).max(1);
+    for (closure_index, (func_id, closure_expr)) in closures.iter().enumerate() {
         if cross_module.typed_f64_closures.contains(func_id) {
             compile_typed_f64_closure(
                 llmod,
@@ -295,13 +297,20 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             cross_module,
         )
         .with_context(|| format!("lowering closure func_id={}", func_id))?;
+        let done = closure_index + 1;
+        if done == closures.len() || done % closure_progress_step == 0 {
+            progress.items("closure bodies", done, closures.len(), closure_started);
+        }
     }
+    progress.checkpoint("closure bodies");
 
     // Lower each class method as `perry_method_<modprefix>__<class>__<name>(
     // this_box, arg0, arg1, ...) -> double`. Methods are emitted as
     // standalone LLVM functions; the dispatch in `lower_call` calls
     // them directly.
-    for class in &hir.classes {
+    let classes_started = Instant::now();
+    let class_progress_step = (hir.classes.len() / 20).max(1);
+    for (class_index, class) in hir.classes.iter().enumerate() {
         for method in &class.methods {
             let typed_public_trampoline = if cross_module
                 .typed_f64_methods
@@ -765,7 +774,18 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 )
             })?;
         }
+        let done = class_index + 1;
+        if done == hir.classes.len() || done % class_progress_step == 0 {
+            progress.items(
+                "classes (methods, constructors, and statics)",
+                done,
+                hir.classes.len(),
+                classes_started,
+            );
+        }
     }
+
+    progress.checkpoint("class methods, constructors, and statics");
 
     // Emit FuncRef-as-value wrappers. For each user function, generate
     // a thin wrapper `__perry_wrap_<name>` whose signature matches the
@@ -1147,6 +1167,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         }
     }
 
+    progress.checkpoint("top-level function value wrappers and aliases");
+
     // Issue #774: emit closure-call wrappers for class instance methods
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
@@ -1200,15 +1222,15 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         }
     }
 
-    // #337: emit an always-defined fallback wrapper for the
-    // `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef` falls
-    // through to `wrap_name = "__perry_wrap_perry_unknown_func"` when the
+    // #337: emit an always-defined fallback wrapper for the module-scoped
+    // `perry_unknown_func_<module>` sentinel. `expr.rs::Expr::FuncRef` falls
+    // through to the matching wrapper when the
     // FuncRef's id isn't in `func_names` (cross-module reference whose
     // Source HIR wasn't lowered into THIS LLVM module — should normally
     // route to ExternFuncRef instead, but some HIR shapes still emit
-    // FuncRef with an unresolvable id). Pre-fix the wrapper was never
-    // defined and clang errored with `use of undefined value
-    // @__perry_wrap_perry_unknown_func`. This stub returns TAG_UNDEFINED
+    // FuncRef with an unresolvable id). Before #337, the wrapper was never
+    // defined and clang rejected the unresolved reference during IR
+    // validation. This stub returns TAG_UNDEFINED
     // (encoded as `f64::from_bits(0x7FFC_0000_0000_0001)` =
     // 1.7800590868057611e-307 — the canonical undefined sentinel matching
     // `value::TAG_UNDEFINED`); any runtime-side `js_closure_callN`
@@ -1218,11 +1240,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // imported classes (see the existing comment block below).
     //
     // Emitted unconditionally — link-time DCE strips it when no
-    // `Expr::FuncRef(unknown_id)` site exists in this module.
+    // `Expr::FuncRef(unknown_id)` site exists in this module. The stable
+    // module suffix is load-bearing under codegen-unit splitting: splitting
+    // promotes this internal definition for cross-unit calls, and a shared
+    // final link may contain split objects from many source modules (#8064).
     {
-        let wrap_name = "__perry_wrap_perry_unknown_func";
+        let wrap_name = unknown_func_wrapper_name(module_prefix);
         let wf = llmod.define_function(
-            wrap_name,
+            &wrap_name,
             DOUBLE,
             vec![
                 (I64, "%this_closure".to_string()),
@@ -1233,14 +1258,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 (DOUBLE, "%a4".to_string()),
             ],
         );
-        // Fix #420 (v0.5.576): internal linkage so multi-module
-        // programs (drizzle-orm has 5+ modules each emitting this
-        // fallback) don't fail link with `duplicate symbol
-        // ___perry_wrap_perry_unknown_func`. Same pattern as the
-        // `__perry_wrap_extern_*` wrappers below — comment block at
-        // line ~1957 explicitly calls out that wrappers like this
-        // should be `internal` linkage so each module gets its own
-        // dead-code-eliminable copy.
+        // Fix #420 (v0.5.576): internal linkage keeps unsplit modules' copies
+        // dead-code-eliminable. Split units promote the definition so calls
+        // from sibling units can bind; #8064's module-scoped name keeps those
+        // promoted copies distinct at the application link.
         wf.linkage = "internal".to_string();
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();
@@ -1395,6 +1416,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         }
     }
 
+    progress.checkpoint("method, fallback, and imported function wrappers");
+
     // Issue #100: emit the per-module `@__perry_ns_<prefix>` global iff
     // this module is the target of at least one dynamic `import()` site
     // anywhere in the program. Defined here with external linkage so the
@@ -1518,6 +1541,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &namespace_key_globals,
     )
     .with_context(|| format!("lowering entry of module '{}'", hir.name))?;
+    progress.checkpoint("namespace setup and module entry body");
 
     // Issue #392: pre-intern every user-class method name into the
     // string pool so `emit_string_pool` (which takes `&strings`) can
@@ -1941,6 +1965,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
 
+    progress.checkpoint("runtime registration metadata");
+
     emit_string_pool(
         llmod,
         strings,
@@ -1968,6 +1994,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_display_names,
         &user_fn_source,
     );
+    progress.checkpoint("string pool and registration initializer");
 
     Ok(())
 }

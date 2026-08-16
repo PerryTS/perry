@@ -1,6 +1,7 @@
 use super::super::*;
 use super::support::*;
 use std::cell::Cell;
+mod arraylike_callbacks;
 mod callback_scanners;
 mod fs_options_object;
 mod generator_attach_prototype;
@@ -8,6 +9,7 @@ mod hook_dispatch_handles;
 mod interned_string_caches;
 mod iter_result_keys;
 mod json_shape_template;
+mod old_defrag_contract;
 mod prototype_addr_cache;
 mod side_table_scanners;
 mod string_slice;
@@ -484,14 +486,21 @@ extern "C" fn test_async_hook_event_force_minor_gc(
 thread_local! {
     static TEST_TIMER_ARG_BITS: Cell<u64> = const { Cell::new(0) };
     static TEST_TIMER_CALLED: Cell<bool> = const { Cell::new(false) };
+    static TEST_TIMER_CALLBACK_PTR: Cell<usize> = const { Cell::new(0) };
 }
 
 extern "C" fn test_timer_capture_arg(
-    _closure: *const crate::closure::ClosureHeader,
+    closure: *const crate::closure::ClosureHeader,
     arg: f64,
 ) -> f64 {
+    TEST_TIMER_CALLBACK_PTR.with(|slot| slot.set(closure as usize));
     TEST_TIMER_ARG_BITS.with(|slot| slot.set(arg.to_bits()));
     TEST_TIMER_CALLED.with(|slot| slot.set(true));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn test_timer_force_minor_gc(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let _ = crate::gc::gc_collect_minor();
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

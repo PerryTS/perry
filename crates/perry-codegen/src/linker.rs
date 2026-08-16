@@ -350,15 +350,68 @@ fn ll_size_opt_max_fn_bytes() -> usize {
         .unwrap_or(DEFAULT_LL_SIZE_OPT_MAX_FN_BYTES)
 }
 
+/// For an oversized unit, the size of its **widest single function** above
+/// which we drop the whole unit to `-O0`.
+///
+/// This is the per-function counterpart of the average cap above, and it is the
+/// arm that can actually see the `#4880` shape. An average cannot: a bundle is
+/// hundreds of ordinary functions plus one generated monolith, and the ordinary
+/// ones dilute the monolith out of the mean. `next@16.3.0`'s bundled
+/// `jsonwebtoken` is exactly that — 468 functions averaging 28 KB with one at
+/// 3.5 MB — so its average sits nine times UNDER the average cap while one
+/// body is a monolith (#8132).
+///
+/// **The default is deliberately unchanged at 6 MiB, and lowering it is a
+/// measured bad trade.** The arm previously borrowed `ll_o0_threshold_bytes()`,
+/// which is a *whole-unit* constant answering a different question; it now has
+/// its own name and its own override so the two stop moving together. What it
+/// is NOT is a retune, because the corpus does not support one. Over the 52
+/// oversized codegen units Perry produces from `next@16.3.0`'s 17 largest
+/// `dist/compiled/**` bundles, the widest function runs from 751 KB to 11.1 MB
+/// *continuously* (deciles 0.73/1.3/1.6/1.9/2.1/2.2/2.7/3.4/3.8/5.4 MB) — there
+/// is no empty band between "ordinary bundle" and "monolith", because in real
+/// webpack output every oversized unit is monolith-bearing. (Their averages run
+/// 19-67 KB/fn, so all 52 clear the average cap and this arm is the only one
+/// that ever fires.) A cap low enough to catch #8132's two units (3.5 MB and
+/// 1.5 MB) is ≤ 1.5 MB, which reclassifies 44 of 52; 1 MiB reclassifies 50 of
+/// 52. Measured on that same bundle, reclassifying costs **+95% `__text`
+/// (2.80 MB → 5.45 MB) to buy −62% clang CPU (43.8 s → 16.5 s)**. Whether that
+/// trade is worth making is a product call; `PERRY_LL_O0_MAX_FN_BYTES` makes it
+/// one env var instead of a rebuild, and the default declines to make it on
+/// everybody's behalf.
+///
+/// `0` disables this arm entirely (leaving only the average cap);
+/// `PERRY_LL_SIZE_OPT` still overrides both.
+const DEFAULT_LL_O0_MAX_FN_BYTES: usize = 6 * 1024 * 1024;
+
+fn ll_o0_max_fn_bytes() -> usize {
+    std::env::var("PERRY_LL_O0_MAX_FN_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LL_O0_MAX_FN_BYTES)
+}
+
 /// Decide the clang opt flag for an oversized unit: `-Os` when the unit is many
 /// ordinary functions (size-optimize, big `__text` win), `-O0` when it is a
 /// pathological few-giant-function monolith (`#4880`). `ll_fn_count` is the
 /// number of `define` functions in the unit.
-fn oversized_opt_flag(ll_byte_size: usize, ll_fn_count: usize) -> &'static str {
+fn oversized_opt_flag(
+    ll_byte_size: usize,
+    ll_fn_count: usize,
+    max_fn_bytes: Option<usize>,
+) -> &'static str {
     match std::env::var("PERRY_LL_SIZE_OPT").as_deref() {
         Ok("0") | Ok("off") | Ok("false") => return "-O0",
         Ok("1") | Ok("on") | Ok("true") => return "-Os",
         _ => {}
+    }
+    // Native construction knows each function's render-free size. Do not let
+    // hundreds of small functions dilute one pathological generated function's
+    // average: that sent a 20+ MiB body through -Os in the Claude bundle and
+    // spent minutes in LLVM where the same body finishes in seconds at -O0.
+    let max_fn_cap = ll_o0_max_fn_bytes();
+    if max_fn_cap > 0 && max_fn_bytes.is_some_and(|bytes| bytes > max_fn_cap) {
+        return "-O0";
     }
     let avg_fn_bytes = ll_byte_size / ll_fn_count.max(1);
     if avg_fn_bytes <= ll_size_opt_max_fn_bytes() {
@@ -382,7 +435,9 @@ fn build_clang_compile_plan(
     target_triple: Option<&str>,
     ll_byte_size: usize,
     ll_fn_count: usize,
+    max_fn_bytes: Option<usize>,
     debug_symbols: bool,
+    compact_gc_map: bool,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -400,16 +455,26 @@ fn build_clang_compile_plan(
     // oversized_opt_flag.
     let o0_threshold = ll_o0_threshold_bytes();
     let opt_flag = if o0_threshold > 0 && ll_byte_size > o0_threshold {
-        let flag = oversized_opt_flag(ll_byte_size, ll_fn_count);
+        let flag = oversized_opt_flag(ll_byte_size, ll_fn_count, max_fn_bytes);
+        // `widest` is the quantity the -O0 arm actually decides on, so print
+        // it: an average alone cannot explain why a unit was routed, and a
+        // corpus sweep needs the per-unit distribution to retune the cap.
+        // `?` when the caller could not supply it (the textual clang path,
+        // which has no per-function sizes).
         eprintln!(
             "perry: module IR is {:.1} MB (> {:.1} MB), {} functions \
-             (~{:.0} KB/fn); compiling at {} instead of -O3 so LLVM's -O1+ \
-             pipeline doesn't blow up on oversized functions (#4880). Override \
-             with PERRY_LL_O0_THRESHOLD_BYTES / PERRY_LL_SIZE_OPT.",
+             (~{:.0} KB/fn avg, widest {}); compiling at {} instead of -O3 so \
+             LLVM's -O1+ pipeline doesn't blow up on oversized functions \
+             (#4880). Override with PERRY_LL_O0_THRESHOLD_BYTES / \
+             PERRY_LL_O0_MAX_FN_BYTES / PERRY_LL_SIZE_OPT.",
             ll_byte_size as f64 / (1024.0 * 1024.0),
             o0_threshold as f64 / (1024.0 * 1024.0),
             ll_fn_count,
             (ll_byte_size as f64 / ll_fn_count.max(1) as f64) / 1024.0,
+            match max_fn_bytes {
+                Some(bytes) => format!("{:.0} KB", bytes as f64 / 1024.0),
+                None => "?".to_string(),
+            },
             flag,
         );
         flag
@@ -423,7 +488,6 @@ fn build_clang_compile_plan(
     // the statepoint backends emit a stack map, so only they pay for it, and
     // the cost is small: `-S` takes the same time as `-c` (codegen is the
     // cost, printing text is free) and assembling is ~0.02s per module.
-    let compact_gc_map = crate::codegen::helpers::native_stack_roots_enabled();
     let asm_path = compact_gc_map.then(|| PathBuf::from(format!("{}.s", obj_path.display())));
 
     let mut clang_args = vec![
@@ -530,8 +594,8 @@ pub(crate) fn rs4gc_funclet_refusal(ll_text: &str) -> Option<String> {
     })
 }
 
-fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
-    if !crate::codegen::helpers::rs4gc_enabled() {
+fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<String>> {
+    if !native_roots {
         return Ok(None);
     }
     if let Some(refusal) = rs4gc_funclet_refusal(ll_text) {
@@ -617,13 +681,23 @@ fn which_in_path(name: &str) -> Option<PathBuf> {
 }
 
 pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Result<Vec<u8>> {
-    let rs4gc_ll = maybe_rs4gc_preprocess(ll_text)?;
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
+    compile_ll_to_object_with_native_roots(ll_text, target_triple, native_roots)
+}
+
+fn compile_ll_to_object_with_native_roots(
+    ll_text: &str,
+    target_triple: Option<&str>,
+    native_roots: bool,
+) -> Result<Vec<u8>> {
+    let rs4gc_ll = maybe_rs4gc_preprocess(ll_text, native_roots)?;
     let ll_text: &str = rs4gc_ll.as_deref().unwrap_or(ll_text);
     compile_ll_to_object_in(
         &env::temp_dir(),
         ll_text,
         target_triple,
         TempFilePolicy::from_env(),
+        native_roots,
     )
 }
 
@@ -658,6 +732,8 @@ pub(crate) fn native_plan_args(
     target_triple: Option<&str>,
     est_ll_bytes: usize,
     ll_fn_count: usize,
+    max_fn_bytes: usize,
+    native_roots: bool,
 ) -> (String, Vec<String>) {
     let plan = build_clang_compile_plan(
         PathBuf::from("(in-process)"),
@@ -666,9 +742,69 @@ pub(crate) fn native_plan_args(
         target_triple,
         est_ll_bytes,
         ll_fn_count,
+        Some(max_fn_bytes),
         env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+        native_roots,
     );
     (plan.effective_target, plan.clang_args)
+}
+
+/// Finish an in-process emission whose plan asked for `-S`.
+///
+/// **#7982.** The statepoint backends compact the stack map at ASSEMBLY time
+/// (#7314) — that is where LLVM prints the map's function addresses as symbol
+/// names — so `build_clang_compile_plan` puts `-S` in the argv and what comes
+/// back from `optimize_and_emit_module` is assembler TEXT, not an object. The
+/// textual in-process path has always run the rewrite-and-assemble step; the
+/// **native** construction path returned the bytes straight to the object
+/// cache, which wrote assembly into a `.o` and killed the link with
+/// `ld: unknown file type`.
+///
+/// That defect was invisible for as long as native construction could not
+/// build `ptr addrspace(1)` at all: the run died earlier, in the reader. Fixing
+/// the reader is what exposed it, which is the usual shape — a gate that fails
+/// early hides everything behind it.
+///
+/// A plan without `-S` (the non-statepoint backends) passes its bytes through
+/// untouched.
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) fn finish_native_emission(
+    bytes: Vec<u8>,
+    effective_target: &str,
+    clang_args: &[String],
+) -> Result<Vec<u8>> {
+    if !clang_args.iter().any(|a| a == "-S") {
+        return Ok(bytes);
+    }
+    let pid = std::process::id();
+    let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let scratch = std::env::temp_dir().join(format!("perry_native_asm_{pid:x}_{counter:x}"));
+    fs::create_dir_all(&scratch)
+        .with_context(|| format!("Failed to create {}", scratch.display()))?;
+    let asm_path = scratch.join("module.s");
+    let obj_path = scratch.join("module.o");
+    fs::write(&asm_path, &bytes)
+        .with_context(|| format!("Failed to write {}", asm_path.display()))?;
+    // Same reasoning as the textual path: the version skew that motivated the
+    // in-process backend was an *IR* parse failure, and by this point the IR is
+    // gone — what is being assembled is text this LLVM just printed.
+    let assembler = find_clang().context(
+        "the statepoint compact-map rewrite needs an assembler to turn the \
+         natively-emitted assembly into an object, and no clang was found",
+    )?;
+    let assembled = crate::gc_map::compact_and_assemble(
+        &assembler,
+        effective_target,
+        &asm_path,
+        &obj_path,
+        clang_args,
+    )
+    .and_then(|()| {
+        fs::read(&obj_path)
+            .with_context(|| format!("Failed to read assembled {}", obj_path.display()))
+    });
+    let _ = fs::remove_dir_all(&scratch);
+    assembled
 }
 
 /// Route `.ll -> .o` through the LLVM C API inside this process (no clang
@@ -682,10 +818,11 @@ pub(crate) fn native_plan_args(
 /// (#7339).
 ///
 /// `PERRY_LLVM_INPROCESS=0`/`off`/`false` reverts to the clang subprocess for
-/// bisection. `=native` additionally builds function bodies through the C API
-/// instead of rendering per-function text; that is byte-identical on the
-/// 81-module zod corpus but has narrower CI coverage, so it stays opt-in until
-/// that widens.
+/// bisection. Large codegen-unit-split modules default to direct C-API native
+/// construction because materializing their textual IR is itself a dominant
+/// serial cost; `=1` selects the legacy in-process text transport, while
+/// `=diff` builds both arms and compares them. Small modules retain the mature
+/// text transport unless `=native` is explicit.
 ///
 /// The value participates in both the build cache and the object cache keys,
 /// so the backends can never share a cached object.
@@ -711,6 +848,7 @@ fn compile_ll_inprocess_in(
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     let (paths, _pid, _nonce) = llvm_temp_paths(tmp_dir, ll_text);
     // Same decision inputs as the clang path — opt level (#4880 fallback
@@ -723,7 +861,9 @@ fn compile_ll_inprocess_in(
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        None,
         policy.debug_symbols,
+        native_roots,
     );
     // #7131 parity: the module identifier is the content-addressed basename,
     // the only name that can reach the object bytes.
@@ -750,6 +890,7 @@ fn compile_ll_inprocess_in(
         &plan.effective_target,
         &plan.clang_args,
         &module_name,
+        native_roots,
     ) {
         // The statepoint backends ask for `-S`, because #7314's compact-map
         // rewriter rewrites `.llvm_stackmaps` at ASSEMBLY time — that is where
@@ -786,9 +927,25 @@ fn compile_ll_inprocess_in(
             )?;
             let obj = fs::read(&plan.obj_path)
                 .with_context(|| format!("Failed to read assembled {}", plan.obj_path.display()))?;
-            if !policy.keep {
-                let _ = fs::remove_file(asm_path);
-                let _ = fs::remove_file(&plan.obj_path);
+            if policy.keep {
+                // This arm retains the object too — `compact_and_assemble`
+                // wrote it to `plan.obj_path` and the scratch dir survives
+                // below — but it never said so. `PERRY_LLVM_KEEP_IR`'s contract
+                // is that the location is PRINTED, and every consumer that
+                // parses `kept object:` went blind the moment statepoints
+                // became the default backend and this arm started handling the
+                // ordinary compile (#8087: all 11 compiler-output-regression
+                // workloads fail on exactly this, never reaching their subject).
+                eprintln!("[perry-codegen] kept object: {}", plan.obj_path.display());
+            } else {
+                // `remove_dir_all`, not the two names we know about — the same
+                // reason the clang path gives. This arm is the only in-process
+                // one that CREATES the scratch dir (writing the assembly), so
+                // unlinking just the files left an empty husk per compile: a
+                // leak counted in compiles rather than in distinct IR, which is
+                // what turned the temp-hygiene gate red once this backend
+                // became the default and the clang cleanup stopped running.
+                let _ = fs::remove_dir_all(&paths.scratch_dir);
             }
             Ok(obj)
         }
@@ -836,6 +993,7 @@ fn compile_ll_inprocess_in(
     _ll_text: &str,
     _target_triple: Option<&str>,
     _policy: TempFilePolicy,
+    _native_roots: bool,
 ) -> Result<Vec<u8>> {
     // Fail loudly rather than silently falling back: an A/B arm that asked
     // for the in-process backend must never be served the text path.
@@ -853,9 +1011,10 @@ fn compile_ll_to_object_in(
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
+    native_roots: bool,
 ) -> Result<Vec<u8>> {
     if inprocess_requested() {
-        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy);
+        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy, native_roots);
     }
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
@@ -903,7 +1062,9 @@ fn compile_ll_to_object_in(
         target_triple,
         ll_text.len(),
         count_ll_functions(ll_text),
+        None,
         policy.debug_symbols,
+        native_roots,
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -1058,10 +1219,19 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         })
         .min(units.len());
 
+    // The root backend is a per-module decision stored on the producer thread.
+    // Unit workers must receive it explicitly: fresh threads start with the
+    // thread-local target/override cells unset and would otherwise silently
+    // compile precise-root IR without RS4GC or a compact map (#8070).
+    let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     let mut compiled: Vec<Option<Result<Vec<u8>>>> = (0..units.len()).map(|_| None).collect();
     if jobs <= 1 {
         for (i, unit) in units.iter().enumerate() {
-            compiled[i] = Some(compile_ll_to_object(unit, target_triple));
+            compiled[i] = Some(compile_ll_to_object_with_native_roots(
+                unit,
+                target_triple,
+                native_roots,
+            ));
         }
     } else {
         let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>>>>> = (0..units.len())
@@ -1075,7 +1245,11 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
                     if i >= units.len() {
                         break;
                     }
-                    let out = compile_ll_to_object(&units[i], target_triple);
+                    let out = compile_ll_to_object_with_native_roots(
+                        &units[i],
+                        target_triple,
+                        native_roots,
+                    );
                     *slots[i].lock().expect("codegen-unit slot poisoned") = Some(out);
                 });
             }
@@ -1098,8 +1272,11 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
     merge_unit_objects(&objs)
 }
 
-/// Partial-link (`ld -r`) already-compiled codegen-unit objects into one
-/// object. Shared by the text path above and the native construction path
+/// Combine already-compiled codegen-unit objects into one linker input.
+/// Unix uses a relocatable partial link (`ld -r`). COFF has no equivalent,
+/// so Windows stores the objects in a static archive; the final MSVC linker
+/// accepts that archive anywhere it accepts the former single object.
+/// Shared by the text path above and the native construction path
 /// (`native_emit::compile_module_units_native`).
 pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let tmp_dir = env::temp_dir();
@@ -1114,23 +1291,44 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         obj_paths.push(p);
     }
 
+    #[cfg(target_os = "windows")]
+    let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.lib", pid, nonce));
+    #[cfg(not(target_os = "windows"))]
     let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.o", pid, nonce));
-    let ld = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
-    let mut cmd = Command::new(&ld);
+
+    #[cfg(target_os = "windows")]
+    let tool = env::var("PERRY_LLVM_LIB").unwrap_or_else(|_| "llvm-lib".to_string());
+    #[cfg(not(target_os = "windows"))]
+    let tool = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
+    let mut cmd = Command::new(&tool);
+    #[cfg(target_os = "windows")]
+    cmd.arg(format!("/OUT:{}", combined.display()));
+    #[cfg(not(target_os = "windows"))]
     cmd.arg("-r").arg("-o").arg(&combined);
     for p in &obj_paths {
         cmd.arg(p);
     }
-    let out = cmd
-        .output()
-        .with_context(|| format!("failed to invoke partial linker `{} -r`", ld))?;
+    let out = cmd.output().with_context(|| {
+        #[cfg(target_os = "windows")]
+        {
+            format!("failed to invoke COFF codegen-unit archiver `{}`", tool)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            format!("failed to invoke partial linker `{} -r`", tool)
+        }
+    })?;
     let result = if out.status.success() {
         fs::read(&combined)
             .with_context(|| format!("failed to read merged object {}", combined.display()))
     } else {
+        #[cfg(target_os = "windows")]
+        let operation = format!("COFF archive `{}`", tool);
+        #[cfg(not(target_os = "windows"))]
+        let operation = format!("partial link `{} -r`", tool);
         Err(anyhow!(
-            "partial link `{} -r` of {} codegen units failed (status={}).\nstderr:\n{}",
-            ld,
+            "{} of {} codegen units failed (status={}).\nstderr:\n{}",
+            operation,
             objs.len(),
             out.status,
             String::from_utf8_lossy(&out.stderr)

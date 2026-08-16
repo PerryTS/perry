@@ -169,66 +169,38 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
     }
 }
 
-pub(crate) fn is_timer_handle_method_key(key: &[u8]) -> bool {
-    matches!(
-        key,
-        b"ref"
-            | b"unref"
-            | b"hasRef"
-            | b"refresh"
-            | b"close"
-            | b"__perry_dispose__"
-            // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the
-            // well-known dispose symbol lowers to this key. (#1213)
-            | b"@@__perry_wk_dispose"
-            | b"@@__perry_wk_toPrimitive"
-    )
-}
-
-/// #6759 C3c: is `keys` safe to prime into a per-site PIC cache whose hit
-/// path does an UNVALIDATED compare-and-load? True only for
-/// `GC_FLAG_SHAPE_SHARED` arrays — those are shape-cache-resident
-/// (process-rooted, so they stay LIVE for as long as a cache references
-/// them). Conservative `false` for anything else.
+/// A `Timeout` / `Immediate` handle method key, as a `'static` byte string:
+/// the literal out of this list, never a borrow of `key`.
 ///
-/// Rooted is not address-STABLE, though: the copying minor moves
-/// shape-shared arrays like anything else (`move_young` merely preserves
-/// the flag), rewriting every rooted reference — but not the `@perry_ic_N`
-/// globals, which no GC scanner knows about. The vacated from-space address
-/// is then recycled, and a different keys array landing there makes a
-/// primed site falsely HIT with the old slot mapping (#6080a). That residual
-/// is closed by [`PERRY_IC_EPOCH`] below, not by this predicate.
-pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHeader) -> bool {
-    let Some(gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
-        return false;
-    };
-    gc.obj_type == crate::gc::GC_TYPE_ARRAY && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
-}
-
-/// #6080(a): process-global read-PIC epoch, exported to the emitted IR as
-/// `@PERRY_IC_EPOCH` (same pattern as `PERRY_TA_VIEW_GUARD`). A keys-POINTER
-/// token primed into a `@perry_ic_N` cache is only trustworthy for as long
-/// as no address has been freed or moved since priming: the cache global is
-/// invisible to every GC scanner, so a recycled keys-array address would
-/// pointer-match a different shape and the inline hit path would load the
-/// wrong slot — silently.
+/// #8133 — this replaced the `is_timer_handle_method_key` PREDICATE it used to
+/// be, and the replacement is the fix, not a refactor. Every caller derives
+/// `key` as `key_string + size_of::<StringHeader>()` — the interior of a
+/// movable GC heap string that is unreachable the moment the read returns —
+/// and then handed that same pointer to `js_class_method_bind`, which captures
+/// it into the bound closure for `dispatch_bound_method` to re-read at CALL
+/// time. #7747 fixed exactly this on the Buffer path and its commit message
+/// names the consequence: "whether the stale bytes still spell the method is an
+/// allocator property, not a program property", which is why it passed locally
+/// and took a SIGSEGV on conformance-smoke.
 ///
-/// The miss handler snapshots this epoch into `cache[2]` at prime time; the
-/// emitted hit predicate requires `cache[2] == PERRY_IC_EPOCH` before
-/// trusting a pointer token (shape-ID tokens skip the check — ids are never
-/// reused, so they cannot alias). Every completed collection bumps the epoch
-/// (`GcStats::record_collection`, the single per-collection funnel), and
-/// budgeted cycles additionally bump at sweep ENTRY, because their sweep
-/// slices interleave with the mutator — an address freed by an early slice
-/// must not be trusted while the cycle is still running.
-///
-/// Starts at 1 so a `zeroinitializer` cache (epoch 0) can never match.
-#[no_mangle]
-pub static PERRY_IC_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// Invalidate every pointer-token read-PIC prime (see [`PERRY_IC_EPOCH`]).
-pub(crate) fn pic_epoch_bump() {
-    PERRY_IC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+/// Returning the literal rather than answering `bool` is deliberate: with no
+/// predicate left, a caller has nothing to pair with its own pointer, so the
+/// bug cannot be reintroduced by writing the obvious code. Same shape as
+/// `set_method_value_name` above and `buffer_method_name_static` (#7747).
+pub(crate) fn timer_handle_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"ref" => Some(b"ref"),
+        b"unref" => Some(b"unref"),
+        b"hasRef" => Some(b"hasRef"),
+        b"refresh" => Some(b"refresh"),
+        b"close" => Some(b"close"),
+        b"__perry_dispose__" => Some(b"__perry_dispose__"),
+        // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the well-known
+        // dispose symbol lowers to this key. (#1213)
+        b"@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
+        b"@@__perry_wk_toPrimitive" => Some(b"@@__perry_wk_toPrimitive"),
+        _ => None,
+    }
 }
 
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
@@ -243,9 +215,9 @@ pub const PIC_CACHE_WORDS: usize = 12;
 ///
 /// | word | meaning |
 /// |---|---|
-/// | 0 | `tok0` — most-recently-used shape token (ID token **or** keys pointer) |
+/// | 0 | `tok0` — most-recently-used ShapeId token |
 /// | 1 | `slot0` — its resolved field slot |
-/// | 2 | `epoch` — [`PERRY_IC_EPOCH`] snapshot; gates word 0's pointer tokens **and every way** |
+/// | 2 | reserved non-identity scratch |
 /// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
 /// | 11 | round-robin victim index for the ways |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
@@ -266,7 +238,7 @@ pub(crate) const PIC_WAYS: usize = 4;
 ///
 /// | value | meaning | emitted code |
 /// |---|---|---|
-/// | `0` | no way is populated (fresh site, or just epoch-wiped) | skip the compares |
+/// | `0` | no way is populated (fresh site) | skip the compares |
 /// | `> 0` | armed: bit 0 set, bits 1..7 the round-robin victim, bits 8.. the *consecutive* capacity-eviction run | run the compares |
 /// | `< 0` | **megamorphic** — the rotation is wider than the ways hold. The magnitude is a countdown: each further miss adds 1, and at 0 the site is armed again | skip the compares |
 pub(crate) const PIC_WAY_STATE: usize = 3;
@@ -308,50 +280,19 @@ const PIC_LATCH_RETRY: i64 = 2048;
 /// resolves it inline instead of calling back into this handler. A site that
 /// alternates between k ≤ `PIC_WAYS + 1` shapes therefore stops thrashing.
 ///
-/// Both token kinds are cascaded, because the population that matters is the
-/// pointer-token one: a plain object literal is allocated through a generated
-/// `__AnonShape_*` constructor and so carries a real `class_id`, which routes it
-/// to the shape-shared keys-POINTER prime, not the `#6804` shape-ID prime. Ways
-/// restricted to ID tokens are dead code for exactly the programs this exists
-/// for — measured as a 6% *regression* on a tree-walking interpreter, all of it
-/// the compare sequence running and never hitting.
-///
-/// A keys-POINTER token is address-derived and can be recycled after a
-/// collection (#6080a), so every way is gated on the SAME `cache[2]` epoch word
-/// the MRU entry uses, and this function **wipes the ways whenever the epoch
-/// moves**. That keeps the shared word honest: a way is only ever readable while
-/// `cache[2]` still holds the epoch that way was primed in. The ways go cold
-/// once per collection and re-prime — 38 minor collections across a 4 s run, so
-/// the re-priming is not measurable.
-///
-/// `(shape, key)` → slot is immutable within an epoch: a site always looks up
-/// one key, and a keys-array change gives the object a different keys array (or
-/// a fresh shape id). So a way that stops matching simply goes cold; it can
-/// never resolve to a wrong slot.
+/// Every token is derived from an authoritative, never-reused ShapeId. A shape
+/// transition therefore makes an old way go cold without requiring an address
+/// epoch or any GC-visible cache rewriting.
 ///
 /// # Safety
 /// `cache` must point at a live `[i64; PIC_CACHE_WORDS]` (the codegen-emitted
 /// per-site global, or a stack array of that type).
-pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64, epoch: i64) {
+pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) {
     let c = &mut *cache;
     let prev_tok = c[0];
     let prev_slot = c[1];
-    // A collection happened since this site was last primed. Every token here —
-    // word 0's and every way's — was resolved against addresses that may since
-    // have been freed, moved and recycled, so the whole cache goes cold. That
-    // includes `prev_tok`: cascading it would smuggle a stale pointer token past
-    // the very guard the wipe exists to enforce.
-    let epoch_held = c[2] == epoch;
     c[0] = token;
     c[1] = slot;
-    c[2] = epoch;
-    if !epoch_held && c[PIC_WAY_STATE] >= 0 {
-        for w in 0..PIC_WAYS {
-            c[PIC_WAY_BASE + w * 2] = 0;
-            c[PIC_WAY_BASE + w * 2 + 1] = 0;
-        }
-        c[PIC_WAY_STATE] = 0;
-    }
     // Megamorphic. A rotation wider than the ways hold never hits one, so the
     // compare sequence becomes pure cost — measured at **+37%** on a 7-shape
     // site, against a 2.5x SPEEDUP on a 5-shape one. That asymmetry is the whole
@@ -368,7 +309,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64, 
         c[PIC_WAY_STATE] = state + 1;
         return;
     }
-    let cascade = epoch_held && prev_tok != 0 && prev_tok != token;
+    let cascade = prev_tok != 0 && prev_tok != token;
     // One pass over the ways does three things:
     //   * evicts `token` from a way if it has one — it now lives in the MRU
     //     entry, and leaving the stale copy behind would permanently cost a way
@@ -458,20 +399,18 @@ unsafe fn key_bytes_are(key: *const crate::StringHeader, want: &[u8]) -> bool {
 
 /// Monomorphic inline cache miss handler (issue #51).
 ///
-/// Called when the codegen-emitted shape check (`obj->keys_array == cache[0]`)
+/// Called when the codegen-emitted ShapeId check misses.
 /// fails. Performs the full field lookup via `js_object_get_field_by_name`,
 /// then populates the per-site cache so subsequent calls with the same shape
 /// hit the inline fast path (no function call, direct field load).
 ///
-/// `cache` layout: see [`PicCache`]. Words 0..2 are the MRU entry
-/// `[shape_token, field_slot_index, primed_epoch]` (`shape_token` is a shape-ID
-/// token or a raw keys-array pointer — see #6804; `primed_epoch` is the
-/// [`PERRY_IC_EPOCH`] snapshot taken at prime time, #6080a); words 3.. are the
-/// polymorphic ways filled by [`pic_prime_get`] (#7753).
+/// `cache` layout: see [`PicCache`]. Words 0..1 are the ShapeId-token MRU entry;
+/// word 2 is reserved scratch, and words 3.. are the polymorphic ways filled by
+/// [`pic_prime_get`] (#7753).
 ///
 /// Only caches when:
 /// - obj is a valid ObjectHeader (not null, not handle, not string/array/etc.)
-/// - field exists and its slot index < 8 (inline allocation limit)
+/// - field exists and its slot index is below `shape.live_inline_slot_count`
 ///
 /// Overflow fields (slot >= alloc_limit) are NOT cached and fall through to
 /// the slow path — the fast path loads from `obj_ptr + 24 + slot*8` which
@@ -605,19 +544,24 @@ pub extern "C" fn js_object_get_field_ic_miss(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if is_timer_handle_method_key(key_bytes) && crate::timer::is_known_timer_id(obj as i64)
-            {
-                let this_f64 =
-                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                return super::super::js_class_method_bind(this_f64, key_ptr, key_len);
+            if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                if crate::timer::is_known_timer_id(obj as i64) {
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    // #8133: the `'static` literal, NOT `key_ptr` — that is the
+                    // interior of a movable heap string this read does not own.
+                    return super::super::js_class_method_bind(
+                        this_f64,
+                        method.as_ptr(),
+                        method.len(),
+                    );
+                }
             }
             // TextDecoder/TextEncoder registry handles — IC-miss mirror of
             // the arms in `js_object_get_field_by_name` /
             // `get_field_by_name_object_tail`; static-name reads (`td.decode`,
             // `td.encoding`) funnel here. See `text_handle_property`.
-            if let Some(v) =
-                crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
-            {
+            if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
                 return f64::from_bits(v.bits());
             }
         }
@@ -691,33 +635,24 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
             };
         let has_own_descriptors = is_object && super::super::object_has_descriptors(obj as usize);
-        let is_regular = is_object && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR;
+        let is_regular = is_object && crate::object::object_is_regular(obj);
         // Gate-neutral builtin accessors deliberately leave the process-wide
         // accessor latch clear. Their owner bit must still block this PIC:
         // its generated hit path is a raw slot load and would otherwise turn
         // `Set.prototype.size` into `undefined` instead of invoking the getter.
         if can_cache && is_regular && !has_own_descriptors {
-            let keys = (*obj).keys_array;
+            let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            };
+            let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
             if keys.is_null() || (keys as usize) <= 0x10000 {
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
-            let key_count = *(keys as *const u32) as usize;
+            let key_count = shape.logical_key_count as usize;
             let keys_data = (keys as *const u8).add(8) as *const f64;
-            let alloc_limit =
-                std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
-            // #6804: stamp the receiver's stable ShapeId at PIC-miss
-            // resolution, so the id-keyed FIELD_CACHE (and the future
-            // id-comparing PIC) see a stamped object from its first read.
-            if (*obj).class_id == 0
-                && !crate::object::shapes::is_shape_id((*obj).parent_class_id)
-                && !crate::regex::regex_header_has_magic(obj as *const crate::regex::RegExpHeader)
-            {
-                let id = crate::object::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
-                if id != 0 {
-                    (*(obj as *mut ObjectHeader)).parent_class_id = id;
-                }
-            }
+            let alloc_limit = shape.live_inline_slot_count as usize;
             for i in 0..key_count {
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
@@ -741,31 +676,11 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // ~900k times per run (40% inclusive samples per
                     // perfcomp.profile).
                     //
-                    // #6804: a stamped plain receiver primes an ID token
-                    // (`stamp | PIC_ID_TOKEN_BIT`, matching the emitted
-                    // PIC's discriminated compare). Ids are never reused,
-                    // so id tokens are immune to the address-recycling ABA
-                    // that keys-pointer tokens have — which also makes
-                    // OWNED keys arrays safely cacheable again for plain
-                    // objects. #6759 C3c: keys-POINTER tokens stay
-                    // restricted to SHAPE-SHARED arrays (literal shapes,
-                    // class-keys arrays — shape-cache-resident,
-                    // process-rooted, address-stable), because that compare
-                    // is unvalidated and a recycled owned-array address
-                    // would read the wrong slot.
-                    let stamp = (*obj).parent_class_id;
-                    // #6080a: stamp the current GC epoch alongside either
-                    // token kind. The emitted hit predicate only consults it
-                    // for pointer tokens, but priming it unconditionally
-                    // keeps `cache[2]` coherent when a site re-primes from
-                    // one token kind to the other.
-                    let epoch = PERRY_IC_EPOCH.load(std::sync::atomic::Ordering::Relaxed) as i64;
-                    if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
-                        let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-                        pic_prime_get(cache, token, i as i64, epoch);
-                    } else if keys_cacheable_for_pic(keys) {
-                        pic_prime_get(cache, keys as i64, i as i64, epoch);
-                    }
+                    // The runtime and emitted hit path share one identity:
+                    // the authoritative, never-reused ShapeId token.
+                    let stamp = crate::object::shapes::object_shape_id(obj);
+                    let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+                    pic_prime_get(cache, token, i as i64);
                     let field_ptr = (obj as *const u8)
                         .add(std::mem::size_of::<ObjectHeader>() + i * 8)
                         as *const f64;
@@ -1107,20 +1022,19 @@ mod poly_pic_tests {
         );
     }
 
-    /// The MRU entry keeps its pre-#7753 meaning exactly: always overwritten,
-    /// carrying its epoch. A monomorphic site must therefore look identical to
-    /// what it looked like before the ways existed — no way is ever filled.
+    /// The MRU entry is always overwritten. A monomorphic site never fills a
+    /// polymorphic way, and its reserved scratch word stays non-identifying.
     #[test]
     fn monomorphic_site_never_fills_a_way() {
         let mut c: PicCache = [0; PIC_CACHE_WORDS];
         unsafe {
             for _ in 0..8 {
-                pic_prime_get(&mut c, id_tok(7), 2, 99);
+                pic_prime_get(&mut c, id_tok(7), 2);
             }
         }
         assert_eq!(c[0], id_tok(7));
         assert_eq!(c[1], 2);
-        assert_eq!(c[2], 99);
+        assert_eq!(c[2], 0);
         for w in 0..PIC_WAYS {
             assert_eq!(
                 c[PIC_WAY_BASE + w * 2],
@@ -1145,7 +1059,7 @@ mod poly_pic_tests {
             // Two full rotations: the first fills, the second must not disturb.
             for _ in 0..2 {
                 for (tok, slot) in &shapes {
-                    pic_prime_get(&mut c, *tok, *slot, 1);
+                    pic_prime_get(&mut c, *tok, *slot);
                 }
             }
         }
@@ -1192,7 +1106,7 @@ mod poly_pic_tests {
         unsafe {
             for _ in 0..40 {
                 for (slot, tok) in shapes.iter().enumerate() {
-                    pic_prime_get(&mut c, *tok, slot as i64, 3);
+                    pic_prime_get(&mut c, *tok, slot as i64);
                 }
             }
         }
@@ -1211,7 +1125,7 @@ mod poly_pic_tests {
         let latched = c[PIC_WAY_STATE];
         unsafe {
             for _ in 0..8 {
-                pic_prime_get(&mut c, shapes[0], 0, 3);
+                pic_prime_get(&mut c, shapes[0], 0);
             }
         }
         assert!(c[PIC_WAY_STATE] < 0, "the latch must not clear immediately");
@@ -1230,11 +1144,11 @@ mod poly_pic_tests {
         // a phase change cannot kill it for the rest of the process.
         unsafe {
             while c[PIC_WAY_STATE] < 0 {
-                pic_prime_get(&mut c, shapes[0], 0, 3);
+                pic_prime_get(&mut c, shapes[0], 0);
             }
             // Two shapes is well inside capacity: the ways must fill again.
-            pic_prime_get(&mut c, shapes[1], 1, 3);
-            pic_prime_get(&mut c, shapes[0], 0, 3);
+            pic_prime_get(&mut c, shapes[1], 1);
+            pic_prime_get(&mut c, shapes[0], 0);
         }
         assert!(
             c[PIC_WAY_STATE] > 0,
@@ -1254,7 +1168,7 @@ mod poly_pic_tests {
         unsafe {
             for _ in 0..200 {
                 for i in 0..(PIC_WAYS as i64 + 1) {
-                    pic_prime_get(&mut c, 0x6000_0000_0000 + i * 8, i, 4);
+                    pic_prime_get(&mut c, 0x6000_0000_0000 + i * 8, i);
                 }
             }
         }
@@ -1283,11 +1197,11 @@ mod poly_pic_tests {
         unsafe {
             for round in 0..400 {
                 for (slot, tok) in hot.iter().enumerate() {
-                    pic_prime_get(&mut c, *tok, slot as i64, 5);
+                    pic_prime_get(&mut c, *tok, slot as i64);
                 }
                 // One interloper every round — far more than the 80 the
                 // interpreter produced, and 10x the raw threshold.
-                pic_prime_get(&mut c, 0x7000_FFFF_0000 + round, 0, 5);
+                pic_prime_get(&mut c, 0x7000_FFFF_0000 + round, 0);
             }
         }
         assert!(
@@ -1296,66 +1210,23 @@ mod poly_pic_tests {
         );
     }
 
-    /// The population that matters is the keys-POINTER one: a plain object
-    /// literal goes through a generated `__AnonShape_*` constructor, so it has
-    /// a real `class_id` and primes a keys pointer, never a shape id. Ways that
-    /// only accept ID tokens are dead code for exactly the programs the ways
-    /// exist for (measured: a 6% regression, the compares running and never
-    /// hitting). This is the test that would have caught shipping that.
+    /// ShapeId tokens cascade into the polymorphic ways without losing their
+    /// paired slot.
     #[test]
-    fn pointer_tokens_do_reach_a_way() {
+    fn shape_id_tokens_do_reach_a_way() {
         let mut c: PicCache = [0; PIC_CACHE_WORDS];
-        let ptr_a = 0x2000_1234_5678_i64;
-        let ptr_b = 0x2000_1234_9999_i64;
-        assert_eq!((ptr_a as u64) & PIC_ID_TOKEN_BIT, 0, "test premise");
+        let shape_a = id_tok(41);
+        let shape_b = id_tok(42);
         unsafe {
-            pic_prime_get(&mut c, ptr_a, 1, 5);
-            pic_prime_get(&mut c, ptr_b, 2, 5);
+            pic_prime_get(&mut c, shape_a, 1);
+            pic_prime_get(&mut c, shape_b, 2);
         }
-        assert_eq!(c[0], ptr_b);
+        assert_eq!(c[0], shape_b);
         assert!(
             (0..PIC_WAYS)
-                .any(|w| c[PIC_WAY_BASE + w * 2] == ptr_a && c[PIC_WAY_BASE + w * 2 + 1] == 1),
-            "the evicted keys-pointer token must land in a way: {c:?}"
+                .any(|w| c[PIC_WAY_BASE + w * 2] == shape_a && c[PIC_WAY_BASE + w * 2 + 1] == 1),
+            "the evicted ShapeId token must land in a way: {c:?}"
         );
-    }
-
-    /// #6080a, extended to the ways. A keys-POINTER token is an ADDRESS: after a
-    /// collection frees or moves that keys array, a different-shape array can be
-    /// recycled into the same address and a stale way would pointer-match and
-    /// load the wrong slot — silently, which is the worst failure this code can
-    /// have. The ways share word 2's epoch snapshot with the MRU entry, so the
-    /// discipline that makes that sound is: a new epoch WIPES every way, and the
-    /// token being evicted from word 0 is dropped rather than cascaded (it too
-    /// was resolved in the old epoch). This asserts both halves.
-    #[test]
-    fn an_epoch_change_wipes_every_way() {
-        let mut c: PicCache = [0; PIC_CACHE_WORDS];
-        unsafe {
-            for i in 0..(PIC_WAYS as i64 + 1) {
-                pic_prime_get(&mut c, 0x3000_0000_0000 + i, i, 7);
-            }
-        }
-        assert!(
-            (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] != 0),
-            "test premise: the ways are populated before the epoch moves"
-        );
-        let stale = c[0];
-        unsafe {
-            pic_prime_get(&mut c, 0x4000_0000_0000, 3, 8);
-        }
-        for w in 0..PIC_WAYS {
-            assert_eq!(
-                c[PIC_WAY_BASE + w * 2],
-                0,
-                "way {w} survived an epoch change: {c:?}"
-            );
-        }
-        assert_ne!(
-            c[0], stale,
-            "the MRU entry must hold the freshly primed token"
-        );
-        assert_eq!(c[2], 8, "word 2 must carry the new epoch");
     }
 
     /// More distinct shapes than the site can hold must degrade to "some miss",
@@ -1366,7 +1237,7 @@ mod poly_pic_tests {
         let mut c: PicCache = [0; PIC_CACHE_WORDS];
         unsafe {
             for i in 0..(PIC_WAYS as u64 * 4) {
-                pic_prime_get(&mut c, id_tok(200 + i), i as i64, 1);
+                pic_prime_get(&mut c, id_tok(200 + i), i as i64);
             }
         }
         for w in 0..PIC_WAYS {
@@ -1386,79 +1257,204 @@ mod poly_pic_tests {
 
 #[cfg(test)]
 mod c3c_pic_tests {
-    /// #6759 C3c: the PIC only caches SHAPE-SHARED (process-rooted,
-    /// address-stable) keys arrays; an owned array's address can be
-    /// recycled under a different shape, which the unvalidated PIC hit
-    /// path cannot detect.
+    /// A class instance primes the same authoritative ShapeId token that the
+    /// emitted guard reads from the receiver.
     #[test]
-    fn pic_caches_only_shape_shared_keys() {
+    fn a_class_instance_primes_an_id_token_after_rung1() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
-            let keys = crate::array::js_array_alloc(4);
-            assert!(
-                !super::keys_cacheable_for_pic(keys),
-                "a fresh owned keys array must not be PIC-cacheable"
-            );
-            let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
-            assert!(
-                super::keys_cacheable_for_pic(keys),
-                "a shape-shared keys array must stay PIC-cacheable"
-            );
-        }
-    }
-
-    /// #6080a: a pointer-token prime snapshots the live PIC epoch into
-    /// `cache[2]`, and a subsequent epoch bump strands that snapshot — the
-    /// exact inputs of the emitted `cache[2] == @PERRY_IC_EPOCH` guard, so
-    /// this proves the guard CAN fail (a primed entry goes stale), not just
-    /// that priming writes something.
-    #[test]
-    fn pointer_token_prime_stamps_epoch_and_goes_stale_on_bump() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            use std::sync::atomic::Ordering;
-            // A CLASS instance (class_id != 0) is the population that still
-            // primes raw keys pointers — plain objects take the #6804
-            // shape-ID token, which the epoch guard deliberately skips.
             let obj = crate::object::js_object_alloc(0x6080, 8);
             let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
             crate::object::js_object_set_field_by_name(obj, key, 7.0);
             let keys = (*obj).keys_array;
             assert!(!keys.is_null(), "test premise: field append built keys");
-            let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+            assert_eq!((*obj).class_id, 0x6080, "test premise: a class instance");
 
             let mut cache = [0i64; super::PIC_CACHE_WORDS];
             let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
             assert_eq!(v, 7.0);
-            assert_eq!(
-                cache[0], keys as i64,
-                "class instance must prime the raw keys pointer token"
-            );
-            let primed_epoch = cache[2];
-            assert_eq!(
-                primed_epoch,
-                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
-                "prime must snapshot the LIVE epoch"
-            );
-            assert!(primed_epoch >= 1, "epoch starts at 1, never 0");
 
-            super::pic_epoch_bump();
+            let stamp = crate::object::shapes::object_shape_stamp(obj);
+            assert!(
+                stamp != 0,
+                "the miss handler did not stamp a class instance — rung 1 is inert"
+            );
+            assert_eq!(
+                cache[0] as u64,
+                stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT,
+                "a stamped class instance must prime the ID token the emitted \
+                 PIC computes for it, not its keys pointer"
+            );
             assert_ne!(
-                cache[2],
-                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
-                "a bump must strand every pointer-token prime (the emitted \
-                 hit predicate then misses and re-primes)"
+                cache[0], keys as i64,
+                "primed the keys pointer for a stamped receiver — every hit at \
+                 this site would miss forever"
+            );
+            assert_eq!(cache[2], 0, "word 2 is non-identity scratch");
+        }
+    }
+
+    /// ★ #6759 C3 rung 1 opens a NEW correctness surface, and this is it.
+    ///
+    /// A delete-compacted class instance receives a semantic successor ShapeId,
+    /// so the emitted hit path can serve it without confusing it with a
+    /// pristine sibling. A token that failed to move across the
+    /// compaction would therefore be read as a pristine sibling's shape at a
+    /// site that has both — the one-slot shift the whole ladder is about.
+    ///
+    /// Pins: the compacted instance's primed token differs from a pristine
+    /// sibling's, AND the slot it primes is the post-compaction slot.
+    #[test]
+    fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        {
+            let packed = b"picdel_a\0picdel_b\0picdel_c";
+            let mk = || {
+                crate::object::js_object_alloc_class_with_keys(
+                    0x6081,
+                    0,
+                    3,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            let key = |n: &str| crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            let pristine = mk();
+            let compacted = mk();
+            for (i, v) in [1.0f64, 2.0, 3.0].iter().enumerate() {
+                crate::object::js_object_set_field(
+                    pristine,
+                    i as u32,
+                    crate::JSValue::from_bits(v.to_bits()),
+                );
+                crate::object::js_object_set_field(
+                    compacted,
+                    i as u32,
+                    crate::JSValue::from_bits(v.to_bits()),
+                );
+            }
+            assert_eq!(
+                crate::object::js_object_delete_field(compacted, key("picdel_a")),
+                1
             );
 
-            // Re-priming heals: the miss handler stamps the NEW epoch.
-            let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
-            assert_eq!(v, 7.0);
+            let mut c_pristine = [0i64; super::PIC_CACHE_WORDS];
+            let vp = super::js_object_get_field_ic_miss(pristine, key("picdel_c"), &mut c_pristine);
+            assert_eq!(vp, 3.0, "pristine `c` is slot 2");
+
+            let mut c_compacted = [0i64; super::PIC_CACHE_WORDS];
+            let vc =
+                super::js_object_get_field_ic_miss(compacted, key("picdel_c"), &mut c_compacted);
             assert_eq!(
-                cache[2],
-                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
-                "re-prime must heal the epoch snapshot"
+                vc, 3.0,
+                "compacted `c` shifted to slot 1 and must still read 3"
+            );
+
+            assert_ne!(
+                c_compacted[0], 0,
+                "the compacted instance primed nothing — rung 1's new surface is inert"
+            );
+            assert_ne!(
+                c_compacted[0], c_pristine[0],
+                "the compacted instance primed its pristine sibling's token — an \
+                 id-comparing PIC would read slot {} for a receiver whose `c` is \
+                 at slot {}",
+                c_pristine[1], c_compacted[1]
+            );
+            assert_eq!(c_pristine[1], 2, "pristine `c` slot");
+            assert_eq!(c_compacted[1], 1, "compacted `c` slot");
+        }
+    }
+
+    /// The PIC cache token the EMITTED code computes for `obj`, transcribed
+    /// from `perry-codegen/src/expr/property_get/generic_dispatch.rs`:
+    ///
+    /// ```text
+    /// token = valid_shape_id ? (shape_id | 1<<62) : 0
+    /// ```
+    ///
+    /// The runtime never calls this; it exists so a test can compare what the
+    /// miss handler PRIMES against what the hit path will COMPUTE, which is
+    /// the only pair whose agreement decides whether a site can ever hit.
+    unsafe fn emitted_pic_token(obj: *const super::ObjectHeader) -> u64 {
+        let shape_id = crate::object::shapes::object_shape_id(obj);
+        shape_id as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT
+    }
+
+    /// ★ The invariant #6759 C3 rung 1 broke, asserted where it broke.
+    ///
+    /// A shape's population must be UNIFORMLY stamped: the token the miss
+    /// handler primes from one instance is only useful if a DIFFERENT,
+    /// freshly-allocated instance of the same class computes the same token.
+    /// A prior implementation stamped class instances lazily, so instance #1
+    /// primed an id token while every newborn sibling computed a different
+    /// identity. `token_eq` then failed at every field-read site until the
+    /// sibling took the miss path itself.
+    ///
+    /// This is deliberately NOT "the newborn carries a stamp" — that is a
+    /// presence check two different states satisfy (both-stamped and
+    /// both-unstamped are each fine; the mixture is the bug). Comparing the
+    /// primed token against a fresh sibling's COMPUTED token is what fails
+    /// under either half of the split.
+    #[test]
+    fn a_fresh_class_instance_computes_the_token_the_miss_handler_primed() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let packed = b"picbirth_x\0picbirth_y";
+            let mk = || {
+                crate::object::js_object_alloc_class_with_keys(
+                    0x6082,
+                    0,
+                    2,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            let key = crate::string::js_string_from_bytes(b"picbirth_x".as_ptr(), 10);
+
+            let primed_from = mk();
+            crate::object::js_object_set_field(
+                primed_from,
+                0,
+                crate::JSValue::from_bits(5.0f64.to_bits()),
+            );
+            assert_eq!(
+                (*primed_from).class_id,
+                0x6082,
+                "test premise: the receiver is a class instance, not a literal"
+            );
+
+            let mut cache = [0i64; super::PIC_CACHE_WORDS];
+            assert_eq!(
+                super::js_object_get_field_ic_miss(primed_from, key, &mut cache),
+                5.0,
+                "test premise: the miss handler resolved the field"
+            );
+            assert_ne!(
+                cache[0], 0,
+                "test premise: the miss handler primed SOMETHING — a zero token \
+                 never hits, so the comparison below would be vacuous"
+            );
+
+            // The next `new C(...)`. Nothing has resolved a field on it.
+            let fresh = mk();
+            assert_eq!(
+                emitted_pic_token(fresh),
+                cache[0] as u64,
+                "a freshly allocated instance of the SAME class computes a \
+                 different PIC token than the one primed from its sibling, so \
+                 every read of a newborn instance's field misses the cache and \
+                 takes the full miss handler — #7983's split population"
+            );
+
+            // And the same must hold once the fresh one has itself resolved:
+            // priming from either instance is interchangeable.
+            let mut cache2 = [0i64; super::PIC_CACHE_WORDS];
+            super::js_object_get_field_ic_miss(fresh, key, &mut cache2);
+            assert_eq!(
+                cache2[0], cache[0],
+                "two instances of one class primed two different tokens — the \
+                 site thrashes between them"
             );
         }
     }
@@ -1475,7 +1471,7 @@ mod array_length_fast_path_tests {
     #[test]
     fn array_length_short_circuit_agrees_with_the_full_ladder() {
         let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
+        {
             let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
             let other_key = crate::string::js_string_from_bytes(b"lengtx".as_ptr(), 6);
             for n in [0u32, 1, 5, 40] {

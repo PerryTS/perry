@@ -326,7 +326,11 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         "targeted old reclaim should not complete in one work unit"
     );
     let targeted_stats = complete_incremental_sweep(&mut targeted_sweep);
-    assert!(targeted_stats.returned_bytes > 0 || targeted_stats.reusable_bytes > 0);
+    assert!(
+        targeted_stats.returned_bytes > 0
+            || targeted_stats.pooled_bytes > 0
+            || targeted_stats.reusable_bytes > 0
+    );
     let targeted_summary = crate::arena::old_page_summary();
     assert_eq!(
         targeted_summary.returned_bytes,
@@ -336,6 +340,7 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         targeted_summary.reusable_bytes,
         targeted_stats.reusable_bytes
     );
+    assert_eq!(targeted_summary.pooled_bytes, targeted_stats.pooled_bytes);
 
     let _full_dead_a = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
     let _full_dead_b = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
@@ -346,10 +351,15 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         "full old reclaim should not complete in one work unit"
     );
     let full_stats = complete_incremental_sweep(&mut full_sweep);
-    assert!(full_stats.returned_bytes > 0 || full_stats.reusable_bytes > 0);
+    assert!(
+        full_stats.returned_bytes > 0
+            || full_stats.pooled_bytes > 0
+            || full_stats.reusable_bytes > 0
+    );
     let full_summary = crate::arena::old_page_summary();
     assert_eq!(full_summary.returned_bytes, full_stats.returned_bytes);
     assert_eq!(full_summary.reusable_bytes, full_stats.reusable_bytes);
+    assert_eq!(full_summary.pooled_bytes, full_stats.pooled_bytes);
 }
 
 #[test]

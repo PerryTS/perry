@@ -43,9 +43,9 @@ use anyhow::Result;
 use perry_hir::{Expr, Stmt};
 
 use super::loops::{
-    local_is_number_array, local_is_untyped_candidate, packed_f64_range_loop_pure_expr_collect,
-    packed_loop_array_binding_storage_is_addressable, record_packed_f64_range_static_access,
-    PackedF64RangeArrayAccess,
+    local_is_number_array, local_is_untyped_candidate, masked_window_expression_is_non_collecting,
+    packed_f64_range_loop_pure_expr_collect, packed_loop_array_binding_storage_is_addressable,
+    record_packed_f64_range_static_access, PackedF64RangeArrayAccess,
 };
 use super::{emit_shadow_clears_after_stmt, lower_stmt};
 use crate::expr::{
@@ -178,7 +178,7 @@ fn expr_is_number_under(
         Expr::LocalGet(id) => {
             refined.contains(id)
                 || matches!(
-                    ctx.local_types.get(id),
+                    ctx.stable_local_type_proof(id),
                     Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }
@@ -352,6 +352,9 @@ fn region_store_operand_collect(
     expr: &Expr,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
 ) -> bool {
+    if !masked_window_expression_is_non_collecting(ctx, expr) {
+        return false;
+    }
     match expr {
         Expr::IndexGet { object, index } => {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
@@ -416,12 +419,14 @@ pub(super) fn try_match_masked_window_region(
         let ok = match stmt {
             Stmt::Expr(Expr::LocalSet(id, value)) => {
                 let mut trial = accesses.clone();
-                if packed_f64_range_loop_pure_expr_collect(
-                    value,
-                    REGION_NO_COUNTER,
-                    true,
-                    &mut trial,
-                ) {
+                if masked_window_expression_is_non_collecting(ctx, value)
+                    && packed_f64_range_loop_pure_expr_collect(
+                        value,
+                        REGION_NO_COUNTER,
+                        true,
+                        &mut trial,
+                    )
+                {
                     accesses = trial;
                     written.insert(*id);
                     true
@@ -429,9 +434,9 @@ pub(super) fn try_match_masked_window_region(
                     false
                 }
             }
-            Stmt::Expr(Expr::Update { id, .. }) => {
+            Stmt::Expr(expr @ Expr::Update { id, .. }) => {
                 written.insert(*id);
-                true
+                masked_window_expression_is_non_collecting(ctx, expr)
             }
             Stmt::Expr(expr) => {
                 if let Some((receiver_id, index, value)) = proven_view_store_parts(ctx, expr) {
@@ -452,12 +457,14 @@ pub(super) fn try_match_masked_window_region(
                     break;
                 }
                 let mut trial = accesses.clone();
-                if packed_f64_range_loop_pure_expr_collect(
-                    expr,
-                    REGION_NO_COUNTER,
-                    true,
-                    &mut trial,
-                ) {
+                if masked_window_expression_is_non_collecting(ctx, expr)
+                    && packed_f64_range_loop_pure_expr_collect(
+                        expr,
+                        REGION_NO_COUNTER,
+                        true,
+                        &mut trial,
+                    )
+                {
                     accesses = trial;
                     true
                 } else {
@@ -524,7 +531,8 @@ pub(super) fn try_match_masked_window_region(
             .buffer_view_slots
             .get(&access.array_id)
             .is_some_and(|view| {
-                view.storage_inline_proven
+                view.pointer_state.is_stable()
+                    && view.storage_inline_proven
                     && view.native_owned.is_none()
                     && view.alias.allows_noalias()
                     && view.scope_idx.is_some()
@@ -590,7 +598,7 @@ pub(super) fn try_match_masked_window_region(
             && !ctx.boxed_vars.contains(&id)
             && !ctx.closure_captures.contains_key(&id)
             && !matches!(
-                ctx.local_types.get(&id),
+                ctx.local_type_hint(&id),
                 Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
             )
     };
@@ -711,7 +719,10 @@ fn lower_region_copy(
             let id = refinements[r].local_id;
             let set_number = refinements[r].set_number;
             if saved_ids.insert(id) {
-                saved.push((id, ctx.local_types.get(&id).cloned()));
+                // Save the map entry itself. The active masked-window guard is
+                // the value proof; the whole-region reassignment set would
+                // intentionally hide this scoped refinement.
+                saved.push((id, ctx.local_type_hint(&id).cloned()));
             }
             if set_number {
                 ctx.local_types.insert(id, perry_hir::types::Type::Number);

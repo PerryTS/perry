@@ -31,11 +31,13 @@
 //! `OLD_ARENA_FREE_BYTES` tracks the total. It is deliberately NOT
 //! subtracted from `OLD_GEN_IN_USE_BYTES` — that cache is defined (and
 //! debug-asserted) as the sum of old block offsets, which hole reuse does
-//! not change. Consumers that want *live* old pressure (the old-reclaim
-//! pacing arms, `process.memoryUsage().heapUsed`) subtract
-//! [`old_free_bytes`] instead; before this, dead-but-unreclaimable bytes
-//! counted as pressure, so old-reclaim kept re-firing full collections
-//! that could not actually lower the number they were watching.
+//! not change. Consumers that want old-generation pressure subtract
+//! [`old_free_bytes`]. The live-allocation census used by
+//! `process.memoryUsage().heapUsed` and major pacing excludes these holes at
+//! collection time and observes later reuse through the decrease in this
+//! counter; before this, dead-but-reusable bytes counted as pressure, so
+//! reclaim kept re-firing full collections that could not lower the number it
+//! was watching.
 //!
 //! Entries are only pushed for dead objects in blocks that still hold a
 //! live object (fully-dead blocks go through block reclaim, which is

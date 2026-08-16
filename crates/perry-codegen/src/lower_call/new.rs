@@ -500,7 +500,8 @@ fn lower_new_impl_inner<'a>(
 
     // #7615 slice 8: the field-count computation and the three-arm instance
     // allocation moved verbatim to `new_alloc.rs` (see its header for why).
-    let obj_handle = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
+    let alloc = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
+    let obj_handle = alloc.handle;
     // #7154: root the instance for the duration of the constructor body.
     //
     // Until now the instance existed ONLY as an SSA register while that body
@@ -532,7 +533,8 @@ fn lower_new_impl_inner<'a>(
     //
     // Before the instance root's push, so the handle this names is the one the
     // allocator returned: nothing between here and there can collect.
-    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle);
+    let typed_layout_baked = alloc.typed_layout_baked;
+    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle, typed_layout_baked);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {
@@ -627,6 +629,89 @@ fn lower_new_impl_inner<'a>(
         } else {
             None
         };
+        // Constructor-free construction: when the whole constructor body is a
+        // run of `this.<f> = <param>` stores into the shape the inline bump
+        // allocator just baked, store the fields here and skip the call. See
+        // `ctor_prologue_stores` for the proof — the short version is that every
+        // condition the per-field precheck tests is a compile-time constant this
+        // very site wrote three instructions ago, so the only things left to
+        // decide at runtime are the policy latch and whether the values are
+        // plain finite numbers, and both are decided ONCE for the construction
+        // instead of once per field.
+        //
+        // Emitted only when `saved_new_target` is absent: a `new.target`-reading
+        // chain needs the runtime cell the call path sets, and a class whose
+        // body is nothing but field stores cannot read it anyway.
+        // `local_constructor_symbol_exists` is re-tested because this arm is
+        // also reached by the recursion guard and the capture-alias redirect,
+        // neither of which requires it — and the diamond's slow arm IS the call,
+        // so emitting it when the call cannot be emitted would leave the fast
+        // arm branching into a block nothing terminates.
+        let prologue_plan =
+            if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
+                super::ctor_prologue_stores::prologue_store_plan(
+                    ctx,
+                    class_name,
+                    class,
+                    lowered_args.len(),
+                    typed_layout_baked,
+                )
+            } else {
+                None
+            };
+        // `(merge block, fast-arm predecessor label)` when the diamond was
+        // emitted; the slow arm is the current block from here on.
+        let mut prologue_merge: Option<(usize, String)> = None;
+        if let Some(plan) = prologue_plan.as_ref() {
+            let fast_idx = ctx.new_block("ctor_prologue.fast");
+            let slow_idx = ctx.new_block("ctor_prologue.slow");
+            let merge_idx = ctx.new_block("ctor_prologue.merge");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            {
+                let blk = ctx.block();
+                // The sticky policy latch, volatile for the same reason every
+                // other reader loads it volatile: the runtime flips it 0 -> 1
+                // mid-execution and LLVM must not hoist a stale 0 across it.
+                let flag =
+                    blk.load_volatile(crate::types::I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
+                let mut acc = blk.icmp_eq(crate::types::I8, &flag, "0");
+                for store in plan {
+                    let bits = blk.bitcast_double_to_i64(&lowered_args[store.arg_index]);
+                    let finite =
+                        crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+                            blk, &bits,
+                        );
+                    acc = blk.and(crate::types::I1, &acc, &finite);
+                }
+                blk.cond_br(&acc, &fast_label, &slow_label);
+            }
+            ctx.current_block = fast_idx;
+            {
+                // arm64_32 watchOS: the fields region starts at
+                // `size_of::<ObjectHeader>()` past the user pointer (24 on
+                // 64-bit, 20 on ILP32) — same derivation as every other packed
+                // slot access.
+                let header_skip =
+                    crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+                let blk = ctx.block();
+                let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                let fields_base = blk.gep(crate::types::I8, &obj_ptr, &[(I64, &header_skip)]);
+                for store in plan {
+                    let field_ptr =
+                        blk.gep(DOUBLE, &fields_base, &[(I64, &store.slot.to_string())]);
+                    // GC_STORE_AUDIT(POINTER_FREE): the finite check above
+                    // proved every value is a genuine unboxed double, never a
+                    // heap pointer, and the shape is GC_LAYOUT_POINTER_FREE —
+                    // no edge, no write barrier, no layout note.
+                    blk.store(DOUBLE, &lowered_args[store.arg_index], &field_ptr);
+                }
+                blk.br(&merge_label);
+            }
+            prologue_merge = Some((merge_idx, ctx.block_label(fast_idx)));
+            ctx.current_block = slow_idx;
+        }
         if let Some(ctor_ret) = call_local_constructor_symbol(
             ctx,
             class,
@@ -637,6 +722,23 @@ fn lower_new_impl_inner<'a>(
             if let Some(save) = &saved_new_target {
                 crate::rooting::new_target_restore(ctx, save);
             }
+            // Rejoin the constructor-free arm. The phi is over the CONSTRUCTOR'S
+            // RETURN VALUE, not the instance: the fast arm ran no constructor,
+            // which is `undefined` — the same thing an ordinary ctor body
+            // returns — so `emit_ctor_return_override` below yields the instance
+            // on both arms without this path having to reason about it.
+            let ctor_ret = match prologue_merge.take() {
+                Some((merge_idx, fast_pred)) => {
+                    let slow_pred = ctx.block().label.clone();
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block().br(&merge_label);
+                    ctx.current_block = merge_idx;
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    ctx.block()
+                        .phi(DOUBLE, &[(&undef, &fast_pred), (&ctor_ret, &slow_pred)])
+                }
+                None => ctor_ret,
+            };
             // #7154: the constructor body has run, so every register holding
             // the instance is potentially pre-move. Re-read it from its root
             // before anything else touches it — `emit_typed_shape_layout_init`
@@ -669,16 +771,8 @@ fn lower_new_impl_inner<'a>(
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
                 || class.extends_expr.is_some();
-            let is_derived_lit = if is_derived { "1" } else { "0" };
-            let final_box = ctx.block().call(
-                DOUBLE,
-                "js_ctor_return_override",
-                &[
-                    (DOUBLE, &obj_box),
-                    (DOUBLE, &ctor_ret),
-                    (crate::types::I32, is_derived_lit),
-                ],
-            );
+            let final_box =
+                super::new_helpers::emit_ctor_return_override(ctx, &obj_box, &ctor_ret, is_derived);
             return Ok(final_box);
         }
         if let Some(save) = &saved_new_target {
@@ -932,7 +1026,7 @@ fn lower_new_impl_inner<'a>(
             caps_absent_from_args,
         });
     let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
-        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, ctor_capture_fill)
+        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, args, ctor_capture_fill)
     });
 
     if let Some(stop_at) = inherited_ctor_class.clone() {
@@ -1011,6 +1105,7 @@ fn lower_new_impl_inner<'a>(
                         ctx,
                         &parent_ctor.params,
                         &lowered_args,
+                        args,
                         parent_capture_fill,
                     );
 
@@ -1560,16 +1655,7 @@ fn lower_new_impl_inner<'a>(
         }
         ctx.current_block = after_idx;
         let raw = ctx.block().load(DOUBLE, &ret.result_slot);
-        let is_derived = if ret.is_derived { "1" } else { "0" };
-        ctx.block().call(
-            DOUBLE,
-            "js_ctor_return_override",
-            &[
-                (DOUBLE, &obj_box),
-                (DOUBLE, &raw),
-                (crate::types::I32, is_derived),
-            ],
-        )
+        super::new_helpers::emit_ctor_return_override(ctx, &obj_box, &raw, ret.is_derived)
     } else {
         obj_box
     };

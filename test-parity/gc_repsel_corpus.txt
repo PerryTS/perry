@@ -32,10 +32,10 @@ test_gap_int_valued_ta_locals
 # --- Phase 1 widening: constant-bounded loop induction variables (#7110) ----
 # A counter that is neither index-used nor `strictly_i32_bounded` now takes
 # canonical i32 storage when the loop guard pins its whole interval inside i32.
-# Three functions in the file are there to be REFUSED (`overshoot`,
-# `runtimeBound`, `accumulate`); an i32 slot for any of them prints a wrapped
-# negative where Node prints the true value, so this file fails loudly under an
-# unsound widening rather than drifting by one.
+# #7123 also admits a loop accumulator when trip count times step magnitude
+# fits i32. The file's refusal probes (`overshoot`, `runtimeBound`, and
+# `overflowingAccumulator`) print wrapped values under an unsound widening, so
+# this fails loudly rather than merely changing an optimization report.
 test_gap_repsel_loop_bounded_i32
 
 # --- Phase 2: specialized calling convention / spec-ABI raw params (#6905) --
@@ -43,6 +43,7 @@ test_gap_specabi_polymorphic_coexist
 test_gap_specabi_reassign
 test_gap_specabi_recursion_escape
 test_gap_specabi_view_detach
+test_gap_specabi_ordinary_param_guards
 test_gap_ta_param_numeric_read
 test_gap_typedarray_param_read
 
@@ -310,6 +311,11 @@ test_gap_gc_closure_call_argument_rooting
 # enforcement working exactly as designed, on the third occurrence of the same
 # mistake. Registering the file is the whole fix.
 test_gap_gc_call_argument_rooting
+
+# #8036: a NextRequest-shaped class crosses a generated-route-style re-export
+# into an imported sync/async handler and stays live through allocation,
+# dynamic import, promise/timer continuations, and body reads.
+test_gap_gc_next_request_import
 
 # --- #7270's two witnesses, registered here rather than dark -----------------
 # `rest_argument_rooting` and `same_module_call_argument_rooting` shipped with
@@ -740,6 +746,19 @@ test_gap_gc_class_field_receiver_rooting
 test_gap_gc_index_set_bounded_globalthis_ta_rooting
 test_gap_gc_namespace_and_computed_dispatch_rooting
 
+# #7949 (PR #7962): Rust-side containers retained raw JS values across
+# allocating callbacks and property operations. These two witnesses shipped
+# with that fix but were never registered, leaving their moving-GC coverage
+# dark and the registration lint red on main.
+test_gap_gc_container_value_rooting
+test_gap_gc_define_properties_key_rooting
+
+# #7979: comparison operands are lowered left-to-right, so the first call
+# result must remain rooted while an allocating second call runs. This is the
+# #7963 defineProperty witness restored to its natural inline verdict shape;
+# retired-from-space protection made the pre-fix js_eq stale read fault.
+test_gap_gc_define_property_descriptor_rooting
+
 # #7766 (PR #7778): the element-binding clone through a function boundary.
 # Lying callers force the slow path while the honest arm's clone reads raw
 # f64 slots off relocatable objects — live on the evacuating arms (9 copying
@@ -752,3 +771,11 @@ test_gap_repsel_element_shape_param_binding
 # value here is byte-parity under every arm plus raw-f64 loads on proven
 # fields whenever relocation does land.
 test_gap_repsel_element_group_numeric
+
+# #7949/#7962 and #7978: runtime-held JS values and the full
+# Object.defineProperty receiver/key/descriptor chain must remain rooted while
+# allocating helpers run. These witnesses are specifically intended for the
+# moving-GC matrix, where a stale raw copy becomes observable.
+test_gap_gc_container_value_rooting
+test_gap_gc_define_properties_key_rooting
+test_gap_gc_define_property_descriptor_rooting

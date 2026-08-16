@@ -23,7 +23,7 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         // Proxy fast path: `key in proxy` routes through js_proxy_has.
         if let ast::Expr::Ident(obj_ident) = bin.right.as_ref() {
             let obj_name = obj_ident.sym.to_string();
-            if ctx.proxy_locals.contains(&obj_name) {
+            if ctx.is_proxy_local(&obj_name) {
                 let key = Box::new(lower_expr(ctx, &bin.left)?);
                 let proxy = Box::new(lower_expr(ctx, &bin.right)?);
                 return Ok(Expr::ProxyHas { proxy, key });

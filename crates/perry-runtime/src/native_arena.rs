@@ -409,16 +409,22 @@ fn strict_pod_view_from_value(value: f64, expected_layout_id: u64) -> *const Nat
         0
     };
     if raw_ptr == 0 {
-        throw_type_error(b"Expected NativePodView for native pod+count parameter");
+        throw_type_error(b"Expected NativePodView");
     }
     let view = raw_ptr as *const NativePodViewHeader;
     unsafe {
         validate_pod_view_alive(view);
-        if (*view).layout_id != expected_layout_id {
+        if expected_layout_id != 0 && (*view).layout_id != expected_layout_id {
             throw_type_error(b"NativePodView layout does not match manifest pod+count parameter");
         }
     }
     view
+}
+
+#[no_mangle]
+pub extern "C" fn js_native_pod_view_length(value: f64) -> f64 {
+    let view = strict_pod_view_from_value(value, 0);
+    unsafe { (*view).record_count as f64 }
 }
 
 #[no_mangle]
@@ -554,6 +560,7 @@ mod tests {
             unsafe { (*owner).data.add(8) as *const u8 }
         );
         assert_eq!(js_native_abi_check_pod_view_record_count(boxed, 0x1234), 3);
+        assert_eq!(js_native_pod_view_length(boxed), 3.0);
 
         assert!(catch_runtime_throw(|| {
             let _ = js_native_abi_check_pod_view_data_ptr(boxed, 0x5678);

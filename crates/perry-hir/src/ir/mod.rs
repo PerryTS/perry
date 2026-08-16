@@ -38,7 +38,7 @@ pub use constants::{
 };
 
 // ---- module.rs ----
-pub use module::Module;
+pub use module::{LocalSourceSpan, Module};
 
 // ---- widget.rs ----
 pub use widget::{

@@ -23,6 +23,7 @@ Installing picks the right prebuilt binary for your platform automatically — `
 | Linux x64 (musl / Alpine) | `@perryts/perry-linux-x64-musl` |
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
+| Windows arm64 | `@perryts/perry-win32-arm64` |
 
 ### Linux: glibc version
 

@@ -23,7 +23,7 @@ x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
 der = { version = "0.7", features = ["oid"] }
 spki = "0.7"
 const-oid = "0.9"
-pem = "3"
+pem = "4"
 rand = "0.8"
 time = { version = "0.3", features = ["parsing"] }
 

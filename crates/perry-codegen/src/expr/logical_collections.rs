@@ -48,7 +48,7 @@ use perry_hir::Expr;
 use crate::lower_conditional::lower_logical;
 use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};
 use crate::rooting::{self, Arg, Repr};
-use crate::type_analysis::{is_definitely_string_expr, is_numeric_expr, map_static_type_args};
+use crate::type_analysis::{map_static_type_args, string_value_is_runtime_guaranteed};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{
@@ -571,10 +571,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- map.delete(key) -> boolean --------
         Expr::MapDelete { map, key } => {
             let use_string_key_map =
-                is_static_string_key_map(ctx, map) && is_definitely_string_expr(ctx, key);
+                is_static_string_key_map(ctx, map) && string_value_is_runtime_guaranteed(ctx, key);
             let use_number_key_map = !use_string_key_map
                 && is_static_number_key_map(ctx, map)
-                && is_numeric_expr(ctx, key);
+                && crate::codegen::typed_arg_is_guard_candidate(
+                    ctx,
+                    crate::codegen::TypedParamRep::F64,
+                    key,
+                );
             // #7615 slice 2: the map is live across the key's lowering.
             rooting::with_operands_rooted(ctx, &[map, key], |ctx, vals| {
                 let (m_box, k_box) = (vals[0].clone(), vals[1].clone());

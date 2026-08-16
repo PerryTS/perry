@@ -234,3 +234,90 @@ fn test_process_global_sab_backing_survives_full_gc_unrooted() {
         "the SAB must still answer as a registered buffer"
     );
 }
+
+/// A dead buffer's OWN-PROPERTY entry must go too (#6406's table).
+///
+/// `finalize_collected_dead_buffer` prunes eleven address-keyed tables; this
+/// one was missing. Its only clear site was `register_buffer`, which fires
+/// only when the recycled address is re-issued to another *buffer* — so an
+/// entry whose address is never reused, or is reused by a plain object,
+/// survived for the life of the process. That matters more here than for the
+/// identity registries above, because `scan_buffer_own_props_roots_mut` traces
+/// the stored VALUES in every GC phase: the dead buffer's expando closure, and
+/// everything it captures, stayed reachable forever.
+#[test]
+fn test_dead_buffer_own_property_entry_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let addr = crate::buffer::buffer_alloc(32) as usize;
+    crate::buffer::buffer_set_own_prop(addr, "tag", 7.0);
+    assert_eq!(
+        crate::buffer::buffer_get_own_prop(addr, "tag"),
+        Some(7.0),
+        "test premise: the own property is recorded"
+    );
+
+    // No roots: dead at the full trace. (Buffers are TENURED old-gen residents,
+    // so only a FULL trace can prove them dead.)
+    full_gc();
+
+    assert_eq!(
+        crate::buffer::buffer_get_own_prop(addr, "tag"),
+        None,
+        "a dead buffer's own-property entry must be pruned — the table is \
+         address-keyed, so a recycled address inherits the dead buffer's \
+         expandos, and the GC root scanner keeps retaining their values"
+    );
+}
+
+/// A LIVE buffer keeps its own properties across a full collection. Without
+/// this the prune above could pass by dropping everything unconditionally.
+///
+/// `CopyingNurseryTestGuard::new(1)` — not `GcTestIsolationGuard` — because
+/// only it pushes the shadow frame that makes `js_shadow_slot_set` an actual
+/// root; see the note on the DataView/SAB survival test above.
+#[test]
+fn test_live_buffer_keeps_its_own_properties_across_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let addr = crate::buffer::buffer_alloc(32) as usize;
+    crate::buffer::buffer_set_own_prop(addr, "tag", 7.0);
+    js_shadow_slot_set(0, ptr_bits(addr));
+
+    full_gc();
+
+    assert_eq!(
+        crate::buffer::buffer_get_own_prop(addr, "tag"),
+        Some(7.0),
+        "a live (rooted) buffer must keep its own properties"
+    );
+}
+
+/// The leak regression: N property-carrying buffers, all references dropped,
+/// one full collection, and the table must DRAIN. A per-address probe cannot
+/// show this — before the fix the table grew monotonically for the life of the
+/// process.
+#[test]
+fn test_buffer_own_props_table_drains_after_owners_die() {
+    let _guard = GcTestIsolationGuard::new();
+
+    const N: usize = 512;
+    let base = crate::buffer::test_buffer_own_props_owner_count();
+    for i in 0..N {
+        let addr = crate::buffer::buffer_alloc(32) as usize;
+        crate::buffer::buffer_set_own_prop(addr, "tag", i as f64);
+    }
+    assert!(
+        crate::buffer::test_buffer_own_props_owner_count() >= base + N,
+        "test premise: {N} owners were recorded"
+    );
+
+    full_gc();
+
+    let after = crate::buffer::test_buffer_own_props_owner_count();
+    assert!(
+        after <= base,
+        "the own-property table must drain when its owners die: {after} owners \
+         remain, expected at most the pre-test {base}"
+    );
+}

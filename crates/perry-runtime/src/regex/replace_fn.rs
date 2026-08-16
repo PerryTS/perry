@@ -353,6 +353,44 @@ fn replacement_is_callable(value: f64) -> bool {
     crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
 }
 
+/// Root TWO raw receivers across one allocating coercion and hand the callee
+/// the POST-collection addresses.
+///
+/// `RuntimeHandle::across_const` pairs exactly one allocating call with one
+/// re-read, so two receivers compose by NESTING: the inner call runs `coerce`
+/// and re-reads `b`, the outer then re-reads `a`. Neither pre-call address is
+/// ever bound, which is the property `across_*` exists to provide (#7341) and
+/// the one `scripts/raw_handle_debt.py` counts. `path::value_args`'
+/// `with_two_headers` uses the same nesting for the same reason.
+///
+/// Both receivers are rooted BEFORE `coerce` runs, so a collection inside it
+/// marks and rewrites both slots; `f` then sees two addresses that are current
+/// as of the same collection.
+fn with_two_receivers_across<A, B, C, R>(
+    a: *const A,
+    b: *const B,
+    coerce: impl FnOnce() -> C,
+    f: impl FnOnce(*const A, *const B, C) -> R,
+) -> R {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_raw_const_ptr(a);
+    let b_handle = scope.root_raw_const_ptr(b);
+    let ((coerced, b), a) = a_handle.across_const::<A, _>(|| b_handle.across_const::<B, _>(coerce));
+    f(a, b, coerced)
+}
+
+/// One-receiver twin of [`with_two_receivers_across`].
+fn with_receiver_across<A, C, R>(
+    a: *const A,
+    coerce: impl FnOnce() -> C,
+    f: impl FnOnce(*const A, C) -> R,
+) -> R {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_raw_const_ptr(a);
+    let (coerced, a) = a_handle.across_const::<A, _>(coerce);
+    f(a, coerced)
+}
+
 #[no_mangle]
 pub extern "C" fn js_string_replace_string_dyn(
     s: *const StringHeader,
@@ -370,14 +408,11 @@ pub extern "C" fn js_string_replace_string_dyn(
     if replacement_is_callable(replacement) {
         return js_string_replace_string_fn(s, pattern, replacement);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let pattern_handle = scope.root_raw_const_ptr(pattern);
-    let coerced = crate::builtins::js_string_coerce(replacement);
-    js_string_replace_string(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        pattern_handle.get_raw_const_ptr::<StringHeader>(),
-        coerced,
+    with_two_receivers_across(
+        s,
+        pattern,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, pattern, coerced| js_string_replace_string(s, pattern, coerced),
     )
 }
 
@@ -390,14 +425,11 @@ pub extern "C" fn js_string_replace_all_string_dyn(
     if replacement_is_callable(replacement) {
         return js_string_replace_all_string_fn(s, pattern, replacement);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let pattern_handle = scope.root_raw_const_ptr(pattern);
-    let coerced = crate::builtins::js_string_coerce(replacement);
-    js_string_replace_all_string(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        pattern_handle.get_raw_const_ptr::<StringHeader>(),
-        coerced,
+    with_two_receivers_across(
+        s,
+        pattern,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, pattern, coerced| js_string_replace_all_string(s, pattern, coerced),
     )
 }
 
@@ -440,13 +472,10 @@ pub extern "C" fn js_string_replace_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_regex_dyn(s, re, replacement);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let needle = crate::builtins::js_string_coerce(needle);
-    js_string_replace_string_dyn(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        needle,
-        replacement,
+    with_receiver_across(
+        s,
+        || crate::builtins::js_string_coerce(needle),
+        |s, needle| js_string_replace_string_dyn(s, needle, replacement),
     )
 }
 
@@ -461,13 +490,10 @@ pub extern "C" fn js_string_replace_all_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_all_regex_dyn(s, re, replacement);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let needle = crate::builtins::js_string_coerce(needle);
-    js_string_replace_all_string_dyn(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        needle,
-        replacement,
+    with_receiver_across(
+        s,
+        || crate::builtins::js_string_coerce(needle),
+        |s, needle| js_string_replace_all_string_dyn(s, needle, replacement),
     )
 }
 
@@ -485,14 +511,11 @@ pub extern "C" fn js_string_replace_regex_dyn(
     // #6949(a): both raw params span the coercion — and `re` is a
     // `RegExpHeader`, not a string, so a stale one is read for its compiled
     // pattern rather than merely for bytes.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let re_handle = scope.root_raw_const_ptr(re);
-    let coerced = crate::builtins::js_string_coerce(replacement);
-    crate::regex::js_string_replace_regex_named(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        re_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
-        coerced,
+    with_two_receivers_across(
+        s,
+        re,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, re, coerced| crate::regex::js_string_replace_regex_named(s, re, coerced),
     )
 }
 
@@ -509,14 +532,11 @@ pub extern "C" fn js_string_replace_all_regex_dyn(
     // #6949(a): both raw params span the coercion — and `re` is a
     // `RegExpHeader`, not a string, so a stale one is read for its compiled
     // pattern rather than merely for bytes.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_raw_const_ptr(s);
-    let re_handle = scope.root_raw_const_ptr(re);
-    let coerced = crate::builtins::js_string_coerce(replacement);
-    crate::regex::js_string_replace_all_regex_named(
-        s_handle.get_raw_const_ptr::<StringHeader>(),
-        re_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
-        coerced,
+    with_two_receivers_across(
+        s,
+        re,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, re, coerced| crate::regex::js_string_replace_all_regex_named(s, re, coerced),
     )
 }
 

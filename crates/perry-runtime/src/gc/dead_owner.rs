@@ -214,8 +214,11 @@ fn fan_out(
     is_dead_symbol: &dyn Fn(usize) -> bool,
 ) {
     // Interned key pointers cached in the store-plan cache may die in this
-    // collection — flush every cached verdict.
-    crate::object::prop_plan::prop_plan_epoch_bump();
+    // collection — flush every cached verdict. Pointer identity only: the
+    // entries pruned below all belong to objects that are DEAD, so no live
+    // object's property lookup changes its answer. See
+    // `prop_plan_gc_epoch_bump`.
+    crate::object::prop_plan::prop_plan_gc_epoch_bump();
     crate::array::prune_dead_array_named_property_owners(is_dead_owner);
     crate::array::prune_dead_element_shape_owners(is_dead_owner);
     crate::map::prune_dead_map_iterator_array_owners(is_dead_owner);
@@ -231,6 +234,11 @@ fn fan_out(
     crate::symbol::prune_dead_symbol_property_owners(is_dead_owner);
     crate::symbol::prune_dead_symbol_pointers(is_dead_symbol);
     crate::closure::prune_dead_closure_side_table_owners(is_dead_closure);
+    // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
+    // value's closure address, and is REKEYED (not re-derived) when that
+    // closure moves — so a dead key does not merely leak, the rekey walk
+    // follows whatever the recycled bytes at that address look like.
+    crate::object::prune_dead_function_class_id_keys(is_dead_closure);
     crate::node_vm::prune_dead_vm_owner_entries(is_dead_owner);
     crate::fs::prune_dead_filehandle_fd_entries(is_dead_owner);
 }

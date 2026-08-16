@@ -761,29 +761,37 @@ pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: O
     if listeners.is_empty() || body.is_empty() {
         return;
     }
-    let chunk_f64 = match encoding {
+    // #8082: the listener snapshot AND the chunk cross every callback, and a
+    // callback can trigger a moving collection — park both in transient
+    // roots and re-read per use.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let rooted = scope.root_addrs(listeners);
+    let chunk = match encoding {
         Some(_) => {
             let s = String::from_utf8_lossy(body).into_owned();
             let header = alloc_string(&s);
-            f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
+            scope.root_nanbox(f64::from_bits(
+                STRING_TAG | (header.as_raw() as u64 & PTR_MASK),
+            ))
         }
         None => {
             let buf = alloc_buffer(body);
             if buf.is_null() {
                 return;
             }
-            f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+            scope.root_nanbox(f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK)))
         }
     };
-    for cb in listeners {
-        if *cb == 0 {
+    for cb in &rooted {
+        let addr = cb.get();
+        if addr == 0 {
             continue;
         }
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call1(chunk_f64);
+                let _ = closure.call1(chunk.get());
             }
         }
     }
@@ -795,12 +803,16 @@ pub(crate) fn emit_end_to_listeners(listeners: &[i64]) {
 }
 
 pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
-    for cb in listeners {
-        if *cb == 0 {
+    // #8082: the snapshot crosses every callback — root it, re-read per use.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let rooted = scope.root_addrs(listeners);
+    for cb in &rooted {
+        let addr = cb.get();
+        if addr == 0 {
             continue;
         }
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 let _ = closure.call0();

@@ -30,6 +30,243 @@ pub(crate) fn is_process_namespace_version_property(object: &Expr, property: &st
         && matches!(object, Expr::NativeModuleRef(module) if is_process_module_ref_name(module))
 }
 
+/// Drop `null` / `undefined` / `void` from a union and return the single
+/// surviving member, if there is exactly one.
+///
+/// `type Env = { … }` + `let e: Env | null` is the ordinary way to write a
+/// linked structure in TypeScript, and it is the *only* thing standing between
+/// `const names = e.names` and a usable type: a read that returns at all had a
+/// non-nullish receiver, because reading a property off `null`/`undefined`
+/// throws. So the nullish arms contribute nothing to the RESULT type and can be
+/// dropped without weakening anything.
+fn strip_nullish_union(ty: &HirType) -> Option<&HirType> {
+    let HirType::Union(members) = ty else {
+        return Some(ty);
+    };
+    let mut live = members
+        .iter()
+        .filter(|m| !matches!(m, HirType::Null | HirType::Void));
+    let first = live.next()?;
+    if live.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+/// Resolve `<receiver>.<property>`'s type from the receiver's DECLARED
+/// annotation, through the same class / interface / object-type-alias tables
+/// [`crate::type_analysis::static_type_of`] already consults.
+///
+/// # Why this exists
+///
+/// `refine_type_from_init`'s class walk resolves the receiver with
+/// `receiver_class_name`, which answers `None` for two shapes that dominate
+/// real TypeScript:
+///
+///   * a **reassigned** local (`predicates.rs`'s first arm) — e.g. the cursor
+///     of a chain walk, `let e: Env | null = env; … e = e.parent;`
+///   * a **union** local — `receiver_class_name`'s `LocalGet` arm matches only
+///     `Named`/`Generic`, so `Env | null` resolves to nothing.
+///
+/// and its table walk then looks only in `ctx.classes`, so a `type X = { … }`
+/// alias or an `interface` resolves to nothing either — the `type`-vs-
+/// `interface` asymmetry #655 already fixed for `static_type_of` but not here.
+///
+/// Measured on `gc-handoff/apps/interp.ts`, whose `lookup` is
+/// `const names = e.names; for (i = 0; i < names.length; i++) names[i]`: with
+/// `names` left `Any`, `names[i]` lowers to `js_dyn_index_get` (4.3% of the
+/// program) and `names.length` misses the property IC into `js_array_length`
+/// (2.9%). Writing the annotation by hand — `const names: string[] = e.names` —
+/// removes both and is **-14.5%** on the whole benchmark. This infers exactly
+/// the type that hand annotation would have written.
+///
+/// # It is a CLAIM, and one consumer could not take one
+///
+/// This produces a *declared* type, so it is a claim, not a proof — the same
+/// claim the author's own `const names: string[] = e.names` would install,
+/// through the same `local_types` entry, but Perry enforces no annotation at
+/// runtime. Element READS and STORES tolerate that: both re-check
+/// `GC_TYPE_ARRAY` on the receiver and fall back, so a violated claim costs a
+/// branch and nothing else.
+///
+/// `.length` used to be the exception: #7854 refused these ids there because
+/// its FALLBACK (`js_value_length_f64`) answered **0** for every value that
+/// carries no length where JS answers `undefined`, and continued instead of
+/// throwing for a nullish receiver (#7853). #7862 replaced that fallback with
+/// `js_value_length_property_f64` — ordinary property semantics — so `.length`
+/// now takes a claim on the same terms as an element read, and the refusal and
+/// its bookkeeping set are gone. `test_gap_declared_field_type_refine_guarded.ts`
+/// and `test_gap_7853_declared_array_length_runtime_value.ts` still pin it: the
+/// same declaration is handed strings, plain objects, numbers, `null` and
+/// `undefined`, and every row must match node.
+///
+/// Deliberately conservative: only a NON-generic receiver name whose entry is a
+/// class, an interface, or an alias to a closed object type answers, and only
+/// the property's own declared type is returned — no inheritance walk beyond
+/// what the class table already does, and no index-signature fallback.
+/// Is `expr` a property READ whose declared type on the receiver's annotation is
+/// an array (`e.vals` on `type Env = { vals: Value[] }`)?
+///
+/// #7854 taught `refine_type_from_init` to recover that type for a LOCAL
+/// (`const names = e.names`), which is why `names[i]` is an inline element read
+/// today. It did nothing for the read used DIRECTLY as a receiver — `e.vals[i]`,
+/// `p.toks[p.pos]` — because the HIR types a `PropertyGet` off a UNION receiver
+/// as `Any` (`perry-hir/src/analysis/value_types.rs`, the `Union` arm), so
+/// `static_type_of` answers `Any` and `expr/index_get.rs` routes the read to the
+/// `js_dyn_index_get` unknown-receiver dispatcher. In `gc-handoff/apps/interp.ts`
+/// — where the lexer, the parser cursor and the environment chain are all
+/// `type` aliases over arrays — that dispatcher plus the `js_array_length` its
+/// miss path calls is 9.6% of the program.
+///
+/// **This is a claim, not a proof**, and its ONLY admissible consumer is a
+/// guarded element read: `lower_guarded_array_index_get` re-checks
+/// `GC_TYPE_ARRAY`, the forwarding flag, per-array descriptors, the prototype
+/// latch and the bounds on the receiver itself, and routes every failure to
+/// `js_typed_feedback_array_index_get_fallback_boxed`. So a violated claim costs
+/// a predicted branch and the same answer, which is the exact deal #7854
+/// records for element reads. Do not hand it to a consumer that has no guarded
+/// fallback.
+pub(crate) fn declared_array_property_claim(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(
+        declared_property_type_from_annotation(ctx, object, property),
+        Some(HirType::Array(_)) | Some(HirType::Tuple(_))
+    )
+}
+
+pub(crate) fn declared_property_type_from_annotation(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Option<HirType> {
+    let declared = match object {
+        // This function produces metadata only. Representation consumers must
+        // either re-check the current value or use `proven_local_types`.
+        Expr::LocalGet(id) => ctx.local_type_hint(id)?,
+        _ => return None,
+    };
+    match strip_nullish_union(declared)? {
+        // `let e: Env | null` where `type Env = { … }` / `interface Env` /
+        // `class Env`.
+        HirType::Named(name) => {
+            if let Some(class) = ctx.classes.get(name) {
+                if let Some(f) = class.fields.iter().find(|f| f.name == property) {
+                    return Some(f.ty.clone());
+                }
+            }
+            if let Some(iface) = ctx.interfaces.get(name) {
+                if let Some(p) = iface.properties.iter().find(|p| p.name == property) {
+                    return Some(p.ty.clone());
+                }
+            }
+            if let Some(HirType::Object(obj)) = ctx.type_aliases.get(name) {
+                return obj.properties.get(property).map(|p| p.ty.clone());
+            }
+            None
+        }
+        // The alias was already expanded in place (`let e: { … } | null`).
+        HirType::Object(obj) => obj.properties.get(property).map(|p| p.ty.clone()),
+        _ => None,
+    }
+}
+
+/// Derive only the runtime kind established by the initializer expression
+/// itself. This is deliberately narrower than [`refine_type_from_init`],
+/// which is also allowed to propagate declared property/return metadata for
+/// consumers that carry their own runtime guard.
+///
+/// Array/object/function details are erased to their outer runtime kind. A
+/// specialized method HIR node is intentionally not enough: it may have been
+/// selected from source metadata and may retain an override-aware fallback
+/// whose result has another kind. New expression variants are unproven by
+/// default until their full lowering contract is explicitly reviewed here.
+pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    match init {
+        Expr::LocalGet(id) => ctx.stable_local_type_proof(id).cloned(),
+        Expr::Undefined | Expr::Void(_) => Some(HirType::Void),
+        Expr::Null => Some(HirType::Null),
+        Expr::Bool(_) | Expr::Compare { .. } => Some(HirType::Boolean),
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Not => Some(HirType::Boolean),
+            UnaryOp::Neg | UnaryOp::BitNot if is_bigint_expr(ctx, operand) => Some(HirType::BigInt),
+            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot if is_numeric_expr(ctx, operand) => {
+                Some(HirType::Number)
+            }
+            _ => None,
+        },
+        Expr::Binary { op, left, right }
+            if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) =>
+        {
+            matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Mod
+                    | BinaryOp::Pow
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            )
+            .then_some(HirType::BigInt)
+        }
+        Expr::Binary { left, right, .. }
+            if is_numeric_expr(ctx, left)
+                && is_numeric_expr(ctx, right)
+                && is_provably_not_bigint(ctx, init) =>
+        {
+            Some(HirType::Number)
+        }
+        Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
+            Some(HirType::String)
+        }
+        Expr::Array(_) | Expr::ArraySpread(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        Expr::MapNew | Expr::MapNewFromArray(_) => Some(HirType::Generic {
+            base: "Map".to_string(),
+            type_args: vec![HirType::Any, HirType::Any],
+        }),
+        Expr::SetNew | Expr::SetNewFromArray(_) => Some(HirType::Generic {
+            base: "Set".to_string(),
+            type_args: vec![HirType::Any],
+        }),
+        // These HIR constructors always allocate a Uint8Array representation;
+        // unlike metadata-selected access nodes, they have no override-aware
+        // result fallback.
+        Expr::Uint8ArrayNew(_) | Expr::Uint8ArrayFrom(_) => {
+            Some(HirType::Named("Uint8Array".to_string()))
+        }
+        Expr::Object(_) | Expr::ObjectSpread { .. } => Some(HirType::Object(Default::default())),
+        Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } => Some(HirType::Function(perry_hir::types::FunctionType {
+            params: Vec::new(),
+            return_type: Box::new(HirType::Any),
+            is_async: *is_async,
+            is_generator: *is_generator,
+        })),
+        // A constructor can explicitly return a different object, so `new C`
+        // proves only Object, never C's class-specific layout.
+        Expr::New { .. } => Some(HirType::Object(Default::default())),
+        Expr::BigInt(_) => Some(HirType::BigInt),
+        _ => None,
+    }
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -354,11 +591,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 return None;
             }
             if let Expr::LocalGet(arr_id) = object.as_ref() {
-                if let Some(HirType::Array(elem_ty)) = ctx.local_types.get(arr_id) {
+                if let Some(HirType::Array(elem_ty)) = ctx.stable_local_type_proof(arr_id) {
                     return Some((**elem_ty).clone());
                 }
                 // str[i] — single-char string from string indexing.
-                if let Some(HirType::String) = ctx.local_types.get(arr_id) {
+                if let Some(HirType::String) = ctx.stable_local_type_proof(arr_id) {
                     return Some(HirType::String);
                 }
             }
@@ -396,13 +633,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             // obj.field where obj is a known class instance → field's
             // declared type. Reuses the same walk static_type_of uses.
-            let receiver_class = receiver_class_name(ctx, object)?;
-            let class = ctx.classes.get(&receiver_class)?;
-            class
-                .fields
-                .iter()
-                .find(|f| f.name == *property)
+            if let Some(ty) = receiver_class_name(ctx, object)
+                .and_then(|receiver_class| ctx.classes.get(&receiver_class))
+                .and_then(|class| class.fields.iter().find(|f| f.name == *property))
                 .map(|f| f.ty.clone())
+            {
+                return Some(ty);
+            }
+            declared_property_type_from_annotation(ctx, object, property)
         }
         // Promise-returning expressions: `Promise.resolve(x)`,
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to

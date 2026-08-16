@@ -28,7 +28,7 @@ pub(crate) const WINDOWS_APP_MANIFEST: &str = include_str!("windows_app.manifest
 /// API libs the Rust runtime pulls in. Always emitted on Windows targets (the
 /// `whoami`/`winhttp`/etc. symbols are needed even by console binaries through
 /// `perry-stdlib`).
-pub(super) fn add_system_libs(cmd: &mut Command) {
+pub(super) fn add_system_libs(cmd: &mut Command, target: Option<&str>) {
     // Win32 GUI + shell system libraries.
     cmd.arg("user32.lib")
         .arg("gdi32.lib")
@@ -44,6 +44,14 @@ pub(super) fn add_system_libs(cmd: &mut Command) {
         .arg("shlwapi.lib")
         .arg("ole32.lib")
         .arg("comctl32.lib")
+        // Perry strips bundled `.dll` import-library members from the UI
+        // staticlib during runtime deduplication. Keep every UI import explicit
+        // here so the trimmed archive remains self-contained at final link:
+        // uxtheme provides SetWindowTheme, winspool supplies the print-dialog
+        // imports, and rpcrt4 provides UuidCreate (windows-core GUID::new).
+        .arg("uxtheme.lib")
+        .arg("winspool.lib")
+        .arg("rpcrt4.lib")
         .arg("advapi32.lib")
         .arg("comdlg32.lib")
         .arg("ws2_32.lib")
@@ -73,6 +81,12 @@ pub(super) fn add_system_libs(cmd: &mut Command) {
         // through perry-ui-windows's `staticlib` crate-type to perry's final
         // link line. Closes #732.
         .arg("winhttp.lib");
+    if super::windows_target_arch(target) == Some(super::WindowsTargetArch::Aarch64) {
+        // MSVC's ARM64 setjmp is a compiler intrinsic whose implementation
+        // lives in the static VCRuntime archive. Perry's Rust staticlib cannot
+        // propagate that native-link directive through to this final PE link.
+        cmd.arg("libvcruntime.lib");
+    }
 }
 
 #[cfg(test)]
@@ -80,15 +94,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_widget_system_imports_survive_the_staticlib_boundary() {
+    fn windows_ui_system_imports_survive_the_staticlib_boundary() {
         let mut command = Command::new("link.exe");
-        add_system_libs(&mut command);
+        add_system_libs(&mut command, Some("windows-aarch64"));
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert!(args.iter().any(|arg| arg == "shlwapi.lib"));
         assert!(args.iter().any(|arg| arg == "winhttp.lib"));
+        assert!(args.iter().any(|arg| arg == "uxtheme.lib"));
+        assert!(args.iter().any(|arg| arg == "winspool.lib"));
+        assert!(args.iter().any(|arg| arg == "rpcrt4.lib"));
+        assert!(args.iter().any(|arg| arg == "libvcruntime.lib"));
+
+        let mut x64_command = Command::new("link.exe");
+        add_system_libs(&mut x64_command, Some("windows-x86_64"));
+        assert!(!x64_command.get_args().any(|arg| arg == "libvcruntime.lib"));
     }
 }
 

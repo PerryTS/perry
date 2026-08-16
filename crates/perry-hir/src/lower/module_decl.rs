@@ -6,6 +6,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -14,6 +15,7 @@ use crate::ir::*;
 // Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
+pub(super) mod native_profile_import;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -124,6 +126,7 @@ pub(crate) fn lower_module_decl(
             // method registry — `obj.method()` worked only via the
             // CLASS_VTABLE_REGISTRY runtime fallback (#392 followup) and
             // `typeof obj.method` returned `"undefined"`. Issue #446.
+            native_profile_import::register_native_profile_type_imports(ctx, &source, import_decl);
             if import_decl.type_only && is_native {
                 return Ok(());
             }
@@ -1191,6 +1194,7 @@ pub(crate) fn lower_module_decl(
                             } else {
                                 ctx.define_local(name.clone(), ty.clone())
                             };
+                            ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
                                 id,
                                 name: name.clone(),
@@ -1269,6 +1273,7 @@ pub(crate) fn lower_module_decl(
                             } else {
                                 ctx.define_local(name.clone(), ty.clone())
                             };
+                            ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
                                 id,
                                 name: name.clone(),
@@ -1598,6 +1603,12 @@ pub(crate) fn lower_module_decl(
                                             | Expr::BigInt(_)
                                             | Expr::Null
                                             | Expr::Undefined
+                                            // #7964: renamed RegExp literals are values too.
+                                            // Zod exports `_null as null` and `_undefined as
+                                            // undefined`; omitting these from exported_objects
+                                            // leaves the namespace populator calling getters
+                                            // that the producer never emits.
+                                            | Expr::RegExp { .. }
                                             // Refs #420 (drizzle): `const entityKind = Symbol.for(...)`
                                             // followed by `export { entityKind }` must register the
                                             // local as an exported variable so importing modules

@@ -585,3 +585,63 @@ pub(crate) fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &Class) -> bool
     }
     false
 }
+
+/// ECMAScript constructor return-override, with the `undefined` case decided
+/// **inline** (#7834).
+///
+/// Every `new` site has to apply the spec's return-override rule: a
+/// constructor that returns an Object yields that object, `undefined` yields
+/// the implicit `this`, and any other primitive yields `this` for a base
+/// constructor or throws for a derived one. `js_ctor_return_override` decides
+/// all three.
+///
+/// The overwhelmingly common case is the one it can answer from a single
+/// 64-bit compare: a constructor with no `return <expr>` at all completes as
+/// `undefined`, and the runtime's answer for `undefined` is *exactly*
+/// `this_val` — `JSValue::is_undefined` is `bits == TAG_UNDEFINED`, and
+/// `constructor_return_overrides_this(undefined)` is `false` at its first
+/// `is_pointer()` test. Emitting that compare here turns a cross-crate call
+/// into a never-taken branch: measured at 8.2% of `churn_alloc` and `push_cls`,
+/// where the synthesized object-literal constructor's only `ret` is the
+/// `TAG_UNDEFINED` constant.
+///
+/// The slow arm is byte-for-byte the previous emission, so derived-constructor
+/// `TypeError`s, `return new Promise(…)`, arguments objects and arrays all keep
+/// the runtime's answer. Skipping the call cannot lose a relocation either:
+/// `js_ctor_return_override` is in `root_reload`'s no-reload set, so no live
+/// value's address depends on having made it.
+pub(super) fn emit_ctor_return_override(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    ctor_ret: &str,
+    is_derived: bool,
+) -> String {
+    let override_idx = ctx.new_block("ctor_ret.override");
+    let merge_idx = ctx.new_block("ctor_ret.merge");
+    let override_label = ctx.block_label(override_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let this_pred_label = ctx.block_label(ctx.current_block);
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(ctor_ret);
+        let is_undef = blk.icmp_eq(crate::types::I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+        blk.cond_br(&is_undef, &merge_label, &override_label);
+    }
+    ctx.current_block = override_idx;
+    let is_derived_lit = if is_derived { "1" } else { "0" };
+    let overridden = ctx.block().call(
+        DOUBLE,
+        "js_ctor_return_override",
+        &[(DOUBLE, obj_box), (DOUBLE, ctor_ret), (I32, is_derived_lit)],
+    );
+    let override_pred_label = ctx.block_label(ctx.current_block);
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (obj_box, &this_pred_label),
+            (&overridden, &override_pred_label),
+        ],
+    )
+}

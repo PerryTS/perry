@@ -523,11 +523,15 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
             || crate::buffer::is_registered_buffer(ptr_usize)
         {
             // DataView, (Shared)ArrayBuffer, or a registered Buffer/Uint8Array
-            // — all BufferHeader-backed with the bytes stored inline.
+            // — all BufferHeader-backed. Their bytes are not necessarily
+            // INLINE, though: a registered view (a DataView, a `Buffer.from(ab)`
+            // window, a subarray) keeps a construction-time copy that only
+            // registry-routed writes refresh, so a multi-byte typed array over
+            // the same backing decoded as pre-write bytes. Resolve the window
+            // the way every other native-span consumer does (#6515).
             let buf = ptr_usize as *const BufferHeader;
             let len = (*buf).length as usize;
-            let data = (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
-            std::slice::from_raw_parts(data, len)
+            std::slice::from_raw_parts(crate::buffer::resolve_span_data_ptr(buf), len)
         } else {
             // Plain arrays, plain objects, strings — reject like Node.
             throw_invalid_decode_input();
@@ -632,19 +636,52 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 /// "Bind must be called on a function"). Methods reify as bound methods —
 /// the dynamic-call arm in `native_call_method.rs` executes them on call —
 /// and accessors return their values directly.
+/// A `TextDecoder.prototype` method key, as a `'static` byte string.
+///
+/// #8133 — the bind below used to hand `js_class_method_bind` the caller's
+/// `key_ptr`, which every caller derives as
+/// `key_string + size_of::<StringHeader>()`: the interior of a movable GC heap
+/// string, unreachable the moment the read returns. The closure captures that
+/// pointer and `dispatch_bound_method` re-reads it at CALL time, so a copying
+/// minor could relocate or reclaim the bytes the closure names. #7747 fixed the
+/// same defect on the Buffer path.
+///
+/// `text_handle_property` no longer TAKES the caller's pointer at all, so the
+/// bug is not merely fixed here, it is unwritable.
+pub(crate) fn text_decoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"decode" => Some(b"decode"),
+        _ => None,
+    }
+}
+
+/// A `TextEncoder.prototype` method key, as a `'static` byte string. See
+/// [`text_decoder_method_name_static`].
+pub(crate) fn text_encoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"encode" => Some(b"encode"),
+        b"encodeInto" => Some(b"encodeInto"),
+        _ => None,
+    }
+}
+
+/// Bind `method` — always a `'static` literal from the two lookups above — as a
+/// bound-method value on `this_f64`.
+fn bind_static_method(this_f64: f64, method: &'static [u8]) -> crate::value::JSValue {
+    let result = crate::object::js_class_method_bind(this_f64, method.as_ptr(), method.len());
+    crate::value::JSValue::from_bits(result.to_bits())
+}
+
 pub(crate) unsafe fn text_handle_property(
     raw: usize,
     key_bytes: &[u8],
-    key_ptr: *const u8,
-    key_len: usize,
 ) -> Option<crate::value::JSValue> {
     let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
     if is_known_text_decoder_id(raw as i64) {
+        if let Some(method) = text_decoder_method_name_static(key_bytes) {
+            return Some(bind_static_method(this_f64, method));
+        }
         match key_bytes {
-            b"decode" => {
-                let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
-                return Some(crate::value::JSValue::from_bits(result.to_bits()));
-            }
             b"encoding" => {
                 let s = js_text_decoder_encoding(this_f64);
                 return Some(crate::value::JSValue::string_ptr(s));
@@ -662,9 +699,68 @@ pub(crate) unsafe fn text_handle_property(
             _ => {}
         }
     }
-    if raw as i64 == TEXT_ENCODER_SENTINEL_ID && matches!(key_bytes, b"encode" | b"encodeInto") {
-        let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
-        return Some(crate::value::JSValue::from_bits(result.to_bits()));
+    if raw as i64 == TEXT_ENCODER_SENTINEL_ID {
+        if let Some(method) = text_encoder_method_name_static(key_bytes) {
+            return Some(bind_static_method(this_f64, method));
+        }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `TextDecoder.decode(dataView)` must read the backing store, not the
+    /// DataView's construction-time snapshot. A `Uint32Array` over the same
+    /// `ArrayBuffer` writes straight into the backing, so the snapshot decoded
+    /// as the pre-write bytes (four NULs for a freshly allocated buffer) while
+    /// decoding the `ArrayBuffer` itself produced the right text — the same
+    /// stale-view class as the numeric accessors, and the reason every
+    /// native-span consumer resolves through `buffer::resolve_span_data_ptr`
+    /// (#6515).
+    #[test]
+    fn text_decoder_reads_backing_store_of_a_data_view() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let ab = crate::buffer::js_array_buffer_new(4);
+        let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
+        let words = crate::typedarray_view::js_typed_array_view(
+            crate::typedarray::KIND_UINT32 as i32,
+            ab_value,
+            undef,
+            undef,
+        );
+        assert!(!words.is_null());
+        let dv = crate::buffer::js_data_view_new(ab_value, undef, undef);
+
+        // "ABCD" on a little-endian host, "DCBA" on a big-endian one — the
+        // assertion compares against the backing rather than a fixed literal.
+        crate::typedarray::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
+        let expected = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                crate::buffer::buffer_data(ab),
+                4,
+            ))
+            .expect("ASCII bytes")
+            .to_string()
+        };
+        assert_ne!(
+            expected, "\0\0\0\0",
+            "the typed-array store must have reached the ArrayBuffer"
+        );
+
+        // An unregistered handle decodes as non-fatal utf-8 — the default this
+        // test wants, and no decoder registry setup.
+        let decoded = js_text_decoder_decode_llvm(0.0, dv);
+        let s = decoded as *const StringHeader;
+        assert!(!s.is_null());
+        let got = unsafe {
+            let len = (*s).byte_len as usize;
+            let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::str::from_utf8(std::slice::from_raw_parts(data, len))
+                .expect("ASCII bytes")
+                .to_string()
+        };
+        assert_eq!(got, expected, "decode(DataView) must see the backing bytes");
+    }
 }

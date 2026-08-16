@@ -416,8 +416,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
-                if let Some(expr) = process_metadata_native_property(prop) {
-                    return Ok(expr);
+                if prop != "sourceMapsEnabled"
+                    || matches!(
+                        ctx.lookup_native_module(obj_name),
+                        Some(("process.namespace", None))
+                    )
+                {
+                    if let Some(expr) = process_metadata_native_property(prop) {
+                        return Ok(expr);
+                    }
                 }
                 match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -621,8 +628,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if inner_is_global_process {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
-                if let Some(expr) = process_metadata_native_property(prop) {
-                    return Ok(expr);
+                if prop != "sourceMapsEnabled" {
+                    if let Some(expr) = process_metadata_native_property(prop) {
+                        return Ok(expr);
+                    }
                 }
                 match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -1081,7 +1090,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         let inner = unwrap_member_obj(member.obj.as_ref());
         if let ast::Expr::Ident(obj_ident) = inner {
             let obj_name = obj_ident.sym.to_string();
-            if ctx.proxy_locals.contains(&obj_name) {
+            if ctx.is_proxy_local(&obj_name) {
                 let proxy_expr = if let Some(id) = ctx.lookup_local(&obj_name) {
                     Expr::LocalGet(id)
                 } else {

@@ -413,6 +413,11 @@ fn structured_clone_unmark(ptr: usize) {
     });
 }
 
+fn reset_structured_clone_state() {
+    STRUCTURED_CLONE_IN_PROGRESS.with(|set| set.borrow_mut().clear());
+    STRUCTURED_CLONE_TRANSFER_STATE.with(|state| *state.borrow_mut() = None);
+}
+
 /// RAII guard that unmarks a pointer from the in-progress set when dropped,
 /// even on early returns from `js_structured_clone`'s POINTER_TAG branches.
 struct CloneCycleGuard(usize);
@@ -440,6 +445,15 @@ fn throw_structured_clone_type_error(message: &str) -> ! {
 fn throw_data_clone_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_error_new_with_name_message(b"DataCloneError", msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+const MAX_STRUCTURED_CLONE_NESTING_DEPTH: usize = 1_000;
+
+fn throw_structured_clone_depth_error() -> ! {
+    let message = "structuredClone: value nested deeper than 1000 levels";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
@@ -622,12 +636,16 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
 /// Handles numbers (pass-through), strings (copy), arrays/objects (shallow for now)
 #[no_mangle]
 pub extern "C" fn js_structured_clone(value: f64) -> f64 {
-    js_structured_clone_inner(value)
+    // Runtime throws use longjmp and therefore skip Rust destructors. Clear
+    // traversal state left by a previously caught error before a new clone.
+    reset_structured_clone_state();
+    js_structured_clone_inner(value, 0)
 }
 
 /// structuredClone(value, options) -> deep-cloned value with supported transfers.
 #[no_mangle]
 pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> f64 {
+    reset_structured_clone_state();
     let transferables = collect_transfer_list(options);
     let previous = STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
         state.borrow_mut().replace(StructuredCloneTransferState {
@@ -636,12 +654,12 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
         })
     });
     let _guard = CloneTransferStateGuard(previous);
-    let cloned = js_structured_clone_inner(value);
+    let cloned = js_structured_clone_inner(value, 0);
     detach_transferables_after_success();
     cloned
 }
 
-fn js_structured_clone_inner(value: f64) -> f64 {
+fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         throw_data_clone_error("Function could not be cloned");
     }
@@ -681,6 +699,9 @@ fn js_structured_clone_inner(value: f64) -> f64 {
             value
         }
         0x7FFD => {
+            if depth > MAX_STRUCTURED_CLONE_NESTING_DEPTH {
+                throw_structured_clone_depth_error();
+            }
             // POINTER_TAG — could be array/object/Map/Set/RegExp. Deep clone recursively.
             let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
             let addr = ptr as usize;
@@ -728,7 +749,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                 for i in 0..size {
                     let src_now = src_handle.get_raw_const_ptr::<crate::set::SetHeader>();
                     let elem = crate::set::js_set_value_at(src_now, i);
-                    let v = js_structured_clone(elem);
+                    let v = js_structured_clone_inner(elem, depth + 1);
                     let new_set_now = new_set_handle.get_raw_mut_ptr::<crate::set::SetHeader>();
                     crate::set::js_set_add(new_set_now, v);
                 }
@@ -753,7 +774,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                         as *mut f64;
                     for i in 0..len as usize {
                         let elem = *elements.add(i);
-                        let cloned = js_structured_clone(elem);
+                        let cloned = js_structured_clone_inner(elem, depth + 1);
                         // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                         *elements.add(i) = cloned;
                         crate::array::note_array_slot(new_arr, i, cloned.to_bits());
@@ -816,7 +837,8 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                                     None => continue,
                                 };
                             let field = crate::object::js_object_get_field(src_now, i as u32);
-                            let cloned = js_structured_clone(f64::from_bits(field.bits()));
+                            let cloned =
+                                js_structured_clone_inner(f64::from_bits(field.bits()), depth + 1);
                             let key_ptr = crate::string::js_string_from_bytes(
                                 key_bytes.as_ptr(),
                                 key_bytes.len() as u32,
@@ -840,7 +862,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                             as *mut f64;
                         for i in 0..field_count as usize {
                             let field = *fields.add(i);
-                            let cloned = js_structured_clone(field);
+                            let cloned = js_structured_clone_inner(field, depth + 1);
                             // GC_STORE_AUDIT(BARRIERED): cloned field uses the shared object slot-store helper.
                             // The recursive clone above can run minor GCs that tenure `cloned_obj`
                             // mid-loop, so this store must be barriered like the array branch.
@@ -886,13 +908,15 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                         let pair_now = pair_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                         let key_handle = entry_scope
                             .root_nanbox_f64(crate::array::js_array_get_f64(pair_now, 0));
-                        let cloned_key = js_structured_clone(key_handle.get_nanbox_f64());
+                        let cloned_key =
+                            js_structured_clone_inner(key_handle.get_nanbox_f64(), depth + 1);
                         key_handle.set_nanbox_f64(cloned_key);
 
                         let pair_now = pair_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
                         let value_handle = entry_scope
                             .root_nanbox_f64(crate::array::js_array_get_f64(pair_now, 1));
-                        let cloned_value = js_structured_clone(value_handle.get_nanbox_f64());
+                        let cloned_value =
+                            js_structured_clone_inner(value_handle.get_nanbox_f64(), depth + 1);
                         value_handle.set_nanbox_f64(cloned_value);
 
                         let new_map = new_map_handle.get_raw_mut_ptr::<crate::map::MapHeader>();

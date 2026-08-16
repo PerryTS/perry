@@ -6,10 +6,38 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-EXPECTED_NODE="${PUBLIC_NODE_VERSION:-v22.23.1}"
-EXPECTED_BUN="${PUBLIC_BUN_VERSION:-1.3.14}"
-MAX_CPU_ACTIVE="25.0"
-QUIET_SECONDS="60"
+MEASUREMENT_CONFIG="$ROOT/benchmarks/public-baseline-config.json"
+IFS=$'\t' read -r \
+  CONFIG_NODE CONFIG_BUN MAX_CPU_ACTIVE QUIET_SECONDS \
+  SUITE_RUNS POLYGLOT_RUNS JSON_POLYGLOT_RUNS \
+  APP_WARMUP APP_RUNS HONEST_WORKLOADS HONEST_WARMUP HONEST_RUNS < <(
+    python3 - "$MEASUREMENT_CONFIG" <<'PY'
+import sys
+from pathlib import Path
+
+from benchmarks.public_baseline import load_measurement_config
+
+config = load_measurement_config(Path(sys.argv[1]))
+components = config["components"]
+print(
+    config["toolchains"]["node"],
+    config["toolchains"]["bun"],
+    config["quiet_host"]["maximum_cpu_active_percent"],
+    config["quiet_host"]["consecutive_seconds"],
+    components["suite"]["measured_runs"],
+    components["polyglot"]["measured_runs"],
+    components["json_polyglot"]["measured_runs"],
+    components["app_patterns"]["warmup_runs"],
+    components["app_patterns"]["measured_runs"],
+    ",".join(str(value) for value in components["honest_bench"]["workloads"]),
+    components["honest_bench"]["warmup_runs"],
+    components["honest_bench"]["measured_runs"],
+    sep="\t",
+)
+PY
+  )
+EXPECTED_NODE="$CONFIG_NODE"
+EXPECTED_BUN="$CONFIG_BUN"
 OUT="$ROOT/.bench-results/public"
 FINAL="$ROOT/benchmarks/results/public-node-bun-v1.json"
 mkdir -p "$OUT"
@@ -103,25 +131,29 @@ done
 wait_for_quiet
 
 echo "=== suite ==="
-./benchmarks/compare.sh --full --runs 5 --json-out "$OUT/suite.json" --warn-only
+./benchmarks/compare.sh --full --runs "$SUITE_RUNS" --json-out "$OUT/suite.json" --warn-only
 wait_for_quiet
 
 echo "=== polyglot ==="
-PUBLIC_BENCH_JSON_OUT="$OUT/polyglot.json" ./benchmarks/polyglot/run_all.sh 11
+PUBLIC_BENCH_JSON_OUT="$OUT/polyglot.json" ./benchmarks/polyglot/run_all.sh "$POLYGLOT_RUNS"
 wait_for_quiet
 
 echo "=== JSON polyglot ==="
-PUBLIC_BENCH_JSON_OUT="$OUT/json-polyglot.json" RUNS=11 ./benchmarks/json_polyglot/run.sh
+PUBLIC_BENCH_JSON_OUT="$OUT/json-polyglot.json" RUNS="$JSON_POLYGLOT_RUNS" \
+  ./benchmarks/json_polyglot/run.sh
 wait_for_quiet
 
 echo "=== app patterns ==="
-PUBLIC_BENCH_JSON_OUT="$OUT/app-patterns.json" ./benchmarks/app-patterns/run.sh
+PUBLIC_BENCH_JSON_OUT="$OUT/app-patterns.json" \
+PUBLIC_BENCH_WARMUP="$APP_WARMUP" \
+PUBLIC_BENCH_RUNS="$APP_RUNS" \
+  ./benchmarks/app-patterns/run.sh
 wait_for_quiet
 
 echo "=== honest bench ==="
-HONEST_BENCH_ONLY=1,3 \
-HONEST_BENCH_WARMUP=5 \
-HONEST_BENCH_MEASURED=20 \
+HONEST_BENCH_ONLY="$HONEST_WORKLOADS" \
+HONEST_BENCH_WARMUP="$HONEST_WARMUP" \
+HONEST_BENCH_MEASURED="$HONEST_RUNS" \
   ./benchmarks/honest_bench/run.sh --strict-output
 python3 benchmarks/honest_bench/scripts/report.py
 

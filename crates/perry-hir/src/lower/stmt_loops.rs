@@ -12,6 +12,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -1569,7 +1570,11 @@ pub(super) fn lower_stmt_for_of_inner(
                 match &decl.name {
                     ast::Pat::Ident(ident) => {
                         let name = ident.id.sym.to_string();
-                        let id = ctx.define_local(name.clone(), elem_type.clone());
+                        let id = ctx.define_local_spanned(
+                            name.clone(),
+                            elem_type.clone(),
+                            ident.id.span,
+                        );
                         if var_decl.kind == ast::VarDeclKind::Const {
                             // `for (const x of …) { x = 1; }` → TypeError.
                             ctx.mark_local_immutable(id);
@@ -1592,7 +1597,11 @@ pub(super) fn lower_stmt_for_of_inner(
                                     } else {
                                         Type::Any
                                     };
-                                    let id = ctx.define_local(name.clone(), var_type);
+                                    let id = ctx.define_local_spanned(
+                                        name.clone(),
+                                        var_type,
+                                        ident.id.span,
+                                    );
                                     ids.push((name, id));
                                 }
                             }
@@ -1608,7 +1617,8 @@ pub(super) fn lower_stmt_for_of_inner(
                     }
                     _ => {
                         let name = get_binding_name(&decl.name)?;
-                        let id = ctx.define_local(name.clone(), Type::Any);
+                        let id =
+                            ctx.define_local_spanned(name.clone(), Type::Any, decl.name.span());
                         vec![(name, id)]
                     }
                 }

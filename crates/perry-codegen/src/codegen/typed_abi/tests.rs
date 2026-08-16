@@ -169,7 +169,7 @@ fn string_clone_accepts_mixed_params_when_only_string_rep_flows_to_return() {
 }
 
 #[test]
-fn closure_clone_accepts_mixed_immutable_captures_for_numeric_return() {
+fn closure_capture_representations_are_runtime_guard_candidates() {
     let expr = Expr::Closure {
         func_id: 7,
         params: vec![param(20, "scale", Type::Number)],
@@ -198,5 +198,41 @@ fn closure_clone_accepts_mixed_immutable_captures_for_numeric_return() {
     assert_eq!(
         typed_f64_closure_capture_reps(&expr, &module_local_types),
         Some(vec![(30, TypedParamRep::I32), (31, TypedParamRep::I1)])
+    );
+}
+
+#[test]
+fn closure_capture_representations_follow_effective_slot_order() {
+    let expr = Expr::Closure {
+        func_id: 8,
+        params: vec![param(20, "scale", Type::Number)],
+        return_type: Type::Number,
+        body: ret(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(20)),
+            // Deliberately absent from the explicit capture list: closure
+            // allocation and body lowering append this auto-capture.
+            right: Box::new(Expr::LocalGet(29)),
+        }),
+        captures: vec![30, 31],
+        mutable_captures: Vec::new(),
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: true,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+    };
+    let module_local_types =
+        HashMap::from([(29, Type::Number), (30, Type::Int32), (31, Type::Boolean)]);
+
+    assert_eq!(
+        typed_f64_closure_capture_reps(&expr, &module_local_types),
+        Some(vec![
+            (30, TypedParamRep::I32),
+            (31, TypedParamRep::I1),
+            (29, TypedParamRep::F64),
+        ])
     );
 }

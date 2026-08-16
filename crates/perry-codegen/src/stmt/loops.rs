@@ -227,7 +227,7 @@ fn match_numeric_bulk_fill_loop(
         _ => return None,
     };
     let is_numeric_array = matches!(
-        ctx.local_types.get(&array_id),
+        ctx.stable_local_type_proof(&array_id),
         Some(perry_hir::types::Type::Array(elem))
             if matches!(elem.as_ref(), perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
     );
@@ -788,7 +788,13 @@ fn match_packed_f64_range_loop(
         // read-only DENSE mode: several scalar statements, masked
         // statically-windowed indices, no stores, no side exits.
         accesses.clear();
-        if !packed_f64_range_loop_dense_body_collect(body, counter_id, bound_local, &mut accesses) {
+        if !packed_f64_range_loop_dense_body_collect(
+            ctx,
+            body,
+            counter_id,
+            bound_local,
+            &mut accesses,
+        ) {
             return None;
         }
         true
@@ -1060,6 +1066,7 @@ fn packed_f64_range_loop_store_collect(
 /// have no side exits, multi-statement bodies are safe: an iteration either
 /// runs entirely in the fast copy or entirely in the slow copy.
 fn packed_f64_range_loop_dense_body_collect(
+    ctx: &FnCtx<'_>,
     body: &[Stmt],
     counter_id: u32,
     bound_local: Option<u32>,
@@ -1074,7 +1081,9 @@ fn packed_f64_range_loop_dense_body_collect(
                 init: Some(init),
                 ..
             } => {
-                if !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses) {
+                if !masked_window_expression_is_non_collecting(ctx, init)
+                    || !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses)
+                {
                     return false;
                 }
                 written.insert(*id);
@@ -1086,19 +1095,26 @@ fn packed_f64_range_loop_dense_body_collect(
                 if *id == counter_id || Some(*id) == bound_local {
                     return false;
                 }
-                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses) {
+                if !masked_window_expression_is_non_collecting(ctx, value)
+                    || !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses)
+                {
                     return false;
                 }
                 written.insert(*id);
             }
-            Stmt::Expr(Expr::Update { id, .. }) => {
+            Stmt::Expr(expr @ Expr::Update { id, .. }) => {
                 if *id == counter_id || Some(*id) == bound_local {
+                    return false;
+                }
+                if !masked_window_expression_is_non_collecting(ctx, expr) {
                     return false;
                 }
                 written.insert(*id);
             }
             Stmt::Expr(expr) => {
-                if !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses) {
+                if !masked_window_expression_is_non_collecting(ctx, expr)
+                    || !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses)
+                {
                     return false;
                 }
             }
@@ -1108,6 +1124,159 @@ fn packed_f64_range_loop_dense_body_collect(
     !accesses.is_empty()
         && accesses.values().all(|access| !access.written)
         && accesses.keys().all(|arr_id| !written.contains(arr_id))
+}
+
+/// Prove that an expression lowered while masked-window facts are active cannot
+/// collect. The structural matcher knows each admitted `IndexGet` becomes a
+/// guarded numeric load, so the proof treats its RESULT as an inert number but
+/// still checks its INDEX expression recursively: a bounded shape such as
+/// `(+key) & 7` can invoke user coercion when `key` is `any`.
+///
+/// Checking the WHOLE operator tree matters as much as checking indexes. In
+/// `ta[0] + (+key) + ta[1]`, the tier's hoisted backing pointer crosses the
+/// middle coercion before the second load. Merely proving both indexes inert
+/// leaves that broader window open.
+pub(super) fn masked_window_expression_is_non_collecting(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+) -> bool {
+    masked_window_expression_proof(ctx, expr).is_some()
+}
+
+/// Facts about a value whose evaluation has also been proved non-collecting.
+/// `inert` means coercing the result cannot dispatch user code; `numeric` is
+/// the stronger fact needed to distinguish numeric `+` from concatenation.
+#[derive(Clone, Copy)]
+struct MaskedWindowExpressionProof {
+    inert: bool,
+    numeric: bool,
+}
+
+/// Prove the collection behavior of the whole expression while computing the
+/// two result facts its parents need. This is deliberately an allowlist:
+/// `None` is the conservative answer for forms the masked structural walkers
+/// do not admit.
+fn masked_window_expression_proof(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+) -> Option<MaskedWindowExpressionProof> {
+    use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
+    let proof = |inert, numeric| MaskedWindowExpressionProof { inert, numeric };
+    match expr {
+        // The structural matcher separately proves this is a tracked masked
+        // read. Under its active fact the access itself is a guarded numeric
+        // load, but evaluating the index must still pass this same whole-tree
+        // proof before that fact may be installed.
+        Expr::IndexGet { object, index } => {
+            if !matches!(object.as_ref(), Expr::LocalGet(_)) {
+                return None;
+            }
+            masked_window_expression_proof(ctx, index)?;
+            Some(proof(true, true))
+        }
+        Expr::Number(_) | Expr::Integer(_) => Some(proof(true, true)),
+        Expr::Bool(_) | Expr::Null | Expr::Undefined => Some(proof(true, false)),
+        Expr::LocalGet(_) => {
+            let inert = crate::rooting::expr_is_inert_primitive(ctx, expr);
+            Some(proof(
+                inert,
+                inert && crate::type_analysis::is_numeric_expr(ctx, expr),
+            ))
+        }
+        // `++` / `--` execute ToNumeric before mutating their local. The
+        // shared inert predicate admits only a non-pointer primitive local;
+        // an `any` target can dispatch valueOf/Symbol.toPrimitive and collect.
+        Expr::Update { .. } => {
+            crate::rooting::expr_is_inert_primitive(ctx, expr).then(|| proof(true, true))
+        }
+        Expr::Binary { op, left, right } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            if matches!(op, BinaryOp::Add) {
+                if !left.numeric || !right.numeric {
+                    return None;
+                }
+            } else if !left.inert || !right.inert {
+                return None;
+            }
+            Some(proof(true, true))
+        }
+        Expr::Compare { op, left, right } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            if !matches!(op, CompareOp::Eq | CompareOp::Ne) && (!left.inert || !right.inert) {
+                return None;
+            }
+            Some(proof(true, false))
+        }
+        Expr::Unary { op, operand } => {
+            let operand = masked_window_expression_proof(ctx, operand)?;
+            if !matches!(op, UnaryOp::Not) && !operand.inert {
+                return None;
+            }
+            Some(proof(true, !matches!(op, UnaryOp::Not)))
+        }
+        Expr::Logical { left, right, .. } => {
+            let left = masked_window_expression_proof(ctx, left)?;
+            let right = masked_window_expression_proof(ctx, right)?;
+            Some(proof(
+                left.inert && right.inert,
+                left.numeric && right.numeric,
+            ))
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            masked_window_expression_proof(ctx, condition)?;
+            let then_expr = masked_window_expression_proof(ctx, then_expr)?;
+            let else_expr = masked_window_expression_proof(ctx, else_expr)?;
+            Some(proof(
+                then_expr.inert && else_expr.inert,
+                then_expr.numeric && else_expr.numeric,
+            ))
+        }
+        Expr::Void(value) | Expr::TypeOf(value) | Expr::BooleanCoerce(value) => {
+            masked_window_expression_proof(ctx, value)?;
+            Some(proof(true, false))
+        }
+        Expr::NumberCoerce(value) => {
+            let value = masked_window_expression_proof(ctx, value)?;
+            value.inert.then(|| proof(true, true))
+        }
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            for value in [left.as_ref(), right.as_ref()] {
+                if !masked_window_expression_proof(ctx, value)?.inert {
+                    return None;
+                }
+            }
+            Some(proof(true, true))
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => {
+            for value in values {
+                if !masked_window_expression_proof(ctx, value)?.inert {
+                    return None;
+                }
+            }
+            Some(proof(true, true))
+        }
+        Expr::MathAbs(value)
+        | Expr::MathSqrt(value)
+        | Expr::MathFloor(value)
+        | Expr::MathCeil(value)
+        | Expr::MathRound(value)
+        | Expr::MathTrunc(value)
+        | Expr::MathSign(value)
+        | Expr::MathF16round(value) => {
+            let value = masked_window_expression_proof(ctx, value)?;
+            if !value.inert {
+                return None;
+            }
+            Some(proof(true, true))
+        }
+        _ => None,
+    }
 }
 
 /// Effect-free expression walk: tracked `a[i ± c]` reads, locals, literals and
@@ -3670,19 +3839,17 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let (obj_bits, obj_handle, expected_keys) = {
+    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+        ctx,
+        &matched.class_name,
+        &matched.keys_global_name,
+    );
+    let (obj_bits, obj_handle) = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
         let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let expected_keys = blk.load(I64, &format!("@{}", matched.keys_global_name));
-        (obj_bits, obj_handle, expected_keys)
+        (obj_bits, obj_handle)
     };
-    let max_field_index = matched
-        .fields
-        .values()
-        .map(|(field_index, _)| *field_index)
-        .max()
-        .expect("matcher requires >= 1 tracked field");
     let has_store = matched.fields.values().any(|(_, written)| *written);
     let expected_class_id_str = matched.expected_class_id.to_string();
     let (obj_ptr, shape_ok) =
@@ -3691,8 +3858,7 @@ fn lower_class_field_versioned_for(
             &obj_bits,
             &obj_handle,
             &expected_class_id_str,
-            &expected_keys,
-            max_field_index,
+            &expected_shape_id,
             // Every tracked field is a raw-f64 candidate: reads rely on the
             // intact bit, so require it whether or not the loop stores.
             true,
@@ -3984,7 +4150,10 @@ fn local_array_element_type<'t>(
     ctx: &'t FnCtx<'_>,
     local_id: u32,
 ) -> Option<&'t perry_hir::types::Type> {
-    match ctx.local_types.get(&local_id) {
+    // This element type only selects versioned loop candidates. Every caller
+    // validates the live receiver and element layout in a preheader guard
+    // before entering the raw clone.
+    match ctx.local_type_hint(&local_id) {
         Some(perry_hir::types::Type::Array(elem)) => Some(elem.as_ref()),
         Some(perry_hir::types::Type::Generic { base, type_args })
             if base == "Array" && type_args.len() == 1 =>
@@ -4069,7 +4238,7 @@ pub(super) fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
 /// ineligible — their guard chains would be dead weight.
 pub(super) fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
-        ctx.local_types.get(&local_id),
+        ctx.stable_local_type_proof(&local_id),
         None | Some(perry_hir::types::Type::Any | perry_hir::types::Type::Unknown)
     )
 }
@@ -4180,9 +4349,6 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
         Expr::LocalGet(id) => *id != arr_id && crate::type_analysis::is_numeric_expr(ctx, expr),
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::Binary { left, right, .. } => {
-            if !crate::type_analysis::is_numeric_expr(ctx, expr) {
-                return false;
-            }
             expr_is_packed_f64_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
                 && expr_is_packed_f64_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
         }
@@ -4194,17 +4360,16 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
 }
 
 fn expr_is_packed_f64_loop_store_abs_rhs_safe(
-    ctx: &FnCtx<'_>,
+    _ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
     arr_id: u32,
     counter_id: u32,
 ) -> bool {
-    crate::type_analysis::is_numeric_expr(ctx, expr)
-        && matches!(
-            expr,
-            perry_hir::Expr::IndexGet { object, index }
-                if is_packed_f64_loop_index(object, index, arr_id, counter_id)
-        )
+    matches!(
+        expr,
+        perry_hir::Expr::IndexGet { object, index }
+            if is_packed_f64_loop_index(object, index, arr_id, counter_id)
+    )
 }
 
 fn expr_is_packed_i32_loop_store_rhs_safe(
@@ -4262,10 +4427,11 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
 }
 
 fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
-    matches!(
-        ctx.local_types.get(&local_id),
-        Some(perry_hir::types::Type::Int32)
-    ) || ctx.integer_locals.contains(&local_id)
+    ctx.integer_locals.contains(&local_id)
+        || matches!(
+            ctx.stable_local_type_proof(&local_id),
+            Some(perry_hir::types::Type::Int32)
+        )
 }
 
 fn expr_is_packed_f64_loop_safe(
@@ -4569,7 +4735,7 @@ fn dynamic_bound_private_counter_is_safe(
     advanced_by_increment && !stmts_mutate_local(body, counter_id)
 }
 
-pub(super) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     let tag = ctx.block().and(
         I64,

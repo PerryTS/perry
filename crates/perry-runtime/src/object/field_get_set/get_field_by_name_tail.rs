@@ -38,22 +38,24 @@ pub(crate) fn get_field_by_name_object_tail(
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                        if is_timer_handle_method_key(key_bytes)
-                            && crate::timer::is_known_timer_id(raw as i64)
-                        {
-                            let this_f64 = f64::from_bits(
-                                crate::value::js_nanbox_pointer(raw as i64).to_bits(),
-                            );
-                            let result =
-                                super::super::js_class_method_bind(this_f64, key_ptr, key_len);
-                            return JSValue::from_bits(result.to_bits());
+                        if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                            if crate::timer::is_known_timer_id(raw as i64) {
+                                let this_f64 = f64::from_bits(
+                                    crate::value::js_nanbox_pointer(raw as i64).to_bits(),
+                                );
+                                // #8133: the `'static` literal, NOT `key_ptr` —
+                                // that is the interior of a movable heap string
+                                // this read does not own.
+                                let result = super::super::js_class_method_bind(
+                                    this_f64,
+                                    method.as_ptr(),
+                                    method.len(),
+                                );
+                                return JSValue::from_bits(result.to_bits());
+                            }
                         }
-                        if let Some(v) = crate::text::text_handle_property(
-                            raw as usize,
-                            key_bytes,
-                            key_ptr,
-                            key_len,
-                        ) {
+                        if let Some(v) = crate::text::text_handle_property(raw as usize, key_bytes)
+                        {
                             return v;
                         }
                     }
@@ -113,17 +115,20 @@ pub(crate) fn get_field_by_name_object_tail(
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if is_timer_handle_method_key(key_bytes)
-                    && crate::timer::is_known_timer_id(obj as i64)
-                {
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
-                    return JSValue::from_bits(result.to_bits());
+                if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                    if crate::timer::is_known_timer_id(obj as i64) {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        // #8133: see the sibling arm above.
+                        let result = super::super::js_class_method_bind(
+                            this_f64,
+                            method.as_ptr(),
+                            method.len(),
+                        );
+                        return JSValue::from_bits(result.to_bits());
+                    }
                 }
-                if let Some(v) =
-                    crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
-                {
+                if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
                     return v;
                 }
             }
@@ -251,7 +256,15 @@ pub(crate) fn get_field_by_name_object_tail(
                 if let Some(value) = crypto_key_property_value(obj as usize, key_bytes) {
                     return value;
                 }
-                if key_bytes == b"length" || key_bytes == b"byteLength" {
+                // #8149: `length` is a `%TypedArray%` slot. An `ArrayBuffer` /
+                // `SharedArrayBuffer` / `DataView` has only `byteLength`, so
+                // node answers `undefined` for `dv.length` / `ab.length`. Asked
+                // ABOVE the shared arm, which answers the byte count for both
+                // spellings.
+                if key_bytes == b"byteLength"
+                    || (key_bytes == b"length"
+                        && !crate::buffer::is_non_indexed_buffer_view(obj as usize))
+                {
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
@@ -451,88 +464,24 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Sets: detect via the SET_REGISTRY, which is authoritative and
-        // dereference-free. Route `.size` to `js_set_size` and synthesize
-        // method values for prototype functions such as `.has`, which Node
-        // exposes through ordinary property reads.
-        //
-        // (This used to say a `SetHeader` comes from a raw `alloc()` with no
-        // `GcHeader`, so the preceding byte could not be read. That has not
-        // been true since `js_set_alloc` moved to
-        // `arena_alloc_gc(_, _, GC_TYPE_SET)`: a registered Set IS a GC
-        // allocation and its `obj_type` classifies it. `js_array_get_f64` and
-        // `js_array_length` gate their probes on exactly that byte (#7765);
-        // this receiver is not proven to carry a header at this point, so it
-        // still asks the registry.)
-        if crate::set::is_registered_set(obj as usize) {
-            if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"size" {
-                    let s = obj as *const crate::set::SetHeader;
-                    return JSValue::number(crate::set::js_set_size(s) as f64);
-                }
-                if let Some(name) = set_method_value_name(key_bytes) {
-                    // Return the SAME brand-checking thunk installed on
-                    // Set.prototype so `const m = s.forEach; m.call(badThis)`
-                    // throws a TypeError (and `m === Set.prototype.forEach`).
-                    // Falls back to the legacy instance-bound closure if the
-                    // prototype thunk isn't available.
-                    if let Ok(method_name) = std::str::from_utf8(name) {
-                        if let Some(v) =
-                            super::super::collection_proto_thunks::collection_proto_method_value(
-                                "Set",
-                                method_name,
-                            )
-                        {
-                            return JSValue::from_bits(v.to_bits());
-                        }
-                    }
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
-                    return JSValue::from_bits(result.to_bits());
-                }
-                // User expando keys (`s.tag = x`) live in the exotic side
-                // table (`ExoticKind::Set`); see the Map/Set arm below.
-                if let Ok(name) = std::str::from_utf8(key_bytes) {
-                    let receiver =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    if let Some(v) = crate::object::exotic_expando::exotic_get_own_property(
-                        obj as usize,
-                        crate::object::exotic_expando::ExoticKind::Set,
-                        name,
-                        receiver,
-                    ) {
-                        return JSValue::from_bits(v.to_bits());
-                    }
-                }
+        // Symbols straddle two storage classes: fresh Symbol() values carry a
+        // GC_TYPE_STRING header, while Symbol.for / well-known / Intl symbols
+        // are Box-leaked and carry no GcHeader at all. Every one does carry
+        // SYMBOL_MAGIC in its own first word, so use that exact-false screen
+        // before the authoritative registry. A plain object now pays one
+        // 4-byte load instead of the process-global symbol Mutex + SipHash.
+        if crate::value::addr_class::is_plausible_heap_addr(obj as usize)
+            && crate::symbol::may_be_symbol_header(obj as *const u8)
+        {
+            if let Some(value) = super::probe_dispatch::symbol_property_if_registered(obj, key) {
+                return value;
             }
-            return JSValue::undefined();
         }
-        // Symbols: registered in SYMBOL_POINTERS by symbol.rs. Symbols
-        // allocated via Symbol.for(...) are Box-leaked (no GcHeader), so
-        // reading the byte before would be UB. Detect via the side table.
-        if crate::symbol::is_registered_symbol(obj as usize) {
-            if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                let sym_f64 =
-                    f64::from_bits(0x7FFD_0000_0000_0000u64 | (obj as u64 & 0x0000_FFFF_FFFF_FFFF));
-                if key_bytes == b"description" {
-                    return JSValue::from_bits(
-                        crate::symbol::js_symbol_description(sym_f64).to_bits(),
-                    );
-                }
-            }
-            return JSValue::undefined();
-        }
-        // Validate this is an ObjectHeader, not some other heap type.
-        // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
-        // for static/const objects that don't have GcHeaders.
-        // Guard: ensure we can safely read GC_HEADER_SIZE bytes before obj
+
+        // Buffer and TypedArray were the two headerless allocations that had
+        // to be classified first. A possible headerless Symbol returned above;
+        // every remaining supported receiver can now be classified once by
+        // the GcHeader the rest of this function already switches on.
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
             || !is_valid_obj_ptr(obj as *const u8)
         {
@@ -541,8 +490,16 @@ pub(crate) fn get_field_by_name_object_tail(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type != crate::gc::GC_TYPE_ARRAY && !is_valid_obj_ptr(obj as *const u8) {
-            return JSValue::undefined();
+
+        // Sets are arena_alloc_gc(_, _, GC_TYPE_SET) allocations. Let the
+        // header rule every other receiver out before entering SET_REGISTRY;
+        // keep the registry authoritative for a genuine Set and for stale
+        // address reuse. Route `.size` and prototype method-value reads exactly
+        // as before.
+        if gc_type == crate::gc::GC_TYPE_SET {
+            if let Some(value) = super::probe_dispatch::set_property_if_registered(obj, key) {
+                return value;
+            }
         }
         // Issue #618: closures have their own GC type (GC_TYPE_CLOSURE=4)
         // distinct from GC_TYPE_OBJECT, but support dynamic-property storage
@@ -1090,14 +1047,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 gc_type == crate::gc::GC_TYPE_MAP,
             );
         }
-        // RegExp: RegExpHeader is allocated via GC_TYPE_OBJECT but tracked
-        // in REGEX_POINTERS. Detect and route `.source`, `.flags`,
+        // RegExp has a dedicated GC kind. Route `.source`, `.flags`,
         // `.lastIndex`, `.global`, `.ignoreCase`, `.multiline`, `.sticky`,
-        // `.unicode`, `.dotAll` to the regex header fields. Must run
-        // before the generic object-field path so the keys_array lookup
-        // doesn't try to read the regex header bytes as ObjectHeader.
-        if gc_type == crate::gc::GC_TYPE_OBJECT && crate::regex::is_regex_pointer(obj as *const u8)
-        {
+        // `.unicode`, `.dotAll` to the regex header fields. The kind check keeps
+        // its native payload out of the generic ObjectHeader field path.
+        if gc_type == crate::gc::GC_TYPE_REGEXP {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -1195,10 +1149,7 @@ pub(crate) fn get_field_by_name_object_tail(
             return JSValue::undefined();
         }
         if gc_type != crate::gc::GC_TYPE_OBJECT {
-            let object_type = (*obj).object_type;
-            if object_type != crate::error::OBJECT_TYPE_REGULAR {
-                return JSValue::undefined();
-            }
+            return JSValue::undefined();
         }
         if super::super::is_arguments_object(obj) {
             if let Some(value) = super::super::arguments_object_get_field(obj, key) {
@@ -1343,7 +1294,7 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             // #4949 `.prototype` / #6497 `.name` on heap class-expression
             // values — see `class_object_props`.
-            if (*obj).object_type == crate::error::OBJECT_TYPE_CLASS && (*obj).class_id != 0 {
+            if super::super::is_class_object_ptr(obj as *const u8) && (*obj).class_id != 0 {
                 if key_bytes == b"prototype" {
                     return super::class_object_props::class_object_prototype_value(obj);
                 }
@@ -1566,15 +1517,17 @@ pub(crate) fn get_field_by_name_object_tail(
         // #6759 C3c: prefer the header-stamped stable shape id as the cache
         // key — it survives owned grow-reallocs AND GC moves of the keys
         // array, both of which change `keys_id` and orphaned the entry.
-        // Unstamped objects (stamp 0 / class instances) keep the address
-        // key; either way every hit below re-validates the stored key, so a
-        // colliding or foreign key can only miss, never mis-resolve.
-        let stamp = (*obj).parent_class_id;
-        let shape_key = if (*obj).class_id == 0 && super::super::shapes::is_shape_id(stamp) {
-            stamp as usize
-        } else {
-            keys_id
-        };
+        // Unstamped objects keep the address key; either way every hit below
+        // re-validates the stored key, so a colliding or foreign key can only
+        // miss, never mis-resolve.
+        //
+        // #6759 C3 rung 1: `object_shape_stamp` has no `class_id` gate, so a
+        // stamped CLASS INSTANCE keys on its id here too — which is the point
+        // of the rung: a delete-compacted instance clears its stamp and mints
+        // a fresh id, so it can no longer collide with a pristine sibling's
+        // cache entries.
+        let stamp = super::super::shapes::object_shape_stamp(obj);
+        let shape_key = if stamp != 0 { stamp as usize } else { keys_id };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1685,19 +1638,14 @@ pub(crate) fn get_field_by_name_object_tail(
                 // object's stable shape id (allocating the record on first
                 // touch) and key the entry on it, so the entry survives the
                 // grow-reallocs and GC moves that retire `keys_id`.
+                // #6759 C3 rung 1: class instances are stamped here too.
                 {
-                    let store_key = if (*obj).class_id == 0 {
-                        let id =
-                            super::super::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
-                        if id != 0 {
-                            (*(obj as *mut ObjectHeader)).parent_class_id = id;
-                            id as usize
-                        } else {
-                            keys_id
-                        }
-                    } else {
-                        keys_id
-                    };
+                    let id = super::super::shapes::stamp_object_shape(
+                        obj as *mut ObjectHeader,
+                        keys,
+                        key_count as u32,
+                    );
+                    let store_key = if id != 0 { id as usize } else { keys_id };
                     let store_idx =
                         (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();
@@ -1853,6 +1801,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     return JSValue::from_bits(result.to_bits());
                 }
             }
+        }
+
+        // CommonJS Module instances inherit an intrinsic constructor accessor.
+        // Resolve it to the exact shared ESM/callable identity after own-field
+        // lookup, preserving ordinary shadowing while avoiding a rebound
+        // function value from the generic inherited-accessor path.
+        if (*obj).class_id == crate::process::MODULE_CJS_CLASS_ID && key_bytes == b"constructor" {
+            return JSValue::from_bits(
+                crate::object::module_constructor_identity_value().to_bits(),
+            );
         }
 
         // #2820: before giving up, walk an explicit `Object.setPrototypeOf`

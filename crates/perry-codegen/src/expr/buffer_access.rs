@@ -5,12 +5,13 @@ use crate::native_value::{
     BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem, BufferEndian,
     BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
+use crate::rooting;
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 
 use super::{
-    attach_native_owned_view_fact, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
+    attach_buffer_view_facts, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
     buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
-    int_range_expr, is_numeric_expr, lower_expr_native, FnCtx,
+    int_range_expr, is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -248,6 +249,21 @@ pub(crate) fn lower_buffer_access_proof(
         },
         _ => return Ok(None),
     };
+    if !view.pointer_state.is_stable() {
+        return Ok(None);
+    }
+
+    // A tracked ArrayBuffer/native-arena view caches a raw backing pointer in
+    // `data_slot`. Moving GC rewrites `TYPED_ARRAY_VIEW_META.backing`, not that
+    // compiler-created alloca, and native-arena disposal can invalidate it
+    // outright. If evaluating the index can collect or re-enter user code,
+    // decline before evaluating anything; the caller's dynamic path keeps the
+    // receiver rooted and resolves its current backing at the consuming call.
+    // Fresh inline Buffer/TypedArray storage is explicitly non-movable, so its
+    // hot native path remains eligible.
+    if !view.storage_inline_proven && rooting::operand_may_collect(ctx, index_expr) {
+        return Ok(None);
+    }
 
     // A closure-captured buffer local is hazardous even before any escape
     // walk stamped `buffer_hazard_reasons` — the closure may mutate/realloc
@@ -386,7 +402,7 @@ fn record_buffer_view(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
 }
 
 pub(crate) fn lower_buffer_load(
@@ -423,7 +439,7 @@ pub(crate) fn lower_buffer_load(
         proof.may_emit_noalias,
         vec![format!("zext_to={}", result_i32)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     let result = LoweredValue::i32(result_i32);
     if let Some(consumer) = spec.result_consumer {
         let facts = access_facts_for_spec(spec, &proof.view, Some(&emission.len_i32));
@@ -442,7 +458,7 @@ pub(crate) fn lower_buffer_load(
             false,
             Vec::new(),
         );
-        attach_native_owned_view_fact(ctx, &proof.view);
+        attach_buffer_view_facts(ctx, &proof.view);
     }
     Ok(Some(result))
 }
@@ -454,9 +470,28 @@ pub(crate) fn lower_buffer_store(
     value_expr: &Expr,
     spec: BufferAccessSpec,
 ) -> Result<Option<StoreResult>> {
+    // Same cached-view rule as `lower_buffer_access_proof`, applied before the
+    // index is lowered: returning `None` afterward would make the caller's
+    // fallback evaluate the index twice. Inline-owned storage is non-movable;
+    // view storage must use the dynamic path when the RHS can collect.
+    let value_crosses_cached_view = match buffer_expr {
+        Expr::LocalGet(id) => ctx
+            .buffer_view_slots
+            .get(id)
+            .is_some_and(|view| !view.storage_inline_proven),
+        _ => false,
+    } && rooting::operand_may_collect(ctx, value_expr);
+    if value_crosses_cached_view {
+        return Ok(None);
+    }
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
+    // #7640 section E audit: `proof` contains stable slot metadata and the
+    // lowered native index, not a receiver JSValue or raw backing-store
+    // pointer. The precheck above excludes movable/external views when the RHS
+    // collects; for inline-owned storage, lower the RHS before
+    // `emit_buffer_access_pointer` loads the non-movable pointer.
     let val_i32 = lower_value_i32(ctx, value_expr)?;
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
     let byte_val = ctx.block().trunc(I32, &val_i32, I8);
@@ -482,7 +517,7 @@ pub(crate) fn lower_buffer_store(
         proof.may_emit_noalias,
         vec![format!("source_i32={}", val_i32)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     let result = LoweredValue::i32(val_i32.clone());
     Ok(Some(StoreResult { result }))
 }
@@ -612,7 +647,7 @@ pub(crate) fn lower_typed_array_load(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     Ok(Some(result))
 }
 
@@ -686,65 +721,100 @@ pub(crate) fn lower_typed_array_store(
     {
         return Ok(None);
     }
-    if matches!(view.elem, BufferElem::F32 | BufferElem::F64) && !is_numeric_expr(ctx, value_expr) {
+    if matches!(view.elem, BufferElem::F32 | BufferElem::F64)
+        && !crate::codegen::typed_arg_is_guard_candidate(
+            ctx,
+            crate::codegen::TypedParamRep::F64,
+            value_expr,
+        )
+    {
+        return Ok(None);
+    }
+    // `data_slot` is a raw cached pointer. It is stable across a collecting RHS
+    // only for fresh inline typed-array storage; ArrayBuffer and native-arena
+    // views must fall back before either index or value is evaluated.
+    if !view.storage_inline_proven && rooting::operand_may_collect(ctx, value_expr) {
         return Ok(None);
     }
 
     let Some(proof) = lower_buffer_access_proof(ctx, array_expr, index_expr, spec)? else {
         return Ok(None);
     };
+    let expected = match proof.view.elem {
+        BufferElem::I8 | BufferElem::U8 | BufferElem::I16 | BufferElem::U16 | BufferElem::I32 => {
+            ExpectedNativeRep::I32
+        }
+        BufferElem::U32 => ExpectedNativeRep::U32,
+        BufferElem::F32 | BufferElem::F64 => ExpectedNativeRep::F64,
+        BufferElem::U8Clamped => return Ok(None),
+    };
+    // #7640 section E: do not derive `data_ptr` / `elem_ptr` until after the
+    // RHS has been evaluated. A numeric RHS can still be a call, and a raw
+    // backing-store pointer cannot be repaired by the JSValue rooting API.
+    // The gates above guarantee this is inline-owned, non-movable storage when
+    // the RHS collects, so loading the slot here does not reuse a GC-stale view
+    // backing pointer.
+    // A declaration may nominate the floating store route, but the bytes we
+    // write must come from the live value. `lower_expr_native(F64)` still has
+    // legacy source-type fast paths, so annotation-only candidates are boxed
+    // and explicitly ToNumber-coerced here before a raw backing-store write.
+    let result = if matches!(proof.view.elem, BufferElem::F32 | BufferElem::F64)
+        && !is_numeric_expr(ctx, value_expr)
+    {
+        let boxed = lower_expr(ctx, value_expr)?;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)]);
+        LoweredValue::f64(coerced)
+    } else {
+        lower_expr_native(ctx, value_expr, expected)?
+    };
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
-    let (stored, result) = match proof.view.elem {
+    let stored = match proof.view.elem {
         BufferElem::I8 | BufferElem::U8 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
-            let byte = ctx.block().trunc(I32, &value.value, I8);
+            let byte = ctx.block().trunc(I32, &result.value, I8);
             ctx.block().emit_raw(format!(
                 "store i8 {}, ptr {}{}",
                 byte, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::u8(byte), value)
+            LoweredValue::u8(byte)
         }
         BufferElem::I16 | BufferElem::U16 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
-            let half = ctx.block().trunc(I32, &value.value, I16);
+            let half = ctx.block().trunc(I32, &result.value, I16);
             ctx.block().emit_raw(format!(
                 "store i16 {}, ptr {}{}",
                 half, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::i32(value.value.clone()), value)
+            LoweredValue::i32(result.value.clone())
         }
         BufferElem::I32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::I32)?;
             ctx.block().emit_raw(format!(
                 "store i32 {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::i32(value.value.clone()), value)
+            LoweredValue::i32(result.value.clone())
         }
         BufferElem::U32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::U32)?;
             ctx.block().emit_raw(format!(
                 "store i32 {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::u32(value.value.clone()), value)
+            LoweredValue::u32(result.value.clone())
         }
         BufferElem::F32 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::F64)?;
-            let narrow = ctx.block().fptrunc(DOUBLE, &value.value, F32);
+            let narrow = ctx.block().fptrunc(DOUBLE, &result.value, F32);
             ctx.block().emit_raw(format!(
                 "store float {}, ptr {}{}",
                 narrow, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::f32(narrow), value)
+            LoweredValue::f32(narrow)
         }
         BufferElem::F64 => {
-            let value = lower_expr_native(ctx, value_expr, ExpectedNativeRep::F64)?;
             ctx.block().emit_raw(format!(
                 "store double {}, ptr {}{}",
-                value.value, emission.elem_ptr, emission.alias_metadata
+                result.value, emission.elem_ptr, emission.alias_metadata
             ));
-            (LoweredValue::f64(value.value.clone()), value)
+            LoweredValue::f64(result.value.clone())
         }
         BufferElem::U8Clamped => return Ok(None),
     };
@@ -765,6 +835,6 @@ pub(crate) fn lower_typed_array_store(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     Ok(Some(StoreResult { result }))
 }

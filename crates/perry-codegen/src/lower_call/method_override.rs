@@ -238,8 +238,8 @@ pub(super) fn emit_guarded_direct_method_call(
         .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
 
     let expected_class_id_str = expected_class_id.to_string();
-    let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
-    let expected_keys = ctx.block().load(I64, &expected_keys_slot);
+    let expected_shape_id =
+        crate::typed_shape::load_class_shape_id(ctx, receiver_class_name, &keys_global_name);
 
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
@@ -257,14 +257,14 @@ pub(super) fn emit_guarded_direct_method_call(
         ))
     };
 
-    // Per-arm keys tokens, loaded through the same entry-block init the
-    // declared class's token uses (module-init populates `@perry_class_keys_*`
-    // after the prelude, so the load may not be hoisted above it).
-    let subclass_keys: Vec<String> = subclass_arms
+    // Per-arm ShapeIds, loaded through entry-block scalar slots.
+    let subclass_shape_ids: Vec<String> = subclass_arms
         .iter()
         .map(|arm| {
-            let slot = ctx.func.entry_init_load_global(&arm.keys_global, I64);
-            ctx.block().load(I64, &slot)
+            let shape_global =
+                crate::typed_shape::shape_id_global_name_from_keys_global(&arm.keys_global);
+            let slot = ctx.func.entry_init_load_global(&shape_global, I32);
+            ctx.block().load(I32, &slot)
         })
         .collect();
 
@@ -296,19 +296,19 @@ pub(super) fn emit_guarded_direct_method_call(
     // single-arm form keeps its original single call.
     let multi_arm = !subclass_arms.is_empty();
     if multi_arm {
-        let keys_slot = ctx.func.alloca_entry(I64);
+        let shape_slot = ctx.func.alloca_entry(I32);
         let cid = ctx.block().call(
             I32,
             "js_method_direct_shape_class",
-            &[(DOUBLE, recv_box), (crate::types::PTR, &keys_slot)],
+            &[(DOUBLE, recv_box), (crate::types::PTR, &shape_slot)],
         );
-        let keys = ctx.block().load(I64, &keys_slot);
+        let shape_id = ctx.block().load(I32, &shape_slot);
         {
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &expected_class_id_str);
-            let keys_ok = blk.icmp_eq(I64, &keys, &expected_keys);
-            let pass = blk.and(I1, &cid_ok, &keys_ok);
+            let shape_ok = blk.icmp_eq(I32, &shape_id, &expected_shape_id);
+            let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &fast_label, &next);
         }
         for (i, arm) in subclass_arms.iter().enumerate() {
@@ -319,11 +319,11 @@ pub(super) fn emit_guarded_direct_method_call(
                 .unwrap_or_else(|| fallback_label.clone());
             let case_label = sub_case_labels[i].clone();
             let class_id_str = arm.class_id.to_string();
-            let arm_keys = subclass_keys[i].clone();
+            let arm_shape_id = subclass_shape_ids[i].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &class_id_str);
-            let keys_ok = blk.icmp_eq(I64, &keys, &arm_keys);
-            let pass = blk.and(I1, &cid_ok, &keys_ok);
+            let shape_ok = blk.icmp_eq(I32, &shape_id, &arm_shape_id);
+            let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &case_label, &next);
         }
         ctx.current_block = guard_idx;
@@ -339,7 +339,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &[
                 (DOUBLE, recv_box),
                 (I32, &expected_class_id_str),
-                (I64, &expected_keys),
+                (I32, &expected_shape_id),
             ],
         )
     } else {
@@ -353,7 +353,7 @@ pub(super) fn emit_guarded_direct_method_call(
                 ),
                 (DOUBLE, recv_box),
                 (I32, &expected_class_id_str),
-                (I64, &expected_keys),
+                (I32, &expected_shape_id),
                 (crate::types::PTR, &bytes_global),
                 (I64, &name_len_str),
                 (crate::types::PTR, &format!("@{}", direct_fn)),
@@ -408,7 +408,7 @@ pub(super) fn emit_guarded_direct_method_call(
                         (I64, &site_id),
                         (DOUBLE, recv_box),
                         (I32, &expected_class_id_str),
-                        (I64, &expected_keys),
+                        (I32, &expected_shape_id),
                         (I64, &key_raw),
                         (I32, &field_index_str),
                         (I32, "1"),

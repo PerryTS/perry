@@ -364,8 +364,8 @@ pub struct CompileOptions {
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
 
     /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
-    /// every Deferred `.next/server/**` module. The entry's `main` emits a
-    /// `js_register_path_init(path, &<prefix>__init)` for each so a runtime
+    /// every Deferred `.next/server/**` module. The entry's `main` or
+    /// `perry_module_init` emits a `js_register_path_init` for each so a runtime
     /// `require(absolutePath)` can lazily trigger the module's init. Only
     /// populated for the entry module; empty otherwise.
     pub nextjs_path_init_modules: Vec<(String, String)>,
@@ -410,10 +410,11 @@ pub struct CompileOptions {
     /// `js_set_call_location(file, line)` so the thrown TypeError's `.stack`
     /// shows `at <file>:<line>`.
     pub debug_locations: bool,
-    /// #5247: this module's original source text, used at codegen to resolve a
-    /// `Call`'s `byte_offset` to a 1-based line number. Only set when
-    /// `debug_locations` is on (avoids cloning source for every module in the
-    /// common build). `None` falls back to the `<anonymous>` frame.
+    /// #5247 / #7036: this module's original source text, used at codegen to
+    /// resolve byte offsets for debug call frames and text optimization-report
+    /// snippets. Set only when either consumer is active (avoids cloning source
+    /// for every module in the common build). `None` falls back to the
+    /// `<anonymous>` frame or a raw byte offset.
     pub module_source: Option<String>,
     /// #5247 (CJS-wrap coordinate skew): for a CommonJS module rewritten by
     /// `cjs_wrap`, `module_source` is the WRAPPED text and `byte_offset`s are in
@@ -554,6 +555,12 @@ pub struct ImportedClass {
     /// instances by the source module's constructor. `None` falls back
     /// to a freshly-assigned id (legacy behavior).
     pub source_class_id: Option<u32>,
+    /// #7170 R2: LOCAL imported function bindings whose source proof returns
+    /// this exact anonymous-record class. Codegen projects these entries into
+    /// `ModuleDispatchFacts::imported_return_shapes` before collecting region
+    /// facts. Kept beside the class metadata so the proof and the field layout
+    /// it names enter the consumer atomically and share one object-cache key.
+    pub return_shape_imports: Vec<String>,
 }
 
 /// Constructor metadata for a class imported from another module.
@@ -617,6 +624,10 @@ pub(crate) struct CrossModuleCtx {
     /// completion/timer queues on the worker thread and alias the main
     /// thread's heap.
     pub async_step_closures: std::collections::HashSet<u32>,
+    /// Module-global runtime kinds proven directly from their initializer and
+    /// invalidated by any module-wide write. Used by the worker-thread safety
+    /// check; declared module types are intentionally excluded (#7846).
+    pub module_global_proven_types: std::collections::HashMap<u32, perry_hir::types::Type>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS
@@ -775,6 +786,11 @@ pub(crate) struct CrossModuleCtx {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// Declared return types independently verified from the specialized
+    /// body's guarded inputs and runtime-derived constructions. A direct call
+    /// result may become a local proof only when its arguments also route to
+    /// the matching specialized entry.
+    pub spec_return_proofs: std::collections::HashMap<u32, perry_hir::types::Type>,
     /// Phase 2 pre-pass: LocalIds proven to permanently hold one specific
     /// non-view typed array (see `collectors/spec_abi_sites.rs`).
     pub spec_ta_bindings: std::collections::HashMap<u32, crate::collectors::SpecTaBinding>,
@@ -863,10 +879,11 @@ pub(crate) struct CrossModuleCtx {
     /// closure identity/arity, string argument guards, and any required string
     /// capture guards pass.
     pub typed_string_closures: std::collections::HashSet<u32>,
-    /// Number of immutable string captures consumed by each typed-string
-    /// closure clone. Direct local call sites use this to guard capture slots
-    /// before entering the raw string ABI.
-    pub typed_string_closure_capture_counts: std::collections::HashMap<u32, usize>,
+    /// Candidate raw representations for immutable captures consumed by each
+    /// typed closure clone. Every typed entry path checks the current capture
+    /// bits against these reps before entering the raw ABI.
+    pub typed_closure_capture_reps:
+        std::collections::HashMap<u32, Vec<super::typed_abi::TypedParamRep>>,
     /// Per-closure typed-i1 clone parameter reps. This lets direct local
     /// closure calls target mixed native predicate clones such as
     /// `i1(i64 closure, double, double)` without routing through the public
@@ -950,7 +967,8 @@ pub(crate) struct CrossModuleCtx {
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
     /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
     /// every Deferred `.next/server/**` module — see [`CompileOptions`]. The
-    /// entry's `main` emits one `js_register_path_init` per entry.
+    /// entry's executable or dylib initializer emits one
+    /// `js_register_path_init` per entry.
     pub nextjs_path_init_modules: Vec<(String, String)>,
     /// Issue #753: sanitized prefixes of modules reached only through
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded
@@ -976,4 +994,10 @@ pub(crate) struct CrossModuleCtx {
     /// `PERRY_INLINE_HOT_SMALL` is off (the flag is checked at the decision
     /// site, so the set is still populated but simply not consulted).
     pub hot_loop_callees: std::collections::HashSet<u32>,
+    /// #7871: `FuncId`s in THIS module whose `new` sites earn the inline bump
+    /// allocator — `collectors::collect_alloc_hot_functions`. Deliberately a
+    /// SECOND set rather than a widening of `hot_loop_callees`: that one gates
+    /// `inlinehint`, whose cost scales with call sites, and the two must not
+    /// share an admission rule. See the collector's doc comment.
+    pub alloc_hot_functions: std::collections::HashSet<u32>,
 }

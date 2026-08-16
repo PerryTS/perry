@@ -26,6 +26,9 @@ pub struct LlFunction {
     /// function at every call site, exposing integer operations to the
     /// caller's optimizer context (critical for vectorization of clamp patterns).
     pub force_inline: bool,
+    /// When true, keep a small routing wrapper as an optimization boundary.
+    /// Used when inlining would duplicate guarded fast/fallback call graphs.
+    pub no_inline: bool,
     /// When true (and `force_inline` is not), emit the `inlinehint` attribute.
     /// Unlike `alwaysinline`, `inlinehint` only *raises* LLVM's inline
     /// threshold for this callee — LLVM keeps its `-O3` growth budget and can
@@ -36,6 +39,24 @@ pub struct LlFunction {
     /// inline-hot-small heuristic in `codegen/function.rs`. `alwaysinline`
     /// already implies the hint, so the two are never emitted together.
     pub inline_hint: bool,
+    /// #7834: `collectors::collect_hot_loop_callees` admitted this function —
+    /// it has at least one direct call site inside a LOOP and at most
+    /// `inline_hot_small_max_call_sites` call sites in the whole module.
+    ///
+    /// Not the same question as [`Self::inline_hint`], which is that set
+    /// INTERSECTED with a body-length window and with "not already
+    /// `alwaysinline`". A ≤8-statement function is `alwaysinline` and therefore
+    /// never hinted, yet it is exactly the shape whose body ends up executing
+    /// once per loop iteration — `cycles.ts`'s `makeCycle`. Sites that want
+    /// "is this code hot?" rather than "should LLVM's threshold move?" read
+    /// this.
+    pub hot_loop_callee: bool,
+    /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
+    /// — it has an in-loop direct call site (uncapped) or calls itself. Read
+    /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
+    /// used to widen `inline_hint`, whose anti-bloat cap is the whole reason
+    /// the two sets are separate.
+    pub alloc_hot: bool,
     /// Invoke-EH (#7302): this function contains landing pads (Itanium) or
     /// funclet pads (SEH), so its `define` line must carry
     /// `personality ptr @<name>` — `perry_eh_personality` on Mach-O/ELF,
@@ -214,7 +235,10 @@ impl LlFunction {
             params,
             linkage: String::new(),
             force_inline: false,
+            no_inline: false,
             inline_hint: false,
+            hot_loop_callee: false,
+            alloc_hot: false,
             personality: None,
             blocks: Vec::new(),
             block_counter: 0,
@@ -629,6 +653,18 @@ impl LlFunction {
         self.blocks.len()
     }
 
+    /// Whether final rendering must lower shadow-slot bindings into native
+    /// `addrspace(1)` roots before RS4GC runs.
+    ///
+    /// The direct C-API backend normally consumes [`FinalItem`]s before
+    /// [`Self::to_ir`] applies this whole-function lowering. Its callers use
+    /// this bit to select the finalized text stream for mapped functions;
+    /// otherwise the native module keeps `js_shadow_slot_bind` calls while
+    /// claiming `gc "statepoint-example"`, and the collector gets no roots.
+    pub(crate) fn stack_map_requested(&self) -> bool {
+        self.stack_map_requested
+    }
+
     /// Label of the last-created block — convenience for expression codegen
     /// that needs to feed a phi node the predecessor label after compiling a
     /// sub-expression whose control flow may have split.
@@ -650,7 +686,26 @@ impl LlFunction {
         body + allocas + self.name.len() + 64
     }
 
-    pub fn to_ir(&self) -> String {
+    /// The `define ... {` line, and the ONLY place it is rendered.
+    ///
+    /// **#7982.** The in-process native path used to synthesize its own copy of
+    /// this (`native_emit::synth_define_header`). It was written against an
+    /// older `to_ir` and silently missed the two attributes added afterwards —
+    /// `"frame-pointer"="non-leaf"` and `gc "statepoint-example"`. Missing the
+    /// GC strategy means RS4GC never runs on a natively-constructed module: it
+    /// verifies, links and executes correctly on any program that does not
+    /// collect, while having **no precise roots at all**. Nothing observable
+    /// distinguishes that from a correct build until a collection frees
+    /// something live (#7332's shape).
+    ///
+    /// So the two callers now share one renderer rather than being tested for
+    /// agreement: a copy that can drift eventually does, and this one took two
+    /// attributes and an unknown number of releases to be noticed.
+    ///
+    /// `force_external` is the codegen-unit case: unit splitting promotes
+    /// internal/private definitions so cross-unit calls bind (mirror of
+    /// `render_fn_external`).
+    pub fn define_header(&self, force_external: bool) -> String {
         let param_str = self
             .params
             .iter()
@@ -658,7 +713,7 @@ impl LlFunction {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let linkage = if self.linkage.is_empty() {
+        let linkage = if self.linkage.is_empty() || force_external {
             String::new()
         } else {
             format!("{} ", self.linkage)
@@ -666,6 +721,8 @@ impl LlFunction {
 
         let attrs = if self.force_inline {
             " alwaysinline"
+        } else if self.no_inline {
+            " noinline"
         } else if self.inline_hint {
             " inlinehint"
         } else {
@@ -696,8 +753,8 @@ impl LlFunction {
             Some(p) => format!(" personality ptr @{}", p),
             None => String::new(),
         };
-        let mut ir = format!(
-            "define {}{} @{}({}){}{}{}{} {{\n",
+        format!(
+            "define {}{} @{}({}){}{}{}{} {{",
             linkage,
             self.return_type,
             self.name,
@@ -706,7 +763,12 @@ impl LlFunction {
             frame_pointer,
             gc_strategy,
             personality
-        );
+        )
+    }
+
+    pub fn to_ir(&self) -> String {
+        let mut ir = self.define_header(false);
+        ir.push('\n');
         self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
             ir.push_str(line);
             ir.push('\n');
@@ -743,10 +805,14 @@ impl LlFunction {
         // exception from the runtime rather than the pad payload. Only the type
         // is load-bearing, and only to RS4GC.
         //
-        // Conditioned on the same fact as `gc_strategy` above — a function that
+        // Conditioned on exactly the predicate `define_header` uses for the GC
+        // strategy (#7982 moved that rendering into one place) — a function that
         // does not carry the strategy must keep the Itanium form, or its pad
         // becomes untypeable for ordinary EH lowering.
-        let ir = if !gc_strategy.is_empty() && crate::codegen::helpers::rs4gc_enabled() {
+        let ir = if self.stack_map_requested
+            && crate::codegen::helpers::native_stack_roots_enabled()
+            && crate::codegen::helpers::rs4gc_enabled()
+        {
             retype_landing_pads_for_statepoints(&ir)
         } else {
             ir
@@ -935,4 +1001,133 @@ pub enum FinalItem<'a> {
     Text(&'a str),
     /// A typed instruction — the native backend constructs it directly.
     Inst(&'a crate::inst::LlInst),
+}
+
+#[cfg(test)]
+mod define_header_tests {
+    use super::*;
+
+    fn probe() -> LlFunction {
+        LlFunction::new(
+            "perry_fn_probe",
+            crate::types::DOUBLE,
+            vec![(crate::types::DOUBLE, "%a".to_string())],
+        )
+    }
+
+    /// `to_ir`'s first line and `define_header(false)` are the same string —
+    /// asserted, not assumed, because they were two independent renderers
+    /// until #7982 and the copy silently lost `gc "statepoint-example"`.
+    /// A natively-constructed module without that strategy gets no RS4GC pass
+    /// and therefore no precise roots, and it looks entirely correct until a
+    /// collection frees something live.
+    #[test]
+    fn to_ir_opens_with_exactly_the_shared_define_header() {
+        for force_inline in [false, true] {
+            for personality in [None, Some("perry_eh_personality")] {
+                let mut f = probe();
+                f.force_inline = force_inline;
+                f.personality = personality;
+                let ir = f.to_ir();
+                let first = ir.lines().next().expect("to_ir emits a header line");
+                assert_eq!(
+                    first,
+                    f.define_header(false),
+                    "to_ir's header and define_header must be one renderer \
+                     (force_inline={force_inline}, personality={personality:?})"
+                );
+            }
+        }
+    }
+
+    /// The property that was actually lost, asserted directly (#7982) — in
+    /// **both** lowerings, neither of them dark.
+    ///
+    /// The header/`to_ir` agreement test above cannot see this: with one shared
+    /// renderer, dropping `gc "statepoint-example"` changes both sides
+    /// identically and that test stays green. Verified by doing exactly that.
+    ///
+    /// The first version of this test read `native_stack_roots_enabled()` and
+    /// branched on it. Under `cargo test` that predicate is false — no module
+    /// has called `set_native_roots_for_target` — so the ON arm, the one that
+    /// matters, never executed and the same sabotage passed a second time. That
+    /// is the failure mode this whole change is about, reproduced inside its own
+    /// test. `NativeRootsPin` exists for precisely this; both arms now run every
+    /// time, and each carries a liveness assertion that its lowering was
+    /// actually selected.
+    #[test]
+    fn the_gc_strategy_appears_exactly_when_the_function_asks_for_a_stack_map() {
+        use crate::codegen::helpers::NativeRootsPin;
+        const STRATEGY: &str = "gc \"statepoint-example\"";
+
+        {
+            let _native = NativeRootsPin::native();
+            let plain = probe();
+            assert!(
+                !plain.define_header(false).contains(STRATEGY),
+                "a function that never reserved a stack-map slot must not claim \
+                 a GC strategy, even under the native-roots lowering"
+            );
+
+            let mut mapped = probe();
+            mapped.enable_shadow_frame(0);
+            assert!(
+                mapped.reserve_shadow_slot().is_some(),
+                "a shadow-framed function must yield a root slot"
+            );
+            assert_eq!(
+                mapped.stack_map_slot_count, 1,
+                "under the native-roots pin the reservation must take the \
+                 stack-map path — otherwise the assertion below is vacuous"
+            );
+            assert!(
+                mapped.define_header(false).contains(STRATEGY),
+                "a stack-map function's define line MUST name the GC strategy. \
+                 Without it RS4GC never runs on the module, which verifies, \
+                 links and executes correctly on any program that does not \
+                 collect while having NO precise roots at all — #7332's shape, \
+                 and exactly what the in-process native backend shipped until \
+                 #7982"
+            );
+        }
+
+        {
+            let _shadow = NativeRootsPin::shadow();
+            let mut mapped = probe();
+            mapped.enable_shadow_frame(0);
+            assert!(
+                mapped.reserve_shadow_slot().is_some(),
+                "a shadow-framed function must yield a root slot in this \
+                 lowering too"
+            );
+            assert_eq!(
+                mapped.stack_map_slot_count, 0,
+                "under the shadow-stack pin the reservation must NOT take the \
+                 stack-map path"
+            );
+            assert!(
+                !mapped.define_header(false).contains(STRATEGY),
+                "the shadow-stack lowering must NOT name a GC strategy — RS4GC \
+                 is not the backend in that build, and claiming it would run the \
+                 pass over IR that has no addrspace(1) roots to rewrite"
+            );
+        }
+    }
+
+    /// `force_external` drops only the linkage keyword. The codegen-unit path
+    /// depends on that and on nothing else changing.
+    #[test]
+    fn force_external_drops_linkage_and_leaves_every_other_attribute() {
+        let mut f = probe();
+        f.linkage = "internal".to_string();
+        let internal = f.define_header(false);
+        let external = f.define_header(true);
+        assert!(internal.starts_with("define internal "));
+        assert!(!external.contains("internal"));
+        assert_eq!(
+            internal.replacen("internal ", "", 1),
+            external,
+            "force_external must remove the linkage keyword and change nothing else"
+        );
+    }
 }

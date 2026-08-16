@@ -10,10 +10,14 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::FnCtx;
+use crate::expr::{lower_expr, FnCtx};
 use crate::lower_array_method::lower_array_method;
-use crate::lower_string_method::{is_known_string_method_name, lower_string_method};
-use crate::type_analysis::{is_array_expr, is_native_module_dynamic_index, is_string_expr};
+use crate::lower_string_method::{
+    is_known_string_method_name, lower_string_method, lower_string_method_from_proven_box,
+};
+use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
+use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
+use crate::types::{DOUBLE, I1, I64};
 
 mod dynamic_dispatch;
 mod fetch_chain;
@@ -28,9 +32,87 @@ mod static_dispatch;
 // original unqualified names.
 pub(crate) use helpers::{
     class_chain_has_field_named, is_array_only_method_name, is_date_receiver,
-    is_inherited_object_prototype_method, receiver_class_defines_method,
-    resolve_static_dispatch_cls, string_only_method_arity_ok,
+    is_inherited_object_prototype_method, resolve_static_dispatch_cls, string_only_method_arity_ok,
 };
+
+/// Preserve the old String-method fast path for an unproven receiver without
+/// using a method name as its type proof (#7673).
+///
+/// The receiver is evaluated once, then a pure NaN-box tag check selects the
+/// direct String lowering or the universal runtime method dispatcher. Known
+/// classes skip this guard and retain the class-dispatch tower below.
+fn try_lower_tag_guarded_string_method(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    call_byte_offset: u32,
+) -> Result<Option<String>> {
+    if !is_known_string_method_name(property)
+        || !string_only_method_arity_ok(property, args.len())
+        || is_string_expr(ctx, object)
+        || receiver_class_name(ctx, object).is_some()
+        || matches!(object, Expr::GlobalGet(_) | Expr::NativeModuleRef(_))
+    {
+        return Ok(None);
+    }
+
+    let recv_box = lower_expr(ctx, object)?;
+    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let is_heap_string = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let is_short_string = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let is_string = ctx.block().or(I1, &is_heap_string, &is_short_string);
+
+    let string_idx = ctx.new_block("anystr.string");
+    let generic_idx = ctx.new_block("anystr.generic");
+    let merge_idx = ctx.new_block("anystr.merge");
+    let string_label = ctx.block_label(string_idx);
+    let generic_label = ctx.block_label(generic_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&is_string, &string_label, &generic_label);
+
+    ctx.current_block = string_idx;
+    let string_value =
+        lower_string_method_from_proven_box(ctx, object, property, args, recv_box.clone())?;
+    let string_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = generic_idx;
+    let mut group = open_rooted_group(args.len() + 1);
+    let recv_collects = any_operand_may_collect(ctx, args.iter());
+    let rooted_recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, recv_collects);
+    for (i, arg) in args.iter().enumerate() {
+        let collects = any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    let generic_recv = group.reread_emitted(ctx, rooted_recv);
+    let generic_args = group.reread_all(ctx)?;
+    let generic_value = super::console_promise::emit_native_method_str_dispatch(
+        ctx,
+        property,
+        call_byte_offset,
+        &generic_recv,
+        &generic_args,
+    );
+    group.release(ctx);
+    let generic_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(Some(ctx.block().phi(
+        DOUBLE,
+        &[
+            (string_value.as_str(), string_end.as_str()),
+            (generic_value.as_str(), generic_end.as_str()),
+        ],
+    )))
+}
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
@@ -74,144 +156,11 @@ pub fn try_lower_property_get_method_call(
     {
         return Ok(Some(lower_string_method(ctx, object, property, args)?));
     }
-    // String method fallback for Any-typed receivers: when the method
-    // name is a well-known string method that has no array/object
-    // equivalent, route through the string dispatcher. This handles
-    // the common pattern where a cross-module function returns a string
-    // but the local is typed as Any (e.g., `readFileSync(path).split('\n')`).
-    // Without this, .split/.charCodeAt/.charAt/etc. on Any-typed strings
-    // fall through to js_native_call_method which returns [object Object].
-    {
-        // Only include methods that are EXCLUSIVELY string methods
-        // (no array/map/set equivalent). Exclude: slice, indexOf,
-        // lastIndexOf, includes, at, concat — these also exist on
-        // arrays and would break when the receiver is an Any-typed
-        // array. startsWith/endsWith are string-only in JS so the
-        // 2-arg form (searchString, position) is also unambiguous.
-        let is_string_only_method = match property.as_str() {
-            "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
-            | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
-            | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "codePointAt" | "localeCompare" => true,
-            // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
-            // string-only in the spec but collide with common user method
-            // names — chalk's `chalk.bold(s)` is a styled-string builder
-            // (#5039). Forcing the string path here coerced the chalk closure
-            // to its source text and wrapped it in `<b>…</b>`. An Any-typed
-            // receiver that really is a string still gets them via the
-            // `jsval.is_string()` arm of `js_native_call_method`.
-            // (`normalize` is intentionally NOT in this unconditional list — the
-            // arg-gated `"normalize" if args.len() <= 1` arm below handles it so
-            // user 2-arg `normalize(pathname, matched)` methods fall through.)
-            // Issue #638: `replace` is also string-exclusive, but routing
-            // it here unconditionally caused regressions in async dispatch
-            // pathways. Only fire when args[1] is statically detectable as
-            // a closure literal — that's the failing case (replace
-            // callback got coerced to "[object Object]" via the runtime
-            // fallback path because the string-method dispatch never
-            // saw it). When args[1] is a string, the existing
-            // js_native_call_method fallback handles it correctly via
-            // js_string_replace_string.
-            "replace" if args.len() == 2 && matches!(&args[1], Expr::Closure { .. }) => true,
-            // `slice` exists on strings, arrays, buffers, and Blob-like
-            // objects. Let the runtime dispatcher choose by receiver shape;
-            // forcing the string path here turns Blob slices into string
-            // slices for Any-typed native-module results.
-            "slice" => false,
-            // `indexOf` / `includes` are NOT string-forced here: an
-            // Any-typed receiver may be a runtime array (e.g. a native
-            // module property like `PerformanceObserver.supportedEntryTypes`),
-            // and forcing the string path made `arr.includes(x)` always
-            // return false (string-includes on a non-string). Falling
-            // through routes both to `js_native_call_method`, which
-            // dispatches on the runtime type and handles string + array
-            // (with content-aware element comparison). Refs #1341.
-            // startsWith / endsWith are NOT string-forced here: an Any-typed
-            // receiver may be a user/library object with its OWN same-named
-            // method that returns something other than the String builtin's
-            // boolean — e.g. Zod's `z.string().startsWith("./")` returns a
-            // refined ZodString schema, not a boolean. Forcing the static
-            // string path made `.startsWith()`/`.endsWith()` return a boolean,
-            // so a chained `.describe()`/`.optional()` threw
-            // `(boolean).describe is not a function` (broke the bundled-CLI TUI
-            // schema init). Falling through routes to `js_native_call_method`,
-            // which dispatches on the runtime type and still services a genuine
-            // Any-typed string receiver via its `jsval.is_string()` arm (the
-            // runtime grew full string-method arms in #421/#514). Refs #1341
-            // (the same fix already applied to indexOf/includes above).
-            // `normalize` is NOT force-routed to the string path for Any-typed
-            // receivers at any arity. User classes commonly define a 1-arg
-            // `normalize(pathname)` method (Next.js route normalizers:
-            // `this.normalize(matchedPath)`, `normalizer.normalize(initPathname)`)
-            // — forcing the string path made the pathname argument the Unicode
-            // `form`, throwing `RangeError: The normalization form should be one
-            // of NFC, NFD, NFKC, NFKD` (Next.js wall 50). A receiver that really
-            // is a string still gets `String.prototype.normalize` two ways: the
-            // statically-typed-string fast path above (`is_string_expr`), and the
-            // `jsval.is_string()` arm of `js_native_call_method` for Any-typed
-            // strings. So nothing is lost by falling through here.
-            // `lastIndexOf` (number-returning) shares the startsWith/endsWith
-            // hazard above — an Any-typed object's own `lastIndexOf` would be
-            // clobbered by the String builtin. Fall through to the runtime,
-            // which services a genuine string receiver via `jsval.is_string()`.
-            _ => false,
-        };
-        // Don't route buffer/Uint8Array methods through the string path —
-        // buffers have a different header layout and their indexOf/includes
-        // go through dispatch_buffer_method via js_native_call_method.
-        let is_buffer = matches!(
-            crate::type_analysis::static_type_of(ctx, object),
-            Some(perry_hir::types::Type::Named(ref n)) if n == "Uint8Array" || n == "Buffer"
-        );
-        // #1760: a dynamic native-module sub-namespace receiver
-        // (`(path as any)[k]` → `path.win32`) is NOT a string, even though a
-        // method like `normalize` collides with a String.prototype name.
-        // Falling through here routes it to the generic `js_native_call_method`
-        // dispatch (→ `dispatch_native_module_method`); forcing the string path
-        // hands the namespace pointer to a string FFI and SIGSEGVs.
-        // #5271: a builtin-named method on a receiver that is NOT provably a
-        // string (object literal, `any`, unknown) may be a USER method that
-        // merely shares the name — joi's `internals.trim(value, schema)`, or
-        // any `{ trim() {…} }.trim()`. Forcing the static String path there
-        // hands the object pointer to a string FFI: it either aborts codegen
-        // on the String arity guard (`String.trim takes no args, got 2`) or
-        // bit-casts the object as a string and returns "[object Object]".
-        //
-        // Take the static String fast path only when:
-        //   * the receiver is NOT a known object-literal local — `o.trim()`
-        //     on `const o = { trim() {…} }` is the object's OWN method, never
-        //     `String.prototype.trim`, even when the arity matches; AND
-        //   * the arg count is plausible for the String builtin — when it is
-        //     NOT (joi's `internals.trim(value, schema)`: 2 args to a 0-arg
-        //     builtin), the call is a user method sharing the name.
-        // Otherwise fall through to `js_native_call_method`, which resolves
-        // the receiver's own member at runtime and still services a genuine
-        // (Any-typed) string receiver via its `jsval.is_string()` arm — so
-        // the earlier "[object Object]" hazard the comment above warns about
-        // no longer applies (the runtime grew full string-method arms in
-        // #421/#514). See #5271.
-        let receiver_is_object_literal = matches!(
-            &**object,
-            Expr::LocalGet(id) if ctx.object_literal_locals.contains(id)
-        ) || matches!(&**object, Expr::Object(_));
-        if is_string_only_method
-            && string_only_method_arity_ok(property, args.len())
-            && !receiver_is_object_literal
-            // A receiver whose statically-known class defines its OWN method of
-            // this name is calling THAT method, never the String builtin — even
-            // when the arity matches. Critical for the char-access methods
-            // (`charAt`/`charCodeAt`/`codePointAt`), whose arity gate above is a
-            // no-op (any arg count is spec-valid), so a user `charAt(n)` helper
-            // (e.g. the `yaml` package's `Lexer`) would otherwise be coerced to
-            // `String.prototype.charAt` on a `"[object Object]"` receiver.
-            && !receiver_class_defines_method(ctx, object, property)
-            && !is_array_expr(ctx, object)
-            && !is_buffer
-            && !is_native_module_dynamic_index(object)
-        {
-            return Ok(Some(lower_string_method(ctx, object, property, args)?));
-        }
-    }
+    // #7673: a String-builtin method NAME is not proof that its receiver is a
+    // string. An Any-typed call result may be a library object with an own
+    // `trim`/`split`/`charAt` method (Zod schemas are the reported case).
+    // Keep the static fast path positive-proof-only; the runtime dispatcher
+    // below handles both genuine Any-typed strings and user methods.
     if is_array_expr(ctx, object) && !is_inherited_object_prototype_method(property) {
         return Ok(Some(lower_array_method(ctx, object, property, args)?));
     }
@@ -240,6 +189,12 @@ pub fn try_lower_property_get_method_call(
     // Issue #687 — ClassRef receiver static-method dispatch.
     if let Some(value) =
         static_dispatch::try_lower_static_dispatch(ctx, callee, object, property, args)?
+    {
+        return Ok(Some(value));
+    }
+
+    if let Some(value) =
+        try_lower_tag_guarded_string_method(ctx, object, property, args, call_byte_offset)?
     {
         return Ok(Some(value));
     }

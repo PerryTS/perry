@@ -109,7 +109,7 @@ fn emit_public_typed_closure_trampoline(
     module_prefix: &str,
     generic_body_name: &str,
     kind: TypedFunctionTrampolineKind,
-    string_capture_count: usize,
+    capture_reps: &[TypedParamRep],
 ) -> Result<()> {
     let params = match closure_expr {
         perry_hir::Expr::Closure { params, .. } => params,
@@ -155,15 +155,11 @@ fn emit_public_typed_closure_trampoline(
                 None => ok,
             });
         }
-        if string_capture_count > 0 {
-            if let Some(capture_guard) =
-                emit_typed_string_capture_guard(blk, "%this_closure", string_capture_count)
-            {
-                guard = Some(match guard {
-                    Some(prev) => blk.and(I1, &prev, &capture_guard),
-                    None => capture_guard,
-                });
-            }
+        if let Some(capture_guard) = emit_typed_capture_guard(blk, "%this_closure", capture_reps) {
+            guard = Some(match guard {
+                Some(prev) => blk.and(I1, &prev, &capture_guard),
+                None => capture_guard,
+            });
         }
     }
 
@@ -253,13 +249,13 @@ fn load_typed_capture(
     }
 }
 
-pub(crate) fn emit_typed_string_capture_guard(
+pub(crate) fn emit_typed_capture_guard(
     blk: &mut crate::block::LlBlock,
     closure_handle: &str,
-    capture_count: usize,
+    capture_reps: &[TypedParamRep],
 ) -> Option<String> {
     let mut guard: Option<String> = None;
-    for idx in 0..capture_count {
+    for (idx, rep) in capture_reps.iter().enumerate() {
         let idx = idx.to_string();
         let captured_bits = blk.call(
             I64,
@@ -267,12 +263,7 @@ pub(crate) fn emit_typed_string_capture_guard(
             &[(I64, closure_handle), (I32, &idx)],
         );
         let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let raw = blk.call(
-            I32,
-            "js_typed_string_arg_guard",
-            &[(DOUBLE, captured.as_str())],
-        );
-        let ok = blk.icmp_ne(I32, &raw, "0");
+        let ok = emit_typed_arg_guard(blk, *rep, &captured);
         guard = Some(match guard {
             Some(prev) => blk.and(I1, &prev, &ok),
             None => ok,
@@ -544,6 +535,21 @@ pub(super) fn compile_closure(
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
     };
 
+    // A LocalId is module-unique, but a closure can only observe ids referenced
+    // or declared in its own body (plus its parameters/capture list). Older
+    // code cloned the complete module-wide boxed/type/reassignment tables into
+    // every closure's FnCtx. Generated bundles contain thousands of closures,
+    // making that O(closures * module locals) in both time and retained memory.
+    // Build the precise key set once and project each global oracle through it.
+    let mut closure_referenced_ids: HashSet<u32> = HashSet::new();
+    collect_ref_ids_in_stmts(body, &mut closure_referenced_ids);
+    let mut closure_declared_ids: HashSet<u32> = HashSet::new();
+    collect_let_ids(body, &mut closure_declared_ids);
+    let mut closure_relevant_ids = closure_referenced_ids.clone();
+    closure_relevant_ids.extend(closure_declared_ids.iter().copied());
+    closure_relevant_ids.extend(params.iter().map(|p| p.id));
+    closure_relevant_ids.extend(captures.iter().copied());
+
     let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
@@ -572,6 +578,12 @@ pub(super) fn compile_closure(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
+    // #7908: closures live outside `hir.functions`, so they do not pass
+    // through `codegen/function.rs`, which applies this same collector result
+    // to ordinary functions. Without propagating the bit here, bounded
+    // indirect-call admission is computed correctly but never reaches
+    // `new_site_is_in_loop` while the closure body is emitted.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&func_id);
     if typed_public_trampoline.is_some() {
         lf.linkage = "internal".to_string();
     }
@@ -610,7 +622,11 @@ pub(super) fn compile_closure(
 
     let _ = lf.create_block("entry");
 
-    let mut closure_boxed_vars = module_boxed_vars.clone();
+    let mut closure_boxed_vars: HashSet<u32> = closure_relevant_ids
+        .iter()
+        .filter(|id| module_boxed_vars.contains(id))
+        .copied()
+        .collect();
     super::arguments::add_arguments_mapped_boxes(params, &mut closure_boxed_vars);
 
     // Allocate slots for the closure's own params (captures don't get
@@ -639,8 +655,10 @@ pub(super) fn compile_closure(
     // typed fast path and return undefined.
     let mut local_types: HashMap<u32, perry_hir::types::Type> =
         params.iter().map(|p| (p.id, p.ty.clone())).collect();
-    for (id, ty) in module_receiver_types.iter() {
-        local_types.entry(*id).or_insert_with(|| ty.clone());
+    for id in &closure_relevant_ids {
+        if let Some(ty) = module_receiver_types.get(id) {
+            local_types.entry(*id).or_insert_with(|| ty.clone());
+        }
     }
 
     // Build the capture map: each captured LocalId gets the index it
@@ -662,17 +680,13 @@ pub(super) fn compile_closure(
         .filter(|id| !module_globals.contains_key(id))
         .collect();
     {
-        let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        collect_ref_ids_in_stmts(body, &mut referenced);
-        let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        collect_let_ids(body, &mut inner_lets);
         let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
         let already: std::collections::HashSet<u32> = auto_captures.iter().copied().collect();
-        let mut sorted: Vec<u32> = referenced.into_iter().collect();
+        let mut sorted: Vec<u32> = closure_referenced_ids.iter().copied().collect();
         sorted.sort();
         for id in sorted {
             if !param_ids.contains(&id)
-                && !inner_lets.contains(&id)
+                && !closure_declared_ids.contains(&id)
                 && !already.contains(&id)
                 && !module_globals.contains_key(&id)
             {
@@ -831,7 +845,11 @@ pub(super) fn compile_closure(
         std::collections::HashSet::new()
     };
 
-    let mut reassigned_locals = module_reassigned_locals.clone();
+    let mut reassigned_locals: HashSet<u32> = closure_relevant_ids
+        .iter()
+        .filter(|id| module_reassigned_locals.contains(id))
+        .copied()
+        .collect();
     reassigned_locals.extend(crate::collectors::reassigned_locals(body));
 
     // #7055: spill the closure's own `%this_closure` pointer into a
@@ -886,6 +904,9 @@ pub(super) fn compile_closure(
         native_facts: &native_facts,
         locals,
         local_types,
+        proven_local_types: std::collections::HashMap::new(),
+        guarded_discriminant_aliases: std::collections::HashMap::new(),
+        module_global_proven_types: &cross_module.module_global_proven_types,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
@@ -971,6 +992,7 @@ pub(super) fn compile_closure(
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
+        number_by_construction_locals: native_facts.number_by_construction_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -978,9 +1000,11 @@ pub(super) fn compile_closure(
         temp_roots: crate::rooting::TempRootPool::default(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
+        class_shape_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
@@ -1003,8 +1027,10 @@ pub(super) fn compile_closure(
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
+        spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
+        spec_i32_params: std::collections::HashSet::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1063,12 +1089,11 @@ pub(super) fn compile_closure(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
-        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
+        typed_closure_capture_reps: &cross_module.typed_closure_capture_reps,
         was_unrolled: false,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
         typed_parse_rodata: Vec::new(),
-        typed_parse_counter: 0,
         buffer_data_slots: HashMap::new(),
         buffer_view_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),
@@ -1139,15 +1164,11 @@ pub(super) fn compile_closure(
         llmod.add_raw_global(raw.clone());
     }
     if let Some(kind) = typed_public_trampoline {
-        let string_capture_count = if matches!(kind, TypedFunctionTrampolineKind::StringRef) {
-            cross_module
-                .typed_string_closure_capture_counts
-                .get(&func_id)
-                .copied()
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let capture_reps = cross_module
+            .typed_closure_capture_reps
+            .get(&func_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         emit_public_typed_closure_trampoline(
             llmod,
             func_id,
@@ -1155,7 +1176,7 @@ pub(super) fn compile_closure(
             module_prefix,
             &llvm_name,
             kind,
-            string_capture_count,
+            capture_reps,
         )?;
     }
     Ok(())

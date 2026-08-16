@@ -73,10 +73,30 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
 /// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
 /// reads as "unknown" at every call site.
 ///
-/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
-/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
-/// are allocator bookkeeping and can read as any value. Use the answer only
-/// where a wrong tag is harmless:
+/// A non-zero tag is NOT proof that a real header exists — but the reason is
+/// narrower than this comment used to claim, and getting it wrong in either
+/// direction has cost this file a recurring bug family (#8137/#8138, swept in
+/// `gc-handoff/ARRAY-SWEEP-NOTES.md`).
+///
+/// `Buffer` and `TypedArray` receivers come in BOTH backings:
+///
+/// * **arena-backed** — `buffer/header.rs`'s `arena_alloc_gc_old(…,
+///   GC_TYPE_BUFFER)` and `typedarray/mod.rs`'s `GC_TYPE_TYPED_ARRAY` site.
+///   These carry a genuine `GcHeader` with a correct `obj_type`; they are
+///   pinned rather than movable, which is a different property from being
+///   untracked. This is the population #8041 started nulling.
+/// * **external** — `EXTERNAL_BUFFER_REGISTRY` /
+///   `EXTERNAL_UINT8ARRAY_REGISTRY` addresses, plus
+///   `shared_sab::alloc_shared_sab`'s `alloc_zeroed`. For these the eight
+///   bytes below the payload really are allocator bookkeeping and can read
+///   as any value.
+///
+/// So the tag is authoritative only once the address is known to be
+/// arena-backed. `typedarray::arena_payload_has_gc_type` is the predicate
+/// that does it properly: it range-checks, rejects `HeapSpace::Unknown` for
+/// the HEADER address specifically, and validates via `gc_type_info` before
+/// trusting the byte. Do not open-code a floor instead. Use a bare tag read
+/// only where a wrong tag is harmless:
 ///
 /// * to *skip* a registry probe whose answer for that receiver would have been
 ///   `false` anyway — the caller must already have routed real buffers and
@@ -537,15 +557,11 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 
 /// Strip NaN-boxing tags from an array pointer and guard against invalid values.
 ///
-/// Issue #73 follow-up: the `> 0x1000` (4 KB) floor is too permissive
-/// for the macOS ARM64 heap layout. A corrupted NaN-box whose 48-bit
-/// handle lands in the 1 TB — 2 TB window (e.g. `0x00FF_0000_0000` —
-/// a `BufferHeader { length: 0, capacity: 255 }` read as u64) clears
-/// the old floor and segfaults `(*arr).length` / SIMD memcpy inside
-/// `js_array_slice` / `js_array_length` / etc. Real mimalloc + arena
-/// allocations on Darwin consistently land in the 3-5 TB range;
-/// constraining to `>= 2 TB && < 128 TB` rejects the observed
-/// corruption patterns without cutting off any real heap pointer.
+/// Issue #73/#8035 follow-up: address magnitude is not proof of ownership.
+/// Corrupted NaN-box payloads can land in a plausible heap window, while real
+/// macOS mimalloc arena allocations can land below the former 2 TiB floor.
+/// Registry-handle bands are rejected first; GC headers are read only after
+/// arena page metadata or the malloc registry proves ownership.
 ///
 /// v0.5.85 follow-up: also validate the GC header byte + length/capacity
 /// sanity. A pointer that passes the range check but points into the
@@ -553,52 +569,11 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 /// e.g. decoded PostgreSQL text column data) reads garbage length
 /// values — witnessed `len=775370038 cap=926234674` (both the ASCII
 /// bytes of `"6+2.2017"`) flowing through `js_array_slice` and
-/// triggering 22GB-wide memcpy segfaults. Post-check: obj_type at
-/// `handle-8` must equal GC_TYPE_ARRAY (1), and length must be
-/// <= capacity <= 16M (same bound as the GC tracer's sanity guard).
+/// triggering 22GB-wide memcpy segfaults. The post-check therefore requires
+/// `GC_TYPE_ARRAY` and validates length/capacity before any element access
+/// (with the registered Buffer/TypedArray and sparse-array exceptions below).
 #[inline(always)]
 pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    // Heap window varies by allocator and run: macOS mimalloc can land well
-    // below 2 TB (observed around 45 GB in the Rust test harness);
-    // Android scudo + Linux glibc also allocate MUCH lower (often < 1 TB); Windows
-    // mimalloc lands well under 1 TB (often in the GB-to-tens-of-GB range).
-    // iOS / tvOS / watchOS / visionOS *device* targets use libsystem_malloc
-    // (mimalloc is host-side only) and allocate in the same low range —
-    // #1136's `for…of` over `split()` reproed empty because the array
-    // pointer landed below 2 TB and `clean_arr_ptr` silently null-ed it.
-    // Using the macOS-tight 2 TB floor on Android / Windows / iOS-family
-    // silently null-s every real array pointer, turning js_array_set_f64
-    // into a no-op and — at the read side via js_array_map etc. —
-    // returning empty arrays for legitimate inputs (issues #385/#386/#387
-    // for non-macOS hosts; #1136 for iOS device).
-    //
-    // The iOS *simulator* runs on the macOS host's mimalloc and lands in
-    // the 3-5 TB range like macOS itself; lowering the floor to 4 KB does
-    // not weaken the guard there because the actual liveness check is the
-    // GcHeader / obj_type validation downstream.
-    #[cfg(any(
-        target_os = "android",
-        target_os = "macos",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    ))]
-    const HEAP_MIN: u64 = 0x1000; // 4 KB (classic user-space floor)
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "macos",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    )))]
-    const HEAP_MIN: u64 = 0x200_0000_0000; // 2 TB — retained for unlisted targets
-    const HEAP_MAX: u64 = 0x8000_0000_0000; // 47-bit userspace cap
     let bits = arr as u64;
     let top16 = bits >> 48;
     let cleaned = if top16 >= 0x7FF8 {
@@ -606,24 +581,14 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             return std::ptr::null();
         }
         let cleaned_bits = bits & 0x0000_FFFF_FFFF_FFFF;
-        if !(HEAP_MIN..HEAP_MAX).contains(&cleaned_bits) {
-            return std::ptr::null();
-        }
         cleaned_bits as *const ArrayHeader
     } else {
-        if !(HEAP_MIN..HEAP_MAX).contains(&bits) {
-            return std::ptr::null();
-        }
         arr
     };
-    // #5432: reject small-handle ids (fetch/zlib/proxy/common-registry) that
-    // reached an array helper as the receiver. On non-macOS hosts HEAP_MIN is
-    // 0x1000 — below the handle band — so a handle like a fetch Headers id
-    // (0x40000) passes the window check above, and the forwarding-chain /
-    // obj_type derefs below (`cleaned - 8`) would read unmapped low memory and
-    // SIGSEGV. Magnitude-classify before any deref and null it (safe
-    // empty-result no-op), mirroring the addr_class band-map contract.
-    if crate::value::addr_class::is_handle_band(cleaned as usize) {
+    // Preserve the permissive window needed by registered Buffer/TypedArray
+    // receivers, but centralize its platform policy in addr_class. Actual GC
+    // header reads below require allocator ownership as well.
+    if !crate::value::addr_class::is_plausible_heap_addr(cleaned as usize) {
         return std::ptr::null();
     }
     // Issue #233: follow GC_FLAG_FORWARDED forwarding chains. When
@@ -639,19 +604,28 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // practice (1-2 grows) but cap depth at 64 to defend against
     // cycles from corrupted GC state.
     let mut cleaned = cleaned;
+    let mut tracked_header =
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(cleaned as usize) };
     unsafe {
         let mut steps = 0u32;
-        while (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+        while let Some(gc_header) = tracked_header {
+            let gc_header = gc_header.as_ptr();
+            if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY
+                || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            {
                 break;
             }
-            let new_user = crate::gc::forwarding_address(gc_header) as u64;
-            if !(HEAP_MIN..HEAP_MAX).contains(&new_user) {
+            let new_user = crate::gc::forwarding_address(gc_header) as usize;
+            let Some(target_header) =
+                crate::value::addr_class::try_read_tracked_gc_header(new_user)
+            else {
+                return std::ptr::null();
+            };
+            if (*target_header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
                 return std::ptr::null();
             }
             cleaned = new_user as *const ArrayHeader;
+            tracked_header = Some(target_header);
             steps += 1;
             if steps > 64 {
                 return std::ptr::null();
@@ -665,56 +639,33 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // into a real ArrayHeader and substitute the materialized
     // pointer for every downstream accessor. O(1) on subsequent
     // calls (idempotent via the `materialized` cache).
-    unsafe {
-        if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let obj_type = (*gc_header).obj_type;
-            if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+    let addr = cleaned as usize;
+    let tracked_obj_type =
+        tracked_header.map(|gc_header| unsafe { (*gc_header.as_ptr()).obj_type });
+    if let Some(obj_type) = tracked_obj_type {
+        if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            unsafe {
                 let lazy = cleaned as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
                     let materialized = crate::json_tape::force_materialize_lazy(lazy);
                     return materialized as *const ArrayHeader;
                 }
             }
-            // #7574: a `GC_TYPE_OBJECT` / `GC_TYPE_CLOSURE` allocation is NOT
-            // an `ArrayHeader`, and the two layouts overlay field for field —
-            // `ArrayHeader.length` reads `ObjectHeader.object_type` (= 1),
-            // `.capacity` reads `class_id`, and the element slots at +8/+16/+24
-            // are `parent_class_id ‖ field_count`, `keys_array` and `meta`. The
-            // sanity check below waves that through (1 <= class_id <= 100M), so
-            // an element WRITE overwrites two live GC child edges with
-            // arbitrary doubles and the collector then traces them: `class X
-            // extends Array` in a `T[]`-annotated binding SIGSEGVs on its
-            // second `.push()`.
-            //
-            // A declared TypeScript type is a hint, never a layout fact
-            // (CLAUDE.md, *Known Limitations*), so this is reachable from every
-            // binding form. Refusing it here makes ALL ~190 `clean_arr_ptr`
-            // call sites fail-closed at once — each degrades through its
-            // existing null branch instead of dereferencing a forged header —
-            // and it is the same "resolve at the shared runtime funnel, not at
-            // one codegen predicate at a time" shape #7573 used for Map/Set.
-            //
-            // Correctness (rather than mere safety) for the entry points the
-            // declared-type tiers actually reach is layered on top: those null
-            // branches re-enter through `array::subclass::array_object_*`,
-            // which runs the operation on the spec-generic array-like engine.
-            //
-            // Costs one compare on a byte this block already loaded. Buffers
-            // and typed arrays are `std::alloc`-backed with no `GcHeader`, so
-            // their preceding bytes are allocator bookkeeping that can read as
-            // any value — confirm against the registries before nulling, in the
-            // cold arm only.
-            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
-                let addr = cleaned as usize;
-                if !crate::buffer::is_registered_buffer(addr)
-                    && crate::typedarray::lookup_typed_array_kind(addr).is_none()
-                {
-                    return std::ptr::null();
-                }
-            }
         }
+        // A declared TypeScript type is a hint, never a layout fact. Reject
+        // every tracked non-array at this shared funnel before treating its
+        // payload as an ArrayHeader (#7574).
+        if obj_type != crate::gc::GC_TYPE_ARRAY {
+            return std::ptr::null();
+        }
+    } else if !crate::buffer::is_registered_buffer(addr)
+        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+    {
+        // Handles, synthetic pointers, and unrelated allocations must be
+        // rejected before any GcHeader or ArrayHeader dereference. Registered
+        // Buffer/TypedArray receivers intentionally use the compatible
+        // length/capacity prefix and carry no GcHeader.
+        return std::ptr::null();
     }
     // Length/capacity sanity: dense arrays have length <= capacity and
     // length below 100M (800 MB of element payload — well above legitimate
@@ -732,15 +683,9 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // wave them through; everything else at this size is
             // almost certainly corrupted.
             let addr = cleaned as usize;
-            let sparse_array_shape = if addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-                let gc_header = (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                    as *const crate::gc::GcHeader;
-                (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
-                    && hdr.length > hdr.capacity
-                    && hdr.capacity <= 1_000_000
-            } else {
-                false
-            };
+            let sparse_array_shape = tracked_obj_type == Some(crate::gc::GC_TYPE_ARRAY)
+                && hdr.length > hdr.capacity
+                && hdr.capacity <= 1_000_000;
             if sparse_array_shape {
                 return cleaned;
             }
@@ -758,6 +703,111 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
 #[inline(always)]
 pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
+}
+
+/// Resolve a receiver a plain-array helper was handed but that is really a
+/// registered %TypedArray%, so the helper can delegate to its element-typed
+/// `js_typed_array_*` twin.
+///
+/// **Ask this BEFORE `clean_arr_ptr`, never after.** Codegen routes
+/// statically-typed typed-array receivers through the generic `js_array_*`
+/// helpers on purpose (#3148 / #654 — perry-codegen `is_array_expr` answers
+/// `true` for `Int32Array` &co.) on the contract that each helper
+/// re-dispatches on `lookup_typed_array_kind`. But `clean_arr_ptr` *rejects*
+/// those receivers, and must: since #7574 it returns null for every tracked
+/// non-`GC_TYPE_ARRAY` object, because a `TypedArrayHeader`'s raw per-kind
+/// storage is not boxed-f64 `ArrayHeader` slots. Since the 2026-07-09
+/// typed-array audit gave every typed array a real `GC_TYPE_TYPED_ARRAY`
+/// header, that rejection fires for all of them — so a delegation written
+/// after the clean is unreachable code, and its helper silently returns the
+/// receiver unmutated. That is exactly how `fill`/`fill_range`/`reverse`/
+/// `copyWithin` became no-ops with no error and no diagnostic (#2879).
+///
+/// Strips the NaN-box tag itself (callers may hold a `POINTER_TAG`-boxed
+/// value) and never dereferences the address: the side-table probe is the
+/// whole test, which also keeps the header-less legacy shapes safe.
+#[inline]
+pub(crate) fn typed_array_receiver(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0 {
+        return None;
+    }
+    crate::typedarray::lookup_typed_array_kind(addr)
+        .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+}
+
+/// #8096: resolve a receiver that is a registered `Buffer` / `Uint8Array`
+/// into a fresh `KIND_UINT8` %TypedArray% COPY, so an `Array.prototype`
+/// helper can delegate to a `js_typed_array_*` twin that only accepts a
+/// `TypedArrayHeader`.
+///
+/// [`typed_array_receiver`] does not answer for the most common typed array
+/// in the language. Perry's `new Uint8Array([…])` returns a `BufferHeader`
+/// (`buffer::js_uint8array_new`), registered as a BUFFER and marked
+/// `mark_as_uint8array` — it is not in the typed-array registry at all. The
+/// receiver is still a tracked non-`GC_TYPE_ARRAY` allocation, so
+/// `clean_arr_ptr` rejects it exactly as it rejects a real
+/// `GC_TYPE_TYPED_ARRAY`, and the caller answers an EMPTY plain array.
+///
+/// Most `Array.prototype` entry points never see that: `sort` / `with` /
+/// `reverse` / `fill` on a Buffer-backed `Uint8Array` resolve through the
+/// dynamic method dispatcher, and `copyWithin` grew its own Buffer arm in
+/// #8090. `toReversed` and `toSorted` fold unconditionally in HIR
+/// (`lower/expr_call/local_array_methods.rs` — no receiver-type guard), and
+/// the dynamic tower's own `toReversed` / `toSorted` arms
+/// (`object/native_call_method/handle_methods.rs`) call straight back into
+/// these same helpers, so those two were wrong on EVERY dispatch path.
+///
+/// **Only sound for the IMMUTABLE methods.** The answer is a copy, so an
+/// in-place mutator delegating to it would sort/reverse the copy and leave
+/// the receiver untouched — a different wrong answer. `toReversed`,
+/// `toSorted` and `with` all return a new collection, which is why they can
+/// use it; `js_array_sort_*` deliberately does not.
+///
+/// `None` for an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` receiver:
+/// none of those has `%TypedArray%.prototype`, so node throws
+/// `TypeError: … is not a function` rather than answering elements.
+#[inline]
+pub(crate) fn buffer_receiver_as_uint8_typed_array(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0
+        || !crate::buffer::is_registered_buffer(addr)
+        || crate::buffer::is_any_array_buffer(addr)
+        || crate::buffer::is_data_view(addr)
+    {
+        return None;
+    }
+    // Copy the bytes out BEFORE allocating: `typed_array_alloc` can collect,
+    // and a raw payload pointer read across it is exactly the borrowed-heap-
+    // slice shape rooting cannot fix.
+    let buf = addr as *const crate::buffer::BufferHeader;
+    let bytes: Vec<u8> = unsafe {
+        let len = (*buf).length as usize;
+        if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), len).to_vec()
+        }
+    };
+    let ta =
+        crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
+    for (i, byte) in bytes.iter().enumerate() {
+        crate::typedarray::js_typed_array_set(ta, i as i32, f64::from(*byte));
+    }
+    Some(ta)
+}
+
+/// The de-NaN-boxed address of an `Array.prototype` receiver, for side-table
+/// probes only. Says nothing about what lives there — never dereference it
+/// without one of the registry answers (`typed_array_receiver`,
+/// `buffer::is_registered_buffer`) or a `clean_arr_ptr` round trip.
+#[inline]
+pub(crate) fn array_receiver_addr(arr: *mut ArrayHeader) -> usize {
+    crate::typedarray::strip_nanbox(arr as u64)
 }
 
 /// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
@@ -1569,11 +1619,29 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
 ///    read (`mark_field_into_worklist` re-validates every word), never a
 ///    stranded live child.
 ///
-/// Refused on a non-empty array: the claim covers `0..length`, and only on an
-/// empty array is it vacuously true of what is already stored. A refusal is
-/// silent and safe — the header keeps whatever layout it had, and the codegen
-/// header test then declines the elided store and routes the push through
-/// `js_array_push_f64`, which notes every slot as it always did.
+/// On a **non-empty** array the claim is not vacuous, so it is discharged
+/// rather than assumed: every slot in `0..length` must be pointer-bearing by
+/// `gc::layout_pointer_bearing_bits`, the same predicate the layout mask
+/// builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation use. The walk is
+/// O(literal size), runs once at the binding, and does not have to trust the
+/// caller's static proof.
+///
+/// #8102 is why that path exists. `emit_all_pointer_array_declaration` is
+/// emitted from the `Stmt::Let` tail, i.e. *after* an array literal's element
+/// stores have already installed a per-slot side mask. Refusing every
+/// non-empty array therefore made the declaration a **silent no-op** for
+/// `const a: C[] = [x, y]`, so every later `a.push(…)` failed the codegen
+/// header test and paid the per-store layout note #7469 exists to delete —
+/// measured at +33.9% instructions on a 4M-push loop, against the
+/// byte-for-byte equivalent array built empty and pushed into.
+/// `collectors/all_pointer_arrays.rs` already admits such a literal (see
+/// `literal_of_object_elements_is_admitted`), so the proof was being issued and
+/// then discarded.
+///
+/// A refusal is still silent and safe — the header keeps whatever layout it
+/// had, and the codegen header test then declines the elided store and routes
+/// the push through `js_array_push_f64`, which notes every slot as it always
+/// did.
 #[no_mangle]
 pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
     let arr = clean_arr_ptr_mut(arr);
@@ -1581,7 +1649,15 @@ pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
         return;
     }
     unsafe {
-        if (*arr).length != 0 {
+        let length = (*arr).length as usize;
+        let slots = if length == 0 {
+            std::ptr::null()
+        } else {
+            array_elements_ptr(arr) as *const u64
+        };
+        // Clear the raw-f64 claim FIRST only when the declaration will stick:
+        // a refused declaration must leave the header exactly as it found it.
+        if !crate::gc::layout_all_pointer_slots_would_hold(slots, length) {
             return;
         }
         clear_array_numeric_layout(arr);
@@ -1822,10 +1898,11 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
         return;
     }
 
-    for i in 0..length {
-        let slot = slots.add(i);
-        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-    }
+    // One parent, one contiguous slot run — the loop form of the barrier, whose
+    // per-store entry point would re-derive the parent classification `length`
+    // times and re-assert a page-granular fact ~512 times per page. See
+    // `gc::barrier::replay_old_parent_slot_range`.
+    crate::gc::replay_old_parent_slot_range_barriers(arr as usize, slots, length);
 }
 
 #[inline]

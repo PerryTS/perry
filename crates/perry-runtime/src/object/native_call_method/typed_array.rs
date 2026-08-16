@@ -226,6 +226,8 @@ pub(crate) unsafe fn dispatch_typed_array_method(
         // through ordinary ToString, running `toString`/`valueOf` and
         // propagating abrupt completions).
         "toLocaleString" => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let ta_handle = scope.root_raw_mut_ptr(ta);
             let kind = crate::typedarray::lookup_typed_array_kind(ta as usize);
             let is_bigint = matches!(
                 kind,
@@ -234,11 +236,15 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             let builtin: &[u8] = if is_bigint { b"BigInt" } else { b"Number" };
             // #5901: no primitive receiver here — the element values are
             // formatted individually below, so pass `undefined`.
-            match builtin_proto_user_method(
-                builtin,
-                "toLocaleString",
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-            ) {
+            let (patched, ta) =
+                ta_handle.across_mut::<crate::typedarray::TypedArrayHeader, _>(|| {
+                    builtin_proto_user_method(
+                        builtin,
+                        "toLocaleString",
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    )
+                });
+            match patched {
                 None => {
                     let s = crate::typedarray::js_typed_array_join_value(
                         ta,
@@ -247,16 +253,28 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                     f64::from_bits(JSValue::string_ptr(s).bits())
                 }
                 Some(patched) => {
+                    let patched_handle = scope.root_nanbox_u64(patched.bits());
                     let len = crate::typedarray::js_typed_array_length(ta);
                     let mut out = String::new();
+                    let mut ta_now = ta;
                     for k in 0..len {
                         if k > 0 {
                             out.push(',');
                         }
-                        let elem = crate::typedarray::js_typed_array_get(ta, k);
-                        let r = call_primitive_closure_value(elem, patched, std::ptr::null(), 0)
-                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                        let s_hdr = crate::builtins::js_string_coerce(r);
+                        let (elem, patched_now) = patched_handle
+                            .across_nanbox(|| crate::typedarray::js_typed_array_get(ta_now, k));
+                        let patched_now = JSValue::from_bits(patched_now.to_bits());
+
+                        let (r, _) = patched_handle.across_nanbox(|| {
+                            call_primitive_closure_value(elem, patched_now, std::ptr::null(), 0)
+                                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+                        });
+
+                        let (s_hdr, ta_after) = ta_handle
+                            .across_mut::<crate::typedarray::TypedArrayHeader, _>(|| {
+                                crate::builtins::js_string_coerce(r)
+                            });
+                        ta_now = ta_after;
                         out.push_str(
                             super::has_own_helpers::str_from_string_header(s_hdr).unwrap_or(""),
                         );

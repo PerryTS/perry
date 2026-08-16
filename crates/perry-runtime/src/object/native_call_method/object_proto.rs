@@ -158,6 +158,74 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             )
         };
     }
+    // #8139: an ARRAY, TYPED ARRAY or BUFFER receiver.
+    //
+    // The HIR folds the zero-arg `x.toLocaleString()` on ANY receiver to
+    // `Expr::DateToLocaleString` (`lower/expr_call/url_date_instance.rs`), so
+    // this function — not the method-dispatch tower — is where every such call
+    // is answered. It had arms for number / Date / Temporal / BigInt /
+    // primitive and then fell through to `Object.prototype.toLocaleString`'s
+    // `Invoke(O, "toString")`, which for these three receivers renders
+    // `"[object Array]"` / `"[object Int32Array]"` / `"[object Uint8Array]"`.
+    // Node joins the per-element `toLocaleString`s: `"3,1,2"`.
+    //
+    // The plain-array row is the tell that this is not a receiver-reroute bug
+    // in the array helpers — `js_array_to_locale_string` was always correct and
+    // is what the ARGUMENT-bearing form (`arr.toLocaleString("en-US")`, which
+    // does NOT fold and goes down the ordinary tower) has always reached. What
+    // was missing is this path's arm, so the two spellings disagreed.
+    //
+    // Each case delegates to the exact helper the tower would have used, rather
+    // than re-implementing the join: `js_native_call_method` is NOT an option
+    // here, because its `common_methods` `toLocaleString` arm calls straight
+    // back into this function.
+    if jsval.is_pointer() {
+        let addr = jsval.as_pointer::<u8>() as usize;
+        if crate::value::addr_class::is_above_handle_band(addr) {
+            // Buffer / `Uint8Array`: the buffer dispatcher owns the
+            // Buffer-vs-`%TypedArray%` split (a `Buffer` decodes its bytes, a
+            // `Uint8Array` joins them), so ask it rather than deciding here.
+            //
+            // `is_byte_indexed_buffer` (#8149) and not `is_registered_buffer`:
+            // an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
+            // registered buffer with NO `toLocaleString` of its own, so node
+            // gives it `Object.prototype.toLocaleString` →
+            // `"[object ArrayBuffer]"` / `"[object DataView]"`. Routing them to
+            // the dispatcher would hand back the utf8 DECODE of their backing
+            // bytes — a new wrong answer, and a byte leak.
+            if crate::buffer::is_byte_indexed_buffer(addr) {
+                return crate::object::dispatch_buffer_method(
+                    addr,
+                    "toLocaleString",
+                    std::ptr::null(),
+                    0,
+                );
+            }
+            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+                if let Some(result) = super::dispatch_typed_array_method(
+                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    "toLocaleString",
+                    std::ptr::null(),
+                    0,
+                ) {
+                    return result;
+                }
+            }
+            let obj_type = crate::value::addr_class::try_read_gc_header(addr)
+                .map(|header| header.obj_type)
+                .unwrap_or(0);
+            if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let s = crate::array::js_array_to_locale_string(
+                    addr as *const crate::array::ArrayHeader,
+                    undef,
+                    undef,
+                );
+                return f64::from_bits(JSValue::string_ptr(s).bits());
+            }
+        }
+    }
+
     // An own `toLocaleString` closure wins over the default rendering —
     // notably `%TypedArray%.prototype.toLocaleString()` invoked as a method ON
     // the prototype object itself must run the installed brand-check thunk
@@ -223,8 +291,8 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     // A RegExp's `[[Prototype]]` chain is `RegExp.prototype → Object.prototype`.
-    // The RegExpHeader isn't a plain GC_TYPE_OBJECT with a registered class
-    // prototype, so the generic class-id walk below misses it (which is why
+    // The dedicated RegExp cell has no registered class prototype, so the
+    // generic class-id walk below misses it (which is why
     // `RegExp.prototype.isPrototypeOf(re)` returned false). Handle it directly.
     {
         let tv = JSValue::from_bits(target.to_bits());

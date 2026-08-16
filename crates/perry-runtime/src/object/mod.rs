@@ -20,13 +20,40 @@ use std::sync::RwLock;
 /// every field get/set bounds check, and every direct-slot read MUST use the
 /// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
 /// centralized here so all sites move in lockstep. (Also mirrored in
-/// perry-codegen `lower_call/new.rs` MIN_FIELD_SLOTS for the PERRY_INLINE_NEW path.)
-pub(crate) const INLINE_SLOT_FLOOR: usize = 4;
+/// perry-codegen `lower_call/new_alloc.rs` MIN_FIELD_SLOTS for the inline-`new`
+/// path and `expr::inline_slot_floor::INLINE_SLOT_FLOOR` for the emitted bounds
+/// checks; paired by `inline_slot_floor_matches_codegen` here and
+/// `inline_slot_floor_matches_runtime` there.)
+///
+/// # Why this number is a footprint dial, not a safety one (#7916)
+///
+/// It is *the* padding term in a small object's size:
+/// `8 (GcHeader) + 32 (ObjectHeader) + 8 * max(field_count, INLINE_SLOT_FLOOR)`.
+/// At 4, a two-field literal `{a, b}` costs **72 bytes to store 16 bytes of
+/// payload**, of which 16 bytes are slots 2–3 that the shape can never use —
+/// `gc-handoff/bench/retain.ts` writes 216 MB to store 48 MB of doubles.
+///
+/// Lowering it is sound at any value because `field_count` is *capped* by the
+/// same expression it feeds: the by-name append path
+/// (`field_set_by_name/tail.rs`) only bumps `field_count` for a slot it placed
+/// INLINE, and anything at or past `alloc_limit` spills to overflow storage
+/// instead. So `alloc_limit` is a fixed point of the allocation — it can never
+/// grow past the physical slot count — and the floor is purely a
+/// *growth-headroom* dial for objects that gain properties by name after birth.
+/// (#6712 moved it 8 → 4 on the same reasoning; #7916 moved it 4 → 2.)
+///
+/// 2 rather than 1 or 0: those three are indistinguishable in footprint for
+/// every shape in the perf corpus (a 2-field literal allocates 2 slots under
+/// all of them), so 2 is chosen as the one that keeps the most inline headroom
+/// for a dynamically-grown `{}` at zero byte cost.
+pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
 
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
 mod arguments;
+#[cfg(test)]
+mod arguments_latch_tests;
 mod array_object_ops;
 mod assert;
 mod async_generator_queue;
@@ -45,10 +72,14 @@ mod delete_rest;
 mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
-mod field_get_set;
-pub(crate) use field_get_set::pic_epoch_bump;
+pub(crate) mod field_get_set;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
+mod gc_slots;
+pub(crate) use gc_slots::{
+    gc_field_slot_range, gc_keys_array_slot, rebuild_array_layout_from_slots,
+    rebuild_object_field_layout,
+};
 mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 mod global_this;
@@ -82,12 +113,16 @@ pub(crate) use native_module_registry::nm_ctor_lookup;
 // (`fs/promises` → `fs.constants`, `sys` → `util`).
 pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_util};
 mod native_module_stream;
-mod native_this_alias;
+pub(crate) mod native_this_alias;
 mod object_literal_ops;
 mod object_ops;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;
 mod polymorphic_index;
+#[cfg(test)]
+mod polymorphic_index_sso_tests;
+#[cfg(test)]
+mod polymorphic_index_symbol_tests;
 mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
@@ -103,6 +138,7 @@ mod regex_proto_thunks;
 mod spill;
 pub(crate) use spill::{
     learned_inline_field_count, learned_inline_fields_hot_addr, overflow_get, overflow_set,
+    reserve_object_spill,
 };
 #[cfg(test)]
 use spill::{object_spill_enabled, spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
@@ -112,8 +148,9 @@ mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
 mod typed_array_define;
-mod typed_array_proto_thunks;
+pub(crate) mod typed_array_proto_thunks;
 mod util_types;
+mod weakref_proto_thunks;
 mod websocket_global;
 mod with_env;
 // Issue #1103 follow-up: behavior-preserving split of the residual top-level
@@ -170,6 +207,12 @@ pub(crate) use typed_array_define::{
     TypedArrayOwnIndex,
 };
 pub use util_types::*;
+// #7947: weak-wrapper method dispatch (moved out of `weakref.rs`, which is at
+// the 2000-line gate) plus the WeakRef/FinalizationRegistry arms and thunks.
+pub use weakref_proto_thunks::{
+    delegate_if_not_weak_collection, dispatch_foreign_weak_receiver, is_weak_wrapper,
+    try_weak_method_dispatch, weak_class_id_from_receiver, weak_wrapper_class_id,
+};
 pub use with_env::*;
 // Re-exports for the residual-helper split (issue #1103 follow-up). Explicit
 // named re-exports keep existing `crate::object::X` / bare-name call sites in
@@ -207,51 +250,127 @@ pub(crate) use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 
+/// An atomic GC root whose backing slot belongs to the calling Perry agent.
+///
+/// The public handle stays process-global and contains no heap address. Every
+/// load, store and scanner visit resolves through `perry_thread_local!` to the
+/// current thread's real atomic. This preserves the explicit atomic API at the
+/// call sites while making it impossible to publish one arena's raw pointer to
+/// another realm (#8002/#8003).
+pub(crate) struct RealmAtomicI64 {
+    slot: &'static crate::tls_hot::HotKey<AtomicI64>,
+}
+
+impl RealmAtomicI64 {
+    const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
+        Self { slot }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load(&self, ordering: Ordering) -> i64 {
+        self.slot.with(|slot| slot.load(ordering))
+    }
+
+    #[inline(always)]
+    pub(crate) fn store(&self, value: i64, ordering: Ordering) {
+        self.slot.with(|slot| {
+            crate::gc::runtime_store_root_atomic_raw_i64(slot, value, ordering);
+        });
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicI64) -> R) -> R {
+        self.slot.with(f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slot_addr(&self) -> usize {
+        self.slot.with(|slot| slot as *const AtomicI64 as usize)
+    }
+}
+
+/// `u64` twin of [`RealmAtomicI64`] for NaN-boxed root words.
+pub(crate) struct RealmAtomicU64 {
+    slot: &'static crate::tls_hot::HotKey<AtomicU64>,
+}
+
+impl RealmAtomicU64 {
+    const fn new(slot: &'static crate::tls_hot::HotKey<AtomicU64>) -> Self {
+        Self { slot }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load(&self, ordering: Ordering) -> u64 {
+        self.slot.with(|slot| slot.load(ordering))
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicU64) -> R) -> R {
+        self.slot.with(f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slot_addr(&self) -> usize {
+        self.slot.with(|slot| slot as *const AtomicU64 as usize)
+    }
+}
+
+crate::perry_thread_local! {
+    static HTTP_METHODS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static FS_CONSTANTS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_SIGNALS_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_ERRNO_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_PRIORITY_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static OS_CONSTANTS_DLOPEN_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
+    static TYPED_ARRAY_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static LOCAL_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static SESSION_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+}
+
+static HTTP_METHODS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&HTTP_METHODS_CACHE_SLOT);
+static FS_CONSTANTS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&FS_CONSTANTS_CACHE_SLOT);
+static OS_CONSTANTS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&OS_CONSTANTS_CACHE_SLOT);
+static OS_CONSTANTS_SIGNALS_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_SIGNALS_CACHE_SLOT);
+static OS_CONSTANTS_ERRNO_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_ERRNO_CACHE_SLOT);
+static OS_CONSTANTS_PRIORITY_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_PRIORITY_CACHE_SLOT);
+static OS_CONSTANTS_DLOPEN_CACHE: RealmAtomicU64 =
+    RealmAtomicU64::new(&OS_CONSTANTS_DLOPEN_CACHE_SLOT);
+
+pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PTR_SLOT);
+pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT);
+pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&GENERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static LOCAL_STORAGE_PTR: RealmAtomicI64 = RealmAtomicI64::new(&LOCAL_STORAGE_PTR_SLOT);
+pub(crate) static SESSION_STORAGE_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&SESSION_STORAGE_PTR_SLOT);
+
 per_test_global! {
-    static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
-    static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
     static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
     static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
-    // `%TypedArray%` intrinsic constructor/prototype roots used by per-kind
-    // typed array constructors and scanned by `scan_object_cache_roots_mut`.
-    pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    // #3664: the generator / async-generator intrinsic prototype towers.
-    // `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
-    // (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
-    // `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
-    // `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
-    // `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
-    // `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
-    // GC roots scanned by `scan_object_cache_roots_mut`.
-    //
-    // #7251: these six are `per_test_global!` (not a bare `static`) SPECIFICALLY
-    // so a test can observe "this tower has never been built" reliably. Before
-    // this they were plain process-global `AtomicI64`s, built exactly once per
-    // *process* — so whichever test happened to run first (order is
-    // libtest-nondeterministic) built them for every OTHER test on the same
-    // binary, and a gate trying to arm a collection around
-    // `ensure_generator_intrinsics()` / `ensure_typed_array_intrinsic()` found
-    // the tower already cached and measured nothing (see #7251's second and
-    // third failed gate attempts). `per_test_global!` gives each libtest THREAD
-    // — and libtest runs one thread per test — its own zeroed instance, so
-    // `crates/perry-runtime/src/gc/tests/lazy_intrinsic_towers.rs` sees a
-    // guaranteed-first-touch tower with no dependence on test execution order.
-    // Non-test builds expand to the identical plain `static` this replaced.
-    pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-    pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
 }
-pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -562,12 +681,6 @@ crate::perry_thread_local! {
     /// this side-table keyed by class_id.
     pub(crate) static CLASS_DYNAMIC_PROPS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, f64>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Configurable synthetic class-ref keys that were deleted (currently
-    /// `name`). Mirrors the closure deleted-key side table for ClassRef values,
-    /// which are tagged integers rather than ObjectHeader/ClosureHeader values.
-    pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-
     /// #7190: `(writable, enumerable)` for static own keys installed by
     /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
     /// next to `static x = …` fields, which are writable AND enumerable by
@@ -1091,74 +1204,39 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    visitor.visit_atomic_nanbox_u64_slot(&HTTP_METHODS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&FS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&OS_CONSTANTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(
+    for slot in [
+        &HTTP_METHODS_CACHE,
+        &FS_CONSTANTS_CACHE,
+        &OS_CONSTANTS_CACHE,
         &OS_CONSTANTS_SIGNALS_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_ERRNO_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_PRIORITY_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    visitor.visit_atomic_nanbox_u64_slot(
         &OS_CONSTANTS_DLOPEN_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
+    ] {
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_nanbox_u64_slot(slot, Ordering::Relaxed, Ordering::Relaxed);
+        });
+    }
     visitor.visit_atomic_i64_slot(&GLOBAL_THIS_PTR, Ordering::Acquire, Ordering::Release);
-    visitor.visit_atomic_i64_slot(
+    // Realm intrinsic towers and Web Storage brands point into the calling
+    // thread's arena, so visit only this agent's backing atomics.
+    for slot in [
         &TYPED_ARRAY_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    // #3664: generator / async-generator intrinsic tower roots.
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_FUNCTION_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &GENERATOR_PROTOTYPE_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
-    visitor.visit_atomic_i64_slot(
         &ASYNC_GENERATOR_PROTOTYPE_PTR,
-        Ordering::Acquire,
-        Ordering::Release,
-    );
+        &LOCAL_STORAGE_PTR,
+        &SESSION_STORAGE_PTR,
+    ] {
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        });
+    }
     async_generator_queue::scan_async_generator_queue_roots_mut(visitor);
-    visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
-    visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
     // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
     // these must stay live for the lifetime of any iterator.
@@ -1170,7 +1248,9 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
     ] {
-        visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
+        });
     }
 }
 
@@ -1338,47 +1418,61 @@ pub(crate) fn test_keys_index_entry_exists(owner: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_seed_object_cache_roots(object_cache_bits: [u64; 7], global_this_ptr: i64) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &HTTP_METHODS_CACHE,
-        object_cache_bits[0],
-        Ordering::Relaxed,
-    );
+    HTTP_METHODS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[0],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &FS_CONSTANTS_CACHE,
-        object_cache_bits[1],
-        Ordering::Relaxed,
-    );
+    FS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[1],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_CACHE,
-        object_cache_bits[2],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[2],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_SIGNALS_CACHE,
-        object_cache_bits[3],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_SIGNALS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[3],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_ERRNO_CACHE,
-        object_cache_bits[4],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_ERRNO_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[4],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_PRIORITY_CACHE,
-        object_cache_bits[5],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_PRIORITY_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[5],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors object cache roots scanned by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_DLOPEN_CACHE,
-        object_cache_bits[6],
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_DLOPEN_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            slot,
+            object_cache_bits[6],
+            Ordering::Relaxed,
+        );
+    });
     // GC_STORE_AUDIT(ROOT): test seed mirrors GLOBAL_THIS_PTR scanned by scan_object_cache_roots_mut.
     crate::gc::runtime_store_root_atomic_raw_i64(
         &GLOBAL_THIS_PTR,
@@ -1404,38 +1498,143 @@ pub(crate) fn test_object_cache_roots() -> ([u64; 7], i64) {
     )
 }
 
+/// Materialize every #8002/#8003 realm-owned root on this agent. Kept as one
+/// helper so the two-thread isolation gate below cannot accidentally exercise
+/// only the backing TLS cells while all builders early-return.
+#[cfg(test)]
+pub(crate) fn test_materialize_realm_owned_roots() {
+    let global = js_get_global_this();
+    assert_ne!(
+        crate::value::js_nanbox_get_pointer(global),
+        0,
+        "globalThis bootstrap did not run"
+    );
+    iterator_prototypes::ensure_iterator_prototypes();
+    unsafe {
+        let _ = http_methods_array();
+        let _ = create_fs_constants_object();
+    }
+    for (name, cache) in [
+        ("os.constants", &OS_CONSTANTS_CACHE),
+        ("os.constants.signals", &OS_CONSTANTS_SIGNALS_CACHE),
+        ("os.constants.errno", &OS_CONSTANTS_ERRNO_CACHE),
+        ("os.constants.priority", &OS_CONSTANTS_PRIORITY_CACHE),
+        ("os.constants.dlopen", &OS_CONSTANTS_DLOPEN_CACHE),
+    ] {
+        let _ = create_cached_sub_namespace(name, cache);
+    }
+}
+
+/// `(name, backing-atomic address, rooted heap word)` for every root moved by
+/// #8002/#8003. The backing address proves the storage is per-agent; the
+/// nonzero heap word proves the corresponding builder actually populated it.
+#[cfg(test)]
+pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)> {
+    let mut roots = Vec::new();
+    for (name, slot) in [
+        ("HTTP_METHODS_CACHE", &HTTP_METHODS_CACHE),
+        ("FS_CONSTANTS_CACHE", &FS_CONSTANTS_CACHE),
+        ("OS_CONSTANTS_CACHE", &OS_CONSTANTS_CACHE),
+        ("OS_CONSTANTS_SIGNALS_CACHE", &OS_CONSTANTS_SIGNALS_CACHE),
+        ("OS_CONSTANTS_ERRNO_CACHE", &OS_CONSTANTS_ERRNO_CACHE),
+        ("OS_CONSTANTS_PRIORITY_CACHE", &OS_CONSTANTS_PRIORITY_CACHE),
+        ("OS_CONSTANTS_DLOPEN_CACHE", &OS_CONSTANTS_DLOPEN_CACHE),
+    ] {
+        roots.push((name, slot.test_slot_addr(), slot.load(Ordering::Acquire)));
+    }
+    for (name, slot) in [
+        ("TYPED_ARRAY_INTRINSIC_PTR", &TYPED_ARRAY_INTRINSIC_PTR),
+        (
+            "TYPED_ARRAY_INTRINSIC_PROTO_PTR",
+            &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            "GENERATOR_FUNCTION_INTRINSIC_PTR",
+            &GENERATOR_FUNCTION_INTRINSIC_PTR,
+        ),
+        (
+            "GENERATOR_INTRINSIC_PROTO_PTR",
+            &GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+        ("GENERATOR_PROTOTYPE_PTR", &GENERATOR_PROTOTYPE_PTR),
+        (
+            "ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR",
+            &ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+        ),
+        (
+            "ASYNC_GENERATOR_INTRINSIC_PROTO_PTR",
+            &ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            "ASYNC_GENERATOR_PROTOTYPE_PTR",
+            &ASYNC_GENERATOR_PROTOTYPE_PTR,
+        ),
+        ("LOCAL_STORAGE_PTR", &LOCAL_STORAGE_PTR),
+        ("SESSION_STORAGE_PTR", &SESSION_STORAGE_PTR),
+        (
+            "ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "ARRAY_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "MAP_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "SET_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "STRING_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
+        ),
+        (
+            "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
+            &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+        ),
+    ] {
+        roots.push((
+            name,
+            slot.test_slot_addr(),
+            slot.load(Ordering::Acquire) as u64,
+        ));
+    }
+    roots
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_object_cache_roots() {
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&HTTP_METHODS_CACHE, 0, Ordering::Relaxed);
+    HTTP_METHODS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&FS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
+    FS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(&OS_CONSTANTS_CACHE, 0, Ordering::Relaxed);
+    OS_CONSTANTS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_SIGNALS_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_SIGNALS_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_ERRNO_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_ERRNO_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_PRIORITY_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_PRIORITY_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned object cache roots.
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &OS_CONSTANTS_DLOPEN_CACHE,
-        0,
-        Ordering::Relaxed,
-    );
+    OS_CONSTANTS_DLOPEN_CACHE.with_slot(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, 0, Ordering::Relaxed);
+    });
     // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinel into scanned GLOBAL_THIS_PTR.
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, 0, Ordering::Release);
     GLOBAL_THIS_READY.store(false, Ordering::Release);
@@ -1490,12 +1689,21 @@ pub struct ObjectHeader {
     pub object_type: u32,
     /// Class ID for this object (used for instanceof, vtable lookup)
     pub class_id: u32,
-    /// Parent class ID for inheritance chain (0 if no parent)
+    /// Compatibility word: the parent class ID during allocation, then the
+    /// runtime `ShapeId` after shape stamping. Parent lookup must use the class
+    /// registry; direct reads of this word are not authoritative parent data.
     pub parent_class_id: u32,
     /// Number of fields in this object
     pub field_count: u32,
-    /// Pointer to array of key strings (for Object.keys() support)
-    /// NULL for class instances (keys are defined by the class)
+    /// Pointer to array of key strings (for Object.keys() support).
+    ///
+    /// A class instance HAS one: `object_alloc_class_inline_keys_impl` installs
+    /// the per-class array that codegen builds once at module init
+    /// (`js_build_class_keys_array`). The note that used to sit here claiming
+    /// the opposite outlived the compact-instance layout it described, and cost
+    /// #8099 a wrong premise — the guard descriptor refused every class-typed
+    /// parameter on the strength of it. Null means genuinely keyless, not
+    /// "class instance".
     pub keys_array: *mut ArrayHeader,
     /// #6759 Phase B: per-object metadata record — null for ordinary
     /// objects (the common case). MUST stay the LAST field: codegen reads
@@ -1516,15 +1724,18 @@ pub struct ObjectHeader {
 /// free paths, no owner registry, and no stale-address hazard: the record
 /// dies with (and only with) its owner.
 ///
-/// CAUTION — RegExp aliasing: `RegExpHeader` is a different struct that is
-/// also tagged `GC_TYPE_OBJECT` (see `gc_child_slots`'s regex special
-/// case). Reading `.meta` at the `ObjectHeader` offset off a RegExp yields
-/// garbage; every `meta` access must first establish a genuine shaped
-/// object (`object_meta_slot_addr` centralizes that check).
+/// Only the authoritative `GC_TYPE_OBJECT` kind has this layout. RegExp uses
+/// its own GC kind and slot descriptor, so no ObjectHeader consumer needs to
+/// inspect its native payload to disambiguate the two.
 ///
-/// Phase B lands incrementally: today the record holds the custom
-/// `[[Prototype]]` plus the Phase C2 per-key descriptor summaries; the
-/// exotic-kind tag migrates here next (#6759).
+/// The shipped Phase B record holds the custom `[[Prototype]]`, the Phase C2
+/// per-key descriptor summaries, object flags, and owned spill storage. The
+/// RFC also sketched an exotic-kind tag here, but Date/RegExp/Error/Promise/
+/// Map/Set/Temporal have distinct cell layouts rather than an `ObjectHeader`;
+/// representing their kind here first requires header unification. Their
+/// expando payloads therefore remain in the per-thread `RuntimeState` with GC
+/// rekey/prune defenses instead of being described as the next incremental
+/// `ObjectMeta` migration.
 #[repr(C)]
 pub struct ObjectMeta {
     /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object
@@ -1565,6 +1776,36 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
 
+/// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
+/// and heap class-expression values carry their kind in the immutable ShapeId
+/// descriptor. The legacy `ObjectHeader::object_type` word is only an ABI
+/// mirror pending #8047.
+#[inline]
+pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && shapes::object_shape_descriptor(obj)
+            .is_some_and(|shape| shape.object_kind == shapes::ShapeObjectKind::Ordinary)
+}
+
+#[inline]
+pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+}
+
 // #6812 spill lanes: the versioned write-loop emitter
 // (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
@@ -1573,7 +1814,7 @@ const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
-/// established that `obj` is a live, non-RegExp `GC_TYPE_OBJECT` allocation
+/// established that `obj` is a live `GC_TYPE_OBJECT` allocation
 /// (see `prototype_chain::meta_capable_object`).
 pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
     if !(*obj).meta.is_null() {
@@ -1613,15 +1854,11 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     meta
 }
 
-/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-
-/// pointer child slot exactly like `gc_keys_array_slot`. Returns `None` for
-/// a null meta AND for a `RegExpHeader` masquerading as `GC_TYPE_OBJECT`
-/// (its bytes at this offset are native data — see the regex special case
-/// in `gc_child_slots`).
+/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-pointer
+/// child slot exactly like `gc_keys_array_slot`. The GC type table calls this
+/// only for `GC_TYPE_OBJECT`; RegExp uses its dedicated slot descriptor.
 pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
-    if user_ptr == 0
-        || crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader)
-    {
+    if user_ptr == 0 {
         return None;
     }
     let obj = user_ptr as *mut ObjectHeader;
@@ -1633,32 +1870,32 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
-    // #6759 C3c: a stamped shape id (plain objects reuse the otherwise-dead
-    // `parent_class_id` word) described the OLD keys array — clear it on a
-    // pointer CHANGE so the stamp invariant (`stamp != 0 ⟹ stamp == id of
-    // current keys`) holds; the resolve paths re-stamp on their next
-    // successful lookup. A same-pointer update (in-place append) keeps the
-    // stamp: slots are append-only, existing mappings stay valid — and the
-    // C3a grow-migration keeps the id itself alive across reallocs, so the
-    // fresh stamp after a grow resolves to the SAME id.
-    if (*obj).class_id == 0
-        && (*obj).keys_array != keys_array
-        && shapes::is_shape_id((*obj).parent_class_id)
-    {
-        (*obj).parent_class_id = 0;
-    }
-    // #6893: the object's typed-shape layout descriptor is keyed by its
-    // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer
-    // change is a shape change (add/delete key), so the exact typed layout no
-    // longer applies to THIS object. Pre-#6893 the per-object store-validation
-    // (`layout_note_slot`, keyed by the object address) caught this implicitly
-    // during the field shuffle; the shared descriptor lookup now misses on the
-    // NEW keys_array, so that trigger is lost — invalidate explicitly here.
-    // Gated: `mark_object_dynamic_shape_unknown` early-returns for objects that
-    // carry no typed layout, so plain/growing objects and initial construction
-    // (INTACT not yet set) pay nothing.
-    if (*obj).keys_array != keys_array {
+    // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
+    // described the OLD keys array — clear it on a pointer CHANGE so no stale
+    // id is visible while the authoritative header changes. A same-pointer
+    // append is versioned by `synchronize_object_shape_descriptor` below; an
+    // immutable old descriptor is never silently changed in place.
+    //
+    // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
+    // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
+    // tests exactly that, so an instance still carrying its allocation-time
+    // `parent_class_id` (never in the ShapeId range) is left alone.
+    let predecessor = shapes::object_shape_descriptor(obj);
+    let keys_changed = (*obj).keys_array != keys_array;
+    if keys_changed {
+        // #6893: the object's typed-shape layout descriptor is keyed by its
+        // keys_array (shared per shape via SHAPE_LAYOUTS). A pointer change
+        // makes that exact typed layout inapplicable. This is gated internally
+        // so plain/growing objects and initial construction pay nothing.
+        //
+        // Invalidate while the predecessor stamp is still authoritative.
+        // `layout_mark_unknown` reports the representation change through
+        // typed feedback, whose defensive shape lookup self-heals an
+        // unstamped object. Clearing first therefore let that re-entrant
+        // lookup publish an Ordinary descriptor for a class object; the
+        // structural synchronization below then inherited the wrong kind.
         mark_object_dynamic_shape_unknown(obj);
+        shapes::clear_object_shape_stamp(obj);
     }
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
@@ -1667,6 +1904,28 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         &(*obj).keys_array as *const _ as usize,
         keys_array as u64,
     );
+    // #8067: the old header edge remains authoritative, but every visible
+    // ShapeId must now resolve to the exact rooted ordered-keys/live-slot
+    // descriptor. Same-pointer appends are versioned inside the helper.
+    shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
+}
+
+/// Publish a new authoritative live-inline-slot bound without ever exposing a
+/// ShapeId whose descriptor disagrees with `ObjectHeader.field_count`.
+///
+/// Callers growing the traced range must invoke this before publishing the
+/// pointer-bearing field value (#7154): old stamp clear → header count write →
+/// complete descriptor install → new stamp → value-slot store.
+#[inline]
+pub(super) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
+    if (*obj).field_count != field_count {
+        let predecessor = shapes::object_shape_descriptor(obj);
+        shapes::clear_object_shape_stamp(obj);
+        (*obj).field_count = field_count;
+        shapes::synchronize_object_shape_descriptor_from(obj, predecessor);
+    } else {
+        shapes::debug_assert_object_shape_parity(obj);
+    }
 }
 
 #[inline]
@@ -1726,53 +1985,5 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
     crate::gc::layout_mark_unknown(obj as *mut u8);
 }
 
-pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
-    if obj.is_null() || (*obj).keys_array.is_null() {
-        return None;
-    }
-    Some(&mut (*obj).keys_array as *mut _ as *mut u64)
-}
-
-pub(crate) unsafe fn gc_field_slot_range(
-    obj: *mut ObjectHeader,
-) -> Option<crate::gc::HeapSlotRange> {
-    if obj.is_null() {
-        return None;
-    }
-    let field_count = (*obj).field_count as usize;
-    if field_count > 1_000_000 {
-        return None;
-    }
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    Some(crate::gc::HeapSlotRange::new(fields, field_count))
-}
-
-#[inline]
-pub(super) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
-    if crate::arena::pointer_in_old_gen(obj as usize) {
-        for i in 0..slot_count {
-            let slot = fields.add(i);
-            crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, *slot);
-        }
-    }
-}
-
-#[inline]
-pub(super) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
-    if arr.is_null() {
-        return;
-    }
-    let len = (*arr).length as usize;
-    let slots = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
-    if crate::arena::pointer_in_old_gen(arr as usize) {
-        for i in 0..len {
-            let slot = slots.add(i);
-            crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-        }
-    }
-}
 #[cfg(test)]
 mod tests;

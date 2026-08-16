@@ -1,0 +1,85 @@
+{
+  "_comment": [
+    "Freshness budgets for the post-merge gate sweeps. Checked by",
+    "scripts/check_gate_freshness.py, run every two hours by .github/workflows/gate-freshness.yml.",
+    "",
+    "WHY THIS FILE EXISTS: #7856. Every heavy gate produced zero results on `main`",
+    "for over two days and nobody noticed, because an empty result set is",
+    "indistinguishable from a healthy one that nobody looked at. Rescheduling the",
+    "gates (docs/src/testing/ci-gate-scheduling.md) does not fix that on its own --",
+    "a cron that silently stops firing fails exactly the same way. This is the",
+    "detector for both.",
+    "",
+    "max_age_hours = schedule interval + headroom for a 90-minute job and a queue",
+    "that is still draining. A gate whose budget you keep having to RAISE is a gate",
+    "that is still starving: raise capacity or cut demand instead of the number.",
+    "",
+    "Entries are checked against the most recent SUCCESSFUL non-pull_request run on",
+    "the default branch. Pull-request runs are deliberately excluded -- counting them",
+    "is what made gc-root-dominance look healthy in #7856 while its `main` arm was",
+    "dark for two days."
+  ],
+  "default_branch": "main",
+  "gates": [
+    {
+      "workflow": "gc-ratchet.yml",
+      "max_age_hours": 12,
+      "why": "Primary defence for collector retention/evacuation accounting. Went dark 2026-08-09..08-11 while #7799/#7809/#7812/#7834/#7839 merged; #7843's seven red rows landed in that window."
+    },
+    {
+      "workflow": "gc-root-dominance.yml",
+      "max_age_hours": 12,
+      "why": "Static GC root-dominance checker over emitted LLVM IR. Its allowlist is empty, so every new hit is a red build -- worth nothing if the gate never runs."
+    },
+    {
+      "workflow": "tls-budget.yml",
+      "max_age_hours": 12,
+      "why": "_tlv_get_addr call-count ratchet. macOS-only by nature; cannot be relieved by moving pools."
+    },
+    {
+      "workflow": "gc-native-roots.yml",
+      "max_age_hours": 12,
+      "why": "RS4GC native-roots arm."
+    },
+    {
+      "workflow": "gc-ptr-shape-off-witness.yml",
+      "max_age_hours": 12,
+      "why": "Exercises the Ptr<Shape> OFF state. CLAUDE.md's kill-policy: an unexercised mode is a configuration nobody has verified."
+    },
+    {
+      "workflow": "gc-parse-churn-gate.yml",
+      "max_age_hours": 12,
+      "why": "Parse-churn layout gate."
+    },
+    {
+      "workflow": "gc-moving-witnesses.yml",
+      "max_age_hours": 12,
+      "why": "Asserts the copying minor actually moved objects -- the 'gate must assert its subject was live' arm (#7024/#7025)."
+    },
+    {
+      "workflow": "auto-opt-app-patterns.yml",
+      "max_age_hours": 12,
+      "why": "Auto-optimize app-pattern regression sweep."
+    },
+    {
+      "workflow": "eh-transport.yml",
+      "max_age_hours": 12,
+      "why": "Owned unwinder transport on arm64 macOS."
+    },
+    {
+      "workflow": "llvm-inprocess.yml",
+      "max_age_hours": 12,
+      "why": "In-process LLVM backend arm; the promotion prerequisite."
+    },
+    {
+      "workflow": "npm-publish-freshness.yml",
+      "max_age_hours": 30,
+      "why": "Daily comparison of npm's `latest` against this tree (#7491: users installed a month-old build and hit a linker bug fixed weeks earlier). Its own cron going dark would restore exactly the blind spot it was built to close. Note the overlap by design: while the registry is genuinely behind, this workflow fails, produces no successful run, and therefore also appears HERE -- one alarm is the release being overdue, the other is nobody watching."
+    },
+    {
+      "workflow": "security-audit.yml",
+      "max_age_hours": 12,
+      "why": "Required status context, still on every merge. Included so that if IT starves too, this checker says so rather than staying silent."
+    }
+  ]
+}

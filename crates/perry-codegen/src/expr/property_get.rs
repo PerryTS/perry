@@ -65,6 +65,20 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+/// A declared class may nominate the guarded field/method route, but never a
+/// raw load by itself. Every field consumer below checks the live receiver's
+/// class id and keys token before dereferencing; method-value/runtime-member
+/// helpers retain their dynamic fallback semantics.
+fn guarded_declared_class_get_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let HirType::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
     // STORAGE, so the local's inline-storage proof stops holding from here on.
@@ -95,7 +109,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         if property == "buffer" {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.buffer_view_slots.contains_key(id) {
-                    super::downgrade_buffer_alias(
+                    super::invalidate_buffer_view_pointer(
                         ctx,
                         *id,
                         crate::native_value::MaterializationReason::MutableAlias,
@@ -131,6 +145,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 
     match expr {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && matches!(object.as_ref(), Expr::LocalGet(id) if ctx.pod_views.contains_key(id)) =>
+        {
+            // A NativePodView is a verifier-owned GC object, not a normal JS
+            // object with a property table. Read its record count through the
+            // validating runtime helper so the public `PodView.length`
+            // declaration has the promised observable behavior and disposed
+            // owners are still rejected.
+            let view = lower_expr(ctx, object)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_native_pod_view_length", &[(DOUBLE, &view)]))
+        }
         Expr::PropertyGet {
             object, property, ..
         } if matches!(object.as_ref(), Expr::LocalGet(id)
@@ -277,9 +306,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .is_some_and(is_numeric_typed_array_class) =>
         {
             let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            ))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -292,6 +323,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "length"
+            // #7854 recorded a receiver whose Array/String type is a copied
+            // ANNOTATION rather than a proof in `FnCtx::declared_only_array_locals`
+            // and refused it here, because the inline half was guarded but the
+            // fallback — `js_value_length_f64` — answered **0** for every value
+            // that carries no length where JS answers `undefined`, and continued
+            // instead of throwing for a nullish receiver. A violated claim was
+            // therefore a silent wrong answer rather than a slower path.
+            //
+            // #7862 replaced that fallback with `js_value_length_property_f64`
+            // (the slow arm below, and the string-lowering arm above), which
+            // *is* ordinary property semantics: `undefined` for a missing
+            // property, the real value for a non-numeric one, normal
+            // object/function/native/proxy dispatch, and a catchable TypeError
+            // for a nullish receiver. The reason for the refusal is gone, so the
+            // refusal is too — a claim now costs a guard branch and nothing else,
+            // which is exactly the deal element reads have always taken.
+            //
+            // `test-files/test_gap_7853_declared_array_length_runtime_value.ts`
+            // and `test_gap_declared_field_type_refine_guarded.ts` are the
+            // sabotage: both feed a `string[]`-declared local an array, a
+            // string, a number, an array-like object with numeric and
+            // non-numeric `length`, a function, a typed array, `null` and
+            // `undefined`, and require node-identical output. They run the
+            // inline arm now instead of the generic tower.
             && (is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
@@ -342,8 +397,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (`lshr 40; and 0xFF`, matching `js_value_length_f64`'s SSO
             // branch), heap STRING_TAG → `load i32` of `utf16_len` at
             // offset 0, anything else (annotation lie, nullable-union
-            // receiver) → the same `js_value_length_f64` slow call the
-            // generic tower's slow arm uses.
+            // receiver) → the property-semantic slow call used by the
+            // generic tower's slow arm.
             {
                 if crate::expr::static_string_lowering_enabled()
                     && is_string_expr(ctx, object)
@@ -388,9 +443,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().br(&merge_label);
 
                     ctx.current_block = slow_idx;
-                    let slow_len =
-                        ctx.block()
-                            .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+                    let slow_len = ctx.block().call(
+                        DOUBLE,
+                        "js_value_length_property_f64",
+                        &[(DOUBLE, &recv_box)],
+                    );
                     let slow_pred = ctx.block().label.clone();
                     ctx.block().br(&merge_label);
 
@@ -517,14 +574,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let fast_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
-            // Runtime slow path: handles Buffer / TypedArray via side-
-            // table registries, returns 0 for non-length-bearing
-            // receivers (Closure / BigInt / Promise / Error / plain
-            // Object) and for non-pointer NaN-boxes.
+            // Runtime slow path: preserve ordinary property semantics when the
+            // annotation lies. It handles Buffer / TypedArray / Closure and
+            // objects through their normal dispatch, returns `undefined` for
+            // a missing property, preserves a non-numeric property value, and
+            // throws for a nullish receiver.
             ctx.current_block = slow_idx;
-            let slow_len = ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+            let slow_len = ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            );
             let slow_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
@@ -634,7 +694,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if property == "constructor" {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     let is_date = matches!(
-                        ctx.local_types.get(id),
+                        ctx.stable_local_type_proof(id),
                         Some(HirType::Named(name)) if name == "Date"
                     );
                     if is_date {
@@ -653,8 +713,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Issue #649: PropertyGet on a native-module reference (`fs`,
             // `os`, `crypto`, `path`, ...). `NativeModuleRef` lowers to a
             // literal `0.0`, so the generic PropertyGet path can't see the
-            // namespace. Short-circuit to `js_native_module_property_by_name`
-            // which consults the constants dispatcher directly. For chained
+            // namespace. Short-circuit to the snapshot-backed ESM export
+            // lookup, which consults the constants dispatcher on first read
+            // and is refreshed by `syncBuiltinESMExports`. For chained
             // access like `fs.constants.F_OK` only the inner read fires
             // here — `constants` returns a real NATIVE_MODULE_CLASS_ID
             // ObjectHeader, and the outer PropertyGet routes through
@@ -697,11 +758,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(nanbox_string_inline(blk, &handle));
                 }
                 let mod_idx = ctx.strings.intern(module_name);
-                let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
-                let mod_len_str = module_name.len().to_string();
                 let prop_idx = ctx.strings.intern(property);
-                let prop_bytes_global = format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
-                let prop_len_str = property.len().to_string();
                 // The value read of a native-module callable export (`const f =
                 // util.inherits`) mints a BOUND_METHOD closure that, when invoked
                 // indirectly, dispatches through the per-module `NM_DISPATCH_REGISTRY`
@@ -716,15 +773,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
                     ctx.block().call_void(install_sym, &[]);
                 }
+                if module_name == "fs" && property == "promises" {
+                    let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                    let prop_bytes_global =
+                        format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_module_property_by_name",
+                        &[
+                            (PTR, &mod_bytes_global),
+                            (I64, &module_name.len().to_string()),
+                            (PTR, &prop_bytes_global),
+                            (I64, &property.len().to_string()),
+                        ],
+                    ));
+                }
+                let mod_handle_global = format!("@{}", ctx.strings.entry(mod_idx).handle_global);
+                let prop_handle_global = format!("@{}", ctx.strings.entry(prop_idx).handle_global);
+                let blk = ctx.block();
+                let module_value = blk.load(DOUBLE, &mod_handle_global);
+                let property_value = blk.load(DOUBLE, &prop_handle_global);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_native_module_property_by_name",
-                    &[
-                        (PTR, &mod_bytes_global),
-                        (I64, &mod_len_str),
-                        (PTR, &prop_bytes_global),
-                        (I64, &prop_len_str),
-                    ],
+                    "js_native_module_esm_export_value",
+                    &[(DOUBLE, &module_value), (DOUBLE, &property_value)],
                 ));
             }
             // Cross-module static field access. When `Base` is an imported
@@ -1219,8 +1291,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the property is registered as a getter, call the
             // synthesized __get_<property> method instead of doing a
             // raw field load.
-            if let Some(class_name) = receiver_class_name(ctx, object) {
-                if class_name == "URLPattern" && is_url_pattern_data_property(property) {
+            let proven_receiver_class = receiver_class_name(ctx, object);
+            if let Some(class_name) = proven_receiver_class
+                .clone()
+                .or_else(|| guarded_declared_class_get_candidate(ctx, object))
+            {
+                // A metadata-only class name may nominate the guarded plain-
+                // field IC below, whose live class-id/keys check owns a
+                // semantic fallback. It must never select class behavior by
+                // itself: direct accessors and bound methods have no receiver
+                // shape guard and would otherwise invoke the declared class on
+                // an unrelated live instance.
+                let receiver_class_is_proven =
+                    proven_receiver_class.as_deref() == Some(class_name.as_str());
+                if receiver_class_is_proven
+                    && class_name == "URLPattern"
+                    && is_url_pattern_data_property(property)
+                {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
@@ -1242,7 +1329,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `class Headers` — a user class of that name owns the
                 // receiver type, so fall through to the user-class
                 // getter/method dispatch below.
-                if class_name == "Headers"
+                if receiver_class_is_proven
+                    && class_name == "Headers"
                     && !ctx.classes.contains_key(&class_name)
                     && matches!(
                         property.as_str(),
@@ -1273,13 +1361,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
                 }
-                if class_name == "ClientRequest" && is_http_client_request_method_name(property) {
+                if receiver_class_is_proven
+                    && class_name == "ClientRequest"
+                    && is_http_client_request_method_name(property)
+                {
                     return lower_class_method_bind(ctx, object, property);
                 }
-                if class_name == "Agent" && is_http_agent_method_name(property) {
+                if receiver_class_is_proven
+                    && class_name == "Agent"
+                    && is_http_agent_method_name(property)
+                {
                     return lower_class_method_bind(ctx, object, property);
                 }
-                if is_net_native_method_value(&class_name, property) {
+                if receiver_class_is_proven && is_net_native_method_value(&class_name, property) {
                     return lower_class_method_bind(ctx, object, property);
                 }
                 if class_has_computed_runtime_members(ctx, &class_name) {
@@ -1297,7 +1391,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .get(&class_name)
                     .map(|c| c.static_accessor_names.iter().any(|n| n == property))
                     .unwrap_or(false);
-                if !is_static_accessor {
+                if receiver_class_is_proven && !is_static_accessor {
                     if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                         let recv_box = lower_expr(ctx, object)?;
                         return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
@@ -1325,7 +1419,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
-                if class_name == "Headers"
+                if receiver_class_is_proven
+                    && class_name == "Headers"
                     && !ctx.classes.contains_key(&class_name)
                     && is_headers_method_name(property)
                 {
@@ -1344,7 +1439,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_bits), (I64, &key_handle)],
                     ));
                 }
-                if is_web_stream_method {
+                if receiver_class_is_proven && is_web_stream_method {
                     return lower_class_method_bind(ctx, object, property);
                 }
                 // Fast path: known class instance + plain instance field
@@ -1542,6 +1637,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                            ctx,
+                            &class_name,
+                            &keys_global_name,
+                        );
                         // #5391 path 2: oversized modules full-outline the entire
                         // class-field-GET diamond (guard + fast load + fallback +
                         // phi) to a single `js_class_field_get_ic(...)` call that
@@ -1550,14 +1650,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // (the per-function compile time is superlinear in size).
                         // Mirrors the field-SET full-outline (#5334 lever B).
                         if crate::codegen::full_outline_ic_enabled() {
-                            let (key_raw, expected_keys) = {
+                            let key_raw = {
                                 let blk = ctx.block();
                                 let key_box = blk.load(DOUBLE, &key_handle_global);
                                 let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                let expected_keys =
-                                    blk.load(I64, &format!("@{}", keys_global_name));
-                                (key_raw, expected_keys)
+                                blk.and(I64, &key_bits, POINTER_MASK_I64)
                             };
                             let val = ctx.block().call(
                                 DOUBLE,
@@ -1566,7 +1663,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I64, &site_id),
                                     (DOUBLE, &recv_box),
                                     (I32, &expected_class_id_str),
-                                    (I64, &expected_keys),
+                                    (I32, &expected_shape_id),
                                     (I64, &key_raw),
                                     (I32, &field_idx_str),
                                     (I32, requires_raw_f64_str),
@@ -1577,15 +1674,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
                         // can reference them.
-                        let (obj_bits, obj_handle, key_raw, expected_keys) = {
+                        let (obj_bits, obj_handle, key_raw) = {
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                             let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                             let key_box = blk.load(DOUBLE, &key_handle_global);
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
                             let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-                            (obj_bits, obj_handle, key_raw, expected_keys)
+                            (obj_bits, obj_handle, key_raw)
                         };
                         let fast_idx = ctx.new_block("class_field_get.fast");
                         let fallback_idx = ctx.new_block("class_field_get.fallback");
@@ -1598,17 +1694,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // branches straight to the fast slot load, skipping the
                         // cross-crate guard call; on a miss it leaves the current
                         // block at the guard-call path below (unchanged).
+                        let subclass_arms =
+                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                                requires_raw_f64,
+                            );
                         let _guardcall_label =
                             crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
                                 ctx,
                                 &obj_bits,
                                 &obj_handle,
                                 &expected_class_id_str,
-                                &expected_keys,
-                                field_index,
+                                &expected_shape_id,
                                 requires_raw_f64,
                                 None,
                                 &fast_label,
+                                &subclass_arms,
                             );
                         let guard_ok = ctx.block().call(
                             I32,
@@ -1617,7 +1721,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &site_id),
                                 (DOUBLE, &recv_box),
                                 (I32, &expected_class_id_str),
-                                (I64, &expected_keys),
+                                (I32, &expected_shape_id),
                                 (I64, &key_raw),
                                 (I32, &field_idx_str),
                                 (I32, requires_raw_f64_str),
@@ -1812,7 +1916,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // prototype methods — every method reference returned
                 // `undefined`.
                 let method_key = (class_name.clone(), property.clone());
-                if ctx.methods.contains_key(&method_key) {
+                if receiver_class_is_proven && ctx.methods.contains_key(&method_key) {
                     return lower_class_method_bind(ctx, object, property);
                 }
             }

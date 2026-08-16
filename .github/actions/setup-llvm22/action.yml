@@ -90,7 +90,8 @@ runs:
       run: |
         $ErrorActionPreference = "Stop"
         $ver = $env:LLVM_VERSION
-        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
+        $llvmArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq "Arm64") { "aarch64" } else { "x86_64" }
+        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-$llvmArch-pc-windows-msvc.tar.xz"
         Write-Host "downloading $url"
         curl.exe -sSL --retry 3 -o "$env:RUNNER_TEMP\llvm.tar.xz" $url
         New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
@@ -165,3 +166,7 @@ runs:
         }
 
         "LLVM_SYS_221_PREFIX=C:\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
+        # Windows links LLVM-C dynamically to avoid the release archive's
+        # /MT CRT and bundled-rpmalloc collision with Rust's /MD binaries.
+        # Put the matching DLL beside every later cargo test/build process.
+        "C:\llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Append

@@ -31,6 +31,8 @@ use crate::expr::{variant_name, FnCtx};
 //   `native_module_dispatch.rs` (#1105 followup): per-branch
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
+#[cfg(test)]
+mod alloc_hot_tests;
 mod atomics;
 pub(crate) mod buffer_intrinsic;
 mod builtin;
@@ -42,6 +44,9 @@ mod console_promise;
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
 mod console_rooting_tests;
+#[cfg(test)]
+mod ctor_prologue_store_tests;
+mod ctor_prologue_stores;
 mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
@@ -49,6 +54,10 @@ mod extern_func;
 mod extern_timers;
 mod field_init;
 mod func_ref;
+pub(crate) use func_ref::{
+    guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
+    guarded_path_type,
+};
 mod jsx;
 mod method_override;
 mod namespace_call;
@@ -56,7 +65,7 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
-mod new_alloc;
+pub(crate) mod new_alloc;
 mod new_ctor_args;
 mod new_helpers;
 mod omitted_native_params;
@@ -71,6 +80,8 @@ mod scalar_method;
 /// module header for why the default build cannot fault on them.
 #[cfg(test)]
 mod timer_rooting_tests;
+#[cfg(test)]
+mod typed_shape_bake_tests;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
 mod typed_shape_init;

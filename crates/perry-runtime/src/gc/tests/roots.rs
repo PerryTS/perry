@@ -1,5 +1,9 @@
 use super::super::*;
 use super::support::*;
+// #7946: the unsafe-zone tests pin the predicate per THREAD rather than
+// storing into the process-global `GC_UNSAFE_ZONES`; see
+// `GcUnsafeZoneResetGuard` below.
+use crate::gc::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test;
 
 struct ActiveShadowFrame(u64);
 
@@ -75,25 +79,44 @@ fn lock_safe_runtime_scanner_closure() -> (*mut u8, u64, f64) {
     (ptr, bits, f64::from_bits(bits))
 }
 
-struct GcUnsafeZoneResetGuard;
+/// #7946: pins the unsafe-zone answer PER THREAD instead of storing into the
+/// process-global [`GC_UNSAFE_ZONES`].
+///
+/// The counter is process-wide by design (a worker thread's unscannable stack
+/// has to stop the *main* thread collecting), which in a test binary made
+/// `store(1)` a global stop-the-collector: every concurrent libtest thread's
+/// `gc_budgeted_start_blocked()` began answering "blocked", and any test
+/// driving a budgeted cycle to completion got `JS_GC_STEP_STATUS_SKIPPED`.
+/// `root_words::bare_address_in_{shadow_slot,global_root}_survives_a_real_
+/// collection` failed that way ("budgeted GC cycle stopped before completion:
+/// status 3") 3 runs in 100.
+///
+/// Every test here sets the zone and then asserts about a collection on its own
+/// thread, so a per-thread pin exercises the same predicate.
+struct GcUnsafeZoneResetGuard(Option<bool>);
 
 impl GcUnsafeZoneResetGuard {
     fn clear() -> Self {
-        GC_UNSAFE_ZONES.store(0, std::sync::atomic::Ordering::Release);
         GC_UNSAFE_WARNED.store(false, std::sync::atomic::Ordering::Release);
-        Self
+        Self(set_unsafe_zone_blocked_for_test(Some(false)))
     }
 
     fn enter() -> Self {
         let guard = Self::clear();
-        GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+        set_unsafe_zone_blocked_for_test(Some(true));
         guard
+    }
+
+    /// Enter the zone mid-test, for the cases that assert a *deferred*
+    /// collection re-checks it at flush time.
+    fn enter_now() {
+        set_unsafe_zone_blocked_for_test(Some(true));
     }
 }
 
 impl Drop for GcUnsafeZoneResetGuard {
     fn drop(&mut self) {
-        GC_UNSAFE_ZONES.store(0, std::sync::atomic::Ordering::Release);
+        set_unsafe_zone_blocked_for_test(self.0);
         GC_UNSAFE_WARNED.store(false, std::sync::atomic::Ordering::Release);
     }
 }
@@ -295,7 +318,7 @@ fn lock_safe_runtime_scanners_deferred_manual_gc_respects_unsafe_zone_at_flush()
             before,
             "manual GC should defer while a state root lock is held"
         );
-        GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+        GcUnsafeZoneResetGuard::enter_now();
     });
 
     assert_eq!(
@@ -335,7 +358,7 @@ fn lock_safe_runtime_scanners_deferred_auto_gc_respects_unsafe_zone_at_flush() {
             before,
             "automatic threshold GC should defer while a state root lock is held"
         );
-        GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+        GcUnsafeZoneResetGuard::enter_now();
     });
 
     assert_eq!(

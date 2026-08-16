@@ -24,7 +24,7 @@ fn general_block_offset(idx: usize) -> usize {
     ARENA.with(|a| unsafe { (&*a.get()).blocks[idx].offset })
 }
 
-fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
+pub(super) fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
     std::thread::spawn(test)
         .join()
         .expect("arena test panicked");
@@ -130,11 +130,40 @@ fn survivor_reclaim_resets_dead_blocks() {
 
         assert_eq!(survivor_after, 0);
         assert!(stats.reset_blocks > 0);
-        assert!(stats.reusable_bytes > 0 || stats.deallocated_bytes > 0);
+        assert!(stats.reusable_bytes > 0 || stats.removed_bytes > 0);
         assert!(
             after_reclaim.total_reserved_bytes <= after_alloc.total_reserved_bytes,
             "dead survivor blocks should become reusable or be returned"
         );
+    });
+}
+
+#[test]
+fn budgeted_survivor_reclaim_accumulates_release_stats_across_slices() {
+    run_with_fresh_arenas(|| {
+        for _ in 0..3 {
+            let ptr = arena_alloc_gc_survivor(BLOCK_SIZE, 8, GC_TYPE_STRING);
+            assert!(!ptr.is_null());
+        }
+
+        let snapshots = arena_block_snapshots();
+        let block_has_live = vec![false; snapshots.len()];
+        let mut reclaim = SurvivorArenaReclaimDeadBlocksState::new(&block_has_live, &snapshots);
+        let mut slices = 0;
+        while !reclaim.step(1) {
+            slices += 1;
+            assert!(slices < 32, "one-unit survivor reclaim must converge");
+        }
+
+        let stats = reclaim.stats();
+        assert!(slices > 3, "the test must span multiple reclamation slices");
+        assert_eq!(stats.reset_blocks, 3);
+        assert_eq!(stats.removed_blocks, 2);
+        assert!(stats.removed_bytes >= 2 * BLOCK_SIZE);
+        assert_eq!(stats.pooled_blocks, 2);
+        assert_eq!(stats.pooled_bytes, stats.removed_bytes);
+        assert_eq!(stats.deallocated_blocks, 0);
+        assert_eq!(stats.deallocated_bytes, 0);
     });
 }
 
@@ -445,6 +474,112 @@ fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
     });
 }
 
+/// The birth-generation threshold is TYPE-DEPENDENT, and this pins the split
+/// rather than the constants.
+///
+/// The test above allocates `LARGE_OBJECT_THRESHOLD_BYTES` of `GC_TYPE_STRING`
+/// and asserts it is born Old + `GC_FLAG_TENURED`. The *same size* of
+/// `GC_TYPE_ARRAY` must be born in the NURSERY, because being born tenured
+/// costs a pointer-bearing object far more than its own bytes: a minor never
+/// sweeps old-gen, so the container and — through the remembered set —
+/// everything it names stay live until a full mark-sweep. `shapes.ts`'s
+/// 2000-element array is 16 400 bytes, sixteen over the old flat line, and that
+/// alone made its two minors re-mark 94 000 then 118 006 slots.
+///
+/// Sabotage check: reverting `arena_alloc_gc` to the flat
+/// `is_large_object_total_size` fails the first assertion here — it is the
+/// whole of the change.
+#[test]
+fn pointer_bearing_objects_get_a_wider_born_tenured_threshold_than_pointer_free_ones() {
+    run_with_fresh_arenas(|| {
+        // Just over the pointer-FREE line, well under the pointer-bearing one.
+        let payload = LARGE_OBJECT_THRESHOLD_BYTES;
+
+        let array = arena_alloc_gc(payload, 8, GC_TYPE_ARRAY) as usize;
+        assert!(
+            pointer_in_nursery(array),
+            "a pointer-bearing object between the two thresholds must be born \
+             young, or every object it reaches is immortal until a full GC"
+        );
+        assert!(!pointer_in_old_gen(array));
+        unsafe {
+            let header = (array - GC_HEADER_SIZE) as *const GcHeader;
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "born-young means born untenured"
+            );
+        }
+
+        // Same size, pointer-free: unchanged, still born tenured in old-gen.
+        let string = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
+        assert!(pointer_in_old_gen(string));
+        assert!(!pointer_in_nursery(string));
+
+        // Above the wider line, a pointer-bearing object is born tenured again.
+        let huge = arena_alloc_gc(
+            crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES + 64,
+            8,
+            GC_TYPE_ARRAY,
+        ) as usize;
+        assert!(pointer_in_old_gen(huge));
+        unsafe {
+            let header = (huge - GC_HEADER_SIZE) as *const GcHeader;
+            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+        }
+    });
+}
+
+/// Everything the widened threshold admits to the nursery must be MOVABLE.
+///
+/// Two independent ceilings, and a violation of either is silent: an object
+/// larger than `MAX_YOUNG_MOVE_BYTES` is refused by `move_young` and left
+/// behind in from-space, and one larger than a nursery block cannot be
+/// bump-allocated there at all. Neither would fail a correctness test until a
+/// collection landed on such an object, so the invariant is asserted directly
+/// on the constants.
+#[test]
+fn pointer_bearing_large_object_threshold_is_movable() {
+    assert!(
+        crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES < crate::gc::MAX_YOUNG_MOVE_BYTES,
+        "the allocator must not admit to the nursery an object move_young refuses to relocate"
+    );
+    assert!(
+        crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES <= block::BLOCK_SIZE,
+        "a nursery-resident object must fit in a nursery block"
+    );
+    assert!(
+        crate::gc::LARGE_OBJECT_THRESHOLD_BYTES
+            <= crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES,
+        "the pointer-bearing threshold is a widening, never a narrowing"
+    );
+}
+
+/// The type table, not a hardcoded type list, is what selects the threshold.
+#[test]
+fn large_object_threshold_follows_the_type_table_pointer_free_flag() {
+    use crate::gc::{
+        large_object_threshold_for_type, LARGE_OBJECT_THRESHOLD_BYTES as SMALL,
+        LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES as WIDE,
+    };
+    // pointer_free: false
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_ARRAY), WIDE);
+    assert_eq!(
+        large_object_threshold_for_type(crate::gc::GC_TYPE_OBJECT),
+        WIDE
+    );
+    assert_eq!(
+        large_object_threshold_for_type(crate::gc::GC_TYPE_CLOSURE),
+        WIDE
+    );
+    // pointer_free: true
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_STRING), SMALL);
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_BUFFER), SMALL);
+    // An unknown type takes the conservative value: the widening is justified
+    // by the type table saying the payload is traced, and it cannot say that.
+    assert_eq!(large_object_threshold_for_type(u8::MAX), SMALL);
+}
+
 #[test]
 fn large_buffer_and_typed_array_old_objects_are_seen_by_arena_walkers() {
     run_with_fresh_arenas(|| {
@@ -554,6 +689,8 @@ fn generation_metadata_arena_reset_stats_reports_reusable_bytes_for_retained_res
         assert_eq!(stats.reusable_bytes, before_offset);
         assert_eq!(stats.deallocated_blocks, 0);
         assert_eq!(stats.deallocated_bytes, 0);
+        assert_eq!(stats.pooled_blocks, 0);
+        assert_eq!(stats.pooled_bytes, 0);
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
             assert!(!arena.blocks[idx].data.is_null());
@@ -567,8 +704,8 @@ fn generation_metadata_removed_on_nursery_block_deallocation() {
     run_with_fresh_arenas(|| {
         let (idx, base, _size, stats) = reset_old_nursery_block(1);
         assert!(
-            stats.deallocated_blocks >= 1,
-            "test setup should deallocate at least one nursery block"
+            stats.removed_blocks >= 1,
+            "test setup should remove at least one nursery block"
         );
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
@@ -581,13 +718,17 @@ fn generation_metadata_removed_on_nursery_block_deallocation() {
 }
 
 #[test]
-fn generation_metadata_arena_reset_stats_reports_deallocated_blocks_as_returned_not_reusable() {
+fn generation_metadata_arena_reset_stats_distinguishes_pooled_from_deallocated_blocks() {
     run_with_fresh_arenas(|| {
         let (idx, base, size, _before_offset, stats) = reset_single_reclaimable_nursery_block(1);
         assert_eq!(stats.reset_blocks, 1);
         assert_eq!(stats.reusable_bytes, 0);
-        assert_eq!(stats.deallocated_blocks, 1);
-        assert_eq!(stats.deallocated_bytes, size);
+        assert_eq!(stats.removed_blocks, 1);
+        assert_eq!(stats.removed_bytes, size);
+        assert_eq!(stats.pooled_blocks, 1);
+        assert_eq!(stats.pooled_bytes, size);
+        assert_eq!(stats.deallocated_blocks, 0);
+        assert_eq!(stats.deallocated_bytes, 0);
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
             assert!(arena.blocks[idx].data.is_null());
@@ -602,7 +743,7 @@ fn generation_metadata_registered_on_tombstone_reuse() {
     run_with_fresh_arenas(|| {
         let (idx, _base, _size, stats) = reset_old_nursery_block(1);
         assert!(
-            stats.deallocated_blocks >= 1,
+            stats.removed_blocks >= 1,
             "test setup should create a nursery tombstone"
         );
 
@@ -1169,6 +1310,76 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
     assert_eq!(block_pool_bytes_for_test(), before);
 }
 
+/// #7875: per-thread LIFO ownership must not multiply the allowance by the
+/// number of simultaneously-live `perry/thread` agents. Four threads race to
+/// reserve 8 MiB against the same process counter under a 2 MiB cap; the
+/// census reaches the cap, never four copies of it, and returns to zero after
+/// the simulated owners release their shares. The production wrapper passes
+/// `BLOCK_POOL_PROCESS_BYTES` to this exact reservation primitive.
+#[test]
+fn block_pool_cap_is_process_wide_across_live_threads() {
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(5));
+    let release = std::sync::Arc::new(std::sync::Barrier::new(5));
+    let mut threads = Vec::new();
+
+    for _ in 0..4 {
+        let counter = counter.clone();
+        let ready = ready.clone();
+        let release = release.clone();
+        threads.push(std::thread::spawn(move || {
+            let mut reserved = 0;
+            for _ in 0..2 {
+                if super::block::block_pool_counter_try_reserve(
+                    &counter,
+                    BLOCK_SIZE,
+                    2 * BLOCK_SIZE,
+                ) {
+                    reserved += BLOCK_SIZE;
+                }
+            }
+            ready.wait();
+            release.wait();
+            counter.fetch_sub(reserved, std::sync::atomic::Ordering::Relaxed);
+        }));
+    }
+
+    ready.wait();
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        2 * BLOCK_SIZE,
+        "all live threads together must share one process-wide cap"
+    );
+    release.wait();
+    for thread in threads {
+        thread.join().expect("pool worker must exit cleanly");
+    }
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "each owner must release its share of the process census"
+    );
+}
+
+#[test]
+fn allocation_failure_recovery_drains_mismatched_pooled_blocks() {
+    let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
+    let raw = unsafe { std::alloc::alloc(layout) };
+    assert!(!raw.is_null());
+    assert!(block_pool_put(raw, BLOCK_SIZE));
+
+    force_next_block_alloc_failure();
+    let block = crate::arena::block::reserve_arena_block(BLOCK_SIZE + 1);
+    assert_eq!(
+        block_pool_bytes_for_test(),
+        0,
+        "emergency full collection must drain blocks unusable for the failed size"
+    );
+
+    let returned_layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
+    unsafe { std::alloc::dealloc(block.data, returned_layout) };
+}
+
 // ---------------------------------------------------------------------------
 // #7624: deferred old-object page registration.
 //
@@ -1223,8 +1434,10 @@ fn deferred_registration_flush_sites() {
             "as old_page_account_swept_object — per-object, same argument",
         ),
         (
-            "old_page_account_dirty_slot",
-            "touches only dirty_slots/epoch, which no registration contributes to",
+            "old_page_account_dirty_slots",
+            "touches only dirty_slots/epoch, which no registration contributes to. \
+             The batched form of the above: the dirty scan walks ascending \
+             contiguous slots, so ~512 of them share one page and one probe",
         ),
         (
             "old_page_mark_dirty",
@@ -1255,6 +1468,23 @@ fn deferred_registration_flush_sites() {
              the whole walk. Flushing per call would be the same flush repeated \
              256 times per 1 MiB block — and cannot be needed, because nothing \
              between the walk's start and its end allocates into old-gen",
+        ),
+        (
+            "register_promoted_page_headers",
+            "the TRACED promotion's eager arm, split out of \
+             register_promoted_page_run. Same argument: one call per PAGE from \
+             `finish_in_place_promotion`'s single linear walk, which flushes \
+             once before the whole walk, and nothing between the walk's start \
+             and its end allocates into old-gen",
+        ),
+        (
+            "expand_promoted_run",
+            "expands a DESCRIBED promoted page into the object list. Every \
+             caller has already flushed: the four readers/removers do so as \
+             their #7624 obligation, `materialize_all_promoted_page_runs` runs \
+             immediately after `old_pages_begin_gc_cycle`, and \
+             `register_promoted_page_run` is inside the promotion walk covered \
+             by the entry above",
         ),
         (
             "flush_deferred_old_page_registrations",
@@ -1597,5 +1827,81 @@ fn batched_flush_matches_eager_registration() {
             "page object_count must match the eager path's, counting the \
              re-registered address exactly once"
         );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// #7912: `arena_alloc_gc_no_collect` — the "allocate without a collection
+// point" entry point.
+//
+// Its whole value is a guarantee, not a speed: a caller holding raw heap
+// pointers it has not rooted may allocate through it and, on a non-null
+// return, KNOW nothing moved. That is only true if it REFUSES rather than
+// reaching `gc_check_trigger()` when the open block cannot serve the request,
+// so that is what these tests pin.
+//
+// ★ An earlier cut of this coverage asserted only "a small concat reached no
+// trigger", which is vacuous: a small allocation into a block with room does
+// not reach the trigger through `arena_alloc` either. Replacing the entry's
+// body with the COLLECTING `arena_alloc` left that test green. These two
+// drive the block to the point where the two entries must diverge.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_collect_alloc_refuses_a_full_block_instead_of_collecting() {
+    run_with_fresh_arenas(|| {
+        reset_gc_trigger_arena_probe();
+        // Comfortably under LARGE_OBJECT_THRESHOLD_BYTES, so every request
+        // takes the nursery bump path rather than old-gen birth.
+        let chunk = LARGE_OBJECT_THRESHOLD_BYTES / 4;
+        let bound = 8 * BLOCK_SIZE / chunk;
+        let mut served = 0usize;
+        let mut refused = false;
+        for _ in 0..bound {
+            if arena_alloc_gc_no_collect(chunk, 8, GC_TYPE_STRING).is_null() {
+                refused = true;
+                break;
+            }
+            served += 1;
+        }
+        assert!(
+            refused,
+            "the no-collect entry must REFUSE once the open block is full — it \
+             served {served} chunks of {chunk} B without ever declining, which \
+             means it reached the block-reservation/collection path it exists \
+             to avoid"
+        );
+        assert!(
+            served > 0,
+            "test premise: the entry must serve from an open block at all"
+        );
+        assert_eq!(
+            gc_trigger_arena_calls(),
+            0,
+            "the no-collect entry reached the allocation-point GC trigger; \
+             every raw pointer a caller read before it is now potentially \
+             from-space"
+        );
+        // A refusal is a refusal, not damage: the same request through the
+        // collecting entry still works, which is the caller's fallback.
+        assert!(
+            !arena_alloc_gc(chunk, 8, GC_TYPE_STRING).is_null(),
+            "the collecting fallback must still serve after a refusal"
+        );
+    });
+}
+
+#[test]
+fn no_collect_alloc_refuses_an_oversized_request() {
+    run_with_fresh_arenas(|| {
+        reset_gc_trigger_arena_probe();
+        // Old-gen birth walks page lists and can reserve, so it is outside the
+        // contract even though it is not itself `gc_check_trigger`.
+        assert!(
+            arena_alloc_gc_no_collect(LARGE_OBJECT_THRESHOLD_BYTES * 2, 8, GC_TYPE_STRING)
+                .is_null(),
+            "a large-object request must be refused, not born tenured"
+        );
+        assert_eq!(gc_trigger_arena_calls(), 0);
     });
 }

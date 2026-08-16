@@ -7,10 +7,10 @@
 //! one. The wins are reported alongside the misses on purpose: a report that
 //! only nags is less useful, and less trusted, than one that shows the ratio.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
-use super::{Analysis, Entry, Outcome, Tier};
+use super::{Analysis, Entry, Outcome, Position, ReportSource, Tier};
 
 /// Bump when a field is removed or its meaning changes. Additive fields do
 /// not require a bump — consumers must ignore unknown keys.
@@ -72,6 +72,73 @@ fn hotness(e: &Entry) -> String {
     }
 }
 
+struct ResolvedSource<'a> {
+    line: u32,
+    column: u32,
+    text: &'a str,
+}
+
+fn resolve_source<'a>(
+    e: &Entry,
+    sources: &'a HashMap<String, ReportSource>,
+) -> Option<ResolvedSource<'a>> {
+    let source = sources.get(&e.module)?;
+    let offset = e.byte_offset?.checked_sub(1)? as usize;
+    if offset > source.source.len() || !source.source.is_char_boundary(offset) {
+        return None;
+    }
+    let before = &source.source[..offset];
+    let wrapped_line = before.bytes().filter(|b| *b == b'\n').count() as u32 + 1;
+    if wrapped_line <= source.line_offset {
+        return None;
+    }
+    let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+    let line_end = source.source[offset..]
+        .find('\n')
+        .map_or(source.source.len(), |relative| offset + relative);
+    let text = source.source[line_start..line_end].trim_end_matches('\r');
+    Some(ResolvedSource {
+        line: wrapped_line - source.line_offset,
+        column: (offset - line_start + 1) as u32,
+        text,
+    })
+}
+
+fn write_source(out: &mut String, e: &Entry, sources: &HashMap<String, ReportSource>) {
+    let Some(offset) = e.byte_offset else {
+        return;
+    };
+    let Some(location) = resolve_source(e, sources) else {
+        let _ = writeln!(out, "      source byte offset {offset}");
+        return;
+    };
+    let width = location.line.to_string().len();
+    let desired_caret_width = match e.position {
+        Position::AllocSite => 3, // the existing offset points at `new`
+        _ => e.name.len(),
+    };
+    let caret_width = desired_caret_width.max(1).min(
+        location
+            .text
+            .len()
+            .saturating_sub(location.column.saturating_sub(1) as usize)
+            .max(1),
+    );
+    let _ = writeln!(
+        out,
+        "      --> {}:{}:{}",
+        e.module, location.line, location.column
+    );
+    let _ = writeln!(out, "      {:>width$} | {}", location.line, location.text);
+    let _ = writeln!(
+        out,
+        "      {:>width$} | {}{}",
+        "",
+        " ".repeat(location.column.saturating_sub(1) as usize),
+        "^".repeat(caret_width),
+    );
+}
+
 /// Human-readable report.
 ///
 /// Reads the process-global de-duplication counter. **Tests must use
@@ -80,11 +147,21 @@ fn hotness(e: &Entry) -> String {
 /// line without holding a `test_support::Session` would observe whatever a
 /// concurrently-running collector test last stored.
 pub fn render_text(entries: &[Entry]) -> String {
-    render_text_with(entries, super::masked_by_dedup())
+    let sources = super::source_snapshot();
+    render_text_with_sources(entries, super::masked_by_dedup(), &sources)
 }
 
 /// [`render_text`] with the de-duplication count supplied explicitly.
+#[cfg(test)]
 pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
+    render_text_with_sources(entries, masked, &HashMap::new())
+}
+
+fn render_text_with_sources(
+    entries: &[Entry],
+    masked: usize,
+    sources: &HashMap<String, ReportSource>,
+) -> String {
     let mut out = String::new();
     let tallies = tally(entries);
 
@@ -232,6 +309,7 @@ pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
             if let Some(issue) = &e.issue {
                 let _ = writeln!(out, "      tracking: {issue}");
             }
+            write_source(&mut out, e, sources);
         }
         if wasted.len() > MAX_ROWS_PER_TIER {
             let _ = writeln!(out, "  ... and {} more", wasted.len() - MAX_ROWS_PER_TIER);
@@ -294,9 +372,7 @@ pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
             if let Some(ordinal) = e.alloc_ordinal {
                 let _ = writeln!(out, "      allocation site #{ordinal} in this region");
             }
-            if let Some(offset) = e.byte_offset {
-                let _ = writeln!(out, "      source byte offset {offset}");
-            }
+            write_source(&mut out, e, sources);
             if let Some(issue) = &e.issue {
                 let _ = writeln!(out, "      tracking: {issue}");
             }
@@ -330,6 +406,7 @@ pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
                 e.region.as_str(),
                 e.function,
             );
+            write_source(&mut out, e, sources);
         }
         if wins.len() > MAX_ROWS_PER_TIER {
             let _ = writeln!(out, "  ... and {} more", wins.len() - MAX_ROWS_PER_TIER);
@@ -337,10 +414,7 @@ pub fn render_text_with(entries: &[Entry], masked: usize) -> String {
         out.push('\n');
     }
 
-    out.push_str(
-        "Values are reported by function and binding name: HIR keeps names through\n\
-         lowering but not source spans, so there is no file:line yet.\n",
-    );
+    out.push_str("Values are reported by function, binding name, and declaration location.\n");
     out
 }
 
@@ -564,6 +638,28 @@ mod tests {
             alloc_context: None,
             alloc_ordinal: None,
         }
+    }
+
+    #[test]
+    fn declaration_offset_renders_file_line_column_and_snippet() {
+        let source = "function build() {\n  const boxed = makeValue();\n}\n";
+        let mut entry = denied(Analysis::PtrShape, "boxed", "rule 2 (containment)");
+        entry.byte_offset = Some(source.find("boxed").unwrap() as u32 + 1);
+        let sources = HashMap::from([(
+            "batch.ts".to_string(),
+            ReportSource {
+                source: source.to_string(),
+                line_offset: 0,
+            },
+        )]);
+
+        let text = render_text_with_sources(&[entry], 0, &sources);
+        assert!(text.contains("--> batch.ts:2:9"), "got:\n{text}");
+        assert!(
+            text.contains("2 |   const boxed = makeValue();"),
+            "got:\n{text}"
+        );
+        assert!(text.contains("|         ^^^^^"), "got:\n{text}");
     }
 
     /// The #7034 §0 acceptance case: when a representation promotes nothing,

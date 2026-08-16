@@ -87,11 +87,20 @@ pub unsafe extern "C" fn js_response_new(
     } else {
         HeadersStore::default()
     };
+    // A Response owns a private Headers list. The constructor input may be an
+    // existing Headers object, so retaining its registry id would make
+    // mutations alias in both directions instead of copying the initializer.
+    let response_headers_id = (headers_id != 0).then(|| alloc_headers(headers.clone()));
     let id = alloc_response(status_u16, status_text, headers, body, body_present);
-    if let Some(stream_id) = body_stream_id {
+    if response_headers_id.is_some() || body_stream_id.is_some() {
         if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {
-            resp.body_stream_id = Some(stream_id);
-            resp.cached_body_stream_id = Some(stream_id);
+            if let Some(headers_id) = response_headers_id {
+                resp.cached_headers_id = Some(headers_id);
+            }
+            if let Some(stream_id) = body_stream_id {
+                resp.body_stream_id = Some(stream_id);
+                resp.cached_body_stream_id = Some(stream_id);
+            }
         }
     }
     handle_to_f64(id)
@@ -102,14 +111,7 @@ pub unsafe extern "C" fn js_response_new(
 #[no_mangle]
 pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
     let id = handle_id(handle);
-    let store = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        match guard.get(&id) {
-            Some(resp) => resp.headers.clone(),
-            None => return f64::from_bits(TAG_UNDEFINED),
-        }
-    };
-    handle_to_f64(alloc_headers(store))
+    response_headers_handle(id)
 }
 
 /// response.clone() — duplicates the response (deep copy of body + headers)
@@ -134,7 +136,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
             FetchResponse {
                 status: resp.status,
                 status_text: resp.status_text.clone(),
-                headers: resp.headers.clone(),
+                headers: response_headers_snapshot(resp),
                 body: resp.body.clone(),
                 body_present: resp.body_present,
                 body_used: false,

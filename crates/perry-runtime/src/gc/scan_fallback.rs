@@ -213,7 +213,7 @@ pub(crate) fn record_scan_fallback(site: ConservativeScanSite) {
         c.set(counts);
         counts[site.index()]
     });
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-scan-fallback] site={} automatic={} count={}",
             site.as_str(),
@@ -233,7 +233,7 @@ pub(crate) fn record_safepoint_drain(kind: SafepointDrainKind) {
         c.set(counts);
         counts[kind.index()]
     });
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-safepoint-drain] kind={} count={}",
             kind.as_str(),

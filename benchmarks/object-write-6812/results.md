@@ -143,3 +143,36 @@ Function-local inspection of the definitive uncached LLVM module found:
 - the new `test_gap_6812_object_write_loop_generalization` passed in that full
   release-driver run; its final expanded inherited-setter/Proxy corpus also
   passed a focused release-driver rerun
+
+## Eight-shape static-PIC follow-up
+
+The original four-way static write PIC sent every shape beyond its first three
+stable entries through the fourth miss slot. At an eight-shape site that slot
+was overwritten continuously, so half of all writes repeated full `[[Set]]`
+semantics. The follow-up keeps the four generated ways unchanged and adds four
+non-evicting ways in one outlined helper.
+
+The benchmark corpus now includes `shape_eight`, using the same 2,400-object,
+60-million-write scale as `shape_four`. Both binaries were compiled from clean
+release builds with the default auto-optimizing pipeline; the final object was
+regenerated with both Perry caches disabled. Measurements were 15 alternating
+Node/Perry pairs on macOS arm64, with identical `62876400` checksums throughout.
+
+| Implementation | Node median | Perry median | Perry/Node |
+|---|---:|---:|---:|
+| Four-way baseline | 234 ms | 2,359 ms | 10.08× |
+| Four inline + four outlined | 226 ms | **768 ms** | 3.40× |
+
+The Perry median improves by **67.4% (3.07×)**. The established paths remain
+stable: `shape_monomorphic` was 119 → 119 ms and `shape_four` was 400 → 408 ms.
+Both linked matrix executables were 5,849,320 bytes.
+
+Raw alternating samples:
+
+| Implementation | Node ms | Perry ms |
+|---|---|---|
+| Four-way baseline | `[228, 250, 231, 234, 240, 242, 236, 238, 236, 233, 239, 230, 228, 230, 227]` | `[2355, 2422, 2310, 3778, 2396, 2376, 2359, 2361, 2371, 2395, 2354, 2294, 2291, 2292, 2331]` |
+| Four inline + four outlined | `[226, 226, 226, 229, 227, 230, 226, 227, 227, 226, 226, 228, 225, 224, 226]` | `[768, 768, 764, 766, 763, 765, 766, 762, 767, 770, 774, 775, 774, 771, 771]` |
+
+The executable parity corpus adds an eight-shape settled-cache case, a frozen
+receiver in an outlined way, and a ninth-shape bounded-fallback case.

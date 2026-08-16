@@ -1159,6 +1159,13 @@ pub(super) fn lower_builtin_new<'a>(
             // new Headers(init?) — init can be an object literal or another
             // Headers/array iterable.
             let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
+            // `js_headers_new` produces the only reference to the new handle.
+            // Initializer evaluation and string coercion can collect, so keep
+            // that emitted value in the surrounding constructor root group and
+            // re-read it at every use below.  In particular, a dynamic header
+            // value may run `toString()` before `js_headers_set` consumes the
+            // handle (#8087's native statepoint corpus caught this window).
+            let h_root = group.adopt_emitted(ctx, rooting::Repr::Boxed, &h, !args.is_empty());
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
@@ -1168,6 +1175,7 @@ pub(super) fn lower_builtin_new<'a>(
                         let val_ptr =
                             ctx.block()
                                 .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
+                        let h = group.reread_emitted(ctx, h_root);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
@@ -1176,6 +1184,7 @@ pub(super) fn lower_builtin_new<'a>(
                     }
                 } else {
                     let init = lower_expr(ctx, &args[0])?;
+                    let h = group.reread_emitted(ctx, h_root);
                     ctx.block().call(
                         DOUBLE,
                         "js_headers_init_from_value",
@@ -1183,7 +1192,7 @@ pub(super) fn lower_builtin_new<'a>(
                     );
                 }
             }
-            Ok(Some(h))
+            Ok(Some(group.reread_emitted(ctx, h_root)))
         }
 
         "FormData" => {

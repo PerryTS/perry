@@ -1,0 +1,21 @@
+{
+  "name": "perry-next-app-route-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "next build --webpack",
+    "start": "next start",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "25.3.3",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

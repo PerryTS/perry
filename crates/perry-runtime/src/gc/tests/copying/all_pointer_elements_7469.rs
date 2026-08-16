@@ -151,17 +151,21 @@ fn a_numeric_layout_probe_revokes_the_declaration_and_the_header_test_catches_it
     // The refused push routes through the runtime, which records the slot.
     let child = fresh_string(b"after_revocation");
     let arr = crate::array::js_array_push_f64(arr, f64::from_bits(string_bits(child)));
-    unsafe {
-        assert!(
-            test_heap_child_slot_count(arr as *mut u8) >= 1,
-            "the runtime push must have recorded the pointer the elided store \
-             was refused for"
-        );
-    }
+    assert!(
+        test_heap_child_slot_count(arr as *mut u8) >= 1,
+        "the runtime push must have recorded the pointer the elided store \
+         was refused for"
+    );
 }
 
+/// The all-pointer claim covers `0..length`. #8102 widened the declaration to
+/// non-empty arrays whose every existing slot IS a pointer, so the property
+/// under test here is the one that always mattered: an existing **non-pointer**
+/// element refuses it. (Before #8102 this was spelled "non-empty is refused",
+/// which is why the fixture pushes a number — that push is what makes it a
+/// refusal, not the length.)
 #[test]
-fn declaring_a_non_empty_array_is_refused() {
+fn declaring_an_array_holding_a_non_pointer_element_is_refused() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let arr = crate::array::js_array_alloc(4);
     crate::array::js_array_push_f64(arr, 1.0);
@@ -169,9 +173,8 @@ fn declaring_a_non_empty_array_is_refused() {
         crate::array::js_array_declare_all_pointer_elements(arr);
         assert!(
             !codegen_would_take_the_elided_store(arr),
-            "the all-pointer claim covers 0..length; on a non-empty array it \
-             is not vacuously true of what is already stored, so it must be \
-             refused rather than asserted over existing elements"
+            "the all-pointer claim is not true of what is already stored, so \
+             it must be refused rather than asserted over existing elements"
         );
     }
 }
@@ -359,5 +362,96 @@ fn a_replace_or_a_numeric_append_downgrades_to_a_conservative_scan() {
                  the downgrade"
             );
         }
+    }
+}
+
+/// #8102 — the array-LITERAL shape: `const a: C[] = [x, y]; a.push(…)`.
+///
+/// The literal's element stores run first and note each slot
+/// (`expr/array_literal.rs` publishes the payload `POINTER_FREE` and notes per
+/// slot), and only then does the `Stmt::Let` tail emit the declaration. While
+/// `js_array_declare_all_pointer_elements` refused every `length != 0` array
+/// the declaration was a silent no-op for exactly this shape, so every later
+/// push failed the codegen header test and paid the per-store layout note
+/// #7469 exists to delete — +33.9% instructions on a 4M-push loop.
+#[test]
+fn a_non_empty_all_pointer_literal_is_declared_and_admits_the_elided_store() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc(8);
+    unsafe {
+        for (slot, name) in [&b"lit_zero"[..], &b"lit_one"[..]].iter().enumerate() {
+            let bits = string_bits(fresh_string(name));
+            elided_inline_push(arr, bits);
+            crate::gc::js_gc_note_slot_layout(arr as u64, slot as u32, bits);
+        }
+        assert!(
+            !codegen_would_take_the_elided_store(arr),
+            "the literal's own stores leave a precise side mask, which is NOT \
+             a state the elided push may run in — this is the pre-declaration \
+             state the fixture exists to start from"
+        );
+
+        crate::array::js_array_declare_all_pointer_elements(arr);
+
+        assert!(
+            codegen_would_take_the_elided_store(arr),
+            "a non-empty literal whose every slot is a pointer must still be \
+             declared; refusing it is #8102"
+        );
+        assert_eq!(
+            test_heap_child_slot_count(arr as *mut u8),
+            2,
+            "the two elements already stored must stay enumerable across the \
+             declaration"
+        );
+    }
+}
+
+/// Sabotage arm for the test above, made permanent: the SAME sequence with one
+/// element that is not a pointer. The declaration must refuse and must leave
+/// the header exactly as it found it — otherwise the widening would be
+/// declaring `0..length` all-pointer over a payload it had not checked, and a
+/// green positive test above would mean nothing.
+#[test]
+fn a_non_pointer_element_in_the_literal_still_refuses_the_declaration() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc(8);
+    unsafe {
+        let ptr_bits = string_bits(fresh_string(b"lit_zero"));
+        elided_inline_push(arr, ptr_bits);
+        crate::gc::js_gc_note_slot_layout(arr as u64, 0, ptr_bits);
+        let number_bits = 42.0f64.to_bits();
+        elided_inline_push(arr, number_bits);
+        crate::gc::js_gc_note_slot_layout(arr as u64, 1, number_bits);
+
+        let header = header_from_user_ptr(arr as *const u8);
+        let before = (*header)._reserved;
+
+        crate::array::js_array_declare_all_pointer_elements(arr);
+
+        assert_eq!(
+            (*header)._reserved,
+            before,
+            "a refused declaration must not touch the header — in particular \
+             it must not clear the raw-f64 bits on its way out"
+        );
+        assert!(
+            !codegen_would_take_the_elided_store(arr),
+            "codegen must keep routing this array's pushes through \
+             js_array_push_f64"
+        );
+    }
+}
+
+/// The empty-literal path — the one this function has always served — must be
+/// bit-identical after the widening.
+#[test]
+fn an_empty_array_is_still_declared_vacuously() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc(4);
+    unsafe {
+        assert!(!codegen_would_take_the_elided_store(arr));
+        crate::array::js_array_declare_all_pointer_elements(arr);
+        assert!(codegen_would_take_the_elided_store(arr));
     }
 }

@@ -13,6 +13,8 @@ pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
 pub mod inline;
+pub mod prop_cse;
+mod source_spans;
 pub mod state_desugar;
 pub mod unroll;
 
@@ -27,3 +29,23 @@ pub use inline::{
     gather_cross_module_methods_with_extern_imports, inline_functions, MethodCandidate,
 };
 pub use unroll::unroll_static_loops;
+
+/// Post-inline HIR cleanups, in the one order that works for both.
+///
+/// [`unroll_static_loops`] and [`prop_cse::run`] share their ordering
+/// constraint, so the driver runs them through a single entry point rather
+/// than repeating the constraint at each call site:
+///
+/// * **After the inliner** — both want the inlined callee bodies. The unroller
+///   gets their loops; `prop_cse` gets the guard chains an inlined body
+///   contributes, and the copies the unroller then makes.
+/// * **Before the async/generator transforms** — those rewrite control flow
+///   into state-machine shapes the unroll match no longer recognizes, and they
+///   box every body local into a shared mutable `Any` cell, which would turn a
+///   hoisted `const` into one more boxed cell instead of a register.
+///   (`prop_cse` skips async/generator bodies for exactly that reason; keeping
+///   the order here stops the two facts from drifting apart.)
+pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
+    unroll_static_loops(module);
+    prop_cse::run(module);
+}

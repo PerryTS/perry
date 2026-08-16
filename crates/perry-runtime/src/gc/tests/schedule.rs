@@ -320,10 +320,7 @@ fn the_schedule_implies_forced_evacuation() {
 #[test]
 fn unset_is_inert_for_evacuation_policy() {
     let _off = ScheduleGuard::off();
-    let baseline = matches!(
-        std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
-        Ok("1") | Ok("on") | Ok("true")
-    );
+    let baseline = super::super::env_flag_enabled("PERRY_GC_FORCE_EVACUATE");
     assert_eq!(
         gc_force_evacuate_enabled(),
         baseline,

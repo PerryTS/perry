@@ -21,6 +21,12 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
+/// #7900: weak-to-strong READ barrier. See the module for the full argument.
+mod read_barrier;
+pub(crate) mod sliced;
+#[cfg(test)]
+pub(crate) mod test_support;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -336,6 +342,25 @@ fn weak_target_should_clear(
     }
 }
 
+/// Parent-only half of [`is_weak_target_trace_slot`]: can `header` own a weak
+/// target slot at all?
+///
+/// Exactly the three classes the slot predicate recognises. A `false` here
+/// proves `is_weak_target_trace_slot` is `false` for EVERY slot of this
+/// object, which lets a scan that walks hundreds of slots per parent decide it
+/// once instead of per slot.
+#[inline]
+pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::GcHeader) -> bool {
+    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+    matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+    )
+}
+
 /// True when `slot` is a weak target edge and must not be treated as a
 /// strong child during mark/remembered-set scans. Rewrite/copy passes should
 /// still visit these slots so live weak targets get moved addresses repaired.
@@ -394,6 +419,17 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
 /// cleared by GC.
 #[no_mangle]
 pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
+    // #7948: the HIR fold that reaches here is keyed by BARE LOCAL NAME with no
+    // scope discrimination, so a module holding `const r = new WeakRef(x)`
+    // anywhere folds EVERY `r.deref()` onto this helper — including an `r` that
+    // is a user class instance, an object literal or a function parameter.
+    // Reading the internal slot by name off a foreign object answered
+    // `undefined`: a wrong answer with exit code 0. Brand-check first and hand
+    // a foreign receiver back to ordinary dynamic dispatch, which resolves the
+    // receiver's own `deref` (or throws `deref is not a function` like node).
+    if !crate::object::is_weak_wrapper(weakref, CLASS_ID_WEAKREF) {
+        return crate::object::dispatch_foreign_weak_receiver(weakref, "deref", &[]);
+    }
     let ptr = js_nanbox_get_pointer(weakref) as *mut ObjectHeader;
     if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -403,7 +439,9 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if val.is_undefined() {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(val.bits())
+        // #7900: a white target becomes a STRONG mutator local here, through a
+        // read the store barrier cannot see. Shade it before handing it over.
+        read_barrier::weak_read_barrier_f64(val.bits())
     }
 }
 
@@ -489,6 +527,16 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
 /// produce that token value anyway.
 #[no_mangle]
 pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
+    // #7948: brand-check the receiver BEFORE the argument checks — the fold
+    // that reaches here is name-keyed (see `js_weakref_deref`), so `registry`
+    // may be an unrelated object whose own `register` the program meant.
+    if !crate::object::is_weak_wrapper(registry, CLASS_ID_FINALIZATION_REGISTRY) {
+        return crate::object::dispatch_foreign_weak_receiver(
+            registry,
+            "register",
+            &[target, held, token],
+        );
+    }
     if !is_valid_weak_target(target) {
         weakref_type_error("FinalizationRegistry.prototype.register: invalid target");
     }
@@ -544,6 +592,11 @@ pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, toke
 /// references — both sides are stored as POINTER_TAG-tagged f64 values.
 #[no_mangle]
 pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
+    // #7948: brand-check the receiver before the token check (see
+    // `js_finreg_register`).
+    if !crate::object::is_weak_wrapper(registry, CLASS_ID_FINALIZATION_REGISTRY) {
+        return crate::object::dispatch_foreign_weak_receiver(registry, "unregister", &[token]);
+    }
     if !is_valid_weak_target(token) {
         weakref_type_error("Invalid unregisterToken");
     }
@@ -648,9 +701,9 @@ pub(crate) fn scan_pending_finalization_jobs_roots_mut(
 // shared between two passes that decide "was this weak target collected?"
 // differently:
 //
-// * The FULL / fallback cycle (`process_weak_targets_after_mark`, driven from
-//   cycle.rs `WeakProcessing`) probes the `ValidPointerSet` it already built
-//   for its main trace. UNCHANGED behavior — see `weak_target_should_clear`.
+// * The FULL / fallback cycle (`FullWeakProcessingState`, driven from cycle.rs
+//   `WeakProcessing`) probes the `ValidPointerSet` it already built for its
+//   main trace. See `weak_target_should_clear`.
 // * The copied-minor fast path (`process_weak_targets_from_registry`) probes
 //   the copy's O(1) page-metadata classifier (`CopyingPointerSet`), avoiding
 //   both the full-heap BTreeSet build and the whole-arena walk. See
@@ -797,15 +850,12 @@ unsafe fn classify_gc_type_child(
     (unsafe { (*cp.header).obj_type } == obj_type).then_some(ptr)
 }
 
-/// What the copied-minor pass should do with a registered holder address.
+/// What a registry-scoped weak pass should do with a holder address.
 enum HolderDisposition {
-    /// Live holder scanned this cycle (its weak slots are repaired): rekey the
-    /// registry to this current address and process it.
+    /// Live holder at its current address: process its weak slots.
     Process(usize),
     /// Cannot be proven dead in a minor (an unmarked OLD/longlived holder — a
-    /// minor doesn't mark old-gen) AND its weak slots may be stale/unrepaired:
-    /// leave it registered untouched and let a full GC resolve it. Mirrors the
-    /// original arena walk, which only ever processed MARKED objects.
+    /// minor doesn't mark old-gen): leave it registered for a full GC.
     Keep,
     /// Provably dead (unmarked nursery holder) or unclassifiable (stale /
     /// recycled address): remove it from the registry.
@@ -852,35 +902,41 @@ unsafe fn resolve_weak_holder_copied(
     }
 }
 
-/// Full / fallback-cycle weak processing. Walks EVERY live object in the arena
-/// to find the three weak-holder class_ids and tombstones dead weak targets
-/// using the `ValidPointerSet` the caller built for its main trace. UNCHANGED
-/// by #6182 (the registry optimization is copied-minor-only).
-pub(crate) fn process_weak_targets_after_mark(
+/// Resumable full/fallback weak processing. Lives in [`sliced`], which carries
+/// the whole rationale for why a FinalizationRegistry's record array is now
+/// cursored rather than atomic (#7903).
+pub(crate) use sliced::FullWeakProcessingState;
+
+/// Validate a registry entry before dereferencing it. Full cycles can prove
+/// every unmarked holder dead. Fallback minors may only prove that for nursery
+/// holders; unmarked old holders stay registered for the next full cycle.
+unsafe fn resolve_weak_holder_full(
     valid_ptrs: &crate::gc::ValidPointerSet,
+    addr: usize,
     minor_only: bool,
-    enqueue_callbacks: bool,
-) {
-    // #6180 pause floor: the whole-heap walk below exists only to FIND weak
-    // holders (WeakRef / FinalizationRegistry / WeakMap-entry objects). The
-    // #6182 registry tracks every live holder — if none exist (the common
-    // case), the entire O(heap) pass is a no-op. This is the single largest
-    // atomic-finalize cost for weakref-free programs.
-    if !weak_target_holders_allocated() {
-        return;
+) -> HolderDisposition {
+    if !valid_ptrs.contains(&addr) {
+        return HolderDisposition::Drop;
     }
-    let liveness = FullCycleLiveness {
-        valid_ptrs,
-        minor_only,
-    };
-    crate::arena::arena_walk_objects(|header_ptr| unsafe {
-        let header = header_ptr as *mut crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT || !header_is_live(header) {
-            return;
-        }
-        let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
-        dispatch_weak_holder(obj, &liveness, enqueue_callbacks);
-    });
+    let header = header_from_user_addr(addr);
+    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return HolderDisposition::Drop;
+    }
+    let obj = addr as *mut ObjectHeader;
+    if !matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY | CLASS_ID_WEAK_ENTRY
+    ) {
+        return HolderDisposition::Drop;
+    }
+    if header_is_live(header) {
+        return HolderDisposition::Process(addr);
+    }
+    if minor_only && !crate::arena::pointer_in_nursery(addr) {
+        HolderDisposition::Keep
+    } else {
+        HolderDisposition::Drop
+    }
 }
 
 /// Copied-minor weak processing (#6182). Iterates ONLY the registered holders
@@ -1033,14 +1089,64 @@ unsafe fn process_finreg_after_mark(
     liveness: &dyn WeakLiveness,
     enqueue_callbacks: bool,
 ) {
+    let Some(identity) = finreg_entries_identity(registry, liveness) else {
+        return;
+    };
+    process_finreg_record_range(registry, liveness, enqueue_callbacks, 0, identity.len);
+}
+
+/// The value word of a registry's `entries` field plus that array's length.
+///
+/// This pair is the *identity* a sliced record cursor is validated against —
+/// see `sliced`'s module docs. Both mutator-side mutation paths change one of
+/// the two (`unregister` installs a rebuilt array, `register` pushes), so a
+/// match means the indices held across a mutator window still denote the same
+/// records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FinregEntriesIdentity {
+    bits: u64,
+    len: usize,
+}
+
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn finreg_entries_identity(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+) -> Option<FinregEntriesIdentity> {
+    let bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
+    let entries = liveness.as_live_array(bits)?;
+    Some(FinregEntriesIdentity {
+        bits,
+        len: js_array_length(entries) as usize,
+    })
+}
+
+/// Scan `count` records starting at `start`. Returns how many indices were
+/// visited — the work-unit charge, which counts skipped (dead / non-record)
+/// slots too, because reading and rejecting one is the same cost as processing
+/// it and a budget that only charged for hits would not bound anything.
+///
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn process_finreg_record_range(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+    enqueue_callbacks: bool,
+    start: usize,
+    count: usize,
+) -> usize {
     let callback = f64::from_bits(object_field_bits(registry, FINREG_CALLBACK_FIELD));
     let entries_bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
     let Some(entries) = liveness.as_live_array(entries_bits) else {
-        return;
+        return 0;
     };
     let len = js_array_length(entries) as usize;
+    let stop = len.min(start.saturating_add(count));
     let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
-    for i in 0..len {
+    let mut scanned = 0usize;
+    for i in start..stop {
+        scanned += 1;
         let record_value = js_array_get_f64(entries, i as u32);
         let Some(record) = liveness
             .as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
@@ -1055,6 +1161,7 @@ unsafe fn process_finreg_after_mark(
             enqueue_callbacks,
         );
     }
+    scanned
 }
 
 unsafe fn process_finreg_record_after_mark(
@@ -1244,90 +1351,6 @@ pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 /// safe. Refs #6120.
 pub(crate) const WEAK_ENTRIES_KEY: &[u8] = b"__perry_wk_entries";
 
-/// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
-/// #1757/#1758). `js_native_call_method` calls this for any heap object;
-/// it returns `Some(result)` only when `obj` carries the reserved
-/// WeakMap/WeakSet `class_id` and `method_name` is one of *that class's own*
-/// methods, and `None` otherwise so the caller falls through to its normal
-/// dispatch. `receiver` is the NaN-boxed f64 the `js_weak*` helpers expect.
-///
-/// A method that isn't one of the receiver's own (e.g. `"add"` on a WeakMap,
-/// or any name outside `set`/`add`/`get`/`has`/`delete`) falls through to
-/// `None` so the ordinary property lookup resolves it — correctly missing
-/// and raising `TypeError: ... is not a function` on a call, rather than
-/// this function silently answering `undefined`.
-///
-/// # Safety
-/// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
-/// already validated it as a live heap object).
-pub unsafe fn try_weak_method_dispatch(
-    obj: *const ObjectHeader,
-    receiver: f64,
-    method_name: &str,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> Option<f64> {
-    let class_id = (*obj).class_id;
-    if class_id != CLASS_ID_WEAKMAP && class_id != CLASS_ID_WEAKSET {
-        return None;
-    }
-    let args: &[f64] = if !args_ptr.is_null() && args_len > 0 {
-        std::slice::from_raw_parts(args_ptr, args_len)
-    } else {
-        &[]
-    };
-    // #5834: dispatch regardless of arg count, padding missing positions with
-    // `undefined` — mirrors calling the real thunks reflectively. Arity-gating
-    // these arms let `s.add()` (zero args) fall through to a no-op, skipping
-    // `js_weakset_add`'s CanBeHeldWeakly check entirely (it must throw
-    // `TypeError` since `undefined` cannot be held weakly).
-    //
-    // Also gate each method by the receiver's actual class: `"set"`/`"get"`
-    // only exist on WeakMap, `"add"` only on WeakSet (`"has"`/`"delete"` are
-    // shared). Without this a WeakMap receiver could reach `js_weakset_add`
-    // for a `.add(...)` call (and vice versa) instead of falling through to
-    // the ordinary property lookup, which correctly resolves the missing
-    // method to `undefined` and throws `TypeError: ... is not a function`.
-    let undef = f64::from_bits(TAG_UNDEFINED);
-    let arg = |i: usize| args.get(i).copied().unwrap_or(undef);
-    let result = match (method_name, class_id) {
-        ("set", CLASS_ID_WEAKMAP) => js_weakmap_set(receiver, arg(0), arg(1)),
-        ("add", CLASS_ID_WEAKSET) => js_weakset_add(receiver, arg(0)),
-        ("get", CLASS_ID_WEAKMAP) => js_weakmap_get(receiver, arg(0)),
-        ("has", _) => js_weakmap_has(receiver, arg(0)),
-        ("delete", _) => js_weakmap_delete(receiver, arg(0)),
-        _ => return None,
-    };
-    Some(result)
-}
-
-/// Return the reserved WeakMap/WeakSet `class_id` of `receiver` if it is one
-/// of those collections, else `None`. Backs the reflective
-/// `WeakMap.prototype.*` / `WeakSet.prototype.*` thunks so they can perform
-/// the spec brand check (`TypeError` on a non-Weak* receiver) before
-/// dispatching. The `GcHeader.obj_type == GC_TYPE_OBJECT` pre-filter ensures
-/// the pointer is an `ObjectHeader`-backed allocation before `class_id` is
-/// read, so a `Set`/`Map` pointer (different `obj_type`) or a primitive
-/// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
-pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
-    let addr = js_nanbox_get_pointer(receiver) as usize;
-    // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
-    // are NaN-boxed POINTER_TAG values, not heap addresses) before
-    // dereferencing the GC header. WeakMap/WeakSet are ObjectHeader-backed
-    // allocations above the cutoff. See `value::addr_class` for the band map.
-    unsafe {
-        match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
-            _ => return None,
-        }
-        let cid = (*(addr as *const ObjectHeader)).class_id;
-        if cid == CLASS_ID_WEAKMAP || cid == CLASS_ID_WEAKSET {
-            return Some(cid);
-        }
-    }
-    None
-}
-
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
     // #6136: `js_string_from_bytes` allocates and can fire a moving minor GC,
     // which relocates the (movable, GcHeader-backed) WeakMap/WeakSet `reg`.
@@ -1469,6 +1492,15 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
+    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
+    // by BARE LOCAL NAME with no scope discrimination, so `map` may be an
+    // unrelated object (a literal, a user class instance, a parameter) whose own
+    // `set` the program meant. Reading the weak entries array by name off a
+    // foreign object answered `undefined`/`false` — a wrong answer with exit
+    // code 0. Hand it back to ordinary dynamic dispatch instead.
+    if let Some(v) = crate::object::delegate_if_not_weak_collection(map, "set", &[key, value]) {
+        return v;
+    }
     // #2772: WeakMap keys must be values that "CanBeHeldWeakly" (ES2023):
     // objects/handles AND non-registered Symbols (a fresh `Symbol()` or a
     // well-known symbol). Only `Symbol.for(...)` registered symbols, and
@@ -1576,6 +1608,15 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
+    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
+    // by BARE LOCAL NAME with no scope discrimination, so `map` may be an
+    // unrelated object (a literal, a user class instance, a parameter) whose own
+    // `get` the program meant. Reading the weak entries array by name off a
+    // foreign object answered `undefined`/`false` — a wrong answer with exit
+    // code 0. Hand it back to ordinary dynamic dispatch instead.
+    if let Some(v) = crate::object::delegate_if_not_weak_collection(map, "get", &[key]) {
+        return v;
+    }
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
     if map_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -1596,7 +1637,11 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
-                return f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD));
+                // #7900: shade the key (so a pending weak slice cannot tombstone
+                // this entry mid-turn) and the value handed to the mutator.
+                read_barrier::weak_read_barrier(stored_key);
+                let value = object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD);
+                return read_barrier::weak_read_barrier_f64(value);
             }
         }
     }
@@ -1605,6 +1650,15 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
+    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
+    // by BARE LOCAL NAME with no scope discrimination, so `map` may be an
+    // unrelated object (a literal, a user class instance, a parameter) whose own
+    // `has` the program meant. Reading the weak entries array by name off a
+    // foreign object answered `undefined`/`false` — a wrong answer with exit
+    // code 0. Hand it back to ordinary dynamic dispatch instead.
+    if let Some(v) = crate::object::delegate_if_not_weak_collection(map, "has", &[key]) {
+        return v;
+    }
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
     if map_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
@@ -1625,6 +1679,7 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
+                read_barrier::weak_read_barrier(stored_key); // #7900: keep has/get agreeing
                 return f64::from_bits(TAG_TRUE);
             }
         }
@@ -1634,6 +1689,15 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
+    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
+    // by BARE LOCAL NAME with no scope discrimination, so `map` may be an
+    // unrelated object (a literal, a user class instance, a parameter) whose own
+    // `delete` the program meant. Reading the weak entries array by name off a
+    // foreign object answered `undefined`/`false` — a wrong answer with exit
+    // code 0. Hand it back to ordinary dynamic dispatch instead.
+    if let Some(v) = crate::object::delegate_if_not_weak_collection(map, "delete", &[key]) {
+        return v;
+    }
     if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_FALSE);
     }
@@ -1776,6 +1840,15 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
+    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
+    // by BARE LOCAL NAME with no scope discrimination, so `set` may be an
+    // unrelated object (a literal, a user class instance, a parameter) whose own
+    // `add` the program meant. Reading the weak entries array by name off a
+    // foreign object answered `undefined`/`false` — a wrong answer with exit
+    // code 0. Hand it back to ordinary dynamic dispatch instead.
+    if let Some(v) = crate::object::delegate_if_not_weak_collection(set, "add", &[value]) {
+        return v;
+    }
     // #2772: WeakSet members must "CanBeHeldWeakly" (ES2023): objects/handles
     // AND non-registered Symbols. Throw the WeakSet-specific message *before*
     // delegating (js_weakmap_set throws the weak-map-key message, which is wrong

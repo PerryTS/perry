@@ -14,8 +14,7 @@ use crate::expr::{
     lower_expr_with_expected_type, unbox_str_handle,
 };
 use crate::native_value::{
-    BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal,
-    SemanticKind,
+    LoweredValue, MaterializationReason, NativeRep, PodLayoutDecision, PodLocal, SemanticKind,
 };
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -111,6 +110,18 @@ pub(crate) fn lower_let(
     }
     if let Some(init_expr) = init {
         crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
+        ctx.guarded_discriminant_aliases.remove(&id);
+        if !mutable && !ctx.reassigned_locals.contains(&id) {
+            if let perry_hir::Expr::PropertyGet {
+                object, property, ..
+            } = init_expr
+            {
+                if let perry_hir::Expr::LocalGet(owner_id) = object.as_ref() {
+                    ctx.guarded_discriminant_aliases
+                        .insert(id, (*owner_id, property.clone()));
+                }
+            }
+        }
         if let Some(source_id) = native_i32_alias_source(init_expr) {
             ctx.native_i32_aliases.insert(id, source_id);
         }
@@ -119,6 +130,7 @@ pub(crate) fn lower_let(
         }
     } else {
         ctx.local_value_aliases.remove(&id);
+        ctx.guarded_discriminant_aliases.remove(&id);
     }
     crate::expr::record_int_facts_for_let(ctx, id, init, mutable);
     // Class alias detection. Two shapes:
@@ -289,6 +301,50 @@ pub(crate) fn lower_let(
     } else {
         ty.clone()
     };
+
+    // Keep runtime-derived evidence separate from the erased declaration.
+    // A binding such as `const n: number = ({} as any)` therefore records an
+    // Object proof (or no proof), never Number. The accessor additionally
+    // rejects every id written anywhere in this region, so this initializer
+    // fact cannot survive a non-dominating assignment (#7846).
+    ctx.proven_local_types.remove(&id);
+    if let Some(proven) = init.and_then(|expr| {
+        crate::lower_call::guarded_call_return_proof(ctx, expr)
+            .or_else(|| crate::lower_call::guarded_expr_proof(ctx, expr, ty))
+            .or_else(|| crate::type_analysis::proven_type_from_init(ctx, expr))
+    }) {
+        ctx.proven_local_types.insert(id, proven);
+    }
+
+    // #7773/#7506: a numeric local inherits a DECLARED-ONLY proof from its
+    // initializer. `const v = o.x` reaches this as `Any` refined to `Number`,
+    // while TypeScript's inferred `const sum = o.x + o.y` already reaches the
+    // HIR as `Number`; neither form proves what the runtime slots contain.
+    // Record both as violable so a later arithmetic consumer re-checks the
+    // local instead of laundering a possibly boxed value through its type.
+    // A non-numeric initializer of an explicitly numeric local is the direct
+    // form of the same erased-annotation hazard (`let n: number = "4" as
+    // any`), so it must seed the bit even without a declared-only read below
+    // it.
+    if matches!(
+        refined_ty,
+        perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+    ) {
+        if init.is_some_and(|e| {
+            !crate::type_analysis::is_numeric_expr(ctx, e)
+                || crate::type_analysis::numeric_proof_is_declared_only(ctx, e)
+        }) {
+            ctx.declared_only_numeric_locals.insert(id);
+        }
+    }
+
+    // (#7854 also recorded the array/string half of this — a local whose
+    // `Array`/`String` type came only from the RECEIVER'S ANNOTATION — in
+    // `declared_only_array_locals`, so the `.length` fast arm could refuse it.
+    // #7862 gave that arm a property-semantic fallback, which is what the
+    // refusal existed to avoid, so both the set and its one consumer are gone;
+    // see the `.length` arm in `expr/property_get.rs`. The NUMERIC half above
+    // stays: its consumer is an arithmetic op with no guarded fallback.)
 
     // Track closure func_id → local_id mapping so the closure
     // call site in lower_call can look up rest param info.
@@ -908,6 +964,15 @@ pub(crate) fn lower_let(
                     return Ok(());
                 }
 
+                // Preserve only initializer-derived argument evidence for
+                // the inlined constructor parameters. Their declarations are
+                // metadata, but the already-evaluated argument value can
+                // legitimately establish a call-site-scoped runtime kind.
+                let arg_proofs: Vec<Option<perry_hir::types::Type>> = args
+                    .iter()
+                    .map(|arg| crate::type_analysis::proven_type_from_init(ctx, arg))
+                    .collect();
+
                 // Lower args first
                 let mut lowered_args: Vec<String> = Vec::new();
                 for a in args {
@@ -995,15 +1060,23 @@ pub(crate) fn lower_let(
                 if let Some(ctor) = &ctor {
                     let saved_locals = ctx.locals.clone();
                     let saved_local_types = ctx.local_types.clone();
-                    for (param, arg_val) in ctor.params.iter().zip(lowered_args.iter()) {
+                    let saved_proven_local_types = ctx.proven_local_types.clone();
+                    for (index, (param, arg_val)) in
+                        ctor.params.iter().zip(lowered_args.iter()).enumerate()
+                    {
                         let slot = ctx.func.alloca_entry(DOUBLE);
                         ctx.block().store(DOUBLE, arg_val, &slot);
                         ctx.locals.insert(param.id, slot);
                         ctx.local_types.insert(param.id, param.ty.clone());
+                        ctx.proven_local_types.remove(&param.id);
+                        if let Some(Some(proof)) = arg_proofs.get(index) {
+                            ctx.proven_local_types.insert(param.id, proof.clone());
+                        }
                     }
                     crate::stmt::lower_stmts(ctx, &ctor.body)?;
                     ctx.locals = saved_locals;
                     ctx.local_types = saved_local_types;
+                    ctx.proven_local_types = saved_proven_local_types;
                 } else if class_has_extends {
                     // No own ctor — JS spec defaults to
                     // `constructor(...args) { super(...args); }`. Walk
@@ -1018,6 +1091,7 @@ pub(crate) fn lower_let(
                             if let Some(parent_ctor) = &parent_class.constructor {
                                 let saved_locals = ctx.locals.clone();
                                 let saved_local_types = ctx.local_types.clone();
+                                let saved_proven_local_types = ctx.proven_local_types.clone();
                                 for (i, param) in parent_ctor.params.iter().enumerate() {
                                     let slot = ctx.func.alloca_entry(DOUBLE);
                                     if i < lowered_args.len() {
@@ -1030,6 +1104,10 @@ pub(crate) fn lower_let(
                                     }
                                     ctx.locals.insert(param.id, slot);
                                     ctx.local_types.insert(param.id, param.ty.clone());
+                                    ctx.proven_local_types.remove(&param.id);
+                                    if let Some(Some(proof)) = arg_proofs.get(i) {
+                                        ctx.proven_local_types.insert(param.id, proof.clone());
+                                    }
                                 }
                                 ctx.class_stack.pop();
                                 ctx.class_stack.push(pname.clone());
@@ -1038,6 +1116,7 @@ pub(crate) fn lower_let(
                                 ctx.class_stack.push(class_name.clone());
                                 ctx.locals = saved_locals;
                                 ctx.local_types = saved_local_types;
+                                ctx.proven_local_types = saved_proven_local_types;
                                 break;
                             }
                             parent_name = parent_class.extends_name.clone();
@@ -1131,13 +1210,10 @@ pub(crate) fn lower_let(
                 let bptr = blk.load(I64, &slot_clone);
                 if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
                     let init_i32 = crate::expr::lower_i32_control_store_value(ctx, init_expr)?;
-                    ctx.block()
-                        .call_void("js_i32_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                    crate::expr::store_async_i32_control_cell(ctx, &bptr, &init_i32);
                 } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, id) {
                     let init_i1 = crate::expr::lower_i1_control_store_value(ctx, init_expr)?;
-                    let init_i32 = ctx.block().zext(I1, &init_i1, I32);
-                    ctx.block()
-                        .call_void("js_bool_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                    crate::expr::store_async_i1_control_cell(ctx, &bptr, &init_i1);
                 } else {
                     let init_val =
                         lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
@@ -1289,15 +1365,14 @@ pub(crate) fn lower_let(
     // * `int_valued_ta_locals` (#6898): every write i32-producing or an int-kind
     //   TA read, every observation ToInt32-coercing — which makes canonical-i32
     //   storage output-invariant with the NaN-safe entry conversion.
-    // * `loop_bounded_i32_locals` (#7110): a monotone induction variable whose
-    //   whole reachable interval is a pair of compile-time i32 constants —
-    //   single literal init, every write a step dominated by a constant-bounded
-    //   guard on the immediately enclosing loop. This is the term that admits a
-    //   plain `for (let i = 0; i < 1000000; i++)` counter, which satisfies
-    //   neither `index_used_locals` (nothing is indexed) nor
-    //   `strictly_i32_bounded_locals` (`i++` disqualifies there, #6072).
-    //   See `collectors/loop_bounded_i32.rs` for the interval argument — and
-    //   for why a bare accumulator is NOT admitted by it.
+    // * `loop_bounded_i32_locals` (#7110/#7123): either a monotone induction
+    //   variable whose whole reachable interval is a pair of compile-time i32
+    //   constants, or an accumulator whose entry magnitude plus every bounded
+    //   loop trip count times every bounded step magnitude fits i32. This term
+    //   admits both a plain `for (let i = 0; i < 1000000; i++)` counter and a
+    //   soundly bounded `sum = sum + 1`; neither satisfies `index_used_locals`
+    //   or `strictly_i32_bounded_locals`. See the collector for the proof and
+    //   the deliberately small accepted step-expression set.
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
@@ -1703,8 +1778,8 @@ pub(crate) fn lower_let(
                 } else {
                     ctx.i1_local_slots.remove(&id);
                     let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
-                    // String aliasing fix: `let y = x` (init is `LocalGet`
-                    // of a string-typed local) shares the same heap
+                    // String aliasing fix: `let y = x` (init is `LocalGet`)
+                    // may share the same heap
                     // pointer between `y` and `x`. A later
                     // `x = x + suffix` would otherwise see refcount==1
                     // and mutate the string in-place via
@@ -1717,19 +1792,13 @@ pub(crate) fn lower_let(
                     // and `test_edge_error_handling`'s `finallyReturn`
                     // started returning `start-try-finally` instead of
                     // `start-try`.
-                    if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                        if matches!(
-                            ctx.local_types.get(src_id),
-                            Some(perry_hir::types::Type::String)
-                        ) {
-                            let blk = ctx.block();
-                            let s_ptr = blk.call(
-                                crate::types::I64,
-                                "js_get_string_pointer_unified",
-                                &[(DOUBLE, &v)],
-                            );
-                            blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
-                        }
+                    // The tag-checking helper is intentionally unconditional
+                    // for a local source. A declared numeric/object type can
+                    // still hold a string at runtime, and the old type gate
+                    // then left this alias invisible to self-append (#7846).
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                        ctx.block()
+                            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
                     }
                     ctx.block().store(DOUBLE, &v, &slot);
                     v
@@ -1737,8 +1806,8 @@ pub(crate) fn lower_let(
             } else {
                 ctx.i1_local_slots.remove(&id);
                 let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
-                // String aliasing fix: `let y = x` (init is `LocalGet`
-                // of a string-typed local) shares the same heap
+                // String aliasing fix: `let y = x` (init is `LocalGet`) may
+                // share the same heap
                 // pointer between `y` and `x`. A later
                 // `x = x + suffix` would otherwise see refcount==1
                 // and mutate the string in-place via
@@ -1751,19 +1820,9 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                    if matches!(
-                        ctx.local_types.get(src_id),
-                        Some(perry_hir::types::Type::String)
-                    ) {
-                        let blk = ctx.block();
-                        let s_ptr = blk.call(
-                            crate::types::I64,
-                            "js_get_string_pointer_unified",
-                            &[(DOUBLE, &v)],
-                        );
-                        blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
-                    }
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    ctx.block()
+                        .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
                 }
                 ctx.block().store(DOUBLE, &v, &slot);
                 v
@@ -1808,6 +1867,20 @@ pub(crate) fn lower_let(
                             count_source: pod_view_count_source(ctx, count),
                         },
                     );
+                } else if let perry_hir::Expr::LocalGet(source_id) = init_expr {
+                    // An immutable local-to-local assignment preserves the
+                    // exact NativePodView value. Carry its provenance to the
+                    // alias so `.length` and native pod+count boundaries keep
+                    // using validating helpers instead of the object PIC.
+                    if let Some(source_view) = ctx.pod_views.get(source_id).cloned() {
+                        ctx.pod_views.insert(
+                            id,
+                            crate::native_value::PodViewLocal {
+                                view_slot: slot.clone(),
+                                ..source_view
+                            },
+                        );
+                    }
                 }
             }
             v

@@ -12,6 +12,8 @@ use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
 #[cfg(test)]
+mod boxed_slot_no_root_tests;
+#[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
 mod element_shape_loop;
@@ -31,7 +33,7 @@ mod unused_expr;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
-pub(crate) use loops::{lower_do_while, lower_for, lower_while};
+pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
 pub(crate) use try_stmt::lower_try;
 

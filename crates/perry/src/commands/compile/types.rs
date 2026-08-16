@@ -106,7 +106,8 @@ pub struct CompileArgs {
     /// Target platform: ios-simulator, ios, visionos-simulator, visionos,
     /// android, android-x86_64, ios-widget, ios-widget-simulator, watchos-widget,
     /// watchos-widget-simulator, android-widget, wearos-tile, web, wasm,
-    /// windows, linux (default: native host). See docs/src/cli/flags.md
+    /// windows, windows-x86_64, windows-aarch64, linux (default: native host).
+    /// See docs/src/cli/flags.md
     /// for the full target table.
     #[arg(long)]
     pub target: Option<String>,
@@ -483,7 +484,9 @@ pub struct CompileArgs {
     /// fast paths silently do not fire. This prints, per value: its position
     /// (local / param / return / allocation site), the representation it got,
     /// the collector rule that denied it, an actionability tier, and a static
-    /// hotness proxy. Wins are reported too, so you can see the ratio.
+    /// hotness proxy. Named locals include their declaration file, line,
+    /// column, and source snippet. Wins are reported too, so you can see the
+    /// ratio.
     ///
     /// `--opt-report` prints human-readable text; `--opt-report=json` emits a
     /// stable schema for tooling (CI can diff two builds to catch a silent
@@ -611,6 +614,11 @@ pub struct CompilationContext {
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
+    /// JavaScript package entry files reached through a statically resolved
+    /// import edge. Perry has no runtime JavaScript engine, so these exact
+    /// graph members must re-enter the native AOT collector even when their
+    /// containing package was not opted into wholesale via `compilePackages`.
+    pub aot_discovered_modules: HashSet<PathBuf>,
     /// #5731 — assets to embed into the standalone executable, as
     /// `(embed-relative name, absolute source path)` pairs. Populated by
     /// merging the `--embed` flag with `perry.embed` / `[compile] embed` and
@@ -1016,24 +1024,23 @@ pub struct CompilationContext {
     /// overridden. Keyed by the full `process.env.<NAME>` string.
     pub define: HashMap<String, DefineValue>,
     /// #5247 (CJS-wrap coordinate skew): for each CommonJS module rewritten by
-    /// `cjs_wrap::wrap_commonjs_for_target`, the ORIGINAL (pre-wrap) source
+    /// `cjs_wrap::wrap_commonjs_for_target`, the final wrapped source
     /// text plus the number of newline characters the injected wrapper prefix
-    /// prepended before the original module body. Under `--debug-symbols`,
-    /// codegen resolves a node's `byte_offset` (which is in WRAPPED
-    /// coordinates) to a line by deducting this prefix line count and looking
-    /// up the original source — so a throw renders `at <module>:<original-line>`
+    /// prepended before the original module body. Under `--debug-symbols` or a
+    /// text opt report, codegen resolves a node's wrapped-coordinate
+    /// `byte_offset` to a line by deducting this prefix line count and looking
+    /// up the wrapped source — so a throw renders `at <module>:<original-line>`
     /// rather than a line shifted by the preamble. Empty unless
-    /// `--debug-symbols` is set (the map is only populated then), keeping the
-    /// default build allocation-free.
+    /// source locations are requested, keeping the default build allocation-free.
     pub cjs_wrap_debug_sources: HashMap<PathBuf, CjsWrapDebugSource>,
-    /// #5247: mirror of the CLI `--debug-symbols` flag, set after construction.
-    /// Gates the CJS-wrap source mapping capture in `collect_modules` so the
-    /// default build never records `cjs_wrap_debug_sources`.
+    /// #5247 / #7036: whether a later compiler stage needs source locations.
+    /// Gates CJS-wrap source mapping capture for debug symbols and text opt
+    /// reports, so the default build never records `cjs_wrap_debug_sources`.
     pub debug_symbols: bool,
 }
 
-/// #5247: source mapping for a CJS-wrapped module, used only by the
-/// `--debug-symbols` source-location path. See `cjs_wrap_debug_sources`.
+/// #5247 / #7036: source mapping for a CJS-wrapped module, used by debug
+/// locations and text opt reports. See `cjs_wrap_debug_sources`.
 #[derive(Debug, Clone)]
 pub struct CjsWrapDebugSource {
     /// The WRAPPED module source text (the injected-IIFE text perry parsed).
@@ -1103,6 +1110,7 @@ impl CompilationContext {
             native_libraries: Vec::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
+            aot_discovered_modules: HashSet::new(),
             embedded_assets: Vec::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),

@@ -140,6 +140,34 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
     ptr
 }
 
+/// Allocate an exact-sized holey array for runtime-owned side storage.
+///
+/// Unlike [`js_array_alloc_with_length`], this does not add
+/// [`MIN_ARRAY_CAPACITY`] growth headroom. Callers must know their final width;
+/// the spill buffer used by JSON tape materialization does, and padding every
+/// parsed object to 16 side slots would otherwise dominate the object itself.
+pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeader {
+    let ptr = arena_alloc_gc(
+        array_byte_size(capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*ptr).length = capacity;
+        (*ptr).capacity = capacity;
+        let elements_ptr = (ptr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        for i in 0..capacity as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
+            std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
+        }
+        clear_array_numeric_layout(ptr);
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+
+    ptr
+}
+
 /// Runtime path for `Array(value)` / `new Array(value)`.
 ///
 /// A single Number argument is interpreted as an array length and must be a

@@ -207,7 +207,9 @@ unsafe fn object_field_name(
     obj: *const crate::object::ObjectHeader,
     field_index: usize,
 ) -> Option<String> {
-    let keys_bits = (*obj).keys_array as u64;
+    let keys_bits = crate::object::shapes::object_shape_descriptor(obj)
+        .map(|descriptor| descriptor.keys)
+        .unwrap_or((*obj).keys_array as u64);
     let keys_addr = decode_slot_target(keys_bits);
     if keys_addr < GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -306,7 +308,11 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
         let mut ordinal: u32 = 0;
         let (fields_base, fields_len) = if rec.obj_type == GC_TYPE_OBJECT {
             let obj = rec.user as *const crate::object::ObjectHeader;
-            let fc = unsafe { (*obj).field_count } as usize;
+            let fc = unsafe {
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .map(|descriptor| descriptor.live_inline_slot_count as usize)
+                    .unwrap_or((*obj).field_count as usize)
+            };
             if fc <= 10_000 {
                 (
                     rec.user + std::mem::size_of::<crate::object::ObjectHeader>(),

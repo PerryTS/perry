@@ -34,4 +34,21 @@ check("charAt ignores extra args", s.charAt(0, extra(), extra(), extra()) === "g
 check("charCodeAt ignores extra args", s.charCodeAt(0, extra(), extra(), extra()) === 103);
 check("ignored extra args are evaluated", sideEffects === 6);
 
+const matchAllExtra = [..."a1".matchAll(/([a-z])(\d)/g, extra())];
+check("matchAll ignores extra args", matchAllExtra[0][0] === "a1");
+check("matchAll extra args are evaluated", sideEffects === 7);
+
+check("search ignores extra args", "a1".search(/\d/, extra()) === 1);
+check("match ignores extra args", "a1".match(/\d/, extra())![0] === "1");
+check("regex method extra args are evaluated", sideEffects === 9);
+
+check("replace missing replacement", "a1".replace("1") === "aundefined");
+check("replace ignores extra args", "a1".replace("1", "x", extra()) === "ax");
+check("replace extra args are evaluated", sideEffects === 10);
+
+check("slice ignores extra args", s.slice(1, 4, extra()) === "lob");
+check("substring ignores extra args", s.substring(1, 4, extra()) === "lob");
+check("indexOf ignores extra args", s.indexOf("g", 1, extra()) === 4);
+check("two-arg string extras are evaluated", sideEffects === 13);
+
 console.log("string-tail-3987 ok");

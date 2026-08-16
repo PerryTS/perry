@@ -29,6 +29,27 @@ const f: boolean = false;
 console.log(t);  // true
 console.log(f);  // false
 
+// === Statically proven booleans in numeric operators ===
+// These remain native i1 -> f64 operations in codegen (#5497 Lever E).
+console.log(t + 2);  // 3
+console.log(f * 9);  // 0
+console.log(t < 2);  // true
+console.log(f >= 1); // false
+
+// Type annotations are optimization hints, not runtime guards. Invalidating a
+// proven boolean through `any` must retain dynamic + / ToNumber semantics.
+let maybeBool: boolean = true;
+maybeBool = "4" as any;
+console.log(maybeBool + 2); // 42
+console.log(maybeBool * 2); // 8
+console.log(maybeBool > 2); // true
+
+// A nested `+` is not a canonical numeric operand merely because its declared
+// type says Number: this RHS is "41", so abstract relational comparison is
+// required even though the left Boolean is native.
+const liar: number = "4" as any;
+console.log(t < (liar + 1)); // true
+
 // === Boolean in while loop ===
 let i = 0;
 let flag = true;

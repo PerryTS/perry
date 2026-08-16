@@ -24,6 +24,19 @@ use crate::lower_call::method_override::{
 /// call it replaces — so past this width the site keeps the single-arm guard.
 const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
 
+/// A declared class may select the direct-method guard, but never prove the
+/// direct call. The guard validates the live class id, keys token, own
+/// override, and resolved method pointer; every miss uses dynamic dispatch.
+fn guarded_declared_receiver_class_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
+}
+
 /// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
 /// plus the keys token the routed path must re-check inline.
 struct TowerPshapeRoute {
@@ -108,8 +121,10 @@ fn emit_tower_pshape_call(
 ) -> String {
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
-    let keys_slot = ctx.func.entry_init_load_global(&route.keys_global, I64);
-    let expected_keys = ctx.block().load(I64, &keys_slot);
+    let shape_global =
+        crate::typed_shape::shape_id_global_name_from_keys_global(&route.keys_global);
+    let shape_slot = ctx.func.entry_init_load_global(&shape_global, I32);
+    let expected_shape_id = ctx.block().load(I32, &shape_slot);
 
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
     let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
@@ -121,7 +136,7 @@ fn emit_tower_pshape_call(
     crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
         ctx,
         recv_handle,
-        &expected_keys,
+        &expected_shape_id,
         &proven_label,
         &generic_label,
     );
@@ -161,6 +176,11 @@ pub(crate) fn try_lower_instance_method_call(
     args: &[Expr],
     call_byte_offset: u32,
 ) -> Result<Option<String>> {
+    // Runtime-derived evidence may identify the receiver directly. A declared
+    // local class is weaker: it may only select the later direct-method guard,
+    // whose miss path preserves dynamic JavaScript dispatch.
+    let receiver_class = receiver_class_name(ctx, object)
+        .or_else(|| guarded_declared_receiver_class_candidate(ctx, object));
     // Skip dynamic dispatch when the receiver is GlobalGet (e.g.
     // `console.log`). GlobalGet is a module-level global object
     // (console, Math, JSON, etc.), not a class instance. Without
@@ -176,9 +196,9 @@ pub(crate) fn try_lower_instance_method_call(
     // implementor and `buf.readUInt8(i)` would fall through to the
     // default 0.0 case when the Buffer's class id doesn't match any
     // tower entry.
-    let is_builtin_receiver = match receiver_class_name(ctx, object) {
+    let is_builtin_receiver = match receiver_class.as_deref() {
         Some(name) => matches!(
-            name.as_str(),
+            name,
             "Buffer"
                 | "Uint8Array"
                 | "Uint8ClampedArray"
@@ -208,9 +228,9 @@ pub(crate) fn try_lower_instance_method_call(
     };
     let needs_dynamic_dispatch = !is_global
         && !is_builtin_receiver
-        && match receiver_class_name(ctx, object) {
+        && match receiver_class.as_deref() {
             None => true,
-            Some(name) => !ctx.classes.contains_key(&name),
+            Some(name) => !ctx.classes.contains_key(name),
         };
     if needs_dynamic_dispatch {
         // Find all (class_id → fn_name) for `property` — including
@@ -689,7 +709,7 @@ pub(crate) fn try_lower_instance_method_call(
         }
     }
 
-    if let Some(class_name) = receiver_class_name(ctx, object) {
+    if let Some(class_name) = receiver_class {
         // Step 1: walk parent chain for the static method name.
         let mut static_fn: Option<String> = None;
         let mut current_class = Some(class_name.clone());
@@ -1014,10 +1034,13 @@ pub(crate) fn try_lower_instance_method_call(
                         .get(&typed_method_key)
                         .is_some_and(|name| name == &fallback_fn)
                     && args.len() == typed_formal_count
-                    && args
-                        .iter()
-                        .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg))
-                {
+                    && args.iter().all(|arg| {
+                        crate::codegen::typed_arg_is_guard_candidate(
+                            ctx,
+                            crate::codegen::TypedParamRep::F64,
+                            arg,
+                        )
+                    }) {
                     Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
                 } else {
                     None

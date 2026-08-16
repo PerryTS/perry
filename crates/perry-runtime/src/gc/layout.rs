@@ -65,7 +65,19 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 //                      either per-object in `TYPED_LAYOUTS` OR (the #6893 common
 //                      case) shared by shape in `SHAPE_LAYOUTS`, keyed by the
 //                      object's `keys_array`
-// holds at all times. (Before #6893 the descriptor was always the per-object
+// holds at all times.
+//
+// #7834 introduced ONE producer that sets the bit without installing a
+// descriptor: the inline `new`'s baked header constant
+// (`lower_call/new_alloc.rs`), for a class whose pointer mask is statically
+// empty. That is sound at birth — the collector's view of a
+// `GC_LAYOUT_POINTER_FREE` payload consults no map — but it made the invariant
+// hold only until the first store the descriptor path would have downgraded on.
+// #8115 closes that: `layout_note_slot` clears the bit the moment BOTH
+// descriptor maps answer `None`, which is the one point where the broken state
+// is observable. So the invariant above still holds *for every reader*, with
+// the bake as a birth-time exception that self-heals on its first contradicting
+// store. (Before #6893 the descriptor was always the per-object
 // `TYPED_LAYOUTS` entry; `shape_install_shared` now sets the bit while routing
 // same-shape objects through the shared map, so the bit no longer implies a
 // per-object entry — only that *some* descriptor is reachable.) The descriptor's
@@ -103,226 +115,9 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub(super) enum LayoutSlotMask {
-    Inline(u64),
-    Heap(Vec<u64>),
-    /// Every currently-live slot is pointer-bearing. This is useful for
-    /// runtime-produced arrays such as `String.prototype.split` results: the
-    /// array grows its visible length only after each string has been stored,
-    /// so the collector can visit `0..length` directly without allocating or
-    /// updating a side-table bit for every element.
-    AllPointers,
-}
+mod slot_mask;
 
-impl LayoutSlotMask {
-    pub(super) fn from_words(words: &[u64]) -> Self {
-        let mut trimmed = words.len();
-        while trimmed > 0 && words[trimmed - 1] == 0 {
-            trimmed -= 1;
-        }
-        match trimmed {
-            0 => LayoutSlotMask::Inline(0),
-            1 => LayoutSlotMask::Inline(words[0]),
-            _ => LayoutSlotMask::Heap(words[..trimmed].to_vec()),
-        }
-    }
-
-    #[inline]
-    pub(super) fn set_slot(&mut self, slot_index: usize) {
-        match self {
-            LayoutSlotMask::Inline(bits) if slot_index < 64 => {
-                *bits |= 1u64 << slot_index;
-            }
-            LayoutSlotMask::Inline(bits) => {
-                let mut words = vec![0; slot_index / 64 + 1];
-                words[0] = *bits;
-                words[slot_index / 64] |= 1u64 << (slot_index % 64);
-                *self = LayoutSlotMask::Heap(words);
-            }
-            LayoutSlotMask::Heap(words) => {
-                let word = slot_index / 64;
-                if words.len() <= word {
-                    words.resize(word + 1, 0);
-                }
-                words[word] |= 1u64 << (slot_index % 64);
-            }
-            LayoutSlotMask::AllPointers => {}
-        }
-    }
-
-    #[inline]
-    pub(super) fn clear_slot(&mut self, slot_index: usize) {
-        match self {
-            LayoutSlotMask::Inline(bits) if slot_index < 64 => {
-                *bits &= !(1u64 << slot_index);
-            }
-            LayoutSlotMask::Inline(_) => {}
-            LayoutSlotMask::Heap(words) => {
-                let word = slot_index / 64;
-                if word < words.len() {
-                    words[word] &= !(1u64 << (slot_index % 64));
-                    while words.last().copied() == Some(0) {
-                        words.pop();
-                    }
-                    if words.len() == 1 {
-                        *self = LayoutSlotMask::Inline(words[0]);
-                    }
-                }
-            }
-            // `layout_note_slot` must downgrade an all-pointer layout before
-            // clearing a slot, because this variant intentionally stores no
-            // per-slot bitmap from which to reconstruct the remaining set.
-            LayoutSlotMask::AllPointers => {
-                unreachable!("all-pointer layouts must be downgraded before clearing a slot")
-            }
-        }
-    }
-
-    #[inline]
-    pub(super) fn is_empty(&self) -> bool {
-        match self {
-            LayoutSlotMask::Inline(bits) => *bits == 0,
-            LayoutSlotMask::Heap(words) => words.iter().all(|&w| w == 0),
-            LayoutSlotMask::AllPointers => false,
-        }
-    }
-
-    pub(super) fn visit_slots<F: FnMut(usize)>(&self, slot_count: usize, mut visit: F) {
-        match self {
-            LayoutSlotMask::Inline(bits) => {
-                let limit = slot_count.min(64);
-                let mask = if limit == 64 {
-                    u64::MAX
-                } else if limit == 0 {
-                    0
-                } else {
-                    (1u64 << limit) - 1
-                };
-                let mut word = *bits & mask;
-                while word != 0 {
-                    let bit = word.trailing_zeros() as usize;
-                    visit(bit);
-                    word &= word - 1;
-                }
-            }
-            LayoutSlotMask::Heap(words) => {
-                let word_count = slot_count.div_ceil(64);
-                for (word_index, &raw_word) in words.iter().take(word_count).enumerate() {
-                    let remaining = slot_count.saturating_sub(word_index * 64);
-                    let limit = remaining.min(64);
-                    let mask = if limit == 64 {
-                        u64::MAX
-                    } else if limit == 0 {
-                        0
-                    } else {
-                        (1u64 << limit) - 1
-                    };
-                    let mut word = raw_word & mask;
-                    while word != 0 {
-                        let bit = word.trailing_zeros() as usize;
-                        visit(word_index * 64 + bit);
-                        word &= word - 1;
-                    }
-                }
-            }
-            LayoutSlotMask::AllPointers => {
-                for slot in 0..slot_count {
-                    visit(slot);
-                }
-            }
-        }
-    }
-
-    pub(super) fn count_slots(&self, slot_count: usize) -> usize {
-        let mut count = 0usize;
-        self.visit_slots(slot_count, |_| {
-            count += 1;
-        });
-        count
-    }
-
-    /// Reference implementation only. The construction path asks this question
-    /// of the raw mask words (`shape_install::words_intersect`) rather than of
-    /// two built masks — see that module's "mask words" section — and
-    /// `shape_install::tests::mask_word_helpers_agree_with_layout_slot_mask`
-    /// pins the two together, which is what this now exists for.
-    #[cfg(test)]
-    pub(super) fn intersects(&self, other: &Self, slot_count: usize) -> bool {
-        let mut found = false;
-        self.visit_slots(slot_count, |slot| {
-            if other.contains_slot(slot) {
-                found = true;
-            }
-        });
-        found
-    }
-
-    #[inline]
-    pub(super) fn contains_slot(&self, slot_index: usize) -> bool {
-        match self {
-            LayoutSlotMask::Inline(bits) if slot_index < 64 => (*bits & (1u64 << slot_index)) != 0,
-            LayoutSlotMask::Inline(_) => false,
-            LayoutSlotMask::Heap(words) => {
-                let word = slot_index / 64;
-                word < words.len() && (words[word] & (1u64 << (slot_index % 64))) != 0
-            }
-            LayoutSlotMask::AllPointers => true,
-        }
-    }
-
-    pub(super) fn next_slot_at_or_after(&self, cursor: usize, slot_count: usize) -> Option<usize> {
-        if cursor >= slot_count {
-            return None;
-        }
-        match self {
-            LayoutSlotMask::Inline(bits) => {
-                if cursor >= 64 {
-                    return None;
-                }
-                let limit = slot_count.min(64);
-                let limit_mask = if limit == 64 {
-                    u64::MAX
-                } else if limit == 0 {
-                    0
-                } else {
-                    (1u64 << limit) - 1
-                };
-                let cursor_mask = u64::MAX << cursor;
-                let word = *bits & limit_mask & cursor_mask;
-                (word != 0).then(|| word.trailing_zeros() as usize)
-            }
-            LayoutSlotMask::Heap(words) => {
-                let mut word_index = cursor / 64;
-                let word_count = slot_count.div_ceil(64);
-                while word_index < word_count && word_index < words.len() {
-                    let word_start = word_index * 64;
-                    let remaining = slot_count.saturating_sub(word_start);
-                    let limit = remaining.min(64);
-                    let limit_mask = if limit == 64 {
-                        u64::MAX
-                    } else if limit == 0 {
-                        0
-                    } else {
-                        (1u64 << limit) - 1
-                    };
-                    let cursor_mask = if word_index == cursor / 64 {
-                        u64::MAX << (cursor % 64)
-                    } else {
-                        u64::MAX
-                    };
-                    let word = words[word_index] & limit_mask & cursor_mask;
-                    if word != 0 {
-                        return Some(word_start + word.trailing_zeros() as usize);
-                    }
-                    word_index += 1;
-                }
-                None
-            }
-            LayoutSlotMask::AllPointers => (cursor < slot_count).then_some(cursor),
-        }
-    }
-}
+pub(in crate::gc) use slot_mask::LayoutSlotMask;
 
 /// What a single store means for the object's canonical typed descriptor.
 /// Computed while the descriptor is still borrowed, acted on after
@@ -347,6 +142,8 @@ pub(super) struct TypedLayoutDescriptor {
 #[cfg(test)]
 thread_local! {
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
+    static TYPED_SLOT_DESCRIPTOR_PROBES: Cell<usize> = const { Cell::new(0) };
+    static TYPED_RAW_F64_DESCRIPTOR_QUERIES: Cell<usize> = const { Cell::new(0) };
 }
 
 // #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
@@ -376,11 +173,7 @@ fn shape_layout_keyed_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     // Default ON; `PERRY_SHAPE_LAYOUT_KEYED=0` restores the per-object maps
     // (A/B validation).
-    *E.get_or_init(|| {
-        std::env::var("PERRY_SHAPE_LAYOUT_KEYED")
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    })
+    *E.get_or_init(|| super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED"))
 }
 
 /// keys_array only exists on genuine shaped objects (`ObjectFields`). Arrays,
@@ -397,7 +190,10 @@ unsafe fn object_keys_array_ptr(user_ptr: usize) -> usize {
     if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
         return 0;
     }
-    (*(user_ptr as *const crate::object::ObjectHeader)).keys_array as usize
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    crate::object::shapes::object_shape_descriptor(object)
+        .map(|descriptor| descriptor.keys as usize)
+        .unwrap_or((*object).keys_array as usize)
 }
 
 /// Borrow the shared canonical descriptor for `user_ptr`'s shape, if
@@ -417,13 +213,12 @@ unsafe fn with_shape_shared_descriptor<R>(
     if keys == 0 {
         return None;
     }
-    // Defense-in-depth: the descriptor's `slot_count` is pinned to the owning
-    // object's `field_count` at install (`init_typed_shape_layout` rejects a
-    // mismatch). A differing current field_count means this object's shape is
-    // not the one the descriptor describes — e.g. a keys_array address reused by
-    // a shape with a different field count (moving-GC relocation before the new
-    // address is re-installed). Fall back (per-object → conservative).
-    let field_count = (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize;
+    // Defense-in-depth: both descriptor families must agree on the exact live
+    // bound. The ObjectHeader count is only an ABI mirror pending #8047.
+    let object = user_ptr as *const crate::object::ObjectHeader;
+    let field_count = crate::object::shapes::object_shape_descriptor(object)
+        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+        .unwrap_or((*object).field_count as usize);
     let map = hot_shape_layouts().borrow();
     let desc = map.get(&keys)?.as_ref()?;
     if desc.slot_count != field_count {
@@ -630,7 +425,9 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
         | GcLayoutSlotKind::ClosureCaptures => Some(header),
         // #6812: meta records keep no layout mask — their two child slots
         // (prototype, spill) are enumerated unconditionally.
-        GcLayoutSlotKind::None | GcLayoutSlotKind::ObjectMeta => None,
+        GcLayoutSlotKind::None | GcLayoutSlotKind::ObjectMeta | GcLayoutSlotKind::RegExpFields => {
+            None
+        }
     }
 }
 
@@ -657,6 +454,37 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
     layout_forget_object(user_ptr as usize);
     set_layout_state(header, GC_LAYOUT_SIDE_MASK);
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
+}
+
+/// Does the all-pointer claim actually hold for a payload that **already holds
+/// initialized slots** — the non-empty array literal `const a: C[] = [x, y]`?
+///
+/// [`layout_init_all_pointer_slots`]' array caller
+/// (`js_array_declare_all_pointer_elements`) used to refuse every non-empty
+/// array outright, because the claim covers `0..length` and only an empty array
+/// makes it vacuously true. #8102 is what that cost: the declaration is emitted
+/// from the `Stmt::Let` tail, i.e. *after* a literal's element stores have
+/// installed a per-slot side mask, so for a non-empty literal it was a silent
+/// no-op and every later `push` lost #7469's elided store.
+///
+/// This predicate discharges the claim instead of assuming it. Every slot must
+/// be pointer-bearing by [`layout_pointer_bearing_bits`] — the same test the
+/// mask builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation apply — so the
+/// declaration never has to trust a caller's static proof. `slot_count == 0` is
+/// the empty case and holds vacuously, which keeps the pre-#8102 path
+/// bit-identical.
+#[inline]
+pub(crate) unsafe fn layout_all_pointer_slots_would_hold(
+    slots: *const u64,
+    slot_count: usize,
+) -> bool {
+    if slot_count == 0 {
+        return true;
+    }
+    if slots.is_null() {
+        return false;
+    }
+    (0..slot_count).all(|i| layout_pointer_bearing_bits(*slots.add(i)))
 }
 
 /// #7630: settle a materialiser-built object's layout state ONCE, after its
@@ -729,6 +557,27 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
 /// object-store hot path via `mark_object_dynamic_shape_unknown` (#5094).
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
     layout_typed_intact_for_user(user_ptr)
+}
+
+/// #8115 test probe: would [`layout_note_slot`]'s descriptor probe find a
+/// `TypedLayoutDescriptor` for `user_ptr` right now — asked of the two maps,
+/// never of the header bit?
+///
+/// [`layout_has_typed_descriptor`] above answers a similar question by reading
+/// `GC_OBJ_TYPED_LAYOUT_INTACT`, which is the very claim #8115 is about. A test
+/// that used it could not tell "the bit is honest" from "the bit lies", so the
+/// premise of every intact-bit test has to come from here instead.
+///
+/// Note this is the *shape*'s answer, not the object's licence: the shared
+/// `SHAPE_LAYOUTS` entry outlives one object's divergence on purpose (see
+/// `with_shape_shared_descriptor`), so after `layout_set_typed_unknown` this
+/// still reports `true` while the diverged object no longer claims it.
+#[cfg(test)]
+pub(in crate::gc) fn layout_descriptor_reachable(user_ptr: usize) -> bool {
+    if with_per_object_descriptor(user_ptr, |_| ()).is_some() {
+        return true;
+    }
+    unsafe { with_shape_shared_descriptor(user_ptr, |_| ()).is_some() }
 }
 
 pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: usize) {
@@ -813,9 +662,40 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // return `None` and fall through to the pointer-mask path below.
         // Skipping it removes the per-write TLS touch on the common dynamic-shape
         // / pointer-free object and array store path (#5094). The inner `if let`
-        // still tolerates a `None` defensively, so a transiently desynced bit
-        // can only cost an extra fall-through, never mis-track a slot.
-        if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
+        // still tolerates a `None` defensively — see the #8115 clear below for
+        // what a `None` costs and why it is no longer merely a fall-through.
+        let claimed_intact = (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
+        if claimed_intact {
+            // #5094: a plain, non-pointer-bearing double is representation-
+            // compatible with every in-bounds typed object slot. A raw-f64
+            // slot consumes the bits directly; a boxed slot consumes the same
+            // bits as an ordinary NaN-boxed number; and neither case changes
+            // the pointer mask. The descriptor's slot_count was pinned equal
+            // to ObjectHeader::field_count when INTACT was installed (also a
+            // requirement of the descriptor-free pointer-free allocation
+            // bake), so this header + bounds check proves the same `Conforms`
+            // verdict without resolving either thread-local descriptor map.
+            //
+            // Keep the raw-pointer classifier in the predicate. Some aligned
+            // low words are both valid f64 bit patterns and conservatively
+            // pointer-bearing; a boxed slot outside the pointer mask must
+            // still take the descriptor path and downgrade on such a store.
+            if layout_raw_f64_bits(value_bits)
+                && !layout_pointer_bearing_bits(value_bits)
+                // ObjectFields currently has exactly one concrete type. Use
+                // the byte already in the hot header instead of walking the
+                // type-info table a second time after layout_header_for_user.
+                && (*header).obj_type == GC_TYPE_OBJECT
+            {
+                let object = parent_user as *const crate::object::ObjectHeader;
+                let live_slots = crate::object::shapes::object_shape_descriptor(object)
+                    .map(|descriptor| descriptor.live_inline_slot_count as usize)
+                    .unwrap_or((*object).field_count as usize);
+                if slot_index < live_slots {
+                    return;
+                }
+            }
+
             // #6893: per-object descriptor (diverged/ambiguous objects) OR the
             // shared shape descriptor (the common INTACT case). Exactly one is
             // present for an INTACT object.
@@ -828,6 +708,8 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             // allocates on every store. The per-object probe is also skipped
             // outright while [`PER_OBJECT_LAYOUTS_NONEMPTY`] proves that map
             // empty, which on a monomorphic workload is always.
+            #[cfg(test)]
+            TYPED_SLOT_DESCRIPTOR_PROBES.with(|c| c.set(c.get() + 1));
             let verdict = {
                 let classify = |typed: &TypedLayoutDescriptor| {
                     if slot_index >= typed.slot_count {
@@ -858,6 +740,46 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 }
                 return;
             }
+        }
+        // #8115: reaching here with the bit still set means BOTH descriptor maps
+        // answered `None` — the probe above is exhaustive — so the object is
+        // INTACT and descriptor-less, and the invariant documented on
+        // [`GC_OBJ_TYPED_LAYOUT_INTACT`] ("intact ⟹ a canonical descriptor is
+        // reachable") is false for it. Restore the invariant here, at the one
+        // place that observes it broken.
+        //
+        // The state stores in the generic pointer-mask branch below CANNOT do
+        // it: `set_layout_state` masks `!(GC_LAYOUT_STATE_MASK |
+        // GC_LAYOUT_ALL_POINTERS)` = `!0xE000`, and this bit is `0x1000`. So
+        // before this clear the branch could publish `SIDE_MASK | INTACT`
+        // WITHOUT a descriptor — a state three separate consumers read as a
+        // proof they may skip a map:
+        //
+        // * `class_field_inline_guard` (codegen) tests this bit ALONE before
+        //   reading/writing a slot as a bare `double`;
+        // * `element_shape_guard`'s packed `0x1800_80FF` header test folds it
+        //   in for the same license;
+        // * `class_field_store_layout_note_is_conforming` (codegen
+        //   `expr/helpers.rs`) elides the layout note outright on
+        //   `_reserved & 0xD000 == 0x9000`, whose proof is "a descriptor built
+        //   from this class's mask globals is reachable".
+        //
+        // #7834's at-allocation bake is what made that reachable: it stamps
+        // `POINTER_FREE | INTACT` into the inline `new`'s header constant with
+        // no descriptor behind it, deliberately, on the argument that the
+        // generic branch below downgrades correctly. It does — for the
+        // collector. The bit it leaves behind is the half that was missing:
+        // `docs/engine-plan.md`'s construction-cost section, item 2, named this
+        // mechanism exactly — it used to forbid the bake outright, and now
+        // records the residual and this repair.
+        //
+        // Cost: one 16-bit store, only on the fall-through, which for a baked
+        // object is only ever a store the descriptor path would have called
+        // `layout_set_typed_unknown` for. Pre-#7834 that is precisely what it
+        // did — every pointer-free class carried a real descriptor, and any
+        // non-conforming store evicted it, bit included.
+        if claimed_intact {
+            header_clear_typed_layout_intact(header);
         }
         let pointer = layout_pointer_bearing_bits(value_bits);
         // A result array built by a runtime helper can declare that its live
@@ -1105,7 +1027,10 @@ unsafe fn init_typed_shape_layout(
         return;
     }
     let obj_header = user_ptr as *const crate::object::ObjectHeader;
-    let object_slot_count = (*obj_header).field_count as usize;
+    let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
+    let object_slot_count = shape_descriptor
+        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+        .unwrap_or((*obj_header).field_count as usize);
     if object_slot_count != slot_count {
         layout_set_typed_unknown(header, user_ptr);
         return;
@@ -1155,7 +1080,9 @@ unsafe fn init_typed_shape_layout(
     // `object_keys_array_ptr`'s two guards are already discharged above (the
     // low addresses were rejected, `GcLayoutSlotKind::ObjectFields` was
     // checked), so read the field directly rather than re-walking the header.
-    let keys = (*obj_header).keys_array as usize;
+    let keys = shape_descriptor
+        .map(|descriptor| descriptor.keys as usize)
+        .unwrap_or((*obj_header).keys_array as usize);
     let memo = if keys == 0 {
         None
     } else {
@@ -1535,6 +1462,8 @@ pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
 }
 
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {
+    #[cfg(test)]
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(c.get() + 1));
     with_typed_descriptor_for_query(user_ptr, |layout| {
         slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index)
     })
@@ -1870,27 +1799,6 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
                 .unwrap_or_else(HeapChildSlotIterator::empty)
         }
         GcLayoutSlotKind::ObjectFields => {
-            // Wall 18 follow-up: a `RegExpHeader` is allocated as
-            // `GC_TYPE_OBJECT` but is a NATIVE struct, NOT a shaped JS object.
-            // The generic ObjectHeader read takes `field_count` from offset 12,
-            // which for a `RegExpHeader` overlaps the high 32 bits of
-            // `pattern_ptr` (~900 on macOS's 0x3xx_… heap) → a bogus ~900-slot
-            // range that scans/rewrites ADJACENT heap during evacuation (heap
-            // corruption; `PERRY_GC_VERIFY_EVACUATION` reports it as a stale
-            // forwarded pointer "inside" the regex at an offset far past its
-            // size). This is a latent pre-existing bug — exposed deterministically
-            // once Wall 18 grew the header. Detect the regex via its
-            // self-identifying magic and scan EXACTLY its GC-visible slots —
-            // `pattern_ptr`/`flags_ptr` (a 2-slot contiguous payload range) and
-            // `last_index` (the prefix slot). The off-heap `regex_ptr`/`fancy_ptr`,
-            // the bool flags, the `magic` sentinel, and any tail padding are never
-            // inspected, so evacuation can never touch raw native data.
-            if crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader) {
-                let (pattern_slot, slot_count, last_index_slot) =
-                    crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
-                let range = HeapSlotRange::new(pattern_slot, slot_count);
-                return HeapChildSlotIterator::new(header, Some(last_index_slot), range);
-            }
             let obj = user_ptr as *mut crate::object::ObjectHeader;
             let Some(range) = crate::object::gc_field_slot_range(obj) else {
                 return HeapChildSlotIterator::empty();
@@ -1904,6 +1812,15 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             // keeps payload slot indices aligned with the layout masks.
             HeapChildSlotIterator::new(header, keys_slot, range)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
+        }
+        GcLayoutSlotKind::RegExpFields => {
+            let (pattern_slot, slot_count, last_index_slot) =
+                crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
+            HeapChildSlotIterator::new(
+                header,
+                Some(last_index_slot),
+                HeapSlotRange::new(pattern_slot, slot_count),
+            )
         }
         GcLayoutSlotKind::ObjectMeta => {
             // #6812: prototype (NaN-boxed / raw / sentinel) as the prefix
@@ -2006,6 +1923,21 @@ pub(crate) fn test_gc_rewrite_slot_count(user_ptr: usize) -> Option<usize> {
     Some(count)
 }
 
+#[cfg(test)]
+pub(crate) fn test_gc_rewrite_slot_addresses(user_ptr: usize) -> Option<Vec<usize>> {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
+    let mut slots = Vec::new();
+    unsafe {
+        visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+            descriptor.visit_slots(&mut |slot| slots.push(slot.slot as usize));
+        });
+    }
+    Some(slots)
+}
+
 #[inline(always)]
 pub(super) fn record_trace_slot_read() {
     #[cfg(test)]
@@ -2020,4 +1952,24 @@ pub(super) fn test_reset_trace_slot_reads() {
 #[cfg(test)]
 pub(super) fn test_trace_slot_reads() -> usize {
     TRACE_SLOT_READS.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(super) fn test_reset_typed_slot_descriptor_probes() {
+    TYPED_SLOT_DESCRIPTOR_PROBES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_typed_slot_descriptor_probes() -> usize {
+    TYPED_SLOT_DESCRIPTOR_PROBES.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_typed_raw_f64_descriptor_queries() {
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_typed_raw_f64_descriptor_queries() -> usize {
+    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(Cell::get)
 }

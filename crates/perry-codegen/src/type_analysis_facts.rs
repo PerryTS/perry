@@ -6,7 +6,8 @@ use perry_hir::{infer_expr_type, infer_refinable_expr_type, Expr, HirTypeFacts};
 use crate::expr::FnCtx;
 
 pub(crate) struct CodegenTypeFacts<'a> {
-    pub(crate) local_types: &'a std::collections::HashMap<u32, HirType>,
+    pub(crate) proven_local_types: &'a std::collections::HashMap<u32, HirType>,
+    pub(crate) reassigned_locals: &'a std::collections::HashSet<u32>,
     pub(crate) imported_func_return_types: &'a std::collections::HashMap<String, HirType>,
     pub(crate) classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
     pub(crate) interfaces: &'a std::collections::HashMap<String, perry_hir::Interface>,
@@ -17,7 +18,8 @@ pub(crate) struct CodegenTypeFacts<'a> {
 impl<'a> CodegenTypeFacts<'a> {
     pub(crate) fn from_ctx(ctx: &'a FnCtx<'a>) -> Self {
         Self {
-            local_types: &ctx.local_types,
+            proven_local_types: &ctx.proven_local_types,
+            reassigned_locals: &ctx.reassigned_locals,
             imported_func_return_types: ctx.imported_func_return_types,
             classes: ctx.classes,
             interfaces: ctx.interfaces,
@@ -29,7 +31,11 @@ impl<'a> CodegenTypeFacts<'a> {
 
 impl HirTypeFacts for CodegenTypeFacts<'_> {
     fn local_type(&self, id: u32) -> Option<&HirType> {
-        self.local_types.get(&id)
+        if self.reassigned_locals.contains(&id) {
+            None
+        } else {
+            self.proven_local_types.get(&id)
+        }
     }
 
     fn global_type(&self, _id: u32) -> Option<&HirType> {

@@ -78,7 +78,6 @@ import math
 import os
 import platform
 import re
-import resource
 import shutil
 import statistics
 import subprocess
@@ -381,7 +380,6 @@ def toolchain_description(perry: Path) -> dict[str, Any]:
         "env": {
             "PERRY_NO_AUTO_OPTIMIZE": os.environ.get("PERRY_NO_AUTO_OPTIMIZE"),
             "PERRY_GEN_GC": os.environ.get("PERRY_GEN_GC"),
-            "PERRY_GEN_GC_EVACUATE": os.environ.get("PERRY_GEN_GC_EVACUATE"),
             "PERRY_WRITE_BARRIERS": os.environ.get("PERRY_WRITE_BARRIERS"),
         },
         "binaries": binary_fingerprints(perry),
@@ -406,6 +404,11 @@ def run_once(
     otherwise usable sandboxed macOS environments, masking a successful exit.
     Darwin reports ``ru_maxrss`` in bytes, Linux in KiB.
     """
+    if not callable(getattr(os, "wait4", None)):
+        raise RatchetError(
+            "GC ratchet measurement requires os.wait4 (Unix); "
+            "artifact validation remains supported on this host"
+        )
     import time
 
     env = dict(os.environ)
@@ -1285,6 +1288,228 @@ def _validate_probe_overrides(
                 )
 
 
+def _inspect_accepted_deterministic_deltas(
+    artifact: Mapping[str, Any], artifact_defect: Any
+) -> None:
+    """Validate the row-level receipt for a selective deterministic re-pin.
+
+    A full re-pin has one provenance record for the whole artifact.  A selective
+    re-pin is more dangerous: it can make a red row green while leaving no
+    machine-readable answer to *which* rows moved or *why*.  This optional
+    receipt binds every accepted median to the value actually pinned and to one
+    or more causal merged commits.  It is deliberately inert in ``evaluate`` —
+    provenance explains a baseline change; it never grants a future run an
+    allowance.
+
+    Older and synthetic artifacts may omit the receipt.  Once present, however,
+    malformed or stale attribution is an artifact-wide integrity defect rather
+    than metadata the checker silently ignores.
+    """
+    receipt = artifact.get("accepted_deterministic_deltas")
+    if receipt is None:
+        return
+    if not isinstance(receipt, Mapping):
+        artifact_defect("accepted_deterministic_deltas is not an object")
+        return
+
+    expected_receipt_keys = {
+        "commit",
+        "code_tree",
+        "generated_at",
+        "measurement",
+        "notes",
+        "causes",
+        "cells",
+    }
+    unknown = set(receipt) - expected_receipt_keys
+    missing = expected_receipt_keys - set(receipt)
+    if unknown:
+        artifact_defect(
+            "accepted_deterministic_deltas has unknown fields: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    if missing:
+        artifact_defect(
+            "accepted_deterministic_deltas is missing fields: "
+            + ", ".join(sorted(missing))
+        )
+
+    for field in ("commit", "code_tree"):
+        value = receipt.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            artifact_defect(f"accepted_deterministic_deltas.{field} is not a full git hash")
+    generated_at = receipt.get("generated_at")
+    try:
+        parsed_generated_at = datetime.fromisoformat(generated_at)
+    except (TypeError, ValueError):
+        parsed_generated_at = None
+    if (
+        parsed_generated_at is None
+        or parsed_generated_at.tzinfo is None
+        or parsed_generated_at.utcoffset() != timezone.utc.utcoffset(None)
+    ):
+        artifact_defect(
+            "accepted_deterministic_deltas.generated_at must be an ISO-8601 UTC timestamp"
+        )
+    notes = receipt.get("notes")
+    if not isinstance(notes, str) or not notes.strip():
+        artifact_defect("accepted_deterministic_deltas.notes is empty")
+
+    measurement = receipt.get("measurement")
+    expected_measurement_keys = {"platform", "repeats", "traced_runs", "binaries"}
+    if not isinstance(measurement, Mapping):
+        artifact_defect("accepted_deterministic_deltas.measurement is not an object")
+    else:
+        if set(measurement) != expected_measurement_keys:
+            artifact_defect(
+                "accepted_deterministic_deltas.measurement fields must be exactly: "
+                + ", ".join(sorted(expected_measurement_keys))
+            )
+        if not isinstance(measurement.get("platform"), str) or not measurement.get(
+            "platform", ""
+        ).strip():
+            artifact_defect("accepted_deterministic_deltas.measurement.platform is empty")
+        for field, minimum in (("repeats", 3), ("traced_runs", 2)):
+            value = measurement.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                artifact_defect(
+                    f"accepted_deterministic_deltas.measurement.{field} must be >= {minimum}"
+                )
+
+        binaries = measurement.get("binaries")
+        expected_binaries = {"perry", "libperry_runtime.a", "libperry_stdlib.a"}
+        if not isinstance(binaries, Mapping) or set(binaries) != expected_binaries:
+            artifact_defect(
+                "accepted_deterministic_deltas.measurement.binaries must name perry, "
+                "libperry_runtime.a, and libperry_stdlib.a"
+            )
+        else:
+            for name, binary in binaries.items():
+                if not isinstance(binary, Mapping) or set(binary) != {"size", "sha256"}:
+                    artifact_defect(
+                        "accepted_deterministic_deltas.measurement.binaries."
+                        f"{name} must contain exactly size and sha256"
+                    )
+                    continue
+                size = binary.get("size")
+                digest = binary.get("sha256")
+                if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                    artifact_defect(
+                        f"accepted_deterministic_deltas.measurement.binaries.{name}.size "
+                        "must be a positive integer"
+                    )
+                if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                    artifact_defect(
+                        f"accepted_deterministic_deltas.measurement.binaries.{name}.sha256 "
+                        "is not a SHA-256 digest"
+                    )
+
+    causes = receipt.get("causes")
+    known_causes: set[str] = set()
+    if not isinstance(causes, Mapping) or not causes:
+        artifact_defect("accepted_deterministic_deltas records no causal commits")
+    else:
+        for commit, cause in causes.items():
+            if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+                artifact_defect(
+                    f"accepted_deterministic_deltas cause {commit!r} is not a full git hash"
+                )
+                continue
+            known_causes.add(commit)
+            if not isinstance(cause, Mapping) or set(cause) != {
+                "pull_request",
+                "category",
+                "evidence",
+            }:
+                artifact_defect(
+                    f"accepted_deterministic_deltas.causes.{commit} must contain exactly "
+                    "pull_request, category, and evidence"
+                )
+                continue
+            pull_request = cause.get("pull_request")
+            if (
+                isinstance(pull_request, bool)
+                or not isinstance(pull_request, int)
+                or pull_request <= 0
+            ):
+                artifact_defect(
+                    f"accepted_deterministic_deltas.causes.{commit}.pull_request is invalid"
+                )
+            for field in ("category", "evidence"):
+                value = cause.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    artifact_defect(
+                        f"accepted_deterministic_deltas.causes.{commit}.{field} is empty"
+                    )
+
+    cells = receipt.get("cells")
+    probes = artifact.get("probes", {})
+    if not isinstance(cells, list) or not cells:
+        artifact_defect("accepted_deterministic_deltas records no cells")
+        return
+
+    seen: set[tuple[str, str]] = set()
+    expected_cell_keys = {
+        "probe",
+        "metric",
+        "previous_median",
+        "accepted_median",
+        "causes",
+    }
+    for index, cell in enumerate(cells):
+        prefix = f"accepted_deterministic_deltas.cells[{index}]"
+        if not isinstance(cell, Mapping) or set(cell) != expected_cell_keys:
+            artifact_defect(
+                f"{prefix} must contain exactly probe, metric, previous_median, "
+                "accepted_median, and causes"
+            )
+            continue
+        probe = cell.get("probe")
+        metric = cell.get("metric")
+        if not isinstance(probe, str) or probe not in probes:
+            artifact_defect(f"{prefix}.probe does not name a pinned probe")
+            continue
+        if not isinstance(metric, str) or metric not in DETERMINISTIC_METRICS:
+            artifact_defect(f"{prefix}.metric is not a deterministic metric")
+            continue
+        if metric not in probes[probe].get("metrics", {}):
+            artifact_defect(f"{prefix} names a metric absent from the pinned probe")
+            continue
+        key = (probe, metric)
+        if key in seen:
+            artifact_defect(f"{prefix} duplicates {probe}.{metric}")
+        seen.add(key)
+
+        previous = cell.get("previous_median")
+        accepted = cell.get("accepted_median")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in (previous, accepted)
+        ):
+            artifact_defect(f"{prefix} medians must be finite numbers")
+        else:
+            if previous == accepted:
+                artifact_defect(f"{prefix} records no change")
+            pinned = probes[probe]["metrics"][metric].get("median")
+            if accepted != pinned:
+                artifact_defect(
+                    f"{prefix}.accepted_median {accepted!r} does not match pinned median "
+                    f"{pinned!r}"
+                )
+
+        cell_causes = cell.get("causes")
+        if not isinstance(cell_causes, list) or not cell_causes:
+            artifact_defect(f"{prefix}.causes is empty")
+        elif len(cell_causes) != len(set(map(str, cell_causes))):
+            artifact_defect(f"{prefix}.causes contains a duplicate")
+        else:
+            for commit in cell_causes:
+                if not isinstance(commit, str) or commit not in known_causes:
+                    artifact_defect(f"{prefix}.causes names unknown commit {commit!r}")
+
+
 def inspect_artifact(artifact: Mapping[str, Any]) -> list[ArtifactDefect]:
     """Collect *every* defect in the pinned artifact, each tagged with its scope.
 
@@ -1419,6 +1644,7 @@ def inspect_artifact(artifact: Mapping[str, Any]) -> list[ArtifactDefect]:
                     "entry that records the evidence.",
                 )
 
+    _inspect_accepted_deterministic_deltas(artifact, artifact_defect)
     return defects
 
 
@@ -1721,6 +1947,20 @@ def render(rows: Iterable[Row], baseline: Mapping[str, Any], profile: str) -> st
             *(f"- `{name}` — `{_render_run_env(env)}`" for name, env in armed.items()),
             "",
         ]
+    receipt = baseline.get("accepted_deterministic_deltas")
+    if isinstance(receipt, Mapping):
+        cells = receipt.get("cells", [])
+        lines += [
+            "Accepted deterministic baseline deltas:",
+            "",
+            f"- `{len(cells)}` cells measured at `{receipt.get('commit')}` "
+            f"({receipt.get('generated_at')})",
+        ]
+        for commit, cause in sorted(receipt.get("causes", {}).items()):
+            lines.append(
+                f"- `{commit}` / PR #{cause.get('pull_request')} — {cause.get('category')}"
+            )
+        lines.append("")
     lines += [
         "| Probe | Metric | Baseline | Current | Δ | Allowance | Gating | Status |",
         "|-------|--------|---------:|--------:|---:|----------:|:------:|--------|",

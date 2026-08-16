@@ -61,8 +61,19 @@ name: GC Root Dominance
 
 on:
   pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. Note this workflow runs `macos-14`, not `ubuntu-latest`; #7856's
+  # claim that it was unaffected was reading its PR arm, which drains because PR
+  # runs supersede each other, while its `main` arm queued like all the rest.
+  # ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "17 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -77,7 +88,19 @@ concurrency:
   # gc-ratchet, whose shape this file copied). Keying push runs on the SHA gives
   # every merged commit a group of its own, so no two main runs can contend.
   # Same reasoning as gc-ratchet.yml, which carries the full writeup.
-  group: gc-root-dominance-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # ***#7966: KEY EVERY MAIN-LINE RUN ON `github.run_id`, NOT `github.sha`.***
+  # The previous expression read `github.event_name == 'push' && github.sha ||
+  # github.ref`. That was #7205's fix and it keyed on the event being `push` --
+  # correct while the main-line arm WAS `push: branches: [main]`. #7856 moved the
+  # main-line arm to `schedule:`, which falls through to `github.ref` (constant
+  # `refs/heads/main`), so every scheduled run shared one group again and #7205
+  # came straight back. Measured 2026-08-12 on all ten scheduled gates, the same
+  # shape every time: oldest run `queued` holding the group, the two after it
+  # `cancelled` with `jobs: 0`, newest `pending`. `github.run_id` is unique per
+  # run, so schedule / tag-push / workflow_dispatch each get a group of their own
+  # and none can supersede another. PR runs keep the shared per-ref group and
+  # keep superseding themselves, which is still what we want.
+  group: gc-root-dominance-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -195,7 +218,7 @@ jobs:
       # else in that file -- not a fixture invented for this job.
       # `--ignore-scripts` because nothing here needs a lifecycle script to
       # run, and a corpus generator is a bad place to execute one.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
       - name: Install the npm dependencies the dep corpus compiles
@@ -450,6 +473,20 @@ jobs:
       - name: Immovable-source exemptions must still hold
         run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
 
+      # #8170: the dependency-scale corpus this job runs (added by #8084)
+      # compiles `node_modules/zod`, so it needs the same node setup its
+      # sibling job has. Without these two steps the job dies in setup with
+      # "node_modules/zod/src/index.ts is missing" and never reaches the
+      # checker — which meant the arm covering the SHIPPED lowering
+      # (statepoints are the default on aarch64 and x86-64) reported nothing
+      # at all, while its shadow-frame sibling stayed green and made the gate
+      # look healthy.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Install the npm dependencies the dep corpus compiles
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       # This also puts a matched LLVM 22 `opt` on disk and exports
@@ -639,6 +676,52 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
+      # ★★ The DEPENDENCY-SCALE corpus under the NATIVE lowering (#7803).
+      #
+      # The fourth cell of a matrix that had three. #7280 fixed the POPULATION
+      # (curated files do not contain the shapes a real library produces);
+      # #7452 fixed the LOWERING (statepoints ship, the shadow corpus contains
+      # none of that root form). Neither reached the other's cell, so the zod
+      # corpus compiled the way shipped binaries are compiled had never been
+      # checked. First measurement: 66 `unrooted` hazards, against a curated
+      # arm calibrated to ZERO — 24 sinking into js_new_function_construct and
+      # 39 into the js_closure_call family, i.e. the two shapes #7803 surfaces
+      # as ("Cannot read properties of undefined" / "value is not a function").
+      #
+      # BUDGET, not allowlist, and it can only go down. 66 -> 3 when the
+      # callee-outlives-arguments defect was fixed in new_dynamic.rs,
+      # call_spread.rs and early_branches.rs — the whole
+      # js_new_function_construct sink (24), the whole
+      # js_closure_call_apply_with_spread sink (16) and the whole
+      # js_closure_call1/2 sink (23). The residual 3 are one each of
+      # js_array_concat, js_rel_ge and js_get_string_pointer_unified: a
+      # population under triage, not a list anyone has adjudicated one by one
+      # — same reasoning the `--stale-registers` budget records.
+      #
+      # Measured on a CLEAN rebuild. An earlier incremental build read 26 for
+      # the same source, because the corpus had been emitted before the third
+      # arm's fix existed; the number in a ratchet has to come from a tree
+      # someone can reproduce, not from whatever the build directory happened
+      # to contain.
+      - name: Emit the dependency-scale NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_dep_native_corpus.sh ir-corpus-dep-native
+
+      - name: Check GC values across safepoints (dependency-scale, native roots)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep-native \
+            --statepoints \
+            --moving-only \
+            --min-files 60 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 3 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \

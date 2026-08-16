@@ -3,6 +3,7 @@
 
 use crate::types::Type;
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -318,6 +319,7 @@ pub(crate) fn lower_namespace_as_class(
                                 } else {
                                     ctx.define_local(name.clone(), ty.clone())
                                 };
+                                ctx.record_local_source_span(id, decl.name.span());
                                 module.init.push(Stmt::Let {
                                     id,
                                     name: name.clone(),

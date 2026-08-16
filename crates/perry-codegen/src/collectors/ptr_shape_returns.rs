@@ -50,9 +50,28 @@
 //!   anywhere but the returned one". It is discharged by re-running
 //!   `collect_shape_proven_ptr_locals` over the producer's body rather than
 //!   by a second, weaker approximation of it.
+//! * A conditional expression whose result leaves are fresh `New` allocations
+//!   and all agree on the same class. The condition itself cannot weaken
+//!   freshness because a branch-local allocation does not exist until after
+//!   the condition has run. A `LocalGet` leaf remains fail-closed for now:
+//!   Phase 3b exempts only a bare `return local`, not one nested in an
+//!   expression.
+//! * A short-circuiting `&&` / `||` expression when every value that can
+//!   actually escape the expression is fresh. The proof tracks truthy and
+//!   falsy outcomes separately: `flag && new C()` is refused because `flag`
+//!   can escape on the falsy path, while `(flag && new C()) || new C()` is
+//!   admitted because the outer fallback replaces that path with a fresh `C`.
 //!
 //! Anything else — `return CACHE`, `return this.field`, `return mk()`,
-//! `return cond ? a : b` — yields no fact.
+//! `return flag && new C()`, or an expression with a non-fresh/disagreeing
+//! result — yields no fact.
+//!
+//! #7170 R2 also applies the same producer proof to declared instance methods.
+//! A method result is a caller-side seed only when the receiver is itself an
+//! exact shape-proven local, the method name resolves unambiguously on that
+//! class chain, and the module-wide prototype-stability proof holds. The
+//! result fact depends on the receiver fact: if the receiver later fails the
+//! full containment/`this`-flow proof, the result is removed too.
 //!
 //! ## Why the producer must not fall off its end
 //!
@@ -88,9 +107,12 @@
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::Type;
-use perry_hir::{Class, Expr, Module, Stmt};
+use perry_hir::{Class, Expr, LogicalOp, Module, Stmt};
 
-use super::ptr_shape::{chain_admissible, ptr_shape_locals_enabled};
+use super::ptr_shape::{
+    chain_admissible, chain_classes, chain_field_names, chain_has_duplicate_method_names,
+    chain_method_map, ptr_shape_locals_enabled,
+};
 use super::ptr_shape_report as report;
 use super::ModuleDispatchFacts;
 
@@ -236,6 +258,130 @@ pub(crate) fn collect_return_shape_functions(
     out
 }
 
+/// Declared instance methods whose body returns one fresh exact class on every
+/// path, keyed by the method implementation that owns the body.
+///
+/// The method name is resolved separately from the receiver's exact class at
+/// the call site. Keying the producer fact by `(owner class, method name,
+/// FuncId)` prevents equal numeric ids in unrelated declarations (including
+/// accessors) from aliasing. A key claimed by two bodies is dropped entirely:
+/// transformed HIR can duplicate ids, and attributing either body by walk
+/// order would make a guard-free load depend on an arbitrary choice.
+pub(crate) fn collect_return_shape_methods(
+    facts: &ModuleDispatchFacts,
+    hir: &Module,
+) -> HashMap<(String, String, u32), String> {
+    let mut out = HashMap::new();
+    if !ptr_shape_locals_enabled() || facts.has_shape_barrier_sites() {
+        return out;
+    }
+    let classes: HashMap<String, &Class> = hir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class))
+        .collect();
+    let mut claims: HashMap<(String, String, u32), usize> = HashMap::new();
+    let mut proven = Vec::new();
+
+    for class in &hir.classes {
+        if class_has_legacy_decorators(class) {
+            continue;
+        }
+        for method in &class.methods {
+            let key = (class.name.clone(), method.name.clone(), method.id);
+            *claims.entry(key.clone()).or_insert(0) += 1;
+            let view = ProducerBody {
+                boxed_or_resumable: method.is_async
+                    || method.is_generator
+                    || method.was_plain_async,
+                return_type: &method.return_type,
+                body: &method.body,
+            };
+            if let Some(class_name) = producer_return_class(&view, &classes, facts) {
+                proven.push((key, class_name));
+            }
+        }
+    }
+    for (key, class_name) in proven {
+        if claims.get(&key) == Some(&1) {
+            out.insert(key, class_name);
+        }
+    }
+    out
+}
+
+/// Legacy decorators execute arbitrary user code at class-definition time.
+/// A decorator imported from another module can rewrite a prototype without
+/// leaving a `.prototype` expression in this module for rule 4 to observe, so
+/// decorated classes cannot participate in static method-return resolution.
+fn class_has_legacy_decorators(class: &Class) -> bool {
+    let function_has_decorators = |function: &perry_hir::Function| {
+        !function.decorators.is_empty()
+            || function
+                .params
+                .iter()
+                .any(|param| !param.decorators.is_empty())
+    };
+    !class.decorators.is_empty()
+        || class
+            .fields
+            .iter()
+            .chain(class.static_fields.iter())
+            .any(|field| !field.decorators.is_empty())
+        || class
+            .constructor
+            .as_ref()
+            .is_some_and(|constructor| function_has_decorators(constructor))
+        || class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, function)| function))
+            .chain(class.setters.iter().map(|(_, function)| function))
+            .chain(class.computed_members.iter().map(|member| &member.function))
+            .any(function_has_decorators)
+}
+
+/// Export name -> anonymous-record class for source functions whose final HIR
+/// carries a return-shape fact.
+///
+/// This is the producer half of #7170 R2's cross-module increment. It is run
+/// by the compile driver before parallel codegen, so an importing module never
+/// depends on whether its producer happened to compile first. Only direct HIR
+/// functions are exported here: imported `const` closures are live bindings
+/// fetched through variable getters, not the statically-named function symbol
+/// an `ExternFuncRef` call denotes. The first increment also restricts the
+/// payload to content-addressed anonymous shapes; equal names then mean equal
+/// field layouts across modules, while user-class name collisions remain
+/// fail-closed.
+pub(crate) fn collect_exported_return_shapes(hir: &Module) -> HashMap<String, String> {
+    let facts = super::scalar_method_dispatch::collect_module_dispatch_facts(hir);
+    let mut out = HashMap::new();
+
+    let mut insert = |export_name: &str, func_id: u32| {
+        let Some(class_name) = facts.return_shape_class(func_id) else {
+            return;
+        };
+        if !class_name.starts_with("__AnonShape_")
+            || !hir.classes.iter().any(|class| class.name == class_name)
+        {
+            return;
+        }
+        out.insert(export_name.to_string(), class_name.to_string());
+    };
+
+    for function in &hir.functions {
+        if function.is_exported {
+            insert(&function.name, function.id);
+        }
+    }
+    for (export_name, func_id) in &hir.exported_functions {
+        insert(export_name, *func_id);
+    }
+
+    out
+}
+
 /// Visit every expression of every executable body in the module, including
 /// inside nested closure bodies.
 ///
@@ -322,19 +468,23 @@ fn producer_return_class(
         return None;
     }
 
-    // Every return must agree on one class, and each must be a fresh form.
+    // Every return must agree on one class, and each possible result must be
+    // fresh. #7170 R2 models conditionals and short-circuiting logical
+    // expressions as the set of values they can actually return, recursively.
+    let mut sources = Vec::new();
+    for r in &returns {
+        let outcomes = collect_return_outcomes(r, f.body, true);
+        if !outcomes.is_all_fresh() {
+            return None;
+        }
+        sources.extend(outcomes.sources);
+    }
     let mut class_name: Option<&str> = None;
     let mut needs_body_proof: Vec<u32> = Vec::new();
-    for r in &returns {
-        let (name, local) = match r {
-            Expr::New { class_name: c, .. } => (c.as_str(), None),
-            Expr::LocalGet(id) => {
-                // Resolved against the producer's own Phase 3b proof below;
-                // find its declared class first so disagreement short-circuits.
-                let c = seeded_class_of_local(f.body, *id)?;
-                (c, Some(*id))
-            }
-            _ => return None,
+    for source in sources {
+        let (name, local) = match source {
+            FreshReturnSource::New { class_name, .. } => (class_name, None),
+            FreshReturnSource::Local { id, class_name } => (class_name, Some(id)),
         };
         match class_name {
             None => class_name = Some(name),
@@ -403,6 +553,177 @@ fn producer_return_class(
         }
     }
     Some(class_name.to_string())
+}
+
+#[derive(Clone, Copy)]
+enum FreshReturnSource<'a> {
+    New { expr: &'a Expr, class_name: &'a str },
+    Local { id: u32, class_name: &'a str },
+}
+
+/// Abstract result set of one returned expression.
+///
+/// Fresh allocations are always truthy. Non-fresh results are split by
+/// truthiness because a surrounding logical expression may consume one half
+/// rather than return it: `||` consumes falsy left results, while `&&`
+/// consumes truthy left results.
+struct ReturnOutcomes<'a> {
+    sources: Vec<FreshReturnSource<'a>>,
+    non_fresh_truthy: bool,
+    non_fresh_falsy: bool,
+}
+
+impl<'a> ReturnOutcomes<'a> {
+    fn fresh(source: FreshReturnSource<'a>) -> Self {
+        Self {
+            sources: vec![source],
+            non_fresh_truthy: false,
+            non_fresh_falsy: false,
+        }
+    }
+
+    fn non_fresh(truthy: bool) -> Self {
+        Self {
+            sources: Vec::new(),
+            non_fresh_truthy: truthy,
+            non_fresh_falsy: !truthy,
+        }
+    }
+
+    fn unknown() -> Self {
+        Self {
+            sources: Vec::new(),
+            non_fresh_truthy: true,
+            non_fresh_falsy: true,
+        }
+    }
+
+    fn may_be_truthy(&self) -> bool {
+        !self.sources.is_empty() || self.non_fresh_truthy
+    }
+
+    fn may_be_falsy(&self) -> bool {
+        self.non_fresh_falsy
+    }
+
+    fn is_all_fresh(&self) -> bool {
+        !self.sources.is_empty() && !self.non_fresh_truthy && !self.non_fresh_falsy
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.sources.extend(other.sources);
+        self.non_fresh_truthy |= other.non_fresh_truthy;
+        self.non_fresh_falsy |= other.non_fresh_falsy;
+        self
+    }
+}
+
+/// Flatten one returned expression into the values it may produce.
+///
+/// A conditional is safe exactly when both arms are safe: only one arm runs,
+/// but the caller may observe either one. Nested conditionals recurse so the
+/// proof is about the complete result set rather than one syntactic layer.
+/// Logical operators preserve their JavaScript operand-value semantics:
+///
+/// * `left && right` returns a falsy `left`, otherwise `right`;
+/// * `left || right` returns a truthy `left`, otherwise `right`.
+///
+/// This makes the proof path-sensitive without trusting erased TypeScript
+/// types. Each fresh leaf keeps the existing freshness obligation:
+///
+/// * `New` is fresh by construction;
+/// * `LocalGet` is accepted only when it is the direct return expression, then
+///   discharged by the producer's full Phase 3b containment proof in
+///   `producer_return_class`. Phase 3b does not currently exempt a local nested
+///   inside a returned expression, so conditional arms stay `New`-only.
+///
+/// Every unsupported expression is conservatively both truthy and falsy. `??`
+/// remains unsupported because it needs a separate nullish outcome partition.
+fn collect_return_outcomes<'a>(
+    expr: &'a Expr,
+    body: &'a [Stmt],
+    is_direct_return: bool,
+) -> ReturnOutcomes<'a> {
+    match expr {
+        Expr::New { class_name, .. } => ReturnOutcomes::fresh(FreshReturnSource::New {
+            expr,
+            class_name: class_name.as_str(),
+        }),
+        Expr::LocalGet(id) if is_direct_return => {
+            let Some(class_name) = seeded_class_of_local(body, *id) else {
+                return ReturnOutcomes::unknown();
+            };
+            ReturnOutcomes::fresh(FreshReturnSource::Local {
+                id: *id,
+                class_name,
+            })
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => collect_return_outcomes(then_expr, body, false)
+            .merge(collect_return_outcomes(else_expr, body, false)),
+        Expr::Logical { op, left, right } => {
+            let left = collect_return_outcomes(left, body, false);
+            match op {
+                LogicalOp::And => {
+                    let left_may_be_truthy = left.may_be_truthy();
+                    if !left_may_be_truthy {
+                        return left;
+                    }
+                    let right = collect_return_outcomes(right, body, false);
+                    ReturnOutcomes {
+                        // A truthy left operand is consumed by `&&`; only the
+                        // right operand can supply a fresh result.
+                        sources: right.sources,
+                        non_fresh_truthy: right.non_fresh_truthy,
+                        non_fresh_falsy: left.non_fresh_falsy || right.non_fresh_falsy,
+                    }
+                }
+                LogicalOp::Or => {
+                    let left_may_be_falsy = left.may_be_falsy();
+                    if !left_may_be_falsy {
+                        return left;
+                    }
+                    let right = collect_return_outcomes(right, body, false);
+                    let mut sources = left.sources;
+                    sources.extend(right.sources);
+                    ReturnOutcomes {
+                        // A falsy left operand is consumed by `||`; a truthy
+                        // fresh left allocation remains a possible result.
+                        sources,
+                        non_fresh_truthy: left.non_fresh_truthy || right.non_fresh_truthy,
+                        non_fresh_falsy: right.non_fresh_falsy,
+                    }
+                }
+                LogicalOp::Coalesce => ReturnOutcomes::unknown(),
+            }
+        }
+        Expr::Undefined | Expr::Null => ReturnOutcomes::non_fresh(false),
+        Expr::Bool(value) => ReturnOutcomes::non_fresh(*value),
+        Expr::Integer(value) => ReturnOutcomes::non_fresh(*value != 0),
+        Expr::Number(value) => ReturnOutcomes::non_fresh(*value != 0.0 && !value.is_nan()),
+        Expr::String(value) => ReturnOutcomes::non_fresh(!value.is_empty()),
+        _ => ReturnOutcomes::unknown(),
+    }
+}
+
+/// Fresh allocation nodes that may be the final value of this expression.
+///
+/// The optimization report uses this structural view only after the enclosing
+/// region is known to carry a return-shape fact. Keeping the source selection
+/// here prevents its logical-expression accounting from drifting away from
+/// the producer proof above.
+pub(super) fn possible_return_shape_new_sources(expr: &Expr) -> Vec<&Expr> {
+    collect_return_outcomes(expr, &[], true)
+        .sources
+        .into_iter()
+        .filter_map(|source| match source {
+            FreshReturnSource::New { expr, .. } => Some(expr),
+            FreshReturnSource::Local { .. } => None,
+        })
+        .collect()
 }
 
 /// The class of the `new` that a `Stmt::Let` in `stmts` binds to `want`.
@@ -496,14 +817,24 @@ fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
 /// Mirrors `find_new_candidates`' shape exactly — same exclusions (boxed,
 /// module-global), same nesting, and no descent into closure bodies (each is
 /// its own region).
+pub(super) struct ReturnShapeSeeds {
+    pub(super) seeded: HashSet<u32>,
+    /// Result local -> exact receiver local whose final shape proof licenses
+    /// the method dispatch. The parent collector enforces these dependencies
+    /// after all ordinary candidate and element-group rejections have run.
+    pub(super) method_receivers: HashMap<u32, u32>,
+}
+
 pub(crate) fn find_return_shape_candidates(
     stmts: &[Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &Class>,
     module_dispatch: &ModuleDispatchFacts,
     candidates: &mut HashMap<u32, String>,
-) -> HashSet<u32> {
+) -> ReturnShapeSeeds {
     let mut seeded = HashSet::new();
+    let mut method_receivers = HashMap::new();
     walk_stmts(stmts, &mut |s| {
         let Stmt::Let {
             id,
@@ -516,15 +847,62 @@ pub(crate) fn find_return_shape_candidates(
         if boxed_vars.contains(id) || module_globals.contains_key(id) {
             return;
         }
-        let Some(func_id) = callee_names_one_function(callee, module_dispatch) else {
-            return;
+        let mut method_receiver = None;
+        let class_name = match callee.as_ref() {
+            Expr::ExternFuncRef { name, .. } => module_dispatch
+                .imported_return_shape_class(name)
+                .map(str::to_string),
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let Expr::LocalGet(receiver_id) = object.as_ref() else {
+                    return;
+                };
+                let Some(receiver_class) = candidates.get(receiver_id).cloned() else {
+                    return;
+                };
+                if !module_dispatch.prototype_is_stable(classes, &receiver_class) {
+                    return;
+                }
+                let chain = chain_classes(classes, &receiver_class);
+                if chain.iter().any(|class| class_has_legacy_decorators(class)) {
+                    return;
+                }
+                if chain_has_duplicate_method_names(&chain) {
+                    return;
+                }
+                if chain_field_names(&chain).contains(property) {
+                    return;
+                }
+                let methods = chain_method_map(&chain);
+                let Some((owner_class, method)) = methods.get(property) else {
+                    return;
+                };
+                let Some(class_name) = module_dispatch
+                    .return_shape_method_class(owner_class, property, method.id)
+                    .map(str::to_string)
+                else {
+                    return;
+                };
+                method_receiver = Some(*receiver_id);
+                Some(class_name)
+            }
+            _ => callee_names_one_function(callee, module_dispatch)
+                .and_then(|func_id| module_dispatch.return_shape_class(func_id))
+                .map(str::to_string),
         };
-        if let Some(class_name) = module_dispatch.return_shape_class(func_id) {
-            candidates.insert(*id, class_name.to_string());
+        if let Some(class_name) = class_name {
+            candidates.insert(*id, class_name);
             seeded.insert(*id);
+            if let Some(receiver_id) = method_receiver {
+                method_receivers.insert(*id, receiver_id);
+            }
         }
     });
-    seeded
+    ReturnShapeSeeds {
+        seeded,
+        method_receivers,
+    }
 }
 
 /// The one statically-known function a callee expression names, or `None`.
@@ -548,8 +926,9 @@ pub(crate) fn find_return_shape_candidates(
 ///   `js_typed_feedback_closure_direct_call_guard` because it is populated in
 ///   statement order and a later rebinding invalidates it.
 ///
-/// Anything else — a property get, a computed callee, an `ExternFuncRef` —
-/// could resolve to a different body, and yields `None`.
+/// An `ExternFuncRef` is handled separately by the driver-built import
+/// whitelist: unlike a raw name, that table is keyed by the unique local
+/// import binding and already resolved through aliases/re-exports.
 fn callee_names_one_function(callee: &Expr, module_dispatch: &ModuleDispatchFacts) -> Option<u32> {
     match callee {
         Expr::FuncRef(func_id) => Some(*func_id),

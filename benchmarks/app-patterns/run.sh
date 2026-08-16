@@ -24,6 +24,16 @@ KERNELS_DIR="$SCRIPT_DIR/kernels"
 RESULTS_DIR="$SCRIPT_DIR/results"
 mkdir -p "$RESULTS_DIR"
 PUBLIC_JSON_OUT="${PUBLIC_BENCH_JSON_OUT:-}"
+WARMUP="${PUBLIC_BENCH_WARMUP:-3}"
+RUNS="${PUBLIC_BENCH_RUNS:-15}"
+if [[ ! "$WARMUP" =~ ^[0-9]+$ ]]; then
+  echo "Error: PUBLIC_BENCH_WARMUP must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "$RUNS" =~ ^[0-9]+$ ]] || (( RUNS < 2 )); then
+  echo "Error: PUBLIC_BENCH_RUNS must be an integer of at least 2" >&2
+  exit 2
+fi
 RAW_JSONL=$(mktemp "${TMPDIR:-/tmp}/perry-app-patterns.XXXXXX")
 trap 'rm -f "$RAW_JSONL"' EXIT
 
@@ -128,7 +138,7 @@ for KERNEL in "${KERNELS[@]}"; do
   # interleave (less affected by transient system load on any one
   # runtime).
   JSON="/tmp/bench-app-pattern-$NAME.json"
-  hyperfine --warmup 3 --runs 15 --time-unit millisecond \
+  hyperfine --warmup "$WARMUP" --runs "$RUNS" --time-unit millisecond \
     --export-json "$JSON" \
     --command-name "perry"  "$PERRY_OUT" \
     --command-name "bun"    "bun run $KERNEL" \
@@ -210,13 +220,16 @@ cat "$OUTPUT"
 
 if [ -n "$PUBLIC_JSON_OUT" ]; then
   mkdir -p "$(dirname "$PUBLIC_JSON_OUT")"
-  PYTHONPATH="$REPO_ROOT" python3 - "$RAW_JSONL" "$PUBLIC_JSON_OUT" "$REPO_ROOT" <<'PY'
+  PYTHONPATH="$REPO_ROOT" python3 - \
+    "$RAW_JSONL" "$PUBLIC_JSON_OUT" "$REPO_ROOT" "$WARMUP" "$RUNS" <<'PY'
 import json, shutil, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from benchmarks.public_baseline import distribution
 
-records_path, output_path, root = sys.argv[1:]
+records_path, output_path, root, warmup_raw, requested_raw = sys.argv[1:]
+warmup = int(warmup_raw)
+requested = int(requested_raw)
 records = [json.loads(line) for line in open(records_path) if line.strip()]
 expected = sorted(path.rsplit("/", 1)[-1].removesuffix(".ts")
                   for path in __import__("glob").glob(root + "/benchmarks/app-patterns/kernels/*.ts"))
@@ -237,12 +250,18 @@ component = {
     "suite": "app_patterns",
     "commit": subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip(),
     "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "run_config": {"warmup": 3, "requested_samples": 15, "interleaved": True},
+    "run_config": {
+        "warmup": warmup,
+        "requested_samples": requested,
+        "interleaved": True,
+    },
     "commands": {
         "perry": [root + "/target/release/perry", "<kernel.ts>", "-o", "<compiled-kernel>"],
         "node": [shutil.which("node"), "--experimental-strip-types", "<kernel.ts>"],
         "bun": [shutil.which("bun"), "run", "<kernel.ts>"],
-        "measurement": ["hyperfine", "--warmup", "3", "--runs", "15"],
+        "measurement": [
+            "hyperfine", "--warmup", str(warmup), "--runs", str(requested)
+        ],
     },
     "runtime_metadata": {
         "perry": {

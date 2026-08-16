@@ -69,8 +69,6 @@ fn syntax_error_value(message: &str) -> f64 {
     f64::from_bits(JSValue::pointer(err as *const u8).bits())
 }
 
-/// A catchable `RangeError`, for the one JSON failure that is about size
-/// rather than shape: input nested deeper than the parser can descend.
 fn range_error_value(message: &str) -> f64 {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg_ptr);
@@ -85,21 +83,32 @@ fn throw_range_error(message: &str) -> ! {
     crate::exception::js_throw(range_error_value(message))
 }
 
-/// The one depth check, called by every entry that is about to descend.
+/// Select the heap-stack parser before recursive validation or materialization
+/// gets close to the smallest worker-thread stack.
 ///
 /// `js_json_parse` and `js_json_parse_result` are separate implementations of
 /// the same flow, and the typed-array path is a third. Sharing the decision is
 /// what keeps them from drifting — the first version of this fix guarded only
 /// one of the three and appeared to do nothing at all, because the entry point
 /// codegen actually calls was one of the other two.
-fn nesting_is_too_deep(bytes: &[u8]) -> bool {
-    crate::json::parser::nesting_depth_exceeds(bytes, crate::json::parser::MAX_NESTING_DEPTH)
+fn requires_iterative_parse(bytes: &[u8]) -> bool {
+    crate::json::parser::nesting_depth_exceeds(
+        bytes,
+        crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH,
+    )
 }
 
-fn too_deep_message() -> String {
+fn exceeds_iterative_budget(bytes: &[u8]) -> bool {
+    crate::json::parser::nesting_depth_exceeds(
+        bytes,
+        crate::json::parser::MAX_ITERATIVE_NESTING_DEPTH,
+    )
+}
+
+fn iterative_budget_message() -> String {
     format!(
-        "JSON.parse: input nested deeper than {} levels",
-        crate::json::parser::MAX_NESTING_DEPTH
+        "JSON.parse: input exceeds the {}-level iterative nesting budget",
+        crate::json::parser::MAX_ITERATIVE_NESTING_DEPTH
     )
 }
 
@@ -116,6 +125,53 @@ fn is_json_null_literal(bytes: &[u8]) -> bool {
         .map(|idx| idx + 1)
         .unwrap_or(start);
     &bytes[start..end] == b"null"
+}
+
+/// Parse a deeply nested document through the flat tape representation. Tape
+/// construction validates syntax with an explicit heap stack; materialization
+/// likewise keeps pending containers on the heap. This path runs only beyond
+/// the recursive fast path's safe depth, so ordinary JSON keeps its existing
+/// allocation and shape-specialization behavior.
+unsafe fn try_parse_deep_iterative(
+    text_ptr: *const StringHeader,
+    len: usize,
+    bytes: &[u8],
+) -> Option<JSValue> {
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    let result = crate::json_tape::with_built_tape(bytes, |tape_entries| {
+        crate::gc::gc_collect_pending_suppressed_parse();
+        crate::gc::gc_check_trigger();
+        crate::gc::gc_suppress();
+
+        let bytes = {
+            let moved = parse_root_get(text_root);
+            let hdr = moved.as_string_ptr();
+            let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::slice::from_raw_parts(data_ptr, len)
+        };
+        let result = crate::json_tape::materialize_iterative(tape_entries, bytes);
+        if let Some(value) = result {
+            parse_root_push(value);
+        }
+
+        crate::gc::gc_unsuppress();
+        crate::gc::gc_bump_malloc_trigger();
+        crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+        result
+    })
+    .flatten();
+    parse_root_restore(text_root);
+
+    PARSE_KEY_CACHE.with(|cell| {
+        let cache = cell.borrow();
+        if cache.len() > 4096 {
+            drop(cache);
+            cell.borrow_mut().clear();
+            clear_parse_key_ring();
+        }
+    });
+
+    result
 }
 
 /// Non-throwing JSON parse entry for APIs that must reject a Promise rather than
@@ -136,12 +192,12 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         return Err(syntax_error_value("Unexpected end of JSON input"));
     }
 
-    // #7792: depth first, BEFORE the validation pass below. That pass recurses
-    // once per nesting level itself, so a check placed after it would run after
-    // the crash it exists to prevent. The scan is one linear pass over bytes we
-    // are about to read anyway.
-    if nesting_is_too_deep(bytes) {
-        return Err(range_error_value(&too_deep_message()));
+    if requires_iterative_parse(bytes) {
+        if exceeds_iterative_budget(bytes) {
+            return Err(range_error_value(&iterative_budget_message()));
+        }
+        return try_parse_deep_iterative(text_ptr, len, bytes)
+            .ok_or_else(|| syntax_error_value("JSON parse error: malformed deep document"));
     }
 
     // Validate without constructing a second full JSON tree. The Perry parser
@@ -236,11 +292,14 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     if len == 0 {
         throw_syntax_error("Unexpected end of JSON input");
     }
-    // #7792: depth first, ahead of the validation pass, for the same reason as
-    // the `_result` twin above. This is the entry codegen emits, so a guard
-    // that covered only the twin covered nothing a compiled program can reach.
-    if nesting_is_too_deep(bytes) {
-        throw_range_error(&too_deep_message());
+    if requires_iterative_parse(bytes) {
+        if exceeds_iterative_budget(bytes) {
+            throw_range_error(&iterative_budget_message());
+        }
+        return match try_parse_deep_iterative(text_ptr, len, bytes) {
+            Some(value) => value,
+            None => throw_syntax_error("JSON parse error: malformed deep document"),
+        };
     }
     // Keep serde_json's strict syntax validation, but discard tokens as they
     // are read instead of allocating an intermediate `serde_json::Value`
@@ -559,10 +618,9 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
 
-    // #7792: this path builds its own parser, so it needs its own guard. Hand
-    // deep input to the generic entry rather than repeating the error here, so
-    // both report it identically.
-    if nesting_is_too_deep(bytes) {
+    // Deep input uses the generic entry's heap-stack fallback. The shape fast
+    // path is deliberately retained for ordinary payloads only.
+    if requires_iterative_parse(bytes) {
         return js_json_parse(text_ptr);
     }
 

@@ -222,7 +222,7 @@ pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {
 /// `RuntimeHandleScope` inside such a test is decorative — its handles are
 /// neither marked nor rewritten, so a raw pointer held across a GC-capable
 /// call is silently unrooted and the test can pass for the wrong reason.
-pub(super) fn register_runtime_handle_root_scanner_for_tests() {
+pub(crate) fn register_runtime_handle_root_scanner_for_tests() {
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
@@ -324,7 +324,56 @@ pub(super) struct GcTestIsolationGuard {
 
 impl GcTestIsolationGuard {
     pub(super) fn new() -> Self {
+        Self::build(RealmBootstrap::LeaveLazy)
+    }
+
+    /// [`GcTestIsolationGuard::new`] plus: run the lazy `globalThis` realm
+    /// bootstrap BEFORE the measured window opens (#7975).
+    ///
+    /// REQUIRED by any test that asserts an unrooted object is DEAD at a
+    /// collection and reaches the runtime through an API that can resolve the
+    /// realm. Two facts compose into a scheduling-dependent false failure:
+    ///
+    /// 1. `object::set_property_attrs` and `js_object_set_field_by_name` both
+    ///    consult the **process-global** memoized `Object.prototype` address
+    ///    (`array::prototype_addr`), and a MISS runs the whole lazy
+    ///    `globalThis` bootstrap — ~1.15 MB allocated, ~410 KB of it live,
+    ///    rooted for the life of the thread — inside the caller. The cache
+    ///    misses exactly once per PROCESS, so WHICH libtest thread pays is a
+    ///    scheduling accident.
+    /// 2. Arena block reset is all-or-nothing, so
+    ///    `gc::trace::mark_block_persisting_arena_objects` force-MARKS every
+    ///    object in a block that holds one reachable object. A test owner that
+    ///    shares its block with a freshly-bootstrapped realm is therefore NOT
+    ///    dead — and the death prune *correctly* declines to drop its
+    ///    side-table entry, because a block that persists cannot recycle the
+    ///    owner's address.
+    ///
+    /// Measured on `origin/main` before this existed: the two affected cases in
+    /// `dead_owner_side_tables` failed **200/200** runs when scheduled first and
+    /// **0/200** when any sibling resolved the cache first — 10/200 at
+    /// `--test-threads=10` over the whole module (#7975).
+    ///
+    /// Bootstrapping here — inside the isolation lock, but before
+    /// [`ScopedRootScannerRegistryGuard`] takes the thread's scanners and
+    /// before `reset_global_roots` — puts the realm graph OUTSIDE the window:
+    /// the guard then un-roots it, so it cannot keep the test's own block
+    /// alive.
+    pub(super) fn with_realm_bootstrapped() -> Self {
+        Self::build(RealmBootstrap::RunItNow)
+    }
+
+    fn build(realm: RealmBootstrap) -> Self {
         let lock = copying_nursery_isolation_lock();
+        if matches!(realm, RealmBootstrap::RunItNow) {
+            let global = crate::object::js_get_global_this();
+            assert!(
+                crate::value::JSValue::from_bits(global.to_bits()).is_pointer(),
+                "the realm bootstrap must have produced a singleton — otherwise \
+                 it did not run here, and the confounder this guard exists to \
+                 move out of the window is still inside it"
+            );
+        }
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
         reset_shadow_stack();
@@ -337,6 +386,14 @@ impl GcTestIsolationGuard {
     }
 }
 
+/// Whether [`GcTestIsolationGuard::build`] forces the lazy `globalThis`
+/// bootstrap before opening the window. See
+/// [`GcTestIsolationGuard::with_realm_bootstrapped`].
+enum RealmBootstrap {
+    LeaveLazy,
+    RunItNow,
+}
+
 impl Drop for GcTestIsolationGuard {
     fn drop(&mut self) {
         reset_copying_nursery_runtime_test_state();
@@ -346,7 +403,7 @@ impl Drop for GcTestIsolationGuard {
     }
 }
 
-pub(super) struct CopyingNurseryTestGuard {
+pub(crate) struct CopyingNurseryTestGuard {
     frame: u64,
     _scanner_guard: ScopedRootScannerRegistryGuard,
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -390,7 +447,7 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
 }
 
 impl CopyingNurseryTestGuard {
-    pub(super) fn new(slot_count: u32) -> Self {
+    pub(crate) fn new(slot_count: u32) -> Self {
         let lock = copying_nursery_isolation_lock();
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
@@ -418,14 +475,14 @@ impl Drop for CopyingNurseryTestGuard {
     }
 }
 
-pub(super) struct GcTriggerThresholdTestGuard {
+pub(crate) struct GcTriggerThresholdTestGuard {
     next_arena_trigger: usize,
     next_malloc_trigger: usize,
     malloc_step: usize,
 }
 
 impl GcTriggerThresholdTestGuard {
-    pub(super) fn suppress_automatic_triggers() -> Self {
+    pub(crate) fn suppress_automatic_triggers() -> Self {
         let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| {
             let previous = trigger.get();
             trigger.set(usize::MAX);
@@ -488,38 +545,25 @@ pub(super) fn assert_copied_minor_trace(
     assert_eq!(trace.copying_nursery.malloc_sweep_due, malloc_sweep_due);
 }
 
-static ENV_VAR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub(super) struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-impl EnvVarGuard {
-    pub(super) fn set(key: &'static str, value: &'static str) -> Self {
-        let lock = ENV_VAR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self {
-            key,
-            previous,
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.as_ref() {
-            std::env::set_var(self.key, previous);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
+// `EnvVarGuard` used to live here. It took `std::env::set_var` under a mutex,
+// which serialized the twelve tests that SET a `PERRY_GC_*` knob against each
+// other and did nothing whatsoever for the ~2 200 that READ one — the process
+// environment is shared by every libtest thread, and the damage window is
+// "between this test's set and another test's read".
+//
+// It was a live source of red builds (#7946), not a theoretical hazard:
+// `PERRY_GC_FORCE_EVACUATE=1` is an input to `should_promote_young_in_place()`,
+// so holding it for one test's duration silently turned in-place promotion off
+// underneath `gc::tests::promote_in_place`'s policy cases — 5 failed runs in
+// 100 across three of them.
+//
+// Knobs a test needs to move now have a PER-THREAD override next to the reader
+// that consults them, the same shape `barrier_arming`'s `TEST_ARMED_OVERRIDE`,
+// `oldgen_defrag`'s `OLD_DEFRAG_TEST_OVERRIDE` and `roots`'s
+// `CONSERVATIVE_STACK_SCAN_OVERRIDE` already used. A knob whose *parse* or
+// *precedence* is the subject gets a pure function taking the value, the way
+// `parse_promote_in_place` does — never the live process environment.
+pub(super) use crate::gc::knob_overrides::{ForcedEvacuationTestGuard, VerifyEvacuationTestGuard};
 
 static GENERATED_BARRIER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

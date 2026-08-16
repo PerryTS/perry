@@ -618,6 +618,100 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
+/// #7916: the per-object footprint accounting this issue is about, pinned as an
+/// executable fact rather than a comment.
+///
+/// A two-field object literal is `GcHeader (8) + ObjectHeader (32) + 8 *
+/// max(field_count, INLINE_SLOT_FLOOR)`. At `INLINE_SLOT_FLOOR = 4` that is
+/// **72 bytes to store 16 bytes of payload** and `gc-handoff/bench/retain.ts`
+/// writes 216 MB to hold 48 MB of doubles. Lowering the floor to 2 removes the
+/// two unusable slots.
+///
+/// This reads the size the ALLOCATOR recorded (`GcHeader::size`), not a
+/// recomputation of the same formula, so it fails if any allocation path
+/// silently stops honouring the floor.
+#[test]
+fn two_field_literal_footprint_is_exactly_accounted() {
+    assert_eq!(
+        std::mem::size_of::<ObjectHeader>(),
+        32,
+        "the ObjectHeader half of the accounting: 4 u32 + 2 pointers"
+    );
+    assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
+
+    let keys = b"a\0b\0";
+    let obj = js_object_alloc_with_shape(0x7916_0001, 2, keys.as_ptr(), keys.len() as u32);
+    assert!(!obj.is_null());
+    let recorded = unsafe {
+        // #7928 added this probe with a bare `as *const GcHeader`, which the
+        // addr-class ratchet rejects (and which turned required `lint` red on
+        // `main`). `try_read_gc_header` is the approved accessor: it takes the
+        // OBJECT address and does the header arithmetic itself, behind the
+        // plausibility and slab checks.
+        crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader")
+            .size as usize
+    };
+    let expected = crate::gc::GC_HEADER_SIZE
+        + std::mem::size_of::<ObjectHeader>()
+        + 8 * std::cmp::max(2, crate::object::INLINE_SLOT_FLOOR);
+    assert_eq!(
+        recorded, expected,
+        "a 2-field literal must occupy exactly {expected} bytes"
+    );
+    assert_eq!(
+        recorded, 56,
+        "#7916: the 2-field literal footprint is 56 bytes (was 72 at floor 4). \
+         Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 bytes of unusable slots \
+         to every small object"
+    );
+}
+
+/// Paired with `inline_slot_floor_matches_runtime` in
+/// `perry-codegen/src/target_layout.rs` (#7916).
+///
+/// perry-codegen cannot depend on perry-runtime, so it carries its own copy of
+/// this constant and uses it BOTH to size the inline-`new` bump allocation and
+/// to emit `slot < max(field_count, FLOOR)` bounds checks around raw inline
+/// slot loads/stores. The two failure modes point in opposite directions
+/// (codegen too small under-allocates; codegen too large over-reads), so the
+/// values must be exactly equal — pin the number on both sides.
+#[test]
+fn inline_slot_floor_matches_codegen() {
+    assert_eq!(
+        crate::object::INLINE_SLOT_FLOOR,
+        2,
+        "perry-codegen's target_layout::INLINE_SLOT_FLOOR is 2; update both sides together"
+    );
+}
+
+/// #7916: lowering the floor must not change what `{}` + by-name growth does,
+/// only where the inline/overflow boundary sits. Fields placed past the
+/// boundary go to overflow storage and must still read back — the property
+/// that makes the floor a footprint dial rather than a correctness one.
+#[test]
+fn by_name_growth_past_the_floor_reads_back() {
+    let obj = js_object_alloc(0, 0);
+    assert!(!obj.is_null());
+    let names: [&[u8]; 6] = [b"k0", b"k1", b"k2", b"k3", b"k4", b"k5"];
+    for (i, n) in names.iter().enumerate() {
+        let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        js_object_set_field_by_name(obj, key, i as f64);
+    }
+    for (i, n) in names.iter().enumerate() {
+        let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+        let got = js_object_get_field_by_name(obj, key);
+        assert!(
+            got.is_number() && got.as_number() == i as f64,
+            "field {} ({}) read back as {:#x}; the inline/overflow boundary \
+             must be invisible to reads",
+            i,
+            std::str::from_utf8(n).unwrap(),
+            got.bits()
+        );
+    }
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);
@@ -1440,7 +1534,7 @@ fn array_receiver_is_never_read_as_a_class_id() {
 #[test]
 fn constructor_ref_method_value_resolves_static_over_instance_method() {
     // Unique id so the process-global registries don't collide with other tests.
-    const CLASS_ID: u32 = 0x7689;
+    const LEX_METHOD_TEST_CLASS_ID: u32 = 0x7689;
     const NAME: &[u8] = b"lex";
 
     extern "C" fn static_lex_7689() -> f64 {
@@ -1452,25 +1546,25 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 
     unsafe {
         super::class_registry::js_register_class_method(
-            CLASS_ID as i64,
+            LEX_METHOD_TEST_CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
-            instance_lex_7689 as usize as i64,
+            instance_lex_7689 as *const () as usize as i64,
             0,
             0,
             0,
         );
         super::class_registry::js_register_class_static_method(
-            CLASS_ID as i64,
+            LEX_METHOD_TEST_CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
-            static_lex_7689 as usize as i64,
+            static_lex_7689 as *const () as usize as i64,
             0,
             0,
         );
     }
 
-    let class_ref = super::native_module::class_constructor_ref_value(CLASS_ID);
+    let class_ref = super::native_module::class_constructor_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound = super::native_module::js_class_method_bind(class_ref, NAME.as_ptr(), NAME.len());
     let result = unsafe { crate::closure::js_native_call_value(bound, std::ptr::null(), 0) };
     assert_eq!(
@@ -1481,7 +1575,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 
     // The guard must not over-narrow: the PROTOTYPE ref names the instance
     // method, and an extracted `C.prototype.lex` must keep resolving it.
-    let proto_ref = super::native_module::class_prototype_ref_value(CLASS_ID);
+    let proto_ref = super::native_module::class_prototype_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound_proto =
         super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
     let result_proto =
@@ -1490,5 +1584,57 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
         result_proto, 7.0,
         "a method value extracted off the PROTOTYPE ref must still dispatch \
          the instance `lex`"
+    );
+}
+
+/// #8117: a `Buffer` / `DataView` receiver must not reach the ordinary
+/// `ObjectHeader` walk in `obj_value_has_own_key`.
+///
+/// A buffer is a `BufferHeader` — no `class_id`, no `keys_array`. With no arm
+/// of its own it fell through to the ordinary arm, which read
+/// `(*obj).keys_array` out of the bytes that follow a buffer header and handed
+/// that to `js_array_length`, whose lazy-array probe dereferences `addr - 8`.
+///
+/// The two platforms fail differently, which is why this test asserts the
+/// ANSWER rather than merely "did not crash":
+///
+/// * Linux: the payload bytes clear the old `< 0x10000` magnitude floor and the
+///   dereference is a SIGSEGV. `b.readUInt8 = fn` reached through the dynamic
+///   `[[Set]]` (`js_put_value_set_dyn_ic_miss` -> `proxy::ordinary_set_with_
+///   receiver` -> `proxy::own_set_descriptor`) crashed 10/10.
+/// * macOS: the heap floor is high enough that the garbage usually reads as
+///   null, so it silently answered "no own key" for a property the buffer
+///   really owns.
+///
+/// The first assertion below fails on BOTH.
+#[test]
+fn buffer_own_key_comes_from_the_expando_table_not_the_object_walk() {
+    let addr = crate::buffer::buffer_alloc(8) as usize;
+    crate::buffer::buffer_set_own_prop(addr, "myFlag", 42.0);
+    let receiver = crate::value::js_nanbox_pointer(addr as i64);
+
+    let present = crate::string::js_string_from_bytes(b"myFlag".as_ptr(), 6);
+    let present_key = crate::value::js_nanbox_string(present as i64);
+    assert!(
+        obj_value_has_own_key(receiver, present_key),
+        "a buffer's own expando property must be reported as an own key"
+    );
+
+    // A `Buffer.prototype` method is INHERITED, not own. That is what lets
+    // `buf.readUInt8 = fn` install a shadowing own property instead of
+    // being treated as the redefinition of an existing one.
+    let inherited = crate::string::js_string_from_bytes(b"readUInt8".as_ptr(), 9);
+    let inherited_key = crate::value::js_nanbox_string(inherited as i64);
+    assert!(
+        !obj_value_has_own_key(receiver, inherited_key),
+        "a Buffer.prototype method is inherited, not an own key"
+    );
+
+    // And a key the buffer has never seen.
+    let absent = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
+    let absent_key = crate::value::js_nanbox_string(absent as i64);
+    assert!(
+        !obj_value_has_own_key(receiver, absent_key),
+        "an unknown key is not an own key"
     );
 }

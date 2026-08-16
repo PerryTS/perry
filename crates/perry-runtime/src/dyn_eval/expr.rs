@@ -19,6 +19,9 @@ use super::interp::{bind_pattern, make_function_value, Ctx};
 use super::{env, root_get, root_push, roots_truncate, InterpBody};
 
 pub(crate) fn eval_expr(ctx: &Ctx, expr: &ast::Expr, env_idx: usize) -> f64 {
+    // #7803: the interpreter's cooperative GC safepoint. Inert unless
+    // `PERRY_GC_INTERP_SAFEPOINTS=1` — see `super::interp_safepoint`.
+    super::interp_safepoint();
     use ast::Expr::*;
     match expr {
         Paren(p) => eval_expr(ctx, &p.expr, env_idx),

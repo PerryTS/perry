@@ -97,6 +97,12 @@ fn tape_malformed_returns_none() {
     assert!(build_tape(b"[").is_none(), "unclosed array");
     assert!(build_tape(b"{a:1}").is_none(), "unquoted key");
     assert!(build_tape(b"{\"a\"}").is_none(), "missing colon");
+    assert!(build_tape(b"0 trailing").is_none(), "trailing token");
+    assert!(build_tape(b"01").is_none(), "leading zero");
+    assert!(build_tape(b"1.").is_none(), "empty fraction");
+    assert!(build_tape(b"1e+").is_none(), "empty exponent");
+    assert!(build_tape(br#""\q""#).is_none(), "invalid escape");
+    assert!(build_tape(b"\"line\nfeed\"").is_none(), "raw control byte");
     assert!(build_tape(b"").is_none(), "empty input");
 }
 
@@ -107,6 +113,90 @@ fn tape_top_level_scalars() {
     assert_eq!(build_tape(b"true").unwrap().entries.len(), 1);
     assert_eq!(build_tape(br#""hi""#).unwrap().entries.len(), 1);
     assert_eq!(build_tape(b"null").unwrap().entries.len(), 1);
+}
+
+#[test]
+fn recursive_materializer_reserves_exact_spill_per_object_depth() {
+    let input = br#"{"a":1,"nested":{"n0":0,"n1":1,"n2":2,"n3":3,"n4":4},"b":2}"#;
+    let tape = build_tape(input).expect("valid tape");
+    let nested_key = crate::string::js_string_from_bytes(b"nested".as_ptr(), 6);
+
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize(&tape, input) };
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let nested = crate::object::js_object_get_field_by_name(object, nested_key);
+    let nested = (nested.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+
+    unsafe {
+        assert_eq!(
+            (*object).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32,
+            "known width must not enlarge the primary object"
+        );
+        let spill =
+            crate::object::test_spill_buffer_addr(object as usize) as *const crate::ArrayHeader;
+        assert!(!spill.is_null());
+        assert_eq!((*spill).capacity, 3, "count only outer-object keys");
+        assert_eq!((*spill).length, 3);
+
+        assert_eq!(
+            (*nested).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32
+        );
+        let nested_spill =
+            crate::object::test_spill_buffer_addr(nested as usize) as *const crate::ArrayHeader;
+        assert!(!nested_spill.is_null());
+        assert_eq!(
+            (*nested_spill).capacity,
+            5,
+            "reserve the nested width exactly"
+        );
+        assert_eq!((*nested_spill).length, 5);
+    }
+    crate::gc::gc_unsuppress();
+}
+
+#[test]
+fn iterative_materializer_preserves_nested_objects_arrays_and_duplicate_keys() {
+    let input = br#"{"a":[1,true,"x"],"a":{"b":2}}"#;
+    let tape = build_tape(input).expect("valid tape");
+    let saved_roots = crate::json::parse_root_save_len();
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize_iterative(&tape.entries, input) }.expect("materializes");
+    crate::json::parse_root_push(value);
+    crate::gc::gc_unsuppress();
+
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let key_a = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+    let key_b = crate::string::js_string_from_bytes(b"b".as_ptr(), 1);
+    let nested = crate::object::js_object_get_field_by_name(object, key_a);
+    let nested = (nested.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let b = crate::object::js_object_get_field_by_name(nested, key_b);
+    assert_eq!(f64::from_bits(b.bits()), 2.0);
+
+    crate::json::parse_root_restore(saved_roots);
+}
+
+#[test]
+fn iterative_materializer_reserves_exact_spill_without_widening_object() {
+    let input = br#"{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4}"#;
+    let tape = build_tape(input).expect("valid tape");
+
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize_iterative(&tape.entries, input) }.expect("materializes");
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    unsafe {
+        assert_eq!(
+            (*object).field_count,
+            crate::object::INLINE_SLOT_FLOOR as u32
+        );
+        let spill =
+            crate::object::test_spill_buffer_addr(object as usize) as *const crate::ArrayHeader;
+        assert!(!spill.is_null());
+        assert_eq!((*spill).capacity, 5);
+        assert_eq!((*spill).length, 5);
+    }
+    crate::gc::gc_unsuppress();
 }
 
 /// `TapeEntry` is 12 bytes (u32 + u8 + padding + u32). Keeping

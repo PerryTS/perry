@@ -216,7 +216,7 @@ def scan(root: Path) -> tuple[list[tuple[str, int, str]], int]:
     for path in sorted(crates.rglob("*.rs")):
         if "/target/" in str(path):
             continue
-        rel = str(path.relative_to(root))
+        rel = path.relative_to(root).as_posix()
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

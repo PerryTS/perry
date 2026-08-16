@@ -29,6 +29,7 @@ const PERRY_AUDIO_DTS: &str = include_str!("../../../../types/perry/audio/index.
 const PERRY_TUI_DTS: &str = include_str!("../../../../types/perry/tui/index.d.ts");
 const PERRY_WEBASSEMBLY_DTS: &str = include_str!("../../../../types/perry/webassembly/index.d.ts");
 const PERRY_BUILD_DTS: &str = include_str!("../../../../types/perry/build/index.d.ts");
+const PERRY_NATIVE_DTS: &str = include_str!("../../../../types/perry/native/index.d.ts");
 
 // Auto-generated stdlib `.d.ts` from the API manifest (#465's
 // "stretch" deliverable: editor `.d.ts` shipped alongside the
@@ -60,6 +61,9 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
         // Issue #76 — `perry/build` compile-time intrinsics
         // (`embedWasm`). Imported via `import { embedWasm } from "perry/build"`.
         ("build", PERRY_BUILD_DTS),
+        // Issue #6827 — stable author-facing aliases over Perry's existing
+        // native scalar, POD-layout, and arena intrinsics.
+        ("native", PERRY_NATIVE_DTS),
     ];
 
     // Each sub-module gets index.d.ts
@@ -80,7 +84,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, audio, tui, webassembly, build, stdlib)"
+            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, audio, tui, webassembly, build, native, stdlib)"
         );
     }
 
@@ -113,4 +117,21 @@ pub fn run(args: TypesArgs, format: OutputFormat, _use_color: bool) -> Result<()
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_perry_native_type_stub() {
+        let project = tempfile::tempdir().expect("temporary project");
+        write_perry_type_stubs(project.path(), true).expect("write type stubs");
+
+        let native_stub = project.path().join(".perry/types/perry/native/index.d.ts");
+        let source = fs::read_to_string(native_stub).expect("read native type stub");
+        assert!(source.contains("export type u32"));
+        assert!(source.contains("export type pod<T>"));
+        assert!(source.contains("export declare const NativeArena"));
+    }
 }

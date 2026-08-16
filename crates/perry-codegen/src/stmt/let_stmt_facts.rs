@@ -5,7 +5,7 @@
 
 use super::*;
 
-use crate::native_value::{BufferAccessMode, PodLocal, SemanticKind};
+use crate::native_value::BufferAccessMode;
 
 pub(super) fn pod_view_count_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> String {
     match expr {

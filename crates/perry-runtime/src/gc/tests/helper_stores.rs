@@ -2,6 +2,13 @@ use super::super::*;
 use super::support::*;
 use std::fmt::Write as _;
 
+/// Field/element count whose backing store exceeds the POINTER-BEARING
+/// born-tenured threshold — see `copying.rs`'s `OLD_BORN_ELEMENTS`. These two
+/// fixtures assert that a materialized JSON object / regex result array is an
+/// OLD-generation birth holding young children, so they must actually be one.
+const OLD_BORN_FIELDS: u32 =
+    (crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES / 8) as u32 + 64;
+
 unsafe fn alloc_old_test_map(
     capacity: u32,
 ) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
@@ -49,7 +56,7 @@ unsafe fn assert_slot_rewritten_to_nursery(slot: *const u64, before: usize) -> u
 #[test]
 fn shared_array_and_object_slot_helpers_preserve_young_children() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let array_child = young_leaf();
@@ -85,7 +92,7 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     }
 
     let _guard = CopyingNurseryTestGuard::new(0);
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _set_guard = SetRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::set::test_clear_set_roots();
@@ -127,11 +134,11 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
 #[test]
 fn json_large_object_materialization_preserves_young_string_fields() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let mut json = String::from("{");
-    for i in 0..4096 {
+    for i in 0..OLD_BORN_FIELDS {
         if i != 0 {
             json.push(',');
         }
@@ -166,10 +173,10 @@ fn json_large_object_materialization_preserves_young_string_fields() {
 #[test]
 fn regex_global_result_array_preserves_young_match_strings() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
-    let source_bytes = "x".repeat(4096);
+    let source_bytes = "x".repeat(OLD_BORN_FIELDS as usize);
     let source =
         crate::string::js_string_from_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
     let pattern = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
@@ -214,7 +221,7 @@ fn plugin_and_promise_field_population_helpers_preserve_young_children() {
     let _plugin_registry_guard = crate::plugin::PLUGIN_REGISTRY_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let plugin_name = young_leaf();
@@ -263,7 +270,7 @@ fn plugin_and_promise_field_population_helpers_preserve_young_children() {
 #[test]
 fn thread_materialized_array_and_object_helpers_preserve_young_children() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
+    let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let array_child = young_leaf();

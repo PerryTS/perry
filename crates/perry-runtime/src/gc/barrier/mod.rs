@@ -558,19 +558,57 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                // Three per-slot costs hoisted out of this loop, which is the
+                // copying minor's hottest (750 k iterations per cycle on
+                // `gc-handoff/bench/retain.ts`):
+                //
+                // * `is_weak_target_trace_slot` asks a question about the
+                //   PARENT — only a `WeakRef` / weak-entry / finalization-record
+                //   object has weak slots at all. Deciding that once per
+                //   descriptor instead of once per slot is exact, because a
+                //   parent that is not one of those three classes answers
+                //   `false` for every slot it owns.
+                // * `old_page_account_dirty_slot` is a page-keyed counter
+                //   reached through a hash map. Slots here are contiguous and
+                //   ascending, so 512 consecutive slots share one page: batch
+                //   the increment and pay one map probe per page.
+                // * the value in slot `i` is about to be classified, which
+                //   reads its target's (cold) GC header — prefetch ahead.
+                let parent_has_weak_slots =
+                    crate::weakref::header_may_hold_weak_target_slots(header);
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
                     stats.dirty_slot_ranges_scanned += 1;
+                    let mut acct_page = usize::MAX;
+                    let mut acct_slots = 0usize;
                     for i in start..end {
                         let slot = range.slot(i);
-                        if crate::weakref::is_weak_target_trace_slot(header, slot) {
+                        if let Some(ahead) = (i + super::prefetch::PREFETCH_DISTANCE < end)
+                            .then(|| range.slot(i + super::prefetch::PREFETCH_DISTANCE))
+                        {
+                            super::prefetch::prefetch_boxed_child(*ahead);
+                        }
+                        if parent_has_weak_slots
+                            && crate::weakref::is_weak_target_trace_slot(header, slot)
+                        {
                             continue;
                         }
                         if let Some(layout_kind) = layout_kind {
                             record_layout_child_slot_read(layout_kind);
                         }
                         stats.dirty_slots_scanned += 1;
-                        crate::arena::old_page_account_dirty_slot(slot as usize);
+                        let page = crate::arena::generation_page_for_addr(slot as usize);
+                        if page != acct_page {
+                            if acct_slots != 0 {
+                                crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
+                            }
+                            acct_page = page;
+                            acct_slots = 0;
+                        }
+                        acct_slots += 1;
                         visit_slot(slot, stats);
+                    }
+                    if acct_slots != 0 {
+                        crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
                     }
                 }
             }
@@ -723,6 +761,7 @@ pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet, mino
     // its insertion barrier — a lost mark, i.e. a live object swept.
     let newly_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.get().is_null());
     if newly_active {
+        super::instruments::note_mark_barrier_armed();
         PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     }
     INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.set(valid_ptrs as *const ValidPointerSet));
@@ -735,6 +774,7 @@ pub(super) fn incremental_mark_barrier_disable() {
         was_active
     });
     if was_active {
+        super::instruments::note_mark_barrier_disarmed();
         let _ = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_update(
             Ordering::SeqCst,
             Ordering::SeqCst,
@@ -760,13 +800,23 @@ pub(super) fn incremental_mark_barrier_disable() {
 /// pointer. Non-zero is conservative and falls through to the thread-local
 /// read, which then finds its own null and returns.
 ///
+/// `Relaxed` is sufficient here. The counter publishes no accompanying data:
+/// it only decides whether to pay for a thread-local read and barrier call.
+/// Atomic coherence ensures that a thread which has incremented the counter
+/// before installing its own pointer cannot later observe a value preceding
+/// that increment; while its pointer remains installed, later counter values
+/// also remain non-zero because that thread has not removed its contribution.
+/// A zero observed by a thread with a null pointer merely skips a call that
+/// would have returned immediately. No acquire/release relationship with
+/// `ValidPointerSet` is required because that pointer is thread-local.
+///
 /// #7469: the point is to skip the *thread-local* read. On Darwin that read is
 /// an out-of-line `_tlv_get_addr` call on every heap-pointer store, and it was
 /// 91 of the 653 attributed `_tlv_get_addr` samples on `churn.ts` — all of them
 /// spent proving a null pointer was still null. This is a relaxed load of a
 /// static: `adrp` + `ldr` and a perfectly-predicted branch.
 #[inline(always)]
-fn incremental_mark_barrier_globally_idle() -> bool {
+pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
 }
 
@@ -801,6 +851,39 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
         return;
     }
     push_mark_seed(header);
+}
+
+/// Is an incremental mark cycle in progress **on this thread**, or is this
+/// thread currently birthing objects black?
+///
+/// #7888 uses this to refuse the untraced promotion path. An allocate-black
+/// birth puts `GC_FLAG_MARKED` on a NURSERY object, and a cycle that neither
+/// reads nor clears marks would carry that bit into old-gen, where a stale
+/// mark reads as "live" to the next full sweep. The untraced path makes no
+/// liveness claim, so it must not be running while anything else is making one
+/// through the mark bit.
+///
+/// ★ #7946: **this thread's**, not "anywhere". It used to read
+/// `!incremental_mark_barrier_globally_idle()` directly, which is the
+/// deliberately-conservative cross-thread approximation
+/// [`PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT`] exists to give the write
+/// barrier's fast path — where a false positive costs one call that returns.
+/// Here a false positive costs a *policy decision*, and it is unfounded:
+/// arenas are per-thread, `hot_birth_extra_flags` is per-thread, and only the
+/// thread holding the barrier's `valid_ptrs` pointer can shade anything, so
+/// another agent's cycle cannot put a mark on this thread's nursery. Single
+/// threaded the two are identical ([`incremental_mark_barrier_active`]
+/// short-circuits on the same global load); with `perry/thread` agents the old
+/// form let one agent's cycle disable another's promotion policy outright.
+///
+/// It was also a live test flake: under `cargo test` "anywhere" means "any of
+/// the other 2 200 tests", and
+/// `gc::tests::promote_in_place::an_untraced_promotion_indexes_the_objects_it_
+/// could_not_prove_live` failed 25 runs in 200 with `cycles=0, objects=0`
+/// because some unrelated thread happened to be marking.
+#[inline]
+pub(super) fn incremental_mark_in_progress_on_this_thread() -> bool {
+    incremental_mark_barrier_active() || gc_birth_extra_flags() != 0
 }
 
 #[inline]
@@ -917,6 +1000,23 @@ pub(super) fn incremental_mark_barrier_value(value_bits: u64) -> bool {
     incremental_mark_barrier_value_with_valid_ptrs(value_bits, valid_ptrs)
 }
 
+/// Weak-to-strong READ barrier (#7900): shade a value word that a weak slot is
+/// about to hand the mutator as a strong reference.
+///
+/// This is the same shade-and-seed the store barrier performs, exposed to
+/// `crate::weakref` because the *read* side of a weak edge is the one
+/// white-to-strong transition neither the store barrier nor allocate-black
+/// birth accounting can observe — and budgeted cycles keep opening mutator
+/// windows AFTER `FinalRootRemark`, i.e. after the last root observation that
+/// could otherwise have discovered the new reference. See
+/// `crate::weakref::read_barrier` for the full argument.
+///
+/// Returns `true` when a previously-white object was marked.
+#[inline]
+pub(crate) fn gc_weak_read_shade(value_bits: u64) -> bool {
+    incremental_mark_barrier_value(value_bits)
+}
+
 #[allow(dead_code)]
 pub(super) fn drain_incremental_mark_barrier_seeds(valid_ptrs: &ValidPointerSet) {
     loop {
@@ -949,12 +1049,7 @@ pub(super) fn generated_write_barriers_emitted() -> bool {
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
+    *CACHED.get_or_init(|| super::env_default_on_enabled("PERRY_WRITE_BARRIERS"))
 }
 
 #[inline]
@@ -1232,6 +1327,193 @@ pub(super) fn write_barrier_decoded_parent(
     }
 }
 
+/// Re-establish the old→young remembered-set invariant over a contiguous run
+/// of `count` slots belonging to the single old-gen parent `parent_addr`.
+///
+/// This is the array-growth barrier replay (`replay_array_growth_write_barriers`)
+/// and it is the one barrier caller that is a LOOP over one parent, so three
+/// things the per-store entry point must re-derive every call are loop
+/// invariants here:
+///
+/// * the incremental-shading decision (one static probe, hoisted into a
+///   separate pass so the common "no cycle anywhere" case pays nothing per
+///   slot),
+/// * `barrier_parent_addr_is_dereferenceable` + `barrier_parent_needs_remembering`,
+///   which is a page-map classification of the same address `count` times,
+/// * and — the big one — the remembered set is PAGE granular, so once a page
+///   has been dirtied the remaining ~511 slots on it can be skipped outright.
+///   The invariant they would each re-assert ("this slot's page is dirty") is
+///   already true.
+///
+/// Measured motivation: `gc-handoff/bench/retain.ts` grows one array to 3 M
+/// elements, so the geometric growth replays ~6 M barriers, and the replay was
+/// 2.6× the cost of the `memcpy` it follows (11% of the whole program in a
+/// symbolicated profile).
+///
+/// The skip costs trace-counter fidelity: `calls` / `child_not_young_skips` /
+/// `old_to_young_slow_hits` no longer count the slots this proves redundant.
+/// That is a diagnostic, not a semantic — the remembered set built is the same
+/// set of pages.
+pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, count: usize) {
+    if slots.is_null() || count == 0 {
+        return;
+    }
+    // SATB / insertion shading is never skippable while a cycle is live: a
+    // page already dirty says nothing about whether an in-progress mark has
+    // seen this value. Only the "no cycle anywhere" proof lets it be hoisted.
+    if !incremental_mark_barrier_globally_idle() {
+        for i in 0..count {
+            incremental_mark_barrier_value(unsafe { *slots.add(i) });
+        }
+    }
+    if !write_barriers_enabled() || !barrier_remembering_active() {
+        return;
+    }
+    if !barrier_parent_addr_is_dereferenceable(parent_addr) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
+        return;
+    }
+    if !barrier_parent_needs_remembering(parent_addr, false) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
+        return;
+    }
+    let mut dirtied_page = usize::MAX;
+    for i in 0..count {
+        let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
+        let page = crate::arena::generation_page_for_addr(slot_addr);
+        if page == dirtied_page {
+            continue;
+        }
+        let child = unsafe { *(slot_addr as *const u64) };
+        let child_addr = decode_heap_addr(child);
+        bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+        if child_addr == 0 {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
+            continue;
+        }
+        if !remembered_child_needs_tracking(child_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
+            continue;
+        }
+        bump_write_barrier_trace_counter(BarrierTraceCounter::OldToYoungSlowHits);
+        bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
+        // Only a slot that classifies Old is described by its own page; the
+        // fallback (`mark_dirty_parent_span`) covers the parent's whole span
+        // and gives no single page to latch, so it must not arm the skip.
+        if matches!(
+            crate::arena::classify_heap_generation(slot_addr),
+            crate::arena::HeapGeneration::Old
+        ) {
+            if mark_dirty_old_page(page) {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+            }
+            dirtied_page = page;
+        } else if remember_old_to_young_slot(parent_addr, slot_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+        }
+    }
+}
+
+/// Carry an old-gen object's dirty-page coverage across a verbatim relocation.
+///
+/// `js_array_grow` allocates a new backing store and `memcpy`s the old one into
+/// it at offset 0, then has to re-establish the remembered set at the new
+/// address. Re-deriving it from the slot VALUES is O(length) and dominated by a
+/// generation classification per element — 9.7% of `gc-handoff/bench/retain.ts`,
+/// 2.6× the `memcpy` it follows.
+///
+/// It does not have to be re-derived. The barrier's standing invariant is
+/// "an old parent's slot holding a young child is on a dirty page", and the copy
+/// preserves every value at its byte offset. So old byte offset `o` holds a
+/// young child ⟹ the old page covering `o` is dirty ⟹ marking the NEW page
+/// covering `o` dirty re-establishes the invariant for it. Walking the old
+/// object's pages instead of its slots is O(bytes / 4096) — 512× less work for
+/// a `u64` slot run — and it is the SAME invariant the minor collector already
+/// trusts every cycle, not a new assumption.
+///
+/// Returns `false` when it declines (an incremental cycle is live, so the
+/// values also owe SATB shading), and the caller must fall back to the full
+/// value-derived replay.
+pub(crate) fn relocate_copied_old_object_dirty_pages(
+    new_parent_addr: usize,
+    old_base: usize,
+    new_base: usize,
+    copied_bytes: usize,
+) -> bool {
+    if copied_bytes == 0 {
+        return true;
+    }
+    // Shading is about values an in-progress mark may not have seen; a page is
+    // not an answer to it. Hand those cycles back to the full replay.
+    if !incremental_mark_barrier_globally_idle() {
+        return false;
+    }
+    if !write_barriers_enabled() || !barrier_remembering_active() {
+        return true;
+    }
+    if !barrier_parent_addr_is_dereferenceable(new_parent_addr)
+        || !barrier_parent_needs_remembering(new_parent_addr, false)
+    {
+        return true;
+    }
+    if !growth_source_can_donate_dirty_pages(old_base) {
+        return false;
+    }
+    const PAGE_SIZE: usize = 1 << 12; // crate::arena::GENERATION_PAGE_SHIFT
+    let page_size = PAGE_SIZE;
+    let first = crate::arena::generation_page_for_addr(old_base);
+    let last = crate::arena::generation_page_for_addr(old_base + copied_bytes - 1);
+    for page in first..=last {
+        if !dirty_old_page_is_marked(page) {
+            continue;
+        }
+        // The byte window this page contributes, mapped to the new base.
+        let window_start = (page * page_size).max(old_base);
+        let window_end = ((page + 1) * page_size).min(old_base + copied_bytes);
+        if window_start >= window_end {
+            continue;
+        }
+        let new_start = new_base + (window_start - old_base);
+        let new_end = new_base + (window_end - old_base);
+        let new_first = crate::arena::generation_page_for_addr(new_start);
+        let new_last = crate::arena::generation_page_for_addr(new_end - 1);
+        for new_page in new_first..=new_last {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
+            if mark_dirty_old_page(new_page) {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+            }
+        }
+    }
+    true
+}
+
+/// Is `page` currently in the old-gen dirty set?
+#[inline]
+fn dirty_old_page_is_marked(page: usize) -> bool {
+    DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
+}
+
+/// ★ May the dirty-page coverage of the copy SOURCE be inherited by the copy?
+///
+/// Only if the source was itself an old-gen parent. The barrier does not dirty
+/// pages for a YOUNG parent — a young parent's children are found by the
+/// ordinary trace instead — so a young source's empty coverage is not evidence
+/// that it has no young children, it is evidence that nobody was recording.
+///
+/// Array growth crosses that line routinely: a nursery array whose new backing
+/// store is big enough to be born old-gen has nothing to inherit. Translating
+/// its empty set left every young child unremembered and the next minor swept
+/// live objects — `gc-handoff/apps/shapes.ts` printed 1277282 where node prints
+/// 1176000, deterministically, exit 0. A young source must re-derive from the
+/// slot values, which is self-correcting.
+#[inline]
+pub(super) fn growth_source_can_donate_dirty_pages(old_base: usize) -> bool {
+    matches!(
+        crate::arena::classify_heap_generation(old_base),
+        crate::arena::HeapGeneration::Old
+    )
+}
+
 /// Which stored children must an old parent's slot be remembered for?
 /// Minor GCs sweep BOTH the nursery and the malloc registry, and old
 /// parents are black leaves in minors — so an unremembered old→nursery OR
@@ -1444,7 +1726,7 @@ thread_local! {
     /// point (edge recorded-then-LOST by a clear/restore gap) or never recorded
     /// at all (a store path that skips the barrier) — the decisive split for the
     /// missing old→young edge bug. Empty/unused unless the verifier env is set.
-    static EVER_DIRTY_OLD_PAGES: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+    pub(super) static EVER_DIRTY_OLD_PAGES: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
@@ -1452,7 +1734,11 @@ fn ever_dirty_tracking_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        std::env::var_os("PERRY_GC_VERIFY_EVACUATION").is_some()
+        // #7991: value-parsed, not presence-parsed. This site read the same
+        // knob as `gc::gc_verify_evacuation_enabled()` but with the opposite
+        // convention, so `PERRY_GC_VERIFY_EVACUATION=0` switched the verifier
+        // off while leaving its side table being populated on every barrier.
+        super::env_flag_enabled("PERRY_GC_VERIFY_EVACUATION")
             || super::fromspace_scan::fromspace_scan_enabled()
     })
 }
@@ -1702,231 +1988,8 @@ pub(super) fn remembered_dirty_page_count() -> usize {
 /// by tests and `PERRY_GC_DIAG=1` output to confirm barrier
 /// activity. Returns 0 in Phase C1 since no codegen-emitted
 /// barrier has fired yet.
-pub fn remembered_set_size() -> usize {
-    remembered_dirty_page_count() + REMEMBERED_SET.with(|s| s.borrow().len())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct MaintenanceClearStep {
-    pub(super) done: bool,
-    pub(super) work_units: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RememberedSetClearSubphase {
-    DirtyOldPages,
-    ExternalDirtySlots,
-    FallbackHeaders,
-    Done,
-}
-
-pub(super) struct RememberedSetClearState {
-    subphase: RememberedSetClearSubphase,
-}
-
-impl RememberedSetClearState {
-    pub(super) fn new() -> Self {
-        Self {
-            subphase: RememberedSetClearSubphase::DirtyOldPages,
-        }
-    }
-
-    pub(super) fn step(&mut self, budget: usize) -> bool {
-        self.step_counted(budget).done
-    }
-
-    pub(super) fn step_counted(&mut self, budget: usize) -> MaintenanceClearStep {
-        let mut work_units = 0usize;
-        loop {
-            match self.subphase {
-                RememberedSetClearSubphase::DirtyOldPages => {
-                    if dirty_old_pages_empty() {
-                        self.subphase = RememberedSetClearSubphase::ExternalDirtySlots;
-                        continue;
-                    }
-                    if work_units == budget {
-                        break;
-                    }
-                    if clear_one_dirty_old_page() {
-                        work_units = work_units.saturating_add(1);
-                    }
-                }
-                RememberedSetClearSubphase::ExternalDirtySlots => {
-                    if external_dirty_slot_headers_empty() {
-                        self.subphase = RememberedSetClearSubphase::FallbackHeaders;
-                        continue;
-                    }
-                    if work_units == budget {
-                        break;
-                    }
-                    if clear_one_external_dirty_slot_header() {
-                        work_units = work_units.saturating_add(1);
-                    }
-                }
-                RememberedSetClearSubphase::FallbackHeaders => {
-                    if fallback_remembered_set_empty() {
-                        self.subphase = RememberedSetClearSubphase::Done;
-                        continue;
-                    }
-                    if work_units == budget {
-                        break;
-                    }
-                    if clear_one_fallback_remembered_header() {
-                        work_units = work_units.saturating_add(1);
-                    }
-                }
-                RememberedSetClearSubphase::Done => {
-                    return MaintenanceClearStep {
-                        done: true,
-                        work_units,
-                    };
-                }
-            }
-        }
-        MaintenanceClearStep {
-            done: self.subphase == RememberedSetClearSubphase::Done,
-            work_units,
-        }
-    }
-}
-
-fn dirty_old_pages_empty() -> bool {
-    DIRTY_OLD_PAGES.with(|s| s.borrow().is_empty())
-}
-
-/// The **sole** path that removes a page from `DIRTY_OLD_PAGES`. Every other
-/// touch of that set is an insert, a read, or the snapshot — which is why
-/// #7187 Phase B's cache needs exactly one invalidation point on this side.
-fn clear_one_dirty_old_page() -> bool {
-    DIRTY_OLD_PAGES.with(|s| {
-        let mut pages = s.borrow_mut();
-        let Some(page) = pages.iter().next().copied() else {
-            return false;
-        };
-        crate::arena::old_page_clear_dirty(page);
-        pages.remove(&page);
-        // DELIBERATELY redundant with `old_page_clear_dirty`, which invalidates
-        // too (#7187 Phase B rule 2). The cache's invariant has two halves and
-        // this line owns the modbuf one: an edit that stops the arena side from
-        // invalidating — or a page whose metadata entry no longer exists, so
-        // `old_page_clear_dirty` finds nothing to clear — must not silently
-        // leave the cache asserting a page this function just removed. The cost
-        // is one thread-local store on the cold clear path.
-        super::dirty_page_cache::invalidate();
-        true
-    })
-}
-
-fn external_dirty_slot_headers_empty() -> bool {
-    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().is_empty())
-}
-
-fn clear_one_external_dirty_slot_header() -> bool {
-    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
-        let mut pages = s.borrow_mut();
-        let Some(page) = pages.keys().next().copied() else {
-            return false;
-        };
-        let remove_page = match pages.get_mut(&page) {
-            Some(headers) => {
-                headers.pop();
-                headers.is_empty()
-            }
-            None => false,
-        };
-        if remove_page {
-            pages.remove(&page);
-        }
-        true
-    })
-}
-
-fn fallback_remembered_set_empty() -> bool {
-    REMEMBERED_SET.with(|s| s.borrow().is_empty())
-}
-
-fn clear_one_fallback_remembered_header() -> bool {
-    REMEMBERED_SET.with(|s| {
-        let mut headers = s.borrow_mut();
-        let Some(header) = headers.iter().next().copied() else {
-            return false;
-        };
-        headers.remove(&header);
-        true
-    })
-}
-
-pub(super) struct ConservativePinClearState {
-    done: bool,
-}
-
-impl ConservativePinClearState {
-    pub(super) fn new() -> Self {
-        Self { done: false }
-    }
-
-    pub(super) fn step_counted(&mut self, budget: usize) -> MaintenanceClearStep {
-        if self.done {
-            return MaintenanceClearStep {
-                done: true,
-                work_units: 0,
-            };
-        }
-
-        let mut work_units = 0usize;
-        while work_units < budget {
-            if clear_one_conservative_pin() {
-                work_units = work_units.saturating_add(1);
-            } else {
-                self.done = true;
-                break;
-            }
-        }
-
-        if !self.done && conservative_pins_empty() {
-            self.done = true;
-        }
-
-        MaintenanceClearStep {
-            done: self.done,
-            work_units,
-        }
-    }
-}
-
-fn conservative_pins_empty() -> bool {
-    CONS_PINNED.with(|s| s.borrow().is_empty())
-}
-
-fn clear_one_conservative_pin() -> bool {
-    CONS_PINNED.with(|s| {
-        let mut pinned = s.borrow_mut();
-        let Some(header) = pinned.iter().next().copied() else {
-            return false;
-        };
-        pinned.remove(&header);
-        true
-    })
-}
-
-/// Gen-GC Phase C: clear the remembered set. Will be called by
-/// minor GC after the rs-scan completes (Phase C3). Test-only
-/// for now to enable test isolation.
-pub fn remembered_set_clear() {
-    let mut state = RememberedSetClearState::new();
-    while !state.step(usize::MAX) {}
-}
-
-/// #7035: is `addr`'s old page currently in the remembered set?
-pub(super) fn dirty_now_for_addr(addr: usize) -> bool {
-    DIRTY_OLD_PAGES.with(|s| {
-        s.borrow()
-            .contains(&crate::arena::generation_page_for_addr(addr))
-    })
-}
-
-/// #7035: was `addr`'s old page EVER dirtied? Distinguishes "barrier never ran"
-/// from "edge was recorded then lost".
-pub(super) fn ever_dirty_for_addr(addr: usize) -> bool {
-    ever_dirty_old_page(crate::arena::generation_page_for_addr(addr))
-}
+// Remembered-set inspection and drain/maintenance helpers live in a sibling
+// module purely for the 2000-line file-size gate; same module tree, same
+// visibility semantics (the statics they read are pub(super)/pub(crate)).
+mod maintenance;
+pub use maintenance::*;

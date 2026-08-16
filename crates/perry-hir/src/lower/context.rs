@@ -70,6 +70,7 @@ impl LoweringContext {
         let tagged_template_site_salt = stable_module_salt(&module_identity);
         Self {
             next_local_id: 0,
+            local_source_spans: HashMap::new(),
             next_global_id: 0,
             next_func_id: 0,
             next_class_id: start_class_id, // Start from the provided ID to avoid collisions across modules
@@ -92,6 +93,7 @@ impl LoweringContext {
             pending_body_enums: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),
+            native_profile_type_aliases: HashMap::new(),
             immutable_locals: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
@@ -183,6 +185,7 @@ impl LoweringContext {
             nested_generator_forward_referenced: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),
             proxy_locals: HashSet::new(),
+            proxy_local_ids: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
             wasm_instance_locals: HashSet::new(),
             plain_object_locals: HashSet::new(),
@@ -793,6 +796,34 @@ impl LoweringContext {
         id
     }
 
+    /// Define a user-visible local and retain its source declaration span for
+    /// diagnostics and optimization reports.
+    pub(crate) fn define_local_spanned(
+        &mut self,
+        name: String,
+        ty: Type,
+        span: swc_common::Span,
+    ) -> LocalId {
+        let id = self.define_local(name, ty);
+        self.record_local_source_span(id, span);
+        id
+    }
+
+    /// Attach a declaration span to an already-created local. This covers
+    /// forward/hoisted registrations whose `LocalId` is allocated before the
+    /// declaration itself is lowered.
+    pub(crate) fn record_local_source_span(&mut self, id: LocalId, span: swc_common::Span) {
+        if span.lo.0 == 0 || span.hi.0 <= span.lo.0 {
+            return;
+        }
+        self.local_source_spans
+            .entry(id)
+            .or_insert(LocalSourceSpan {
+                start: span.lo.0,
+                end: span.hi.0,
+            });
+    }
+
     pub(crate) fn define_sloppy_implicit_global(&mut self, name: String) -> LocalId {
         if let Some((_, id, _)) = self
             .locals
@@ -825,6 +856,35 @@ impl LoweringContext {
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<LocalId> {
         self.locals.lookup(name)
+    }
+
+    /// Record that `id` holds a proxy. Called from the declarator lowering once
+    /// the binding has a resolved `LocalId` and its initializer has lowered to
+    /// `Expr::ProxyNew` (#7775).
+    pub(crate) fn register_proxy_local(&mut self, id: LocalId) {
+        self.proxy_local_ids.insert(id);
+    }
+
+    /// Is a bare `name` at THIS point in the lowering a proxy receiver?
+    ///
+    /// #7775: the answer is keyed on the resolved binding, not the spelling.
+    /// `proxy_locals` is a module-wide, scope-blind name set — a `new Proxy`
+    /// bound to `a` in one function made every other function's `a.prop` lower
+    /// to `js_proxy_get`, which answers `undefined` on a non-proxy. Whenever the
+    /// receiver resolves to a local we consult `proxy_local_ids` instead, so a
+    /// same-named non-proxy binding is simply a different binding.
+    ///
+    /// KNOWN HOLE, stated plainly: a receiver that resolves to NO local (a bare
+    /// global, or a module-level binding referenced from a function body lowered
+    /// before that binding was pre-registered) still falls back to the name set,
+    /// and is still scope-blind. That arm is kept because dropping it would
+    /// regress genuine proxies reached through those paths; it is strictly no
+    /// worse than the pre-#7775 behaviour, which used it for everything.
+    pub(crate) fn is_proxy_local(&self, name: &str) -> bool {
+        match self.lookup_local(name) {
+            Some(id) => self.proxy_local_ids.contains(&id),
+            None => self.proxy_locals.contains(name),
+        }
     }
 
     /// Like `lookup_local`, but only searches locals defined in the CURRENT
@@ -865,6 +925,41 @@ impl LoweringContext {
             .filter(|&&mark| mark <= pos)
             .count();
         Some(depth)
+    }
+
+    /// Does a `class <name>` declared in (or lexically enclosing) the body
+    /// being lowered SHADOW every same-named local binding currently visible?
+    ///
+    /// This is the JS nearest-binding rule for the three-way race between a
+    /// class declaration, an outer-scope local of the same name, and a
+    /// sibling-scope class whose name lingers in the inherited
+    /// `forward_class_names` set:
+    ///
+    ///   * a local declared in the CURRENT scope (a param/`var`/`let` next to
+    ///     the reference) always wins — the class cannot be nearer than that;
+    ///   * otherwise the binding at the GREATER scope depth wins, so a class
+    ///     declared inside a nested factory beats a module-scope `var` of the
+    ///     same name, while a module-scope class loses to a factory-local.
+    ///
+    /// Single source of truth for the ident-read arm (`arm_ident.rs`) and the
+    /// `new <Ident>` arm (`expr_new.rs`), which disagreed before #8040: the
+    /// read resolved to the class while `new` still rerouted through the outer
+    /// local's slot.
+    pub(crate) fn forward_class_shadows_local(&self, name: &str) -> bool {
+        if !self.forward_class_names.contains(name) {
+            return false;
+        }
+        if self.lookup_local_in_current_scope(name).is_some() {
+            return false;
+        }
+        match (
+            self.local_decl_scope_depth(name),
+            self.forward_class_decl_depth.get(name).copied(),
+        ) {
+            (None, _) => true,       // no local at all: the class wins
+            (Some(_), None) => true, // depth unknown: keep prior behavior
+            (Some(local_depth), Some(class_depth)) => class_depth > local_depth,
+        }
     }
 
     /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
@@ -1257,6 +1352,34 @@ impl LoweringContext {
             let (_, m, method) = &self.native_modules[idx];
             (m.as_str(), method.as_ref().map(|s| s.as_str()))
         })
+    }
+
+    pub(crate) fn register_native_profile_type_alias(
+        &mut self,
+        local_name: String,
+        imported_name: &str,
+    ) {
+        let canonical = match imported_name {
+            "u32" => "PerryU32",
+            "u64" => "PerryU64",
+            "usize" => "PerryUSize",
+            "i32" => "PerryI32",
+            "i64" => "PerryI64",
+            "f32" => "PerryF32",
+            "f64" => "PerryF64",
+            "pod" => "PerryPod",
+            "PodView" => "PerryPodView",
+            "NativeArena" => "NativeArena",
+            _ => return,
+        };
+        self.native_profile_type_aliases
+            .insert(local_name, canonical.to_string());
+    }
+
+    pub(crate) fn resolve_native_profile_type_alias(&self, name: &str) -> Option<&str> {
+        self.native_profile_type_aliases
+            .get(name)
+            .map(String::as_str)
     }
 
     /// #wall5: shadow a native-module name for the current scope IF it is a

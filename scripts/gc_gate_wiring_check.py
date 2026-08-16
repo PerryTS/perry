@@ -295,6 +295,76 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Self-test: the checker must be able to fail, too.
 # ---------------------------------------------------------------------------
+def check_schedule_group(text: str, wf_name: str) -> list[str]:
+    """A scheduled workflow's concurrency group must vary per RUN.
+
+    Hazard 3 in CLAUDE.md, third relapse (#7966). `cancel-in-progress: false`
+    does not protect a main-line run: GitHub allows at most one PENDING run per
+    concurrency group and cancels the previously pending one when a new run
+    enters, regardless of that setting. So a group expression that evaluates to
+    a CONSTANT for scheduled runs lets exactly one run — whichever grabbed the
+    group first — ever execute, and silently cancels every later one with
+    `jobs: 0`.
+
+    #7205 fixed this for the `push: branches: [main]` arm by keying the group on
+    `github.sha`, guarded by `github.event_name == 'push'`. #7856 then moved the
+    main-line arm of ten gates from `push` to `schedule`, and the guard stopped
+    matching: the expression fell through to `github.ref`, constant
+    `refs/heads/main`, and #7205 came straight back on the new arm. Measured
+    2026-08-12: all ten gates showed the identical signature — oldest run
+    `queued` holding the group, the next two `cancelled` with zero jobs, newest
+    `pending` — and `gate-freshness` itself, the alarm for exactly this, was
+    cancelled the same way.
+
+    `github.run_id` is unique per run and is the only context value that is
+    unconditionally distinct for scheduled runs, so that is what this requires.
+    A workflow that genuinely wants scheduled runs to coalesce has to say so by
+    failing this check and arguing the exemption in review.
+    """
+    if "schedule" not in workflow_triggers(text):
+        return []
+    conc = _block(text, "concurrency", 0)
+    if not conc:
+        return []
+    group = scalar(conc, "group", 2)
+    if not group:
+        return []
+    if "github.run_id" in group:
+        return []
+    return [
+        f"{wf_name}: has a `schedule:` trigger but its concurrency group does "
+        f"not contain `github.run_id`, so it is CONSTANT across scheduled runs. "
+        f"GitHub keeps at most one pending run per group and cancels the rest "
+        f"with zero jobs, so only one scheduled run can ever execute (#7205, "
+        f"relapsed as #7966). group: {group}"
+    ]
+
+
+def check_pipefail_early_exit_pipelines(text: str, wf_name: str) -> list[str]:
+    """Reject liveness checks whose successful match can fail via SIGPIPE.
+
+    `grep -q` intentionally closes its input after the first match. Under
+    `pipefail`, feeding a large captured log through `echo ... | grep -q`
+    therefore lets the upstream writer's SIGPIPE turn a successful liveness
+    match into a failed step. Use a here-string or let grep read a file.
+    """
+    problems: list[str] = []
+    for chunk in re.split(r"^      - ", text, flags=re.M)[1:]:
+        chunk = "        " + chunk
+        run = _block(chunk, "run", 8)
+        if not re.search(r"\bset\s+-[a-z]*e[a-z]*\s+pipefail\b", run):
+            continue
+        for line in run.splitlines():
+            stripped = line.strip()
+            if re.search(r"\becho\b[^|\n]*\|\s*grep\b[^\n]*\s-q(?:\s|$)", stripped):
+                problems.append(
+                    f"{wf_name}: `pipefail` liveness check can report a false "
+                    f"failure when `grep -q` closes early and `echo` receives "
+                    f"SIGPIPE: {stripped[:90]}. Use a here-string or a file."
+                )
+    return problems
+
+
 CLEAN = """\
 name: X
 on:
@@ -427,6 +497,85 @@ def _self_test() -> int:
     if not got or "not found" not in got[0]:
         failures.append(f"missing job: expected a not-found problem, got {got}")
 
+    # ---- hazard 3 relapse: constant concurrency group on a scheduled run ----
+    # (#7966) These exercise check_schedule_group, not check_gate, so they get
+    # their own harness. The sabotage case is first: a checker that cannot fail
+    # on the real shape is worth nothing, and CLEAN carries that exact shape.
+    def expect_group(name: str, text: str, want_problem: bool):
+        nonlocal cases
+        cases += 1
+        got = check_schedule_group(text, "fixture.yml")
+        if want_problem and not got:
+            failures.append(f"{name}: expected a constant-group problem, got none")
+        if not want_problem and got:
+            failures.append(f"{name}: expected clean, got {got}")
+
+    # CLEAN is `group: x-${{ github.ref }}` with a schedule trigger -- constant
+    # across scheduled runs, which is precisely the #7966 shape.
+    expect_group("constant ref group under schedule", CLEAN, True)
+
+    # The #7205 spelling that #7856 invalidated: guarded on `push`, so a
+    # scheduled run falls through to the constant ref.
+    expect_group(
+        "push-guarded sha group under schedule",
+        CLEAN.replace(
+            "  group: x-${{ github.ref }}",
+            "  group: x-${{ github.event_name == 'push' && github.sha || github.ref }}",
+        ),
+        True,
+    )
+
+    # The fix.
+    expect_group(
+        "run_id group under schedule",
+        CLEAN.replace(
+            "  group: x-${{ github.ref }}",
+            "  group: x-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        ),
+        False,
+    )
+
+    # No schedule trigger -> the hazard does not apply.
+    expect_group(
+        "constant group without a schedule trigger",
+        CLEAN.replace("  schedule:\n    - cron: '0 4 * * *'", "  push:\n    tags: ['v*']"),
+        False,
+    )
+
+    # No concurrency block at all -> nothing can supersede anything.
+    expect_group(
+        "schedule with no concurrency block",
+        CLEAN.replace(
+            "concurrency:\n  group: x-${{ github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            "",
+        ),
+        False,
+    )
+
+    # A positive match is not a failure. With a large `$out`, however,
+    # `grep -q` closes the pipe before echo finishes and `pipefail` reports
+    # echo's SIGPIPE. This is the exact llvm-inprocess unit-gate relapse.
+    cases += 1
+    broken_pipe = CLEAN.replace(
+        "        run: ./scripts/thing.sh",
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        "          echo \"$out\" | grep -q \"corpus_spike ... ok\"",
+    )
+    got = check_pipefail_early_exit_pipelines(broken_pipe, "fixture.yml")
+    if not got or "SIGPIPE" not in got[0]:
+        failures.append(f"pipefail grep-q SIGPIPE: expected a problem, got {got}")
+
+    cases += 1
+    fixed_pipe = broken_pipe.replace(
+        'echo "$out" | grep -q "corpus_spike ... ok"',
+        'grep -q "corpus_spike ... ok" <<<"$out"',
+    )
+    got = check_pipefail_early_exit_pipelines(fixed_pipe, "fixture.yml")
+    if got:
+        failures.append(f"pipefail here-string: expected clean, got {got}")
+
     if failures:
         for f in failures:
             print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
@@ -461,7 +610,18 @@ def main() -> int:
         if not path.exists():
             problems.append(f"{wf}: missing — a GC gate workflow was deleted")
             continue
-        problems.extend(check_gate(path.read_text(), job, wf))
+        problems.extend(check_gate(path.read_text(encoding="utf-8"), job, wf))
+
+    # The constant-group hazard is not specific to the GC gates -- it hits any
+    # scheduled workflow, and it took out `gate-freshness` (the alarm) too. So
+    # this arm sweeps every workflow file rather than just GATES.
+    wf_dir = REPO_ROOT / ".github" / "workflows"
+    scanned = 0
+    for path in sorted(wf_dir.glob("*.yml")):
+        scanned += 1
+        text = path.read_text(encoding="utf-8")
+        problems.extend(check_schedule_group(text, path.name))
+        problems.extend(check_pipefail_early_exit_pipelines(text, path.name))
 
     if problems:
         print("GC GATE WIRING: one or more gates cannot fail where it matters.\n", file=sys.stderr)
@@ -473,7 +633,11 @@ def main() -> int:
         )
         return 1
 
-    print(f"GC gate wiring OK ({len(GATES)} gates main-line-reachable and able to fail)")
+    print(
+        f"GC gate wiring OK ({len(GATES)} gates main-line-reachable and able to "
+        f"fail; {scanned} workflows checked for constant scheduled-run "
+        f"concurrency groups)"
+    )
     return 0
 
 

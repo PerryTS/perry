@@ -44,11 +44,13 @@ mod post_link;
 mod precompile_capture;
 mod reachability;
 mod update_config;
+mod windows_target;
 // pub(crate): commands/deps.rs (the `check --check-deps` dependency checker)
 // reuses the subpath-imports + tsconfig-paths resolvers for `#` specifiers.
 pub(crate) mod resolve;
 mod resources;
 mod sandbox_buildrs;
+mod shared_tokio;
 mod strip_dedup;
 mod targets;
 pub mod well_known;
@@ -115,6 +117,9 @@ use strip_dedup::{
 use targets::{
     apple_sdk_version, find_visionos_swift_runtime, find_watchos_swift_runtime,
     generate_embedded_js_object, generate_js_bundle,
+};
+use windows_target::{
+    is_native_windows_target, is_windows_target, windows_target_arch, WindowsTargetArch,
 };
 // Codegen-backend entrypoints (#5422) — only present when their backend feature
 // is compiled in. The matching `--target` routing below errors cleanly when a

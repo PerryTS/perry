@@ -31,6 +31,8 @@ behind every helper, and classifies each `static` it writes to:
 
   * `thread_local!`                 -> safe by construction
   * `per_test_global!`         -> per-thread in test builds, safe
+  * `RealmAtomicI64` / `RealmAtomicU64` -> immutable handle to a
+    `perry_thread_local!` backing slot, safe
   * a bare `static`                 -> HAZARD
 
 A hazard fails the build unless it is named in ALLOWLIST below with the issue
@@ -141,7 +143,7 @@ def clear_helpers(body: str) -> list:
 
 
 def rust_sources() -> dict:
-    return {p: p.read_text() for p in RUNTIME_SRC.rglob("*.rs")}
+    return {p: p.read_text(encoding="utf-8") for p in RUNTIME_SRC.rglob("*.rs")}
 
 
 def find_fn_body(sources: dict, name: str):
@@ -152,6 +154,68 @@ def find_fn_body(sources: dict, name: str):
         if match:
             return path, brace_body(text, match.end())
     return None, None
+
+
+def rust_module_path(path: Path) -> tuple[str, ...]:
+    """Best-effort Rust module path for a source file in the runtime tree."""
+    path = Path(path)
+    try:
+        relative = path.relative_to(RUNTIME_SRC)
+    except ValueError:
+        relative = path
+    parts = list(relative.parts)
+    if not parts:
+        return ()
+    if parts[-1] in ("lib.rs", "mod.rs"):
+        parts.pop()
+    elif parts[-1].endswith(".rs"):
+        parts[-1] = parts[-1][:-3]
+    return tuple(parts)
+
+
+def is_runtime_realm_atomic(sources: dict, path: Path, declared: str) -> bool:
+    """Whether `declared` resolves to a real runtime RealmAtomic wrapper.
+
+    Matching the final identifier alone would exempt a same-named local type
+    alias. Resolve the small set of Rust paths this source audit can prove and
+    require the target module to contain the wrapper's `struct` definition.
+    """
+    match = re.fullmatch(
+        r"(?:(crate|self|super(?:::\s*super)*)::\s*)?"
+        r"((?:[a-z_][a-z0-9_]*::\s*)*)"
+        r"(RealmAtomic(?:I64|U64))",
+        declared,
+    )
+    if not match:
+        return False
+
+    prefix, middle, type_name = match.groups()
+    current = list(rust_module_path(path))
+    if prefix == "crate":
+        target = []
+    elif prefix == "self":
+        target = current
+    elif prefix and prefix.startswith("super"):
+        target = current
+        for _ in prefix.split("::"):
+            if not target:
+                return False
+            target.pop()
+    elif middle:
+        # A relative multi-segment path may depend on a `use` alias that this
+        # source-only resolver cannot prove. Fail closed.
+        return False
+    else:
+        target = current
+
+    target.extend(part.strip() for part in middle.split("::") if part.strip())
+    definition_re = re.compile(
+        r"\b(?:pub(?:\([^)]*\))?\s+)?struct\s+" + re.escape(type_name) + r"\b"
+    )
+    return any(
+        rust_module_path(candidate) == tuple(target) and definition_re.search(text)
+        for candidate, text in sources.items()
+    )
 
 
 def declaration_kind(sources: dict, ident: str, prefer=None):
@@ -194,6 +258,13 @@ def declaration_kind(sources: dict, ident: str, prefer=None):
             # the fix. Same for the global allocator.
             if re.fullmatch(r"(std::sync::)?(Mutex|RwLock)\s*<\s*\(\s*\)\s*>", declared):
                 return "lock", path
+            # These wrappers hold no mutable process-global value: their only
+            # field is a `&'static HotKey<Atomic*>`, and every load/store goes
+            # through that `perry_thread_local!` backing slot. Treating the
+            # immutable handle as the data falsely reports a cross-test sink
+            # while ignoring the realm-local slot that actually owns it.
+            if is_runtime_realm_atomic(sources, path, declared):
+                return "thread_local", path
             if "#[global_allocator]" in text[max(0, found.start() - 80) : found.start()]:
                 return "allocator", path
             return "static", path
@@ -310,16 +381,20 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::demo::test_clear_bare();
     crate::demo::test_clear_tls();
     crate::demo::test_clear_paren();
+    crate::demo::test_clear_realm_atomic();
+    crate::demo::test_clear_qualified_realm_atomic();
 }
 """
 
 _FAKE_SRC = """
+struct RealmAtomicU64;
 per_test_global! {
     static PARTITIONED_TABLE: Mutex<u64> = Mutex::new(0);
 }
 per_test_global!(static PAREN_TABLE: Mutex<u64> = Mutex::new(0));
 static PURE_LOCK: Mutex<()> = Mutex::new(());
 static BARE_TABLE: Mutex<u64> = Mutex::new(0);
+static REALM_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&REALM_CACHE_SLOT);
 thread_local! {
     static TLS_TABLE: RefCell<u64> = RefCell::new(0);
 }
@@ -327,6 +402,20 @@ pub(crate) fn test_clear_partitioned() { *PARTITIONED_TABLE.lock().unwrap() = 0;
 pub(crate) fn test_clear_bare() { *BARE_TABLE.lock().unwrap() = 0; }
 pub(crate) fn test_clear_tls() { TLS_TABLE.with(|t| *t.borrow_mut() = 0); }
 pub(crate) fn test_clear_paren() { *PAREN_TABLE.lock().unwrap() = 0; let _g = PURE_LOCK.lock(); }
+pub(crate) fn test_clear_realm_atomic() { REALM_CACHE.with_slot(|slot| slot.store(0)); }
+"""
+
+_FAKE_CHILD_SRC = """
+static QUALIFIED_REALM_CACHE: super::RealmAtomicU64 =
+    super::RealmAtomicU64::new(&QUALIFIED_REALM_CACHE_SLOT);
+pub(crate) fn test_clear_qualified_realm_atomic() {
+    QUALIFIED_REALM_CACHE.with_slot(|slot| slot.store(0));
+}
+"""
+
+_FAKE_ALIAS_SRC = """
+type RealmAtomicU64 = FakeAtomic;
+static SHADOWED_REALM_CACHE: RealmAtomicU64 = FakeAtomic::new();
 """
 
 
@@ -334,7 +423,11 @@ def self_test() -> int:
     import io
 
     failures = []
-    fake = {Path("fake.rs"): _FAKE_SRC}
+    fake = {
+        Path("object/mod.rs"): _FAKE_SRC,
+        Path("object/child.rs"): _FAKE_CHILD_SRC,
+        Path("alias.rs"): _FAKE_ALIAS_SRC,
+    }
     sink = io.StringIO()
 
     # 1. A bare process-global static is a violation; the partitioned and
@@ -374,7 +467,25 @@ def self_test() -> int:
     if any("PURE_LOCK" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
         failures.append("a Mutex<()> serializer was reported as a hazard")
 
-    # 3d. THE FLOOR: a matcher that stops matching must not read as clean.
+    # 3d. RealmAtomic wrappers are immutable handles whose mutable value lives
+    # in a perry_thread_local! HotKey. The wrapper itself is not a shared sink.
+    kind, _ = declaration_kind(fake, "REALM_CACHE")
+    if kind != "thread_local":
+        failures.append("REALM_CACHE classified as %r, not 'thread_local'" % (kind,))
+    if any("REALM_CACHE" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
+        failures.append("a RealmAtomic thread-local proxy was reported as a hazard")
+
+    kind, _ = declaration_kind(fake, "QUALIFIED_REALM_CACHE")
+    if kind != "thread_local":
+        failures.append("qualified RealmAtomic proxy classified as %r, not 'thread_local'" % (kind,))
+
+    # A same-named alias is not proof that the value is backed by the runtime's
+    # perry_thread_local! HotKey. It must remain a process-global hazard.
+    kind, _ = declaration_kind(fake, "SHADOWED_REALM_CACHE")
+    if kind != "static":
+        failures.append("unrelated RealmAtomic alias classified as %r, not 'static'" % (kind,))
+
+    # 3e. THE FLOOR: a matcher that stops matching must not read as clean.
     floored = audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink, floor=99)
     if not any("below the floor" in v for v in floored):
         failures.append("the classified-statics floor did not fire: %r" % (floored,))
@@ -392,7 +503,7 @@ def self_test() -> int:
 
     # 5. The parsers must survive the REAL tree, or the gate is vacuous.
     try:
-        real_support = SUPPORT.read_text()
+        real_support = SUPPORT.read_text(encoding="utf-8")
         helpers = clear_helpers(reset_body(real_support))
         if len(helpers) < 10:
             failures.append("only %d clear helpers parsed from the real %s" % (len(helpers), SUPPORT.name))
@@ -405,12 +516,15 @@ def self_test() -> int:
         kind, _ = declaration_kind(sources, "ARGUMENTS_OBJECTS")
         if kind != "thread_local":
             failures.append("ARGUMENTS_OBJECTS classified as %r on the real tree" % (kind,))
+        kind, _ = declaration_kind(sources, "ITERATOR_PROTOTYPE_PTR")
+        if kind != "thread_local":
+            failures.append("qualified ITERATOR_PROTOTYPE_PTR classified as %r on the real tree" % (kind,))
     except Violation as exc:
         failures.append("parsing the real tree failed: %s" % exc)
 
     for failure in failures:
         print("SELF-TEST FAIL: %s" % failure, file=sys.stderr)
-    print("self-test: 15 checks, %d failures" % len(failures))
+    print("self-test: 20 checks, %d failures" % len(failures))
     return 1 if failures else 0
 
 
@@ -423,7 +537,12 @@ def main() -> int:
         return self_test()
 
     try:
-        violations = audit(rust_sources(), SUPPORT.read_text(), ALLOWLIST, floor=CLASSIFIED_FLOOR)
+        violations = audit(
+            rust_sources(),
+            SUPPORT.read_text(encoding="utf-8"),
+            ALLOWLIST,
+            floor=CLASSIFIED_FLOOR,
+        )
     except Violation as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 1

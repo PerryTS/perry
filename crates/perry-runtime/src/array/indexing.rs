@@ -2,7 +2,7 @@
 use super::header::{array_numeric_layout, NumericArrayLayout};
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
@@ -41,41 +41,21 @@ fn throw_array_not_extensible_add(index: u32) -> ! {
     ));
 }
 
-/// Lazily-memoized address of the `Array.prototype` array, and a sticky flag
-/// recording whether anyone has installed an indexed property on it. An
-/// out-of-bounds element read on an ordinary array must fall through to
-/// `Array.prototype[index]` (ECMA-262 OrdinaryGet → prototype chain), but in
-/// real code nobody adds numeric indices to `Array.prototype`, so the hot OOB
-/// path stays a single relaxed atomic load until the (rare) write flips the
-/// flag. `usize::MAX` marks the address as not-yet-computed.
-///
-/// ***THIS IS A RAW ADDRESS OF A MOVABLE OBJECT*** (#6981). `Array.prototype`
-/// relocates two different ways, and BOTH leave this cache pointing at a
-/// `GC_FLAG_FORWARDED` stub while every reader resolves its own receiver
-/// through `clean_arr_ptr` (which follows forwarding):
-///
-///   1. `js_array_grow` — an indexed write past the dense capacity
-///      (`Array.prototype[300] = v`) reallocates and forwards the old head;
-///   2. the copying young-gen minor — it evacuates the prototype and forwards.
-///
-/// A stale cache is not merely a wrong value: `array_oob_prototype_get`'s
-/// self-recursion guard is `proto != receiver`, and after a move those are two
-/// different addresses **for the same object**, so the guard stops firing and
-/// `js_array_get_f64` ⇄ `array_oob_prototype_get` recurse until the stack guard
-/// page (SIGSEGV, "excessive recursion"). Hence the two defences below:
-/// `array_prototype_addr` resolves the forwarding chain and self-heals, and
-/// `scan_prototype_addr_cache_roots_mut` lets the collector rewrite the slot so
-/// the address stays live even once the from-space stub is recycled.
-static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Sticky flag: someone installed an indexed property on `Array.prototype`.
+/// An out-of-bounds element read on an ordinary array must fall through to
+/// `Array.prototype[index]` (ECMA-262 OrdinaryGet -> prototype chain), but in
+/// real code nobody adds numeric indices there, so the hot OOB path stays a
+/// single relaxed atomic load until the (rare) write flips this. The address
+/// it is compared against lives in [`super::prototype_addr`], which also owns
+/// the GC hazard that address carries (#6981).
 static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
 /// Same idea for `Object.prototype`: a numeric index installed there
 /// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
-/// array HOLES and OOB reads (chain: arr → Array.prototype →
+/// array HOLES and OOB reads (chain: arr -> Array.prototype ->
 /// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Flipped by the object
 /// index-write/defineProperty hooks; consulted by the typed-feedback guards
 /// and the hole/OOB read fallbacks.
-static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
 /// Sticky summary of the process-wide conditions that invalidate codegen's
@@ -88,103 +68,6 @@ pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0);
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
-}
-
-/// GC root scanner for the two memoized prototype addresses (#6981).
-///
-/// `ARRAY_PROTO_ADDR` / `OBJECT_PROTO_ADDR` hold raw addresses of movable
-/// objects, so a relocating cycle must REWRITE them exactly like the other
-/// address-holding side tables (`CLASS_PROTOTYPE_OBJECTS`,
-/// `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain healing alone is not
-/// sufficient: once the from-space stub is swept and its block recycled the
-/// `GC_FLAG_FORWARDED` bit is gone, and the cache would then name an unrelated
-/// live object. Both intrinsics are reachable from `globalThis`, so the marking
-/// half of this visit is redundant; the rewriting half is the point.
-pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    for cache in [&ARRAY_PROTO_ADDR, &OBJECT_PROTO_ADDR] {
-        let cached = cache.load(Ordering::Relaxed);
-        if cached == usize::MAX || cached == 0 {
-            continue;
-        }
-        let mut addr = cached;
-        if visitor.visit_usize_slot(&mut addr) {
-            // GC_STORE_AUDIT(ROOT): this IS the collector's root-rewrite of a
-            // registered side-table slot, running inside a root scan with the
-            // mutator stopped. `visit_usize_slot` returns true only when it
-            // relocated the object, and the value written is the visitor's own
-            // to-space address — barriering it would push an edge into the
-            // remembered set that this very cycle is rebuilding.
-            cache.store(addr, Ordering::Relaxed);
-        }
-    }
-}
-
-/// Test-only handles on the two memoized prototype addresses, so the #6981
-/// regression tests can install a synthetic forwarded stub without touching the
-/// realm's real intrinsics.
-#[cfg(test)]
-pub(crate) fn test_array_proto_addr_cache() -> &'static AtomicUsize {
-    &ARRAY_PROTO_ADDR
-}
-
-#[cfg(test)]
-pub(crate) fn test_object_proto_addr_cache() -> &'static AtomicUsize {
-    &OBJECT_PROTO_ADDR
-}
-
-/// Re-read a memoized prototype address through the GC forwarding chain and
-/// write the healed address back, so every caller compares (and dereferences)
-/// the object's CURRENT location. See the `ARRAY_PROTO_ADDR` doc for why an
-/// unresolved cache is a hang, not just a wrong answer (#6981).
-///
-/// `note_array_index_write` calls this on every indexed array write until the
-/// prototype is polluted, so the not-forwarded case must stay call-free: the
-/// `try_read_gc_header` probe is `#[inline(always)]` and reduces to two range
-/// compares plus one load of a `gc_flags` byte at a fixed, permanently-hot
-/// address. It also classifies the address band before dereferencing, so the
-/// not-yet-resolved sentinel (`usize::MAX`) and any non-heap value fall
-/// straight through.
-#[inline]
-fn heal_prototype_addr(cache: &AtomicUsize, cached: usize) -> usize {
-    let forwarded = unsafe {
-        crate::value::addr_class::try_read_gc_header(cached)
-            .is_some_and(|header| header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
-    };
-    if !forwarded {
-        return cached;
-    }
-    let resolved = crate::value::resolve_forwarding(cached);
-    if resolved != cached {
-        cache.store(resolved, Ordering::Relaxed);
-    }
-    resolved
-}
-
-pub(crate) fn object_prototype_addr() -> usize {
-    let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
-    if cached != usize::MAX {
-        return heal_prototype_addr(&OBJECT_PROTO_ADDR, cached);
-    }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    let addr = if ctor_value.is_pointer() {
-        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-        if proto_value.is_pointer() {
-            proto_value.as_pointer::<u8>() as usize
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    // Cache only a successful resolution — an early call (before globalThis
-    // init) must retry later rather than pinning 0.
-    if addr != 0 {
-        OBJECT_PROTO_ADDR.store(addr, Ordering::Relaxed);
-    }
-    addr
 }
 
 /// Record (if `obj` is the canonical `Object.prototype`) that it now carries
@@ -201,12 +84,6 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
 
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-}
-
-/// `true` when `addr` is the canonical `Object.prototype` (cheap: cached
-/// atomic + compare; lazily computes the address on first use).
-pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
-    addr != 0 && addr == object_prototype_addr()
 }
 
 /// Sticky flag: user code replaced or deleted `Array.prototype[Symbol.iterator]`.
@@ -254,35 +131,6 @@ pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
 
 pub(crate) fn array_proto_iterator_modified() -> bool {
     ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
-}
-
-pub(crate) fn array_prototype_addr() -> usize {
-    let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
-    if cached != usize::MAX {
-        return heal_prototype_addr(&ARRAY_PROTO_ADDR, cached);
-    }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    let addr = if ctor_value.is_pointer() {
-        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-        if proto_value.is_pointer() {
-            proto_value.as_pointer::<u8>() as usize
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    // Don't poison the cache with 0: during runtime init the global `Array`
-    // constructor may not be materialized yet (symbol writes on other builtin
-    // prototypes call into here via `note_array_proto_iterator_write`).
-    // Re-derive until it resolves.
-    if addr != 0 {
-        ARRAY_PROTO_ADDR.store(addr, Ordering::Relaxed);
-    }
-    addr
 }
 
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an
@@ -523,6 +371,27 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
 }
 
 fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
+    // #7891: an erased Array declaration can feed this ABI a heap StringHeader.
+    // The receiver arrived unboxed and no longer carries STRING_TAG, so recover
+    // its runtime kind from the GC header before ordinary by-name lookup. A
+    // canonical index reads the UTF-16 code unit; `length`, `constructor`, OOB
+    // and non-index keys fall through to the established String property path.
+    // (SSO strings have no pointer/header and are separated by codegen.)
+    if !arr.is_null() && !key.is_null() {
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        {
+            if header.obj_type == crate::gc::GC_TYPE_STRING {
+                let key_value = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+                let indexed = crate::string::js_string_index_get(
+                    arr as *const crate::StringHeader,
+                    f64::from_bits(key_value.bits()),
+                );
+                if indexed.to_bits() != crate::value::TAG_UNDEFINED {
+                    return indexed;
+                }
+            }
+        }
+    }
     let value =
         crate::object::js_object_get_field_by_name(arr as *const crate::object::ObjectHeader, key);
     f64::from_bits(value.bits())
@@ -559,12 +428,16 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
             return (*arr).length as usize;
         }
     }
-    let raw = js_array_length(arr) as usize;
-    if arr.is_null() {
-        raw
-    } else {
-        raw.min((*arr).capacity as usize)
+    // A forwarding stub overwrites the old payload's `(length, capacity)`
+    // words with the target address. Resolve once, then read BOTH facts from
+    // the live header; mixing a resolved length with the stale from-space
+    // capacity can truncate an otherwise exact shape count.
+    let live = clean_arr_ptr(arr);
+    if live.is_null() {
+        return js_array_length(arr) as usize;
     }
+    let raw = js_array_length(live) as usize;
+    raw.min((*live).capacity as usize)
 }
 
 /// Read slot `index` of a dense internal keys/property array.
@@ -609,6 +482,8 @@ pub(crate) unsafe fn keys_array_slot(
     crate::array::js_array_get(keys, index)
 }
 
+#[cfg(test)]
+thread_local! {
 /// Times [`keys_array_slot`] could NOT serve a slot from the dense words and
 /// had to delegate. Asserted in both directions by
 /// `array::collection_tag_tests` — zero for the dense keys arrays the fast path
@@ -618,8 +493,6 @@ pub(crate) unsafe fn keys_array_slot(
 ///
 /// Per THREAD — `cargo test` runs every case on its own thread in one process,
 /// so a process-global counter would be moved by whatever else is running.
-#[cfg(test)]
-thread_local! {
     static KEYS_ARRAY_SLOT_FALLBACKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -836,6 +709,8 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 /// Get an element from an array by index (returns f64)
 #[no_mangle]
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+
     // Issue #179 Phase 5: lazy fast path — must run BEFORE
     // `clean_arr_ptr` because that helper force-materializes a lazy
     // pointer into a regular ArrayHeader. For the common read-only
@@ -849,17 +724,19 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // around so the cache persists across calls. Strip the NaN-box
     // tag manually and check obj_type without going through the
     // clean-and-validate helper.
-    unsafe {
+    let raw_ptr = {
         let bits = arr as u64;
         let top16 = bits >> 48;
-        let raw_ptr = if top16 >= 0x7FF8 {
+        if top16 >= 0x7FF8 {
             if top16 == 0x7FFC {
                 return f64::NAN;
             }
             (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader
         } else {
             arr
-        };
+        }
+    };
+    unsafe {
         if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -872,6 +749,55 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             }
         }
     }
+
+    // #7765: ONE `GcHeader` read gates both collection probes and, after the
+    // array-only funnel, supplies the descriptor flags which
+    // `array_object_flags` used to re-derive through a second `clean_arr_ptr`
+    // and a second header read. On `gc-handoff/apps/asyncpipe_big.ts` this call
+    // site was 76% of all `is_registered_set` samples and 82% of all
+    // `is_registered_map` ones — both registries are non-empty there, so the
+    // #7474 latch is armed and each probe really resolves a thread-local and
+    // hashes on every ordinary-array element read unless this tag gates it.
+    //
+    // The tag answers because every registered `Map`/`Set` IS its
+    // `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header, and it is
+    // ABA-proof: recycling the address into anything else rewrites the tag
+    // before the new pointer is handed out. That is exactly what an
+    // address-keyed negative memo could not offer (#7755).
+    //
+    // A header-less Buffer/TypedArray can expose allocator bookkeeping here,
+    // but a coincidental collection tag is harmless: the authoritative
+    // registry answers false, and those receivers are routed below.
+    //
+    // #8060: #8041 correctly made `clean_arr_ptr` reject every tracked
+    // non-array. Map/Set indexed reads are an intentional array-like dispatch,
+    // though, so classify them before that strict array-only funnel — matching
+    // `js_array_length`. The managed-header tag only selects which authority to
+    // ask; the registry remains the liveness/layout proof.
+    let receiver_tag = array_receiver_gc_tag(raw_ptr);
+    if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(raw_ptr as usize) {
+        let set = raw_ptr as *const crate::set::SetHeader;
+        unsafe {
+            let size = (*set).size;
+            if index >= size {
+                return TAG_UNDEFINED_F64;
+            }
+            let elements = (*set).elements as *const f64;
+            return std::ptr::read(elements.add(index as usize));
+        }
+    }
+    if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(raw_ptr as usize) {
+        let map = raw_ptr as *const crate::map::MapHeader;
+        unsafe {
+            let size = (*map).size;
+            if index >= size {
+                return TAG_UNDEFINED_F64;
+            }
+            let entries = (*map).entries as *const f64;
+            return std::ptr::read(entries.add(index as usize * 2));
+        }
+    }
+
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
         // #7574: `a[i]` on a `class X extends Array` instance held in a
@@ -896,55 +822,14 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
         return byte_val as f64;
     }
-    // #7765: ONE `GcHeader` read now gates both collection probes below and
-    // supplies the descriptor flags further down, which `array_object_flags`
-    // used to re-derive through a second `clean_arr_ptr` and a second header
-    // read. On `gc-handoff/apps/asyncpipe_big.ts` this call site was 76% of all
-    // `is_registered_set` samples and 82% of all `is_registered_map` ones —
-    // both registries are non-empty there, so the #7474 latch is correctly
-    // armed and each probe really was resolving a thread-local and hashing, on
-    // every element read of an ordinary array, to prove an array is not a Map.
-    //
-    // The tag answers because every registered `Map`/`Set` IS its
-    // `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header (one registration
-    // site each), and it is ABA-proof by construction: it lives INSIDE the
-    // candidate bytes, so recycling the address into anything else rewrites it
-    // before the new pointer is handed out. That is exactly what an
-    // address-keyed negative memo could not offer (#7755).
-    //
-    // Correct for a header-LESS receiver too. Buffers and typed arrays are
-    // `std::alloc`-backed, so their preceding bytes are allocator bookkeeping —
-    // but both are already routed above, and whichever way those bytes read the
-    // outcome is unchanged: a bookkeeping byte that happens to read as
-    // `GC_TYPE_SET`/`GC_TYPE_MAP` still falls through to the authoritative
-    // registry (which answers `false`), and any other value skips a probe that
-    // would have answered `false` anyway.
-    let receiver_tag = array_receiver_gc_tag(arr);
-    // Check if this is a Set — read from elements pointer (not inline)
-    if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(arr as usize) {
-        let set = arr as *const crate::set::SetHeader;
-        unsafe {
-            let size = (*set).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let elements = (*set).elements as *const f64;
-            return std::ptr::read(elements.add(index as usize));
-        }
-    }
-    // Check if this is a Map — return entries as [key, value] pairs
-    if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(arr as usize) {
-        let map = arr as *const crate::map::MapHeader;
-        unsafe {
-            let size = (*map).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let entries = (*map).entries as *const f64;
-            // Map entries: key at index*2, return key for simple iteration
-            return std::ptr::read(entries.add(index as usize * 2));
-        }
-    }
+    // The usual case cleans to the same address, so reuse the header tag read
+    // above. A forwarded Array resolves to a different address and needs its
+    // live head's descriptor flags.
+    let receiver_tag = if arr == raw_ptr {
+        receiver_tag
+    } else {
+        array_receiver_gc_tag(arr)
+    };
     // #6748 grind: per-array flag, not the process-global gate (see
     // `array_has_own_index`) — this probe allocated two Strings on EVERY
     // checked element read once any descriptor existed process-wide, which
@@ -964,7 +849,6 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // JS spec: out-of-bounds array access returns `undefined`, not NaN.
     // This matters for destructuring defaults (`const [a, b, c = 30] = [1, 2]`)
     // where the `?? fallback` must see TAG_UNDEFINED, not NaN.
-    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
         if index >= length {
@@ -1903,5 +1787,24 @@ mod keys_len_cap_tests {
             capacity,
             "cap must bound a bogus oversized length to the array's capacity"
         );
+    }
+}
+
+#[cfg(test)]
+mod claimed_array_string_receiver_tests {
+    use super::array_get_property_by_key;
+
+    #[test]
+    fn numeric_string_key_reads_a_heap_string_before_by_name_fallback() {
+        let receiver = crate::string::js_string_from_bytes(b"ss".as_ptr(), 2);
+        let zero = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+        let indexed = array_get_property_by_key(receiver.cast(), zero);
+        assert_eq!(
+            crate::builtins::jsvalue_string_content(indexed).as_deref(),
+            Some("s")
+        );
+
+        let length = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        assert_eq!(array_get_property_by_key(receiver.cast(), length), 2.0);
     }
 }

@@ -46,7 +46,12 @@ on:
 # only backstop for integration-suite regressions a scoped PR run can't see, so
 # it must always reach a conclusion.
 concurrency:
-  group: test-${{ github.event_name }}-${{ github.ref }}
+  # #7966: keyed per RUN for non-PR events. A group that is constant across
+  # scheduled runs lets only the first one execute -- GitHub keeps at most one
+  # PENDING run per group and cancels the rest with `jobs: 0`, regardless of
+  # `cancel-in-progress`. PR runs keep the shared per-ref group so superseded
+  # pushes still coalesce. Enforced by scripts/gc_gate_wiring_check.py.
+  group: test-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -111,6 +116,9 @@ jobs:
             benchmarks/honest_bench/harness/run_http_bench.sh \
             tests/test_benchmark_peer_fallback.sh
 
+      - name: Validate Windows LLVM runtime npm staging
+        run: ./tests/test_stage_npm_windows_llvm.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -151,6 +159,17 @@ jobs:
       - name: File size limit
         if: ${{ !cancelled() }}
         run: ./scripts/check_file_size.sh
+
+      # #7846: erased TypeScript annotations and initializer-refined local
+      # types are hints, not runtime proofs. Every codegen read must choose the
+      # whole-region write-invalidating accessor or carry an inventoried
+      # runtime/representation justification. Count-exact entries make both a
+      # new consumer and a stale exemption fail.
+      - name: Local binding type-proof audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/local_binding_type_audit.py --self-test
+          python3 scripts/local_binding_type_audit.py
 
       # Well-known binding provenance pins: every third-party binding in
       # well_known_bindings.toml must carry an [bindings.<name>.upstream]
@@ -202,6 +221,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/class_id_collisions.py
 
+      # #8047/#8067. `ObjectHeader.object_type`, `field_count` and `keys_array`
+      # are being retired in favour of the authoritative ShapeId descriptor.
+      # #8086 migrated the guards AND built this exact-callsite census to keep
+      # them retired -- then wired it into nothing, so it has never been able to
+      # fail a build. A gate that no job invokes is documentation.
+      #
+      # The census is exact rather than a grep count: it strips comments and
+      # string literals, classifies each site declaration-vs-access, and diffs
+      # the full multiset against a reviewed baseline, so it can tell an
+      # ObjectHeader read from another struct's identically-named field. It
+      # also asserts the authority surfaces directly (no guard may compare a
+      # keys pointer, no emitter may bake header offsets 0/12/16) and carries
+      # its own lexer self-test plus sabotage self-tests, which run
+      # unconditionally on every invocation.
+      - name: Object-header shape-descriptor census
+        if: ${{ !cancelled() }}
+        run: python3 scripts/shape_descriptor_census.py
+
       # #7645. The copying minor skips its eligibility preflight — the walk that
       # proves nothing reachable is pinned — whenever the young-pin latch is
       # clear. That is sound only while EVERY creation of GC_FLAG_PINNED goes
@@ -233,6 +270,90 @@ jobs:
         run: |
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
+
+      # #7877. A deleted GC knob left executable CI arms that still looked
+      # distinct but selected the same collector. Derive the accepted names
+      # from live runtime/codegen parsers; historical journals are path-exact
+      # exemptions and cannot license a current script or reference page.
+      - name: GC environment-knob drift audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_env_knobs.py --self-test
+          python3 scripts/check_gc_env_knobs.py
+
+      # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
+      # corpora and asserts they RAN — which proves the tests ran, not that they
+      # test today's IR. All three froze on 2026-08-03 and carried zero
+      # `addrspace(1)` while RS4GC made it the shape of every GC root, so the
+      # unit gate stayed green through three `main` failures of the end-to-end
+      # arm. This asserts every IR form the reader carries a dedicated branch
+      # for is present in the corpora: a form that disappears fails here, and
+      # the fix is either a refresh (scripts/refresh_llvm_inprocess_corpora.sh)
+      # or deleting the now-untested branch.
+      - name: llvm-inprocess corpus currency
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_llvm_corpus_currency.py --self-test
+          python3 scripts/check_llvm_corpus_currency.py
+
+      # #7877, second round. The knob audit above covers env-var names; it says
+      # nothing about the paths and numbers the same pages state. Both drifted:
+      # the memory-model source map pointed at a `gc.rs` deleted in the module
+      # split (with line numbers), and CLAUDE.md carried "~55 registered
+      # scanners" against a population of 123 in two places, of which only one
+      # got corrected by hand. Numbers on the current pages now carry `gc-fact`
+      # markers naming the constant they came from, and this re-derives them.
+      # Build-free, so it belongs in `lint`, which IS a required context.
+      - name: GC documentation claim audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_doc_claims.py --self-test
+          python3 scripts/check_gc_doc_claims.py
+
+      # #7977. The audits above ALSO run as `windows-build`'s first step, where
+      # a bare `read_text()` decodes cp1252 and dies on the 15 runtime sources
+      # carrying 0x81/0x8d/0x8f/0x90/0x9d. That took the whole Windows job down
+      # — including the only Windows run of the perry-runtime unit tests —
+      # before any of it executed. #7882 fixed three of the four readers; this
+      # is what stops the fourth miss from being found on Windows again.
+      #
+      # It runs HERE, on Linux, in a REQUIRED context, precisely because the
+      # defect is invisible on Linux at runtime: the scan is static, so the
+      # class is caught per-PR rather than only when a Windows runner gets to
+      # it. `--self-test` plants each shape, so the checker can say no.
+      - name: Windows-portable text I/O in the Windows-CI audits
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_locale_independent_io.py --self-test
+          python3 scripts/check_locale_independent_io.py
+
+      # #7970. `gc_evacuation_liveness_assert.py` is the liveness gate for every
+      # forced-evacuation arm, and it reads ONLY `[gc-copy-minor]` lines, which
+      # exist only under `PERRY_GC_DIAG=1`. When an arm forgot that flag the
+      # assert reported "the forced-evacuation arm evacuated NOTHING" — sending
+      # readers to debug a collector that was in fact evacuating 16277 objects
+      # per run. It now separates "the instrument was off" from "the subject was
+      # dead", and this proves it still can, in both directions. Hermetic and
+      # instant, so it belongs in `lint` (a REQUIRED context) rather than only
+      # in the GC gate it serves — which is itself still red.
+      - name: GC evacuation-liveness assert can say no
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
+
+      # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
+      # an oracle that cannot run a gap test drops it from the gate instead of
+      # failing it. #6367 made `.node-version` the single pin, and the pin has
+      # leaked twice since -- CLAUDE.md's prose drifted off the file (#7599), and
+      # npm-launcher.yml was created the same day as #6367 and kept that day's
+      # ambient "22.23.1" literal by omission. This re-derives every restatement
+      # from the file it quotes and requires every literal `node-version:` in a
+      # workflow to be a registered exemption with a reason. Build-free, so it
+      # belongs in `lint`, which IS a required context.
+      - name: Node version consistency
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_node_version_consistency.py --self-test
+          python3 scripts/check_node_version_consistency.py
 
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
@@ -328,6 +449,7 @@ jobs:
       - name: GC matrix liveness gate
         if: ${{ !cancelled() }}
         run: |
+          ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
 
@@ -421,7 +543,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Same tarball'd-disk-cache pattern as api-docs-drift (see the comment
       # there for why SCCACHE_GHA_ENABLED is off).
@@ -491,7 +613,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache sccache objects
         uses: actions/cache@v6
@@ -559,7 +681,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -670,7 +792,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -943,7 +1065,7 @@ jobs:
 
       - name: Install sccache
         if: steps.scope.outputs.suites != ''
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache sccache objects
         if: steps.scope.outputs.suites != ''
@@ -1065,6 +1187,28 @@ jobs:
           # (zizmor "artipacked", flagged by review on #6610).
           persist-credentials: false
 
+      - name: GC structural audits (Windows)
+        shell: bash
+        env:
+          # #7977 belt-and-braces. These scripts read Rust sources that contain
+          # bytes cp1252 has no mapping for; the ACTUAL fix is an explicit
+          # `encoding="utf-8"` at every call site, enforced on Linux by
+          # `scripts/check_locale_independent_io.py` in `lint`. This makes a
+          # future miss in a script that gate does not yet cover degrade to
+          # "works anyway" instead of taking the whole job — and with it the
+          # only Windows run of the perry-runtime unit tests — down at step one.
+          PYTHONUTF8: "1"
+        run: |
+          set -euo pipefail
+          python scripts/gc_runtime_root_holders.py --self-test
+          python scripts/gc_runtime_root_holders.py
+          python scripts/check_gc_doc_claims.py --self-test
+          python scripts/check_gc_doc_claims.py
+          python scripts/check_thread_locals.py --self-test
+          python scripts/check_thread_locals.py
+          python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22
@@ -1150,6 +1294,65 @@ jobs:
           grep -q 'test result: ok. 1 passed; 0 failed' test-output.log || {
             echo "::error::expected COFF dedup test did not run exactly once"
             exit 1
+          }
+
+  # Native Windows ARM64 coverage for #4482. The x64 Windows gate above cannot
+  # execute an ARM binary, so keep a focused native job that proves the
+  # compiler, runtime ABI, final linker, and advertised target all agree.
+  windows-arm64-build:
+    runs-on: windows-11-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Set up ARM64 MSVC environment
+        # The native ARM64 runner has the Windows SDK installed, but its
+        # PowerShell environment does not include the SDK's ARM64 library
+        # directories. Populate LIB / INCLUDE / PATH so the final PE link can
+        # resolve system import libraries such as user32.lib.
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build ARM64 compiler and static libraries (perry-dev)
+        run: cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+
+      - name: Run ARM64 setjmp ABI tests
+        run: 'cargo test --profile perry-dev --lib -p perry-runtime ffi::setjmp::tests:: -- --test-threads=1'
+
+      - name: Compile and run a Perry ARM64 executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Keep this a runtime-only smoke. The full runtime+stdlib COFF archive
+          # composition has its own gate; this job's contract is the ARM ABI,
+          # target selection, SDK discovery, final PE link, and execution.
+          New-Item -ItemType Directory -Force 'target/windows-arm64-smoke-libs' | Out-Null
+          Copy-Item 'target/perry-dev/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
+          $env:PERRY_RUNTIME_DIR = (Resolve-Path 'target/windows-arm64-smoke-libs').Path
+          target/perry-dev/perry.exe compile tests/release/link_smoke/fixture.ts `
+            --target windows-aarch64 `
+            --no-auto-optimize `
+            -o target/windows-arm64-smoke.exe
+          # In expression position PowerShell treats a relative path as a
+          # command name and does not search the working directory. Invoke the
+          # freshly linked binary explicitly so the ARM64 gate tests the
+          # artifact instead of failing in shell dispatch.
+          $smoke = (Resolve-Path 'target/windows-arm64-smoke.exe').Path
+          $output = & $smoke
+          if ($output.Trim() -ne 'ok') {
+            throw "unexpected ARM64 smoke output: '$output'"
           }
 
   # ---------------------------------------------------------------------------
@@ -1336,7 +1539,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -1513,7 +1716,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache sccache objects
         uses: actions/cache@v6
@@ -1670,7 +1873,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache sccache objects
         uses: actions/cache@v6
@@ -2279,10 +2482,10 @@ jobs:
       # of allocate-and-discard (would catch a future block-pinning /
       # cache-leak / tenuring-trap regression in the gen-GC work), and
       # (2) crashes when gc() is forced aggressively during JSON parse,
-      # deep recursion, or closure init. Each test runs under default,
-      # PERRY_GEN_GC=1, and PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1 so a
-      # regression in any GC mode is caught. Linux-only because /usr/bin/time
-      # availability + RSS reporting differs on Windows runners.
+      # deep recursion, or closure init. Each test runs under the default,
+      # full mark-sweep, explicit generational, and forced-evacuation verifier
+      # configurations. Linux/macOS only because /usr/bin/time availability +
+      # RSS reporting differs on Windows runners.
       - name: Memory stability tests
         if: runner.os == 'Linux' || runner.os == 'macOS'
         env:

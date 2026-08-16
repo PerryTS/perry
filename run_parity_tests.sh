@@ -40,13 +40,17 @@ fi
 mkdir -p "$TEMP_ROOT"
 
 PYTHON_CMD=""
-if command -v python3 &>/dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &>/dev/null; then
-    # GitHub's Windows image exposes the setup-python shim as `python` on
-    # some revisions and `python3` on others.
-    PYTHON_CMD="python"
-fi
+# `command -v` alone is insufficient on Windows: the Microsoft Store app-
+# execution alias can expose a `python3.exe` that only prints an installation
+# prompt and exits nonzero. Probe the interpreter before selecting it.
+for candidate in python3 python; do
+    if command -v "$candidate" &>/dev/null \
+        && "$candidate" -c 'import sys; raise SystemExit(sys.version_info.major != 3)' \
+            &>/dev/null; then
+        PYTHON_CMD="$candidate"
+        break
+    fi
+done
 if [[ -z "$PYTHON_CMD" ]]; then
     echo "Python 3 is required by the parity output normalizer" >&2
     exit 1
@@ -532,7 +536,7 @@ for raw in sys.stdin:
 }
 
 normalize_failure_output() {
-    printf '%s' "$1" | python3 -c '
+    printf '%s' "$1" | "$PYTHON_CMD" -c '
 import re
 import sys
 
@@ -627,28 +631,38 @@ else
 fi
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
+# #7629 — every tokio-using `perry-ext-*` wrapper this run will link from the
+# prebuilt set, by staticlib stem. Two jobs:
+#   1. they must be in the SAME `cargo build` as perry-stdlib-static, or cargo
+#      resolves feature unification separately for each invocation and the
+#      wrapper bundles a different tokio compilation than the stdlib archive.
+#      Two tokios means two `tokio::runtime::context::CONTEXT` thread-locals;
+#      the wrapper reads the one perry-stdlib's runtime never entered and the
+#      test SIGABRTs with "there is no reactor running" (exit 134, CRASH not
+#      FAIL). Perry refuses such a link since #7629, so a split build now shows
+#      up as a compile error rather than six aborting binaries.
+#   2. under PERRY_SKIP_BUILD=1 nothing is built at all, so their presence in
+#      PERRY_RUNTIME_DIR is a precondition — checked below with the exact
+#      command instead of leaving the operator to decode a link error per test.
+# The `all` suite adds nothing here on purpose: its ext-routed tests take the
+# auto-optimize path per-test (see `test_routes_to_ext_wrapper`), which builds
+# its own coherent archives, so no prebuilt ext archive is required for it.
+REQUIRED_EXT_LIBS=()
 needs_wasm_host=0
-# The default `test-files/` corpus (the gap suite) under PERRY_NO_AUTO_OPTIMIZE
-# links the prebuilt `full` stdlib, which is NOT compiled with the
-# `external-*` pump features. Any test whose module routes through a
-# well-known ext wrapper (events / http / net / ws / zlib) then links against
-# a stdlib with no pump and fails — reported as an untriaged NEW gap failure
-# with no hint that the run mode caused it. Measured: 7 such false regressions
-# (test_gap_events_import_4995, 5x http/fetch, test_gap_net_connect_bound_value),
-# all of which pass with auto-optimize. node-suite already compensates below;
-# do the same here. There is no MODULE_FILTER for this suite, so build the
-# whole well-known set rather than switching on it.
-if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
-    BUILD_PACKAGES+=(-p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib)
-    BUILD_FEATURES+=(
-        perry-stdlib/external-events-construct
-        perry-stdlib/external-http-server-pump
-        perry-stdlib/external-http-client-pump
-        perry-stdlib/external-net-pump
-        perry-stdlib/external-ws-pump
-        perry-stdlib/external-zlib-pump
-    )
-fi
+# Modules the well-known flip routes to a `perry-ext-*` staticlib. A test that
+# imports one of these cannot be served by the prebuilt stdlib at all — see
+# `test_routes_to_ext_wrapper` below and the per-test override at the compile
+# site, which is where the gap suite's http/net/events failures came from.
+EXT_ROUTED_MODULES='http|https|http2|net|ws|zlib|events'
+
+# Does this test import a module the well-known flip routes to a `perry-ext-*`
+# wrapper? Matches both spellings (`node:http` and `http`), both quote styles,
+# and both `import … from` and `require(…)` — `test_gap_net_connect_bound_value`
+# reaches `net` only through `createRequire(import.meta.url)`, so an
+# `^import`-anchored match would miss it.
+test_routes_to_ext_wrapper() {
+    grep -qE "(from|import|require\()[[:space:]]*\(?[\"'](node:)?($EXT_ROUTED_MODULES)[\"']" "$1"
+}
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|http|http/*|https|https/*|http2|http2/*)
@@ -657,6 +671,7 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
             # HTTP fixtures can also emit net + ws well-known owners via the codegen
             # FFI registry, so build those wrappers too (#4373).
             BUILD_PACKAGES+=(-p perry-ext-http -p perry-ext-net -p perry-ext-ws)
+            REQUIRED_EXT_LIBS+=(perry_ext_http perry_ext_net perry_ext_ws)
             BUILD_FEATURES+=(perry-stdlib/external-http-server-pump perry-stdlib/external-http-client-pump)
             ;;
     esac
@@ -688,14 +703,22 @@ if [[ "$TEST_SUITE" == "node-suite" ]]; then
             ;;
     esac
 fi
-needs_ext_net=0
 if [[ "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|net|net/*)
             # node-suite/net commonly runs with PERRY_NO_AUTO_OPTIMIZE=1.
             # That path links prebuilt well-known archives, so build ext-net
-            # once up front instead of failing on unresolved js_net_* symbols.
-            needs_ext_net=1
+            # up front instead of failing on unresolved js_net_* symbols.
+            #
+            # #7629: this used to be its OWN `cargo build -p perry-ext-net`
+            # after the main one. A second invocation resolves tokio's feature
+            # unification over perry-ext-net's graph alone, so the archive it
+            # produced bundled a different tokio than libperry_stdlib.a — and
+            # `net.createServer().listen()` then aborted inside tokio's
+            # `TcpListener::bind` ("there is no reactor running"). Folding it
+            # into BUILD_PACKAGES is the whole fix: one invocation, one tokio.
+            BUILD_PACKAGES+=(-p perry-ext-net)
+            REQUIRED_EXT_LIBS+=(perry_ext_net)
             ;;
     esac
 fi
@@ -719,11 +742,39 @@ if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
         exit 1
     fi
 fi
-if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_ext_net" -eq 1 ]]; then
-    echo "Building net extension (release)..."
-    ext_net_jobs="${CARGO_BUILD_JOBS:-1}"
-    if ! cargo build --release --quiet -p perry-ext-net -j "$ext_net_jobs" 2>/dev/null; then
-        echo -e "${RED}Failed to build net extension library${NC}"
+# #7629 — PERRY_SKIP_BUILD=1 exports PERRY_NO_AUTO_OPTIMIZE=1 and then builds
+# NOTHING, so every wrapper archive the run needs must already be in
+# PERRY_RUNTIME_DIR *and* must have come from the same `cargo build` as the
+# stdlib archive beside it. Presence is what this can check cheaply; perry's
+# own link-time check (crates/perry/src/commands/compile/shared_tokio.rs)
+# compares the bundled tokio compilations and refuses an incoherent pair.
+#
+# Without this, a missing wrapper sent perry down `build_missing_prebuilt_ext_lib`,
+# which built it in a fresh one-crate invocation — the exact split that made six
+# gap tests SIGABRT on `main` for weeks while every CI shard stayed green
+# (the gap job runs on ubuntu and its archives come from one invocation).
+if [[ "$PERRY_SKIP_BUILD" == "1" && "${#REQUIRED_EXT_LIBS[@]}" -gt 0 ]]; then
+    missing_ext_libs=()
+    missing_ext_pkgs=()
+    for ext_stem in "${REQUIRED_EXT_LIBS[@]}"; do
+        if [[ "$HOST_PLATFORM" == "windows" ]]; then
+            ext_file="${ext_stem}.lib"
+        else
+            ext_file="lib${ext_stem}.a"
+        fi
+        if [[ ! -f "$PERRY_RUNTIME_DIR_SHELL/$ext_file" ]]; then
+            missing_ext_libs+=("$ext_file")
+            missing_ext_pkgs+=("-p" "${ext_stem//_/-}")
+        fi
+    done
+    if [[ "${#missing_ext_libs[@]}" -gt 0 ]]; then
+        echo -e "${RED}PERRY_SKIP_BUILD=1 but these ext archives are missing from $PERRY_RUNTIME_DIR_SHELL:${NC}" >&2
+        printf '  %s\n' "${missing_ext_libs[@]}" >&2
+        echo "Build them in ONE invocation with the runtime/stdlib archives — a separate" >&2
+        echo "per-crate build gives the wrapper its own tokio compilation and the tests" >&2
+        echo "abort with \"there is no reactor running\" (#7629):" >&2
+        echo "  cargo build --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
+        echo "Or re-run with PERRY_SKIP_BUILD=0 to have this script do it." >&2
         exit 1
     fi
 fi
@@ -851,6 +902,13 @@ import hashlib
 import json
 import os
 import sys
+
+# Native Windows Python translates stdout newlines to CRLF. Values from this
+# helper are consumed by Bash arithmetic and line-based resume logic, where the
+# retained `\r` corrupts counts such as `1` into `1\r`.
+if os.name == "nt":
+    sys.stdout.reconfigure(newline="\n")
+    sys.stderr.reconfigure(newline="\n")
 
 cmd = sys.argv[1]
 
@@ -1301,6 +1359,30 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     compile_env=""
     if [[ "$test_name" == test_parity_* || "$test_id" == node-suite/* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
+    fi
+    # #7629 — a test that routes a module to a `perry-ext-*` wrapper cannot be
+    # served by ONE prebuilt stdlib. The `external-*-pump` features are a
+    # property of that single archive while ext-archive selection is
+    # per-import, so a stdlib built with (say) `external-zlib-pump` references
+    # `js_ext_zlib_process_pending` unconditionally and fails to link every
+    # test that does not import `node:zlib`; a stdlib built without the pumps
+    # links, but the wrapper's queues are never drained. There is no subset
+    # that satisfies both, which is why the "build the ext packages too"
+    # compensation this script used to rely on never actually worked.
+    #
+    # Auto-optimize has no such problem: it enables a pump exactly when it is
+    # also routing that module. So let it handle these tests specifically,
+    # instead of forcing every wrapper archive onto every link
+    # (`PERRY_FORCE_WELL_KNOWN` does work, but it costs 2.2s -> 37.7s per
+    # compile — measured — which is 17x the whole point of PERRY_SKIP_BUILD).
+    # Scoped to the `all` suite: node-suite selects one module at a time, so its
+    # prebuilt stdlib and its ext archives DO agree and the per-module setup
+    # above is coherent. It is the mixed corpus that cannot be served.
+    if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&
+        test_routes_to_ext_wrapper "$parity_test_file"; then
+        # `-u` and not `PERRY_NO_AUTO_OPTIMIZE=`: perry tests the variable with
+        # `var_os(...).is_some()`, so an empty-but-set value still counts as on.
+        compile_env="-u PERRY_NO_AUTO_OPTIMIZE $compile_env"
     fi
     compile_flags=()
     if [[ -n "$BACKEND_FLAG" ]]; then

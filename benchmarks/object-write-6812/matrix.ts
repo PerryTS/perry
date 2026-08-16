@@ -219,6 +219,30 @@ function shapeFour(): CellResult {
   return { elapsed, writes: 60000000, sink: checksum(objects, ["x"]) };
 }
 
+function shapeEight(): CellResult {
+  const objects: any[] = [];
+  for (let i = 0; i < 2400; i++) {
+    const kind = i & 7;
+    if (kind === 0) objects.push({ x: i, a: 0 });
+    else if (kind === 1) objects.push({ x: i, b: 0 });
+    else if (kind === 2) objects.push({ x: i, c: 0 });
+    else if (kind === 3) objects.push({ x: i, d: 0 });
+    else if (kind === 4) objects.push({ x: i, e: 0 });
+    else if (kind === 5) objects.push({ x: i, f: 0 });
+    else if (kind === 6) objects.push({ x: i, g: 0 });
+    else objects.push({ x: i, h: 0 });
+  }
+  const t0 = Date.now();
+  for (let r = 0; r < 25000; r++) {
+    for (let i = 0; i < 2400; i++) {
+      const object: any = objects[i];
+      object.x = r + i;
+    }
+  }
+  const elapsed = Date.now() - t0;
+  return { elapsed, writes: 60000000, sink: checksum(objects, ["x"]) };
+}
+
 function shapeTransitionBeforeLoop(): CellResult {
   const objects: any[] = [];
   for (let i = 0; i < 2400; i++) {
@@ -503,6 +527,7 @@ else if (name === "rhs_call") result = rhsCall();
 else if (name === "shape_monomorphic") result = shapeMonomorphic();
 else if (name === "shape_two") result = shapeTwo();
 else if (name === "shape_four") result = shapeFour();
+else if (name === "shape_eight") result = shapeEight();
 else if (name === "shape_transition_before_loop") {
   result = shapeTransitionBeforeLoop();
 } else if (name === "fields_one") result = fieldsOne();

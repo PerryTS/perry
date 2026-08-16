@@ -456,6 +456,31 @@ fn decl_init_is_class_expr(decl: &ast::VarDeclarator) -> bool {
     }
 }
 
+/// #7775: does this declarator's initializer spell `new Proxy(...)`? Used by
+/// the module-level pre-registration pass, which runs before any declarator is
+/// lowered and so has no `Expr::ProxyNew` to match on. Mirrors
+/// `decl_init_is_class_expr`'s unwrapping of the TS casts a `new Proxy` init
+/// usually carries (`new Proxy(raw, {}) as any`).
+fn decl_init_is_proxy_new(decl: &ast::VarDeclarator) -> bool {
+    let mut e = match &decl.init {
+        Some(init) => init.as_ref(),
+        None => return false,
+    };
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = &p.expr,
+            ast::Expr::TsAs(a) => e = &a.expr,
+            ast::Expr::TsNonNull(n) => e = &n.expr,
+            ast::Expr::TsTypeAssertion(a) => e = &a.expr,
+            ast::Expr::TsConstAssertion(a) => e = &a.expr,
+            ast::Expr::New(new_expr) => {
+                return matches!(new_expr.callee.as_ref(), ast::Expr::Ident(i) if i.sym.as_ref() == "Proxy")
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Issue #668: superset of the `_seed_and_entry` wrapper that also accepts
 /// `is_external_module`. Callers in `crates/perry/src/commands/compile/`
 /// pass `true` when the source file lives under any `node_modules/` segment
@@ -484,6 +509,10 @@ pub fn lower_module_full(
     // same `__perry_cap_*` symbols.
     let mut ctx =
         LoweringContext::with_class_id_start_salted(source_file_path, name, start_class_id);
+    // Static imports are hoisted. Register `perry/native` type and value
+    // aliases before any pre-pass extracts annotations or lowers expressions,
+    // including when the declaration appears after its first source use.
+    module_decl::native_profile_import::pre_register_native_profile_imports(&mut ctx, ast_module);
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
@@ -627,6 +656,7 @@ pub fn lower_module_full(
                 && ctx.lookup_local(&func_name).is_none()
             {
                 let local_id = ctx.define_local(func_name.clone(), Type::Any);
+                ctx.record_local_source_span(local_id, fn_decl.ident.span);
                 ctx.function_valued_locals.insert(local_id);
                 module.init.push(Stmt::Let {
                     id: local_id,
@@ -724,7 +754,20 @@ pub fn lower_module_full(
                                     Some(("util" | "node:util", None))
                                 )
                         });
-                        ctx.define_local(name.clone(), ty);
+                        let pre_id = ctx.define_local(name.clone(), ty);
+                        // #7775: a module-level `const p = new Proxy(...)` is
+                        // pre-registered here, so a function body lowered
+                        // EARLIER already resolves `p` to this id. Since
+                        // `is_proxy_local` prefers the resolved binding over the
+                        // name set, the id has to be marked now or that forward
+                        // reference would silently lose the proxy fast path.
+                        // The pre-scan's `proxy_locals` membership is the gate,
+                        // so the `class Proxy {}` shadow rule (#6233) still
+                        // applies; the declarator's own lowering re-registers
+                        // the same id and is the authority for every later use.
+                        if ctx.proxy_locals.contains(&name) && decl_init_is_proxy_new(decl) {
+                            ctx.register_proxy_local(pre_id);
+                        }
                         ctx.pre_registered_module_vars.insert(name);
                         if var_decl.kind == ast::VarDeclKind::Var {
                             ctx.pre_registered_module_var_decls
@@ -1288,6 +1331,8 @@ pub fn lower_module_full(
             module.enums.push(en);
         }
     }
+
+    module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
 
     Ok((module, ctx.next_class_id))
 }

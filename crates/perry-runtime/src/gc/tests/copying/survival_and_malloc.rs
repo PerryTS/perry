@@ -127,7 +127,13 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
         "seeded unpinned live/dead old page should be selected for defrag"
     );
 
+    crate::arena::reset_old_page_meta_snapshot_calls_for_tests();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(
+        crate::arena::old_page_meta_snapshot_calls_for_tests(),
+        0,
+        "a copying minor cannot consume an old-page defrag selection"
+    );
     let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let promoted_header = unsafe { header_from_user_ptr(promoted as *const u8) };
     let promoted_total = unsafe { (*promoted_header).size as usize };
@@ -781,6 +787,45 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
         !crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr),
         "expando must not remain at the stale old address"
     );
+}
+
+#[test]
+fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
+    assert!(crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_REGEXP));
+
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let re = crate::regex::test_alloc_nursery_regexp_for_move("move/source", "gi");
+    let old_addr = re as usize;
+    assert!(crate::arena::pointer_in_nursery(old_addr));
+    assert!(crate::regex::test_regex_pointer_entry_exists(old_addr));
+    assert!(crate::regex::test_regex_source_entry_exists(old_addr));
+
+    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+        old_addr,
+        "tag",
+        crate::value::JSValue::int32(42).bits(),
+    );
+    js_shadow_slot_set(0, ptr_bits(old_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, 0, "rooted RegExp must survive the copied minor");
+    assert_ne!(new_addr, old_addr, "the RegExp must be evacuated");
+    assert!(crate::regex::regex_header_has_magic(new_addr as *const _));
+
+    assert!(crate::regex::test_regex_pointer_entry_exists(new_addr));
+    assert!(!crate::regex::test_regex_pointer_entry_exists(old_addr));
+    assert!(crate::regex::test_regex_source_entry_exists(new_addr));
+    assert!(!crate::regex::test_regex_source_entry_exists(old_addr));
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
+
+    let source = crate::regex::js_regexp_get_source(new_addr as *const _);
+    assert_eq!(crate::regex::string_as_str(source), r"move\/source");
+    let reloaded_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let flags = crate::regex::js_regexp_get_flags(reloaded_addr as *const _);
+    assert_eq!(crate::regex::string_as_str(flags), "gi");
 }
 
 // #6181: the promotion-handoff census switched from the unfiltered

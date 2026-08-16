@@ -159,6 +159,18 @@ pub fn module_has_ptr_shape_barrier(hir: &perry_hir::Module) -> bool {
     collectors::collect_module_dispatch_facts(hir).has_shape_barrier_sites()
 }
 
+/// #7170 R2 whole-program pre-pass: exported native function name -> fresh
+/// anonymous-record class returned by that function's final HIR.
+///
+/// Public only for the `perry` compile driver, which resolves these source
+/// facts through imports/re-exports before modules are code-generated in
+/// parallel. Consumers should treat absence as "no proof".
+pub fn module_exported_return_shapes(
+    hir: &perry_hir::Module,
+) -> std::collections::HashMap<String, String> {
+    collectors::collect_exported_return_shapes(hir)
+}
+
 /// #7152 template-change canary: what the `Ptr<Shape>` report suppresses in
 /// `hir` as Perry's own `cjs_wrap` scaffolding.
 ///

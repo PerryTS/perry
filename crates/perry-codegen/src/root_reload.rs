@@ -182,22 +182,40 @@ const NON_COLLECTING: &[&str] = &[
     // layout / barrier bookkeeping
     "js_gc_init_typed_shape_layout",
     "js_gc_declare_typed_shape_layout",
-    "js_gc_layout_note_slot",
+    "js_gc_forget_object_layout",
+    // The two real slot-layout note exports. `js_gc_layout_note_slot` used to
+    // stand here, and no such symbol has ever existed in the tree: the runtime
+    // spells them `js_gc_note_slot_layout` (`gc/layout.rs:814`) and
+    // `js_gc_note_slot_layout_aware` (`:833`), which is how
+    // `gc_call_effects.rs` and every test names them. The typo was
+    // safe-direction — an absent helper is treated as collecting, which costs
+    // a reload rather than losing one — but it meant EVERY emitted note forced
+    // a reload, including the one per guarded array element store
+    // (`expr/index_set_guarded.rs`), which is #5094's hot path.
+    "js_gc_note_slot_layout",
+    // `_aware` is `js_gc_note_slot_layout` plus an early return when neither
+    // the new nor the old bits are pointer-bearing, so it does strictly LESS
+    // than the entry point above. Same reasoning the checker already accepts
+    // for `declare` vs `init`.
+    "js_gc_note_slot_layout_aware",
     "js_write_barrier",
     "js_write_barrier_root_nanbox",
     "js_write_barrier_slot",
-    "js_runtime_write_barrier_slot",
     "js_gc_register_global_root",
-    // pure value predicates / bit twiddling
+    // pure value predicates / bit twiddling.
+    //
+    // `js_value_is_object`, `js_value_is_string` and `js_typeof_tag` used to sit
+    // here, and — like `js_gc_layout_note_slot` above them — none is a symbol
+    // this tree exports. Six such names had accumulated (the three here plus
+    // `js_runtime_write_barrier_slot`, `js_typed_feedback_shape_guard` and
+    // `js_typed_feedback_note`). They cost nothing on their own, because a name
+    // that matches no callee never fires; what they cost is camouflage — they
+    // made a REAL transposition indistinguishable from an aspirational entry.
+    // `every_non_collecting_entry_is_a_real_runtime_export` now rejects both.
     "js_is_truthy",
     "js_nanbox_get_pointer",
-    "js_value_is_object",
-    "js_value_is_string",
-    "js_typeof_tag",
     // inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
-    "js_typed_feedback_shape_guard",
-    "js_typed_feedback_note",
     // verified non-allocating bookkeeping stores/reads
     "js_closure_set_capture_bits",
     "js_closure_get_capture_bits",
@@ -375,8 +393,6 @@ pub(crate) fn apply_to_module(module: &mut crate::module::LlModule) -> usize {
 /// A value the pass can re-materialise: a load out of a collector-rewritten
 /// location, or anything derived from one by pure bit ops (#7664).
 struct Reloadable {
-    /// Where the defining instruction is, which is where its window starts.
-    pos: (usize, usize),
     /// The register it defines, without the `%`.
     reg: String,
     /// The location whose store invalidates the recipe, sigil included.
@@ -432,7 +448,6 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                 }
                 by_reg.insert(dst.clone(), values.len());
                 values.push(Reloadable {
-                    pos: (bi, ii),
                     reg: dst.clone(),
                     root_ptr: ptr.clone(),
                     recipe: vec![(bi, ii)],
@@ -503,7 +518,6 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                 }
                 by_reg.insert(dst.clone(), values.len());
                 values.push(Reloadable {
-                    pos: (bi, ii),
                     reg: dst.clone(),
                     root_ptr: root,
                     recipe,

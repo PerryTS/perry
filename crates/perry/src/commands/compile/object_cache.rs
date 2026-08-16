@@ -607,6 +607,13 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            // #7170 R2: these facts derive from producer HIR, not the
+            // consumer HIR hashed by this cache entry. Keep them in the
+            // ImportedClass record so proof + layout invalidate atomically.
+            buf.push_str(":return_shape_imports=");
+            let mut return_shape_imports = c.return_shape_imports.clone();
+            return_shape_imports.sort();
+            buf.push_str(&return_shape_imports.join(","));
             buf.push('|');
         }
         h.field("imported_classes", &buf);
@@ -910,6 +917,10 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
     h.field(
+        "env_ll_o0_max_fn_bytes",
+        env_var("PERRY_LL_O0_MAX_FN_BYTES").as_deref().unwrap_or(""),
+    );
+    h.field(
         "env_entry_symbol",
         env_var("PERRY_ENTRY_SYMBOL").as_deref().unwrap_or(""),
     );
@@ -920,6 +931,10 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_codegen_unit_size",
         env_var("PERRY_CODEGEN_UNIT_SIZE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_codegen_unit_bytes",
+        env_var("PERRY_CODEGEN_UNIT_BYTES").as_deref().unwrap_or(""),
     );
     h.field(
         "env_gc_moving_loop_polls",
@@ -1065,6 +1080,15 @@ fn compute_object_cache_key_with_env(
     // FEAT_JSCVT ToInt32 (`fjcvtzs` on apple-arm64): flipping it changes
     // every `toint32_wrap` emission site's IR, so it must key the cache.
     h.field("env_jscvt", env_var("PERRY_JSCVT").as_deref().unwrap_or(""));
+    // #8105 — number-by-construction locals: `=0`/`off`/`false` empties the
+    // fact, so every reassigned numeric accumulator returns to the
+    // BigInt-aware dynamic helper. Different IR, different .o bytes.
+    h.field(
+        "env_number_by_construction",
+        env_var("PERRY_NUMBER_BY_CONSTRUCTION")
+            .as_deref()
+            .unwrap_or(""),
+    );
 
     h.finish()
 }

@@ -310,6 +310,24 @@ fn the_native_stack_plant_survives_when_the_scan_is_pinned_on() {
     clear_old_reclaim_state();
 }
 
+/// The env value is an ARGUMENT here, not `std::env::set_var` (#7946).
+///
+/// These two cases are about a precedence RULE, and the rule is now a pure
+/// function (`resolve_conservative_stack_scan_mode`). Setting the variable for
+/// real made the assertion true for this test and made `=full` ambient for
+/// every other libtest thread — which is the configuration this very test
+/// records as having failed 134 of 1574 tests. Same idiom as
+/// `parse_promote_in_place`.
+fn decision_for(
+    env_mode: Option<ConservativeStackScanMode>,
+    pinned: Option<ConservativeStackScanMode>,
+) -> ConservativeStackScanDecision {
+    crate::gc::roots::conservative_stack_scan_decision_for(
+        crate::gc::roots::resolve_conservative_stack_scan_mode(env_mode, pinned),
+        /* shadow_frame_active = */ true,
+    )
+}
+
 #[test]
 fn conservative_scan_env_full_does_not_override_a_pinned_test_mode() {
     // `PERRY_CONSERVATIVE_STACK_SCAN=full` failed 134 of 1574 runtime tests
@@ -317,36 +335,36 @@ fn conservative_scan_env_full_does_not_override_a_pinned_test_mode() {
     // declared its roots precise still got the conservative scan and its
     // "this should have been collected" assertion broke. The env var may now
     // make the scan LESS aggressive than a test declared, never more.
-    let _env = EnvVarGuard::set("PERRY_CONSERVATIVE_STACK_SCAN", "full");
-    let previous = crate::gc::roots::set_conservative_stack_scan_override(None);
+    let env_full = Some(ConservativeStackScanMode::Full);
+
+    // `full` is what the raw string parses to — assert the wiring from the
+    // spelling, so this stays a test about the shipped escape hatch.
+    assert_eq!(
+        crate::gc::roots::conservative_stack_scan_mode_from_value(Some("full")),
+        ConservativeStackScanMode::Full
+    );
 
     // Unpinned: the ops escape hatch still works. This is the arm the
     // `gc_ratchet` sensitivity run depends on — production binaries have no
     // pinned override, so `=full` still forces the scan there.
     assert_eq!(
-        crate::gc::roots::conservative_stack_scan_decision(),
+        decision_for(env_full, None),
         ConservativeStackScanDecision::Scan,
         "with nothing pinned, =full must still force the scan"
     );
 
     // Pinned by a test isolation guard: the declared mode wins.
-    crate::gc::roots::set_conservative_stack_scan_override(Some(ConservativeStackScanMode::Auto));
     assert_eq!(
-        crate::gc::roots::conservative_stack_scan_decision(),
+        decision_for(env_full, Some(ConservativeStackScanMode::Auto)),
         ConservativeStackScanDecision::SkipDisabled,
         "a pinned Auto must beat an ambient =full"
     );
 
-    crate::gc::roots::set_conservative_stack_scan_override(Some(
-        ConservativeStackScanMode::Disabled,
-    ));
     assert_eq!(
-        crate::gc::roots::conservative_stack_scan_decision(),
+        decision_for(env_full, Some(ConservativeStackScanMode::Disabled)),
         ConservativeStackScanDecision::SkipDisabled,
         "a pinned Disabled must beat an ambient =full"
     );
-
-    crate::gc::roots::set_conservative_stack_scan_override(previous);
 }
 
 #[test]
@@ -355,17 +373,18 @@ fn conservative_scan_env_off_still_beats_a_forced_scan() {
     // bisection escape hatch, and it must keep winning over
     // `ManualGcScanGuard::force_full_scan()` (which pins `Full`). Narrowing
     // the #7148 rule to "env asking for Full" is what preserves this.
-    let _env = EnvVarGuard::set("PERRY_CONSERVATIVE_STACK_SCAN", "0");
-    let previous = crate::gc::roots::set_conservative_stack_scan_override(None);
-
-    crate::gc::roots::set_conservative_stack_scan_override(Some(ConservativeStackScanMode::Full));
     assert_eq!(
-        crate::gc::roots::conservative_stack_scan_decision(),
+        crate::gc::roots::conservative_stack_scan_mode_from_value(Some("0")),
+        ConservativeStackScanMode::Disabled
+    );
+    assert_eq!(
+        decision_for(
+            Some(ConservativeStackScanMode::Disabled),
+            Some(ConservativeStackScanMode::Full)
+        ),
         ConservativeStackScanDecision::SkipDisabled,
         "=0 must still disable the scan even when a guard pinned Full"
     );
-
-    crate::gc::roots::set_conservative_stack_scan_override(previous);
 }
 
 #[test]

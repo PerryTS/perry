@@ -3,10 +3,28 @@ name: zizmor
 on:
   push:
     branches: [main]
+    # #7966: the push arm was UNFILTERED while the PR arm was already scoped to
+    # `.github/**`, so every merge queued a zizmor run whose subject could not
+    # have changed. Measured 2026-08-12: 90 queued `push`/`main` zizmor runs,
+    # ~6% of a 1,529-deep queue that had ten `main` gates dark behind it. This
+    # is a static analyser over workflow files; a merge that touches no workflow
+    # file has nothing for it to say. The PR arm (unchanged) still scans every
+    # workflow edit before it can merge, and this arm still covers a direct
+    # admin push to `main`, which is the case the PR arm structurally misses.
+    paths: ['.github/**']
   pull_request:
     paths: ['.github/**']
 
 permissions: {}
+
+concurrency:
+  # This workflow had NO concurrency block, so superseded PR pushes never
+  # coalesced and every push to a busy branch added a run that nothing would
+  # ever read. Per-ref for PRs (supersede), per-RUN for `main` pushes -- a
+  # constant group would let only the first main-line run execute and cancel the
+  # rest with `jobs: 0` (#7205/#7966). Enforced by scripts/gc_gate_wiring_check.py.
+  group: zizmor-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   zizmor:

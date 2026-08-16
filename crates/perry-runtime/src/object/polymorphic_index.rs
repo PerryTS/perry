@@ -139,6 +139,28 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         // *registered* class-id takes the class-ref arm.
         match (obj_handle as u64) >> 48 {
             0x7FFD | 0x7FFF => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
+            // SHORT_STRING_TAG (0x7FF9): an SSO string IS a string receiver,
+            // it just carries its characters inline instead of a heap address
+            // (#6887/#8117). The question this match asks is "does the low 48
+            // hold a heap pointer?", and answering `undefined` for everything
+            // that does not conflates "not a pointer" with "not indexable" —
+            // so `("ab" + "c")[0]` read `undefined` while the byte-identical
+            // heap string read `"a"`. Codegen hands this helper the receiver's
+            // RAW NaN-boxed bits whenever the tag is not POINTER_TAG (see the
+            // `select` in `index_get.rs`'s generic dispatcher), so the value is
+            // intact here and the string question can still be asked.
+            //
+            // Delegate to the boxed string entry point, which materializes the
+            // SSO payload onto the heap and lands in exactly the
+            // `js_string_index_get` the 0x7FFF arm reaches below via
+            // `GC_TYPE_STRING` — so both string representations share one copy
+            // of the CanonicalNumericIndexString key semantics.
+            0x7FF9 => {
+                return crate::string::js_string_index_get_boxed(
+                    f64::from_bits(obj_handle as u64),
+                    idx,
+                );
+            }
             0x7FFE => {
                 let class_id = (obj_handle as u64 & 0xFFFF_FFFF) as u32;
                 if class_id != 0 && crate::object::class_registry::is_class_id_registered(class_id)
@@ -170,6 +192,19 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
     {
         return value;
+    }
+    // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
+    // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own
+    // properties — node answers `undefined` for `dv[0]`. Asked ABOVE the byte
+    // arm, which answers unconditionally. An index store put an ordinary own
+    // property there (`js_object_set_index_polymorphic`), so read that first.
+    if crate::buffer::is_registered_buffer(raw as usize)
+        && crate::buffer::is_non_indexed_buffer_view(raw as usize)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(idx) {
+            return crate::buffer::buffer_get_own_prop(raw as usize, &key)
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
         let Some(index) = numeric_key_i32_index(idx) else {
@@ -316,6 +351,30 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     if raw < 0x1000 {
         return;
     }
+    // Ask the KEY-KIND question before either typed-array arm claims the
+    // receiver. A Symbol is definitionally not a CanonicalNumericIndexString,
+    // so ECMA-262 §10.4.5.5 requires OrdinarySet — the symbol side table, the
+    // same place `js_put_value_set` and `js_array_set_index_or_string` already
+    // put it. Without this, `typed_array_set_numeric_index` read the NaN-boxed
+    // symbol pointer as a non-finite f64, classified it "canonical-invalid
+    // index", and returned "handled" — so `u8[sym] = v` was dropped silently:
+    // the store never landed, `u8[sym]` read back `undefined`, and
+    // `Object.getOwnPropertySymbols(u8)` stayed empty while the same code on a
+    // plain object, a plain array and a Buffer all worked.
+    //
+    // The visible consequence was `@@isConcatSpreadable`: `concat` honours the
+    // opt-in correctly (`Object.defineProperty` proves it), but the assignment
+    // form could never install the property, so a typed array could not opt in.
+    //
+    // Gated on the receiver so only the broken case changes: BOTH registries
+    // are consulted, because either arm alone would still claim the write.
+    if unsafe { crate::symbol::js_is_symbol(idx) } != 0
+        && (crate::typedarray::lookup_typed_array_kind(raw as usize).is_some()
+            || crate::typedarray_props::is_typed_array_owner(raw as usize))
+    {
+        unsafe { crate::symbol::js_object_set_symbol_property(boxed, idx, value) };
+        return;
+    }
     // #5525 fast path: a cached typed-array kind lookup + inline store, before
     // the thread-local `typed_array_set_numeric_index` registry dispatch
     // (`typed_array_owner_*` → `_tlv_get_addr`) that dominated the bcrypt
@@ -337,6 +396,19 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         }
     }
 
+    // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` creates an ordinary own property in node — `dv[0] = 7` leaves
+    // the byte at 0 and makes `Object.keys(dv)` report `"0"`. Asked ABOVE the
+    // byte-store arm for the same reason the read side is: that arm writes
+    // unconditionally.
+    if crate::buffer::is_registered_buffer(raw as usize)
+        && crate::buffer::is_non_indexed_buffer_view(raw as usize)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(idx) {
+            crate::buffer::buffer_set_own_prop(raw as usize, &key, value);
+            return;
+        }
+    }
     if crate::buffer::is_registered_buffer(raw as usize) {
         if let Some(index) = numeric_key_i32_index(idx) {
             crate::buffer::js_buffer_set(

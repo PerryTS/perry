@@ -137,7 +137,6 @@ fn relocating_minor_does_not_replay_an_async_loop_iteration() {
     // settings.
     const GC_ENV_OVERRIDES: &[&str] = &[
         "PERRY_GEN_GC",
-        "PERRY_GEN_GC_EVACUATE",
         "PERRY_GC_SCAVENGE",
         "PERRY_GC_SCAVENGE_NURSERY_MB",
         "PERRY_GC_MOVING_SAFEPOINT",

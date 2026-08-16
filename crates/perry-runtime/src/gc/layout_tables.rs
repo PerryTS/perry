@@ -82,6 +82,18 @@ impl PerObjectLayoutHint {
     }
 }
 
+impl Drop for PerObjectLayoutHint {
+    fn drop(&mut self) {
+        // The ownership bit and its teardown live in this ONE TLS value. The
+        // side-table keys may already have been destroyed (TLS destructor
+        // order is deliberately irrelevant); `nonempty` is the authority for
+        // whether this thread contributed to the process-global count.
+        if self.nonempty.get() {
+            per_object_layouts_global_disarm();
+        }
+    }
+}
+
 /// Bits in the per-object address filter (see [`layout_addr_filter_may_hold`]).
 /// 4096 bits is 512 B of thread-local storage, held INLINE in
 /// [`PerObjectLayoutHint`] so the flag and the filter share one hot slot. One
@@ -380,7 +392,95 @@ pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
 /// through the wrappers below.
 #[inline(always)]
 pub(in crate::gc) fn mark_per_object_layouts_nonempty() {
-    hot_per_object_layout_hint().nonempty.set(true);
+    let hint = hot_per_object_layout_hint();
+    if !hint.nonempty.replace(true) {
+        per_object_layouts_global_arm();
+    }
+}
+
+/// Process-global count of threads whose [`PER_OBJECT_LAYOUTS_NONEMPTY`] is
+/// armed, exported so **generated code** can test it with one load (#7834).
+///
+/// `layout_forget_object` is a runtime call on every inline-bump construction,
+/// and on a monomorphic workload every one of those calls returns immediately
+/// having proved emptiness. The proof itself is thread-local, so codegen could
+/// not read it: a `_tlv_get_addr` from generated code costs more than the call
+/// it would replace. This count is the same proof in a plain `static`, so the
+/// construction site becomes `load atomic i32` + a never-taken branch.
+///
+/// `0` is a proof that **no thread** holds a per-object layout record, and so
+/// that no recycled address can carry a stale one. A non-zero count is only a
+/// hint — the call it gates re-tests the thread-local flag and the address
+/// filter, exactly as it always did.
+///
+/// This exported count is the ONE authoritative state. Keeping a separate
+/// count and byte permits a disarm/re-arm interleaving to publish a false zero
+/// after the re-arm (#7873), regardless of memory ordering. The owning TLS
+/// value's destructor also removes its contribution when a worker exits with
+/// records still live.
+#[no_mangle]
+pub static PERRY_PER_OBJECT_LAYOUTS_ANY: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[inline(never)]
+fn per_object_layouts_global_arm() {
+    use std::sync::atomic::Ordering;
+    PERRY_PER_OBJECT_LAYOUTS_ANY
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+            count.checked_add(1)
+        })
+        .expect("per-object layout thread count overflow");
+}
+
+#[inline(never)]
+fn per_object_layouts_global_disarm() {
+    per_object_layouts_global_disarm_with_hook(&PERRY_PER_OBJECT_LAYOUTS_ANY, || {});
+}
+
+fn per_object_layouts_global_disarm_with_hook(
+    armed_threads: &std::sync::atomic::AtomicU32,
+    after_decrement: impl FnOnce(),
+) {
+    use std::sync::atomic::Ordering;
+    armed_threads
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+            count.checked_sub(1)
+        })
+        .expect("per-object layout thread count underflow");
+    // Test hook for #7873's former vulnerable window. There is no second
+    // publication after this point: a concurrent re-arm updates this same
+    // atomic, so it cannot be overwritten by a delayed zero store.
+    after_decrement();
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_per_object_layouts_global_disarm_with_hook(
+    armed_threads: &std::sync::atomic::AtomicU32,
+    after_decrement: impl FnOnce(),
+) {
+    per_object_layouts_global_disarm_with_hook(armed_threads, after_decrement);
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_per_object_layout_armed_threads() -> u32 {
+    PERRY_PER_OBJECT_LAYOUTS_ANY.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The generated-code entry point for [`layout_forget_object`] (#7834).
+///
+/// An inline-bump `new` site that baked its layout state into the header
+/// constant still has to clear whatever a previous tenant of the recycled
+/// address left in the per-object tables — that is the one part of
+/// `js_gc_declare_typed_shape_layout` which depends on the address rather than
+/// on the shape. Codegen emits this call behind a
+/// [`PERRY_PER_OBJECT_LAYOUTS_ANY`] test, so it runs only in the armed regime.
+#[no_mangle]
+pub extern "C" fn js_gc_forget_object_layout(obj: u64) {
+    let user_ptr = super::layout::strip_nanbox_user_ptr(obj);
+    if user_ptr == 0 {
+        return;
+    }
+    layout_forget_object(user_ptr);
 }
 
 /// Re-establish the flag after a removal emptied one map: clear it once the
@@ -396,7 +496,9 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
         return;
     }
     if hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty() {
-        hot_per_object_layout_hint().nonempty.set(false);
+        if hot_per_object_layout_hint().nonempty.replace(false) {
+            per_object_layouts_global_disarm();
+        }
         // Both maps are empty, so every bit is now stale. Clearing here is what
         // makes the filter's occupancy track LIVE entries rather than every
         // entry the program has ever created.
@@ -534,6 +636,16 @@ pub(in crate::gc) fn transfer_per_object_slot_mask(old_user: usize, new_user: us
 /// pre-#7510 path unchanged, and re-arms the flag on the way out.
 #[inline]
 pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
+    // #7834/#7873: the process-global atomic first, because reading it avoids
+    // resolving `hot_per_object_layout_hint()` — on Darwin a thread-local
+    // access is an out-of-line `_tlv_get_addr` call.
+    // `0` proves every thread's tables are empty, which is the steady state of
+    // every monomorphic workload, so the disarmed path now costs one load and
+    // one branch instead of a call. (Measured as 6% of `cycles`, whose
+    // pointer-bearing shape keeps the full runtime declare.)
+    if PERRY_PER_OBJECT_LAYOUTS_ANY.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        return;
+    }
     // ONE hot-slot resolution for both halves of the guard: the flag (cheap,
     // and false for the overwhelming majority of workloads) and then the
     // address filter (what rescues a workload with an immortal record).

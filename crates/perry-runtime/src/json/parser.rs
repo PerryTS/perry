@@ -56,30 +56,20 @@ pub(crate) struct ObjectShapeHint {
     pub(crate) field_count: u32,
 }
 
-/// The deepest `[`/`{` nesting `JSON.parse` will accept.
+/// The deepest `[`/`{` nesting handled by the recursive fast path.
 ///
-/// Both parsers that see the input recurse once per level — the `serde_json`
-/// validation pass and Perry's own value parser — so a deep enough document
-/// exhausts the stack and takes the whole process out with SIGSEGV, no
-/// diagnostic and no output, on input that is very often attacker-supplied
-/// (#7792). Measured on a default 8 MB main-thread stack the crash lands
-/// between 20,000 and 40,000 levels — but that is the most generous stack in
-/// the process, and it is the wrong one to size against. Perry parses JSON on
-/// `perry/thread` workers and tokio workers too, and a 2 MiB thread stack
-/// overflows well before 10,000 levels: a first attempt at this limit picked
-/// 10,000 off the main-thread measurement, and the unit test below promptly
-/// crashed the test harness at 9,999.
+/// Both the `serde_json` validation pass and Perry's direct value parser recurse
+/// once per container, so their cutoff is sized for Perry's smallest worker
+/// stack rather than the main thread's larger stack (#7792).
 ///
-/// So the limit is sized for the SMALLEST stack in the process, not the
-/// largest, and 1,000 is the same depth Python's parser has settled on. Real
-/// documents do not come close: JSON nested past a hundred levels is already
-/// unusual, and past a thousand is a machine talking to itself.
-///
-/// This is a deliberate parity gap. Node parses far deeper than this because
-/// V8's parser is iterative and does not consume stack per level; matching it
-/// means making this parser iterative too, which is the follow-up. Until then
-/// a catchable error beats a SIGSEGV on untrusted input.
-pub(crate) const MAX_NESTING_DEPTH: usize = 1_000;
+/// Deeper documents switch to the flat-tape parser and iterative materializer,
+/// so this is a native-stack safety threshold rather than an input limit.
+pub(crate) const MAX_RECURSIVE_NESTING_DEPTH: usize = 1_000;
+
+/// Heap-stack safety ceiling. This remains well above Node-parity cases such as
+/// #7817's 300,000-level document, while bounding the tape, pending-frame stack,
+/// and runtime-container amplification for unusually deep input.
+pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
 
 /// Does `bytes` nest deeper than `limit`?
 ///
@@ -431,6 +421,10 @@ impl<'a> DirectParser<'a> {
             shape.field_count,
             shape.keys_array,
         );
+        // #8098: parsed records are ordinary plain objects — no class, but an
+        // authoritative ShapeId and no per-object [[Set]] semantics — so mark
+        // them eligible for the object-write fast paths.
+        crate::object::mark_object_plain_ordinary(js_obj);
         // Initialize all fields to undefined so JSON with missing
         // fields returns `undefined` for absent properties (matches
         // spec: access to absent own property returns undefined).
@@ -660,12 +654,16 @@ impl<'a> DirectParser<'a> {
             let keys: [*const StringHeader; 0] = [];
             let keys_arr = self.parse_shape_keys_array_hot(&keys);
             let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, 0, keys_arr);
-            let fields_ptr =
-                (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
-            for i in 0..8 {
-                // GC_STORE_AUDIT(INIT): empty JSON object fields are initialized before parse publication.
-                std::ptr::write(fields_ptr.add(i), JSValue::undefined());
-            }
+            // #8098: see `parse_object_shaped`.
+            crate::object::mark_object_plain_ordinary(js_obj);
+            // NOTE: no hand-rolled slot fill here. The allocator has written
+            // `undefined` into every slot it allocated since #4717. The fill
+            // this replaces was a leftover from when that was the caller's job,
+            // and it wrote EIGHT slots — `js_object_alloc_class_inline_keys(0,
+            // 0, 0, …)` allocates `max(0, INLINE_SLOT_FLOOR)` = 2 of them (the
+            // floor dropped 4 -> 2 in #7928), so `JSON.parse("{}")` overwrote 48
+            // bytes past the object: the exact "heap buffer overflow into
+            // adjacent arena objects" `js_object_alloc_with_parent` warns about.
             parse_root_restore(saved_roots);
             return JSValue::object_ptr(js_obj as *mut u8);
         }
@@ -736,6 +734,8 @@ impl<'a> DirectParser<'a> {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };
         let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, field_count, keys_arr);
+        // #8098: see `parse_object_shaped`.
+        crate::object::mark_object_plain_ordinary(js_obj);
         let alloc_field_count =
             std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let fields_ptr =

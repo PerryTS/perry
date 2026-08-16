@@ -80,7 +80,7 @@
 //! established at that recycled address next.
 //!
 //! Both follow the crate's convention for invalidation counters (`AtomicU64`
-//! starting at 1, `PROP_PLAN_EPOCH` / `PERRY_IC_EPOCH`), not a per-thread
+//! starting at 1, such as `PROP_PLAN_EPOCH`), not a per-thread
 //! `Cell`: the class registry a generation bump answers to is process-wide.
 //!
 //! ## Verified length: the structural half of the invalidation matrix
@@ -147,26 +147,46 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-/// Bumped on every clear/invalidation. See the module docs.
-static ELEMENT_SHAPE_EPOCH: AtomicU64 = AtomicU64::new(1);
+// #7946: all three counters are `per_test_global!`, so a test build gives each
+// libtest thread its own instance and a product build gets the plain `static`
+// back, byte for byte.
+//
+// The records they validate (`ELEMENT_SHAPES`) are already thread-local, so a
+// process-wide generation was never *reachable* by a well-formed cross-thread
+// read — it only reached other tests. And it did: `CLASS_SHAPE_GENERATION` is
+// bumped by `invalidate_all_element_shapes()`, i.e. by ANY test anywhere in the
+// crate that writes a prototype method or swaps a `[[Prototype]]`
+// (`object::class_registry::prototype_methods`, `object::prototype_chain`).
+// None of those take `ELEMENT_SHAPE_TEST_LOCK`, and asking them to would be the
+// opt-in-defence the `per_test_global!` module docs exist to argue against.
+// The symptom was `js_array_element_shape_class` returning **0** for an array
+// this thread had just proven, 8 runs in 100 (`gc::tests::layout_trace::
+// element_shape`, both cases).
+per_test_global! {
+    /// Bumped on every clear/invalidation. See the module docs.
+    static ELEMENT_SHAPE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-/// Bumped only when a class stops being a reliable shape.
-static CLASS_SHAPE_GENERATION: AtomicU64 = AtomicU64::new(1);
+    /// Bumped only when a class stops being a reliable shape.
+    static CLASS_SHAPE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-/// Hands out a fresh identity to every proof that is *established*. Values
-/// are never reused, which is what makes address recycling safe: a record
-/// that survives at an address its array no longer owns cannot donate its
-/// identity to whatever is established there next, because establishing
-/// always takes a new number rather than reading the old one.
-static ELEMENT_SHAPE_PROOF_SEQ: AtomicU64 = AtomicU64::new(1);
+    /// Hands out a fresh identity to every proof that is *established*. Values
+    /// are never reused, which is what makes address recycling safe: a record
+    /// that survives at an address its array no longer owns cannot donate its
+    /// identity to whatever is established there next, because establishing
+    /// always takes a new number rather than reading the old one.
+    static ELEMENT_SHAPE_PROOF_SEQ: AtomicU64 = AtomicU64::new(1);
+}
 
-/// A shared serialization guard for the tests, which observe the two
-/// process-wide counters above. `ELEMENT_SHAPES` is thread-local, so each
-/// test thread gets its own table, but a concurrent test's clear or
-/// generation bump is visible in `ELEMENT_SHAPE_EPOCH` — order-dependent
-/// tests are exactly the failure #7490 spent a day untangling. Both test
-/// files take this lock, and it is deliberately poison-tolerant (#7492): a
-/// panicking test must not cascade into every other one.
+/// A shared serialization guard for the element-shape test files.
+///
+/// **Since #7946 this is belt-and-braces, not the defence.** The counters above
+/// are `per_test_global!` and `ELEMENT_SHAPES` was already thread-local, so a
+/// concurrent test cannot reach this test's state at all — which is the point,
+/// because the lock never covered the mutators that actually broke these tests
+/// (a prototype write anywhere in the crate). It is kept only so a case that
+/// spans several mutations still reads as ordered, and it is deliberately
+/// poison-tolerant (#7492): a panicking test must not cascade into every other
+/// one.
 #[cfg(test)]
 pub(crate) static ELEMENT_SHAPE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -212,12 +232,11 @@ pub(crate) fn invalidate_all_element_shapes() {
 /// The class id an element must have to keep the invariant, or `None` if the
 /// value cannot participate at all.
 ///
-/// Strict on purpose. `POINTER_TAG` alone is not enough: `RegExpHeader` is
-/// also tagged `GC_TYPE_OBJECT` (see the aliasing caution on `ObjectMeta`),
-/// and reading `class_id` off a non-`ObjectHeader` payload yields garbage
-/// that would then be *compared equal* across two unrelated arrays.
-/// Requiring `object_type == OBJECT_TYPE_REGULAR` and a nonzero class id
-/// keeps every accepted value a genuine shaped instance.
+/// Strict on purpose. `POINTER_TAG` alone is not enough: every native heap
+/// cell uses it, and reading `class_id` off a non-`ObjectHeader` payload yields
+/// garbage that could compare equal across unrelated arrays. Requiring the
+/// authoritative object kind/marker and a nonzero class id keeps every
+/// accepted value a genuine shaped instance.
 #[inline]
 pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
     if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
@@ -236,7 +255,7 @@ pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        if !crate::object::object_is_regular(obj) {
             return None;
         }
         let class_id = (*obj).class_id;

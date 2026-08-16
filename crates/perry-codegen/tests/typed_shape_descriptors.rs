@@ -128,6 +128,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -814,9 +815,31 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
         inbounds_ir.contains("call void @js_gc_note_slot_layout"),
         "pointer stores into statically numeric arrays must update slot layout"
     );
+    // #7715: the barrier still exists and is still reached from this arm, but
+    // it now sits in its own block behind a live test of the stored value (and
+    // then of the parent's generation) rather than inline in `idxset.inbounds`.
+    // So the assertion follows the EDGE: the in-bounds arm must branch into the
+    // gate, and the block the gate leads to must still hold the call. Asserting
+    // only that the call exists somewhere in the module would pass even if this
+    // arm stopped reaching it.
     assert!(
-        inbounds_ir.contains("call void @js_write_barrier_slot"),
-        "pointer stores into statically numeric arrays must emit slot barriers"
+        inbounds_ir.contains("label %idxset.inbounds.barrier.maybe."),
+        "the in-bounds arm no longer branches into the #7715 value gate, so a \
+         pointer store here reaches no barrier at all:\n{inbounds_ir}"
+    );
+    let gate_ir = block_between(
+        &ir,
+        "\nidxset.inbounds.barrier.maybe.",
+        "\nidxset.inbounds.barrier.done.",
+    );
+    assert!(
+        gate_ir.contains("call void @js_write_barrier_slot"),
+        "pointer stores into statically numeric arrays must emit slot barriers:\n{gate_ir}"
+    );
+    assert!(
+        gate_ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
+        "the gate between the store and the barrier is not the #7511 parent \
+         generation test:\n{gate_ir}"
     );
 }
 

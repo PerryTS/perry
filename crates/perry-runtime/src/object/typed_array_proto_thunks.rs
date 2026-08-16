@@ -184,7 +184,27 @@ unsafe fn ta_receiver_or_throw(method: &str) -> TypedArrayProtoReceiver {
     throw_not_typed_array(method)
 }
 
-pub(super) fn is_typed_array_buffer(addr: usize) -> bool {
+#[cfg(test)]
+thread_local! {
+/// Every entry into [`is_typed_array_buffer`], i.e. every caller that could not
+/// rule a Buffer receiver out more cheaply. Mirrors #8140's
+/// `TEST_TA_REGISTRY_PROBES` and exists for the same reason: the
+/// `arena_payload_has_gc_type` gate that lets an ordinary array skip this probe
+/// is asserted against it, so deleting the gate fails a test even though the
+/// ANSWER stays correct. A fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: `cargo test` runs each case on its own thread.
+    static TEST_BUFFER_GATE_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_buffer_gate_probe_count() -> u64 {
+    TEST_BUFFER_GATE_PROBES.with(|c| c.get())
+}
+
+pub(crate) fn is_typed_array_buffer(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_BUFFER_GATE_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     crate::buffer::is_registered_buffer(addr)
         && !crate::buffer::is_any_array_buffer(addr)
         && !crate::buffer::is_data_view(addr)
@@ -519,7 +539,7 @@ fn validate_comparator(args: &[f64]) -> *const crate::closure::ClosureHeader {
     }
 }
 
-pub(super) unsafe fn dispatch_uint8_buffer_method(
+pub(crate) unsafe fn dispatch_uint8_buffer_method(
     addr: usize,
     method: &str,
     args: &[f64],
@@ -621,9 +641,19 @@ pub(super) unsafe fn dispatch_uint8_buffer_method(
             }
             bool_value(false)
         }
-        "find" => {
+        // #8137: `findLast` had NO arm, so it fell through to the catch-all
+        // and threw `TypeError: (Buffer).findLast is not a function` — on the
+        // STATIC receiver too (`new Uint8Array([3,1,2]).findLast(x => x < 3)`,
+        // node: `2`). Its sibling `findLastIndex` was already served below,
+        // which is why the hole survived: the two are always cited together.
+        "find" | "findLast" => {
             let cb = validate_callback(args);
-            for i in 0..len {
+            let indexes: Box<dyn Iterator<Item = usize>> = if method == "find" {
+                Box::new(0..len)
+            } else {
+                Box::new((0..len).rev())
+            };
+            for i in indexes {
                 let value = uint8_get(addr, i) as f64;
                 let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) != 0 {

@@ -24,7 +24,76 @@ use super::ImportedClass;
 pub(crate) struct ModuleGlobals {
     pub module_globals: HashMap<u32, String>,
     pub module_global_types: HashMap<u32, perry_hir::types::Type>,
+    pub module_global_proven_types: HashMap<u32, perry_hir::types::Type>,
     pub static_field_globals: HashMap<(String, String), String>,
+}
+
+/// Runtime kinds established without consulting a TypeScript annotation.
+/// This deliberately covers only the module-global values the thread transfer
+/// check can safely permit; every unrecognized expression stays hazardous.
+fn module_global_runtime_type(
+    init: &perry_hir::Expr,
+    shared_array_buffer_is_intrinsic: bool,
+) -> Option<perry_hir::types::Type> {
+    use perry_hir::types::Type;
+    use perry_hir::Expr;
+    match init {
+        Expr::Undefined | Expr::Void(_) => Some(Type::Void),
+        Expr::Null => Some(Type::Null),
+        Expr::Bool(_) | Expr::Compare { .. } => Some(Type::Boolean),
+        Expr::Number(_) | Expr::Integer(_) => Some(Type::Number),
+        Expr::BigInt(_) => Some(Type::BigInt),
+        Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
+            Some(Type::String)
+        }
+        Expr::New { class_name, .. }
+            if class_name == "SharedArrayBuffer" && shared_array_buffer_is_intrinsic =>
+        {
+            Some(Type::Named(class_name.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn module_shadows_shared_array_buffer_intrinsic(
+    hir: &HirModule,
+    imported_classes: &[ImportedClass],
+    init_lets: &[&perry_hir::Stmt],
+) -> bool {
+    init_lets.iter().any(|stmt| {
+        matches!(
+            stmt,
+            perry_hir::Stmt::Let { name, .. } if name == "SharedArrayBuffer"
+        )
+    }) || hir
+        .globals
+        .iter()
+        .any(|global| global.name == "SharedArrayBuffer")
+        || hir
+            .functions
+            .iter()
+            .any(|function| function.name == "SharedArrayBuffer")
+        || hir
+            .classes
+            .iter()
+            .any(|class| class.name == "SharedArrayBuffer")
+        || hir
+            .enums
+            .iter()
+            .any(|enum_decl| enum_decl.name == "SharedArrayBuffer")
+        || hir.imports.iter().any(|import| {
+            !import.type_only
+                && import.specifiers.iter().any(|specifier| match specifier {
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local }
+                    | perry_hir::ImportSpecifier::Namespace { local } => {
+                        local == "SharedArrayBuffer"
+                    }
+                })
+        })
+        || imported_classes
+            .iter()
+            .any(|class| class.local_alias.as_deref().unwrap_or(&class.name) == "SharedArrayBuffer")
 }
 
 /// Emit module-level globals (with exported-var getters) and static-class-field
@@ -197,6 +266,7 @@ pub(crate) fn emit_module_globals(
     // so method calls in other functions fall through to the generic
     // dispatch instead of the class method registry.
     let mut module_global_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
+    let mut module_global_proven_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
     // Collect exported variable names so we can create external
     // globals + getter functions for cross-module access.
     let exported_var_names: std::collections::HashSet<String> =
@@ -239,12 +309,36 @@ pub(crate) fn emit_module_globals(
     }
     let mut init_lets: Vec<&perry_hir::Stmt> = Vec::new();
     collect_init_lets(&hir.init, &mut init_lets);
+    // `Expr::New { class_name }` does not retain whether an unqualified name
+    // came from the intrinsic or a same-named runtime binding. Mirror HIR's
+    // `shadows_unqualified_global` categories here, plus the module-level HIR
+    // forms available to codegen, and keep the worker-transfer proof
+    // conservative whenever the constructor's provenance is ambiguous.
+    let shared_array_buffer_is_intrinsic =
+        !module_shadows_shared_array_buffer_intrinsic(hir, imported_classes, &init_lets);
+    let let_counts = init_lets.iter().fold(HashMap::new(), |mut counts, stmt| {
+        if let perry_hir::Stmt::Let { id, .. } = stmt {
+            *counts.entry(*id).or_insert(0usize) += 1;
+        }
+        counts
+    });
+    let reassigned = crate::collectors::reassigned_locals_in_module(hir);
     for s in init_lets {
-        if let perry_hir::Stmt::Let { id, name, ty, .. } = s {
+        if let perry_hir::Stmt::Let {
+            id, name, ty, init, ..
+        } = s
+        {
             // Always record the declared type for module-level lets
             // so all functions see it (not just the entry function).
             if !matches!(ty, perry_hir::types::Type::Any) {
                 module_global_types.insert(*id, ty.clone());
+            }
+            if let Some(proven) = init
+                .as_ref()
+                .filter(|_| let_counts.get(id) == Some(&1) && !reassigned.contains(id))
+                .and_then(|init| module_global_runtime_type(init, shared_array_buffer_is_intrinsic))
+            {
+                module_global_proven_types.insert(*id, proven);
             }
             if referenced_from_fn.contains(id) || exported_var_names.contains(name) {
                 // A `var` redeclared at module scope (`var x = …; … var x = …;`)
@@ -449,6 +543,55 @@ pub(crate) fn emit_module_globals(
     ModuleGlobals {
         module_globals,
         module_global_types,
+        module_global_proven_types,
         static_field_globals,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module, Stmt};
+
+    #[test]
+    fn shared_array_buffer_provenance_rejects_let_and_function_bindings() {
+        let mut let_module = Module::new("sab_let_shadow.ts");
+        let_module.init.push(Stmt::Let {
+            id: 1,
+            name: "SharedArrayBuffer".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Undefined),
+        });
+        let init_lets = vec![&let_module.init[0]];
+        assert!(module_shadows_shared_array_buffer_intrinsic(
+            &let_module,
+            &[],
+            &init_lets,
+        ));
+
+        let mut function_module = Module::new("sab_function_shadow.ts");
+        function_module.functions.push(Function {
+            id: 2,
+            name: "SharedArrayBuffer".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: Vec::new(),
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        assert!(module_shadows_shared_array_buffer_intrinsic(
+            &function_module,
+            &[],
+            &[],
+        ));
     }
 }

@@ -15,6 +15,9 @@ type Ok = { id: number; user: string; amount: number; note: string };
 
 const KINDS: string[] = ["order", "refund", "adjust"];
 const USERS: string[] = ["ana", "bo", "cyd", "dee", "eli", "fay"];
+const BATCHES = 1200;
+const SIZE = 200;
+const PROFILE_MIN_MILLISECONDS = 12000;
 
 function makeReq(i: number): Req {
   return {
@@ -64,7 +67,7 @@ async function runBatch(base: number, size: number, rates: Map<string, number>):
   return done;
 }
 
-async function main(): Promise<void> {
+async function runPipeline(): Promise<string> {
   const rates = new Map<string, number>();
   rates.set("order", 3);
   rates.set("refund", 5);
@@ -76,9 +79,6 @@ async function main(): Promise<void> {
   let total = 0;
   let noteLen = 0;
   let errors = 0;
-
-  const BATCHES = 1200;
-  const SIZE = 200;
 
   for (let b = 0; b < BATCHES; b++) {
     let batch: Ok[] = [];
@@ -107,7 +107,34 @@ async function main(): Promise<void> {
     userSum = userSum + (perUser.has(name) ? (perUser.get(name) as number) : 0);
   }
 
-  console.log(`${total} ${noteLen} ${seenUsers.size} ${userSum} ${errors}`);
+  return `${total} ${noteLen} ${seenUsers.size} ${userSum} ${errors}`;
+}
+
+async function main(): Promise<void> {
+  // The gate checks one pipeline's exact result, then profiles this mode. Keep
+  // the sampled process busy with the same async/Map/Set/template-literal work
+  // instead of padding its lifetime with a timer or a narrow spin loop. Each
+  // repetition starts from the same fixed inputs and must produce the same
+  // result, so profiling cannot weaken the correctness oracle. Twelve seconds
+  // covers the one-second attach delay plus the eight-second sample with a
+  // fixed margin, while a slow host completes its current pipeline and exits.
+  const profileMode =
+    process.argv.length > 2 && process.argv[2] === "--tls-budget-profile";
+  const profileDeadline = profileMode ? Date.now() + PROFILE_MIN_MILLISECONDS : 0;
+  let result = "";
+  let repetition = 0;
+  do {
+    const next = await runPipeline();
+    if (repetition > 0 && next !== result) {
+      throw new Error(`non-deterministic pipeline result at repetition ${repetition}`);
+    }
+    result = next;
+    repetition = repetition + 1;
+  } while (profileMode && Date.now() < profileDeadline);
+  if (profileMode) {
+    console.error(`[tls-budget] completed=${repetition}`);
+  }
+  console.log(result);
 }
 
 main();

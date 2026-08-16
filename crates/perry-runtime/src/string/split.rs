@@ -360,6 +360,12 @@ pub extern "C" fn js_string_split_n(
         return crate::array::js_array_alloc(0);
     }
 
+    // The result-array and per-part string allocations below can evacuate the
+    // source. Root it before deriving offsets into its payload, then refresh
+    // its address after every allocation that precedes a read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+
     let str_data = string_as_str(s);
     let delim = if !is_valid_string_ptr(delimiter) {
         ""
@@ -424,9 +430,9 @@ pub extern "C" fn js_string_split_n(
         // and the array in a `RuntimeHandleScope`, re-read both after every
         // allocation, and store each part into the (rooted) array immediately —
         // from then on the array keeps it alive.
-        let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let s_handle = scope.root_string_ptr(s);
+        let (arr, _) = s_handle.across_const::<StringHeader, _>(|| {
+            crate::array::js_array_alloc_pointer_elements(n as u32)
+        });
         let arr_handle = scope.root_raw_mut_ptr(arr);
 
         let mut i = 0usize;
@@ -454,13 +460,15 @@ pub extern "C" fn js_string_split_n(
             // surrogate carved out of a WTF-8 source must keep its flag, or
             // `isWellFormed()` on the part wrongly reports true.
             let seq = &buf[..seq_len];
-            let sh = if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
-                js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
-            } else {
-                js_string_from_bytes(seq.as_ptr(), seq_len as u32)
-            };
+            let (sh, arr_now) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                    js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
+                } else {
+                    js_string_from_bytes(seq.as_ptr(), seq_len as u32)
+                }
+            });
             unsafe {
-                store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), idx, sh);
+                store_split_string(arr_now, idx, sh);
             }
         }
         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
@@ -482,9 +490,9 @@ pub extern "C" fn js_string_split_n(
     }
     let n = part_ranges.len();
 
-    let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
+    let (arr, _) = s_handle.across_const::<StringHeader, _>(|| {
+        crate::array::js_array_alloc_pointer_elements(n as u32)
+    });
     let arr_handle = scope.root_raw_mut_ptr(arr);
 
     unsafe {
@@ -492,8 +500,10 @@ pub extern "C" fn js_string_split_n(
             let byte_len = byte_len_usize as u32;
             // Allocate the destination FIRST (it may move the source), then
             // re-read the source address before touching its bytes.
-            let (sh, data_ptr) = string_storage_alloc(byte_len);
-            let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+            let (((sh, data_ptr), s_now), arr_now) =
+                arr_handle.across_mut::<ArrayHeader, _>(|| {
+                    s_handle.across_const::<StringHeader, _>(|| string_storage_alloc(byte_len))
+                });
             let part_ptr = string_data(s_now).add(offset);
             // Derive metadata from THIS PART's own bytes. The only shortcut
             // taken is the all-ASCII one, which was verified by scanning the
@@ -515,7 +525,7 @@ pub extern "C" fn js_string_split_n(
             if byte_len > 0 {
                 ptr::copy_nonoverlapping(part_ptr, data_ptr, byte_len as usize);
             }
-            store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), i, sh);
+            store_split_string(arr_now, i, sh);
         }
     }
 
@@ -538,7 +548,9 @@ fn split_limit_to_uint32(boxed: f64) -> u32 {
 fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-    let arr = crate::array::js_array_alloc(1);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let (arr, s) = s_handle.across_const::<StringHeader, _>(|| crate::array::js_array_alloc(1));
     unsafe {
         (*arr).length = 1;
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -568,24 +580,33 @@ pub extern "C" fn js_string_split_value(
     limit: f64,
 ) -> *mut ArrayHeader {
     use crate::value::JSValue;
+    #[cfg(feature = "regex-engine")]
     let sep_jv = JSValue::from_bits(separator.to_bits());
     let lim_jv = JSValue::from_bits(limit.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let separator_handle = scope.root_nanbox_f64(separator);
 
     // Step 2: a separator with a `[Symbol.split]` method (a RegExp) takes over.
     #[cfg(feature = "regex-engine")]
     if sep_jv.is_pointer() {
         let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
         if crate::regex::is_regex_pointer(ptr) {
-            let limit_i32 = if lim_jv.is_undefined() {
-                -1
-            } else {
-                let u = split_limit_to_uint32(limit);
-                if u > i32::MAX as u32 {
-                    i32::MAX
-                } else {
-                    u as i32
-                }
-            };
+            let ((limit_i32, separator), s) = s_handle.across_const::<StringHeader, _>(|| {
+                separator_handle.across_nanbox(|| {
+                    if lim_jv.is_undefined() {
+                        -1
+                    } else {
+                        let u = split_limit_to_uint32(limit);
+                        if u > i32::MAX as u32 {
+                            i32::MAX
+                        } else {
+                            u as i32
+                        }
+                    }
+                })
+            });
+            let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
             return crate::regex::js_string_split_regex_n(
                 s,
                 ptr as *const crate::regex::RegExpHeader,
@@ -595,20 +616,24 @@ pub extern "C" fn js_string_split_value(
     }
 
     // Step 6: lim = limit===undefined ? 2^32-1 : ToUint32(limit) (may throw).
-    let lim: u32 = if lim_jv.is_undefined() {
-        u32::MAX
-    } else {
-        split_limit_to_uint32(limit)
-    };
+    let ((lim, separator), s) = s_handle.across_const::<StringHeader, _>(|| {
+        separator_handle.across_nanbox(|| {
+            if lim_jv.is_undefined() {
+                u32::MAX
+            } else {
+                split_limit_to_uint32(limit)
+            }
+        })
+    });
 
     // Step 7: R = ToString(separator) (may throw). For `undefined` the result
     // is unused (step 9) and `ToString(undefined)` is side-effect-free, so we
     // skip it.
-    let sep_is_undefined = sep_jv.is_undefined();
-    let r_str: *mut StringHeader = if sep_is_undefined {
-        std::ptr::null_mut()
+    let sep_is_undefined = JSValue::from_bits(separator.to_bits()).is_undefined();
+    let (r_str, s): (*mut StringHeader, *const StringHeader) = if sep_is_undefined {
+        (std::ptr::null_mut(), s)
     } else {
-        crate::builtins::js_string_coerce(separator)
+        s_handle.across_const::<StringHeader, _>(|| crate::builtins::js_string_coerce(separator))
     };
 
     // Step 8: limit 0 → empty array.

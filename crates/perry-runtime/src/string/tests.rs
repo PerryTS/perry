@@ -525,3 +525,316 @@ fn string_compare_value_heap_and_sso_mixes() {
     assert_eq!(js_string_compare_value(heap("x"), undef), 1);
     assert_eq!(js_string_compare_value(undef, undef), 0);
 }
+
+// ── js_string_concat_box's non-string operand delegates ────────────────────
+
+/// A `string`-declared operand that holds something else at runtime must get
+/// the full dynamic `+`, not silently vanish.
+///
+/// Perry does not validate declared types at runtime, so the codegen's
+/// static string proof (`is_definitely_string_expr`) is a claim about an
+/// ANNOTATION. This helper used to treat an operand it could not decode as
+/// the empty string, which made `"ab" + 42` render as `"ab"` — a silent wrong
+/// answer, and the reason the concat fast path had to be withheld from every
+/// declaration-based proof. Delegating instead is what lets the proof be a
+/// performance decision that cannot change a program's output.
+#[test]
+fn concat_box_delegates_a_non_string_operand_to_the_dynamic_add() {
+    let heap = |s: &str| {
+        let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
+    };
+    let text = |v: f64| {
+        let p = crate::value::js_jsvalue_to_string(v);
+        let bytes = unsafe { std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize) };
+        String::from_utf8(bytes.to_vec()).expect("ascii")
+    };
+
+    // string + number → concatenation with the number's decimal form.
+    assert_eq!(text(js_string_concat_box(heap("ab"), 42.0)), "ab42");
+    // number + string → same, other order.
+    assert_eq!(text(js_string_concat_box(42.0, heap("ab"))), "42ab");
+    // Both operands lying: `+` is then plain numeric addition, and the result
+    // is a NUMBER, not a string. This is the arm the old `unwrap_or` answered
+    // with the empty string.
+    assert_eq!(js_string_concat_box(40.0, 2.0), 42.0);
+    // An int32-tagged operand must decode to its value, not to its boxed bits.
+    let int42 = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    assert_eq!(text(js_string_concat_box(heap("n="), int42)), "n=42");
+    // undefined / null keep their ToString forms.
+    let undef = f64::from_bits(crate::value::JSValue::undefined().bits());
+    assert_eq!(text(js_string_concat_box(heap("v:"), undef)), "v:undefined");
+
+    // The all-strings path is untouched, including the SSO result encoding.
+    let sso_result = js_string_concat_box(heap("a"), heap("b"));
+    assert_eq!(text(sso_result), "ab");
+    assert!(
+        crate::value::JSValue::from_bits(sso_result.to_bits()).is_short_string(),
+        "a 2-byte ASCII result must still be assembled inline as SSO"
+    );
+}
+
+// ---------------------------------------------------------------- #7837
+
+/// NaN-box a heap string, the way codegen's `nanbox_string_inline` does.
+fn boxed_heap(s: &str) -> f64 {
+    let h = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    crate::value::js_nanbox_string(h as i64)
+}
+
+fn boxed_text(v: f64) -> String {
+    let p = crate::value::js_jsvalue_to_string(v);
+    string_as_str(p).to_string()
+}
+
+#[test]
+fn string_add_value_picks_the_operator_from_the_bits() {
+    // #7837 defect 1. `js_string_concat_value` takes an already-unboxed
+    // `StringHeader*`, so it cannot tell a lie from a string; these two take
+    // the NaN-box precisely so they can.
+    unsafe {
+        // A real string on the declared side concatenates, whatever the other
+        // operand holds — including a heap string, an SSO string and a number.
+        assert_eq!(
+            boxed_text(js_string_add_value(boxed_heap("ab"), 5.0)),
+            "ab5"
+        );
+        assert_eq!(
+            boxed_text(js_value_add_string(5.0, boxed_heap("ab"))),
+            "5ab"
+        );
+        let sso = js_string_new_sso(b"ab".as_ptr(), 2);
+        assert_eq!(boxed_text(js_string_add_value(sso, 5.0)), "ab5");
+        assert_eq!(boxed_text(js_value_add_string(5.0, sso)), "5ab");
+        assert_eq!(
+            boxed_text(js_string_add_value(boxed_heap("ab"), boxed_heap("cd"))),
+            "abcd"
+        );
+
+        // A LIE on the declared side is a numeric add, not a concatenation:
+        // `const s: string = (42 as any); s + 7` is 49 in Node, and was "427".
+        assert_eq!(js_string_add_value(42.0, 7.0), 49.0);
+        assert_eq!(js_value_add_string(7.0, 42.0), 49.0);
+        // ...and still concatenates when the OTHER operand is a real string.
+        assert_eq!(
+            boxed_text(js_string_add_value(42.0, boxed_heap("x"))),
+            "42x"
+        );
+        assert_eq!(
+            boxed_text(js_value_add_string(boxed_heap("x"), 42.0)),
+            "x42"
+        );
+    }
+}
+
+/// #7912: the unrooted `js_string_concat_chain` fast path.
+///
+/// The change it covers replaces ~2N transient-handle round trips per chain
+/// with a proof: `string_storage_alloc_no_collect` returns `Some` only when
+/// the nursery block that was already open could serve the request, and that
+/// is the one arena path that precedes `gc_check_trigger`. These tests hold
+/// both halves — that the answer is unchanged, and that the premise the
+/// answer rests on is actually true at run time.
+mod concat_chain_no_collect {
+    use super::super::concat::CONCAT_CHAIN_NO_COLLECT_HITS;
+    use super::*;
+
+    fn hits() -> u64 {
+        CONCAT_CHAIN_NO_COLLECT_HITS.with(|c| c.get())
+    }
+
+    fn heap(text: &str) -> f64 {
+        let p = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        f64::from_bits(crate::value::STRING_TAG | (p as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
+
+    fn chain(parts: &[f64]) -> *mut StringHeader {
+        js_string_concat_chain(parts.as_ptr(), parts.len() as i32)
+    }
+
+    fn text(s: *mut StringHeader) -> String {
+        string_as_str(s).to_string()
+    }
+
+    /// The exact shape a tree-walking interpreter's environment lookup emits:
+    /// `seen = seen + "[" + names[i] + "]"`, four heap-string parts, run in a
+    /// loop so the accumulator grows.
+    #[test]
+    fn four_heap_string_parts_take_the_unrooted_path_and_answer_correctly() {
+        let before = hits();
+        let mut acc = heap("");
+        let mut expected = String::new();
+        for name in ["n", "fib", "go", "cat"] {
+            acc = {
+                let joined = chain(&[acc, heap("["), heap(name), heap("]")]);
+                expected = format!("{expected}[{name}]");
+                assert_eq!(text(joined), expected);
+                f64::from_bits(crate::value::STRING_TAG | (joined as u64 & 0x0000_FFFF_FFFF_FFFF))
+            };
+        }
+        assert!(
+            hits() >= before + 4,
+            "every all-heap-string chain must take the unrooted path: {} -> {}",
+            before,
+            hits()
+        );
+    }
+
+    /// The safety premise, asserted rather than assumed: a fast-path chain
+    /// reaches ZERO allocation-point GC triggers. If it ever reached one, the
+    /// raw part pointers read in the sizing loop could have been moved out
+    /// from under the copy loop — which is precisely the bug the transient
+    /// handles used to prevent.
+    #[test]
+    fn the_unrooted_path_reaches_no_collection_point() {
+        // Warm the block so the very first allocation of the test is not the
+        // one that installs a fresh one.
+        let _ = chain(&[heap("warm"), heap("up")]);
+        crate::arena::reset_gc_trigger_arena_probe();
+        let triggers_before = crate::arena::gc_trigger_arena_calls();
+        let hits_before = hits();
+
+        let joined = chain(&[heap("a"), heap("bb"), heap("ccc")]);
+        assert_eq!(text(joined), "abbccc");
+
+        assert!(
+            hits() > hits_before,
+            "test premise: the chain must have taken the unrooted path"
+        );
+        assert_eq!(
+            crate::arena::gc_trigger_arena_calls(),
+            triggers_before,
+            "the unrooted path must not reach an allocation-point collection"
+        );
+    }
+
+    /// A part that is not a live heap string (SSO, a number, `undefined`)
+    /// needs `js_jsvalue_to_string`, which allocates — so it must fall back
+    /// to the rooted path, and still answer correctly.
+    #[test]
+    fn non_heap_string_parts_fall_back_to_the_rooted_path() {
+        let sso = js_string_new_sso(b"ab".as_ptr(), 2);
+        for (parts, want) in [
+            (vec![heap("x"), 7.0, heap("y")], "x7y"),
+            (vec![heap("x"), sso, heap("y")], "xaby"),
+            (
+                vec![heap("v="), f64::from_bits(crate::value::TAG_UNDEFINED)],
+                "v=undefined",
+            ),
+            (vec![7.0, 8.0], "78"),
+        ] {
+            let before = hits();
+            assert_eq!(text(chain(&parts)), want);
+            assert_eq!(
+                hits(),
+                before,
+                "a non-heap-string part must not take the unrooted path: {want}"
+            );
+        }
+    }
+
+    /// An EMPTY part contributes no bytes AND no flags — the rooted loop ORs
+    /// `piece_flags` inside its `blen > 0` guard, and a fast path that
+    /// diverged there would change WTF-8 behaviour silently rather than
+    /// visibly.
+    #[test]
+    fn empty_parts_contribute_neither_bytes_nor_flags() {
+        let empty = heap("");
+        let joined = chain(&[empty, heap("a"), empty, heap("b"), empty]);
+        assert_eq!(text(joined), "ab");
+        unsafe {
+            assert_eq!((*joined).byte_len, 2);
+            assert_eq!((*joined).utf16_len, 2);
+            assert_eq!((*joined).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+    }
+
+    /// Multi-byte and surrogate handling survives the fast path: `utf16_len`
+    /// is summed from the parts, and an adjacent high→low pair produced by
+    /// the JOIN is still canonicalised to its astral form.
+    #[test]
+    fn utf16_length_and_surrogate_canonicalisation_survive_the_fast_path() {
+        let joined = chain(&[heap("é"), heap("漢"), heap("ab")]);
+        assert_eq!(text(joined), "é漢ab");
+        unsafe {
+            assert_eq!((*joined).utf16_len, 4);
+            assert_eq!((*joined).byte_len, 2 + 3 + 2);
+        }
+
+        let high = js_string_from_char_code(0xD83D as f64);
+        let low = js_string_from_char_code(0xDE00 as f64);
+        let hi_box =
+            f64::from_bits(crate::value::STRING_TAG | (high as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let lo_box =
+            f64::from_bits(crate::value::STRING_TAG | (low as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let merged = chain(&[hi_box, lo_box]);
+        assert_eq!(text(merged), "\u{1F600}");
+        unsafe {
+            assert_eq!((*merged).utf16_len, 2);
+        }
+    }
+
+    /// The REAL fallback: not "a part was a number", but "the open nursery
+    /// block could not serve the result". Driven on its own thread so filling
+    /// the block cannot leak into the rest of the suite.
+    ///
+    /// This is the arm that used to be reachable only in production. It has to
+    /// answer identically, because a refusal is not an event — nothing has
+    /// collected at that point, so the rooted path re-reads its operands from
+    /// the same `parts` array and gets the same pointers.
+    #[test]
+    fn a_full_block_falls_back_to_the_rooted_path_with_the_same_answer() {
+        std::thread::spawn(|| {
+            // Fill the open block through the same no-collect entry the concat
+            // uses, so the very next chain is guaranteed to be refused.
+            // Build the operands FIRST — `js_string_from_bytes` goes through
+            // the COLLECTING entry and would install a fresh block, undoing
+            // the fill.
+            let parts = [heap("a"), heap("bb"), heap("ccc"), heap("dddd")];
+
+            // Now fill through the no-collect entry, which by construction
+            // installs nothing and moves nothing, so `parts` stays valid.
+            // Coarse-to-fine, because refusing a 4 KB request only proves
+            // there is less than 4 KB left — and a 4-part chain of 10 bytes
+            // fits in 40.
+            let mut filled = false;
+            for chunk in [crate::gc::LARGE_OBJECT_THRESHOLD_BYTES / 4, 256, 8] {
+                let bound = 8 * 1024 * 1024 / chunk;
+                filled = false;
+                for _ in 0..bound {
+                    if crate::arena::arena_alloc_gc_no_collect(chunk, 8, crate::gc::GC_TYPE_STRING)
+                        .is_null()
+                    {
+                        filled = true;
+                        break;
+                    }
+                }
+                assert!(filled, "test premise: {chunk} B fill never refused");
+            }
+            assert!(filled, "test premise: the block must actually be full");
+
+            let before = hits();
+            let joined = chain(&parts);
+            assert_eq!(text(joined), "abbcccdddd");
+            assert_eq!(
+                hits(),
+                before,
+                "with the block full the chain must have taken the ROOTED path"
+            );
+        })
+        .join()
+        .expect("full-block fallback test panicked");
+    }
+
+    /// The 4/8/32 scratch-size dispatch all route through the same fast path.
+    #[test]
+    fn every_scratch_size_class_takes_the_fast_path() {
+        for n in [1usize, 2, 4, 5, 8, 9, 16, 32] {
+            let parts: Vec<f64> = (0..n).map(|i| heap(&format!("{i}"))).collect();
+            let want: String = (0..n).map(|i| i.to_string()).collect();
+            let before = hits();
+            assert_eq!(text(chain(&parts)), want, "n={n}");
+            assert!(hits() > before, "n={n} must take the unrooted path");
+        }
+    }
+}

@@ -1,0 +1,581 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "path": "crates/perry-codegen/src/codegen/closure.rs",
+      "function": "compile_closure",
+      "access": "raw:module_receiver_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "The module map is copied into the closure's source-type metadata; representation consumers use the separate runtime-proof map or emit a live-value guard."
+    },
+    {
+      "path": "crates/perry-codegen/src/codegen/closure.rs",
+      "function": "compile_closure",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This entry operation merges source-type metadata for closure receivers; raw representation consumers require separate runtime proof or a live guard."
+    },
+    {
+      "path": "crates/perry-codegen/src/codegen/mod.rs",
+      "function": "unique_global",
+      "access": "raw:module_local_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This iteration derives the typed-ABI metadata oracle while filtering globals; typed entry paths independently guard live argument and capture values."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/byte_read_key.rs",
+      "function": "is_numeric",
+      "access": "raw:binding_types",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This collector inventories declared numeric key candidates; the map contains source metadata and is not itself runtime-value evidence."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/pointer_locals.rs",
+      "function": "collect_facts",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The membership check prunes the complete-write fixpoint to frame-owned locals; it cannot remove a required root and unknown values remain conservatively pointer-capable."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/hir_facts.rs",
+      "function": "seed_module_bindings",
+      "access": "raw:binding_types",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "Declared array kinds only seed packed-loop candidates; the loop entry guard validates the actual array kind and window."
+    },
+    {
+      "path": "crates/perry-codegen/src/codegen/typed_abi.rs",
+      "function": "typed_closure_capture_reps",
+      "access": "raw:module_local_types",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The annotation selects only a candidate capture rep; both the public trampoline and direct-call path guard every current capture slot and use the generic body on failure."
+    },
+    {
+      "path": "crates/perry-codegen/src/codegen/typed_abi.rs",
+      "function": "typed_arg_is_guard_candidate",
+      "access": "local_type_hint",
+      "count": 2,
+      "classification": "runtime-validated",
+      "reason": "Binding and array-element hints only nominate typed routes; every consumer checks or coerces the live JSValue with the selected representation contract and keeps the generic body or semantic runtime helper on failure."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/array_methods.rs",
+      "function": "lower",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "Array.isArray constant-folding uses only runtime-derived initializer evidence and rejects every binding written in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/array_push.rs",
+      "function": "guarded_numeric_add_push_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint admits a numeric-push candidate; raw-layout arrays keep the runtime number guard and generic inline stores inspect live bits to invalidate numeric layout on every non-number."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/binary.rs",
+      "function": "lower",
+      "access": "local_type_hint",
+      "count": 2,
+      "classification": "runtime-validated",
+      "reason": "A real string operand fixes + as concatenation; the numeric hint selects a JSValue-taking concat helper that converts the current other operand at runtime."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/index_get.rs",
+      "function": "is_width_tracked_typed_array_receiver",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint selects a typed-array helper that checks the runtime GC kind, or a buffer-view fact invalidated by every write."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/index_set.rs",
+      "function": "is_width_tracked_typed_array_receiver",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint selects a typed-array store helper that checks the runtime GC kind, or a write-invalidated buffer-view fact."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/literals_vars.rs",
+      "function": "lower",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "String self-append tag-dispatches the current destination and falls back to ordinary dynamic JavaScript addition."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/mod.rs",
+      "function": "is_plain_f64_local",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/mod.rs",
+      "function": "is_plain_i1_local",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/native_memory.rs",
+      "function": "proven_view",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "buffer_view_slots supplies the independent view proof and every local write invalidates its pointer state before this access."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/new_dynamic.rs",
+      "function": "lower",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/property_get.rs",
+      "function": "guarded_declared_class_get_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint selects only the guarded plain-field IC; its live class-id and keys-token checks dominate raw access, while accessors and method binding require proven receiver provenance."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/property_get.rs",
+      "function": "lower",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/shadow_slot.rs",
+      "function": "expr_is_known_non_pointer_shadow_value",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/closure_analysis.rs",
+      "function": "hazardous_module_global_ids",
+      "access": "raw:proven_types",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The map contains only structural module-initializer kinds and omits every binding with a module-wide write."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "function": "util_types_arg_is_async_function_static",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/early_branches.rs",
+      "function": "try_lower_closure_typed_local_call",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint selects js_closure_unbox_callee_checked, which validates the current NaN-boxed callee before invoking it."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/native/mod.rs",
+      "function": "util_types_arg_is_async_function_static",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/options/abort.rs",
+      "function": "is_abort_controller_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/options/abort.rs",
+      "function": "is_abort_signal_typed_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/property_get/dynamic_dispatch.rs",
+      "function": "guarded_declared_receiver_class_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The annotation selects only a direct-method candidate; the emitted guard validates the live class id, keys token, own override, and resolved method pointer, with every miss using dynamic dispatch."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/scalar_method.rs",
+      "function": "walk",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The scalar clone entry path emits a tag guard for every collected local before evaluating the numeric expression in raw representation."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/scalar_method.rs",
+      "function": "local_can_use_public_arg_guard",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The emitted public scalar argument guard validates each current local value before entering the typed method clone."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_string_method.rs",
+      "function": "lower_string_method_dispatch",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/rooting/temp_root.rs",
+      "function": "local_is_inert_primitive",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/proxy_reflect.rs",
+      "function": "guarded_declared_class_property_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint only routes a strict static-name PutValue through PropertySet; its live class/shape/descriptor guard dominates the raw slot access and every miss retains ordinary runtime assignment."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/property_set.rs",
+      "function": "guarded_declared_class_store_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint selects the plain-field store guard; the live class id, keys token, descriptor state, field bounds, and value representation are checked before a raw slot store, while accessors stay dynamic."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
+      "function": "declared_array_element_type_hint",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The annotation only selects a versioned clone; its preheader validates receiver kind, array head, shape, and key token and falls back on every guard miss."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
+      "function": "match_element_shape_versioned_loop",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The numeric annotation admits a candidate clone; the preheader checks the accumulator's current Number tag and the fact is scoped to a store-free, numeric-preserving fast clone."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/loops.rs",
+      "function": "local_array_element_type",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The element annotation only selects a versioned numeric-loop candidate; every caller validates the live array kind, layout, and covered range before entering its raw clone."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/loops.rs",
+      "function": "local_is_int32_value",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "set_static_type_args",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The source type arguments are read only after stable initializer evidence independently proves that the binding holds a Set; argument representations are separately proven or guarded at each helper selection."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "map_static_type_args",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The source type arguments are read only after stable initializer evidence independently proves that the binding holds a Map; key and value representations are separately proven or guarded at each helper selection."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/loops.rs",
+      "function": "local_is_untyped_candidate",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/loops.rs",
+      "function": "match_numeric_bulk_fill_loop",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/masked_window_region.rs",
+      "function": "expr_is_number_under",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies runtime-derived initializer evidence and rejects the binding after any write before the scoped region refinement is installed."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/masked_window_region.rs",
+      "function": "lower_region_copy",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This read saves and restores the map entry around a scoped refinement; it does not itself select a representation or answer."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/masked_window_region.rs",
+      "function": "try_match_masked_window_region",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The candidate is admitted only to a masked-window clone whose runtime preheader guard proves the receiver and index window."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
+      "function": "is_bigint_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
+      "function": "is_bool_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
+      "function": "is_numeric_expr",
+      "access": "stable_local_type_proof",
+      "count": 3,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/predicates.rs",
+      "function": "declared_type_overrides_shape_proof",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/predicates.rs",
+      "function": "is_promise_expr",
+      "access": "stable_local_type_proof",
+      "count": 2,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/predicates.rs",
+      "function": "receiver_class_name",
+      "access": "stable_local_type_proof",
+      "count": 2,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/predicates.rs",
+      "function": "static_type_of",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This generic query returns source-level metadata; answer-folding and raw-representation consumers use the separate runtime-derived proof API."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/refine.rs",
+      "function": "declared_property_type_from_annotation",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This read propagates a declared property claim into metadata; representation consumers must independently guard the value or use the separate runtime-derived proof map."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/refine.rs",
+      "function": "proven_type_from_init",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/refine.rs",
+      "function": "refine_type_from_init",
+      "access": "stable_local_type_proof",
+      "count": 2,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_declared_string_expr",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "A declared local string selects only the pairwise boxed concat helper, which tag-dispatches both values and falls back to full dynamic addition."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_definitely_string_expr",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "This is a boxed string-dispatch candidate; raw-pointer and typed-ABI consumers use string_value_is_runtime_guaranteed instead."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_map_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_set_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_string_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "string_value_is_runtime_guaranteed",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_url_search_params_expr",
+      "access": "stable_local_type_proof",
+      "count": 2,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "map_static_type_args",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "set_static_type_args",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-hir/src/analysis/value_types.rs",
+      "function": "local_type",
+      "access": "raw:HashMapLocalTypeFacts",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "The generic HIR environment exposes source-level metadata only; codegen supplies its separate runtime-proof facts adapter."
+    },
+    {
+      "path": "crates/perry-hir/src/analysis/value_types.rs",
+      "function": "local_type",
+      "access": "raw:self.locals",
+      "count": 2,
+      "classification": "metadata-only",
+      "reason": "The generic HIR environment exposes source-level metadata only; codegen supplies its separate runtime-proof facts adapter."
+    },
+    {
+      "path": "crates/perry-hir/src/lower/context.rs",
+      "function": "define_sloppy_implicit_global",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This scope-stack iteration resolves an existing lexical binding during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-hir/src/lower/context.rs",
+      "function": "lookup_local_in_current_scope",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/func_ref.rs",
+      "function": "discriminant_path",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The discriminant narrowing is licensed by the `===` comparison this lowering emits, and the base proof comes from the write-stable API, so a stale union can only widen the branch back to the generic path."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/func_ref.rs",
+      "function": "guarded_path_type",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The path type seeds a candidate descriptor that `js_param_type_guard` validates against the live argument before the specialized clone is entered; an untrue candidate fails the guard and takes the generic entry."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_conditional.rs",
+      "function": "lower_conditional",
+      "access": "snapshot_guarded_proof",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "Restore bookkeeping for a ternary's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/if_stmt.rs",
+      "function": "lower_if",
+      "access": "snapshot_guarded_proof",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "Restore bookkeeping for an if statement's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
+    }
+  ]
+}

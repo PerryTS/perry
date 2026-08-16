@@ -9,7 +9,9 @@
 //!   integer literals, signed bitwise binary operators, and immutable local
 //!   temporaries built from those expressions; or
 //! - `return <numeric expression> <cmp> <numeric expression>` for boolean
-//!   predicates over the same safe numeric expression subset.
+//!   predicates over the same safe numeric expression subset; or
+//! - one zero-argument numeric field update followed by a return of that same
+//!   field, for example `this.value = this.value + 1; return this.value`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,6 +23,12 @@ enum ScalarMethodReturnKind {
     Numeric,
     Int32,
     Boolean,
+}
+
+struct ScalarMethodStraightLineBody<'a> {
+    return_expr: &'a Expr,
+    local_temps: Vec<(u32, &'a Expr)>,
+    field_write: Option<(&'a str, &'a Expr)>,
 }
 
 pub(crate) fn simple_scalar_method_summary<'a>(
@@ -78,11 +86,10 @@ pub(crate) fn is_simple_scalar_method(
         numeric_locals.insert(param.id);
     }
 
-    let Some((return_expr, local_temps)) = scalar_method_straight_line_return(method, return_kind)
-    else {
+    let Some(body) = scalar_method_straight_line_body(method, return_kind) else {
         return false;
     };
-    for (id, init) in local_temps {
+    for (id, init) in body.local_temps {
         if !scalar_method_return_expr_is_safe(
             classes,
             class_name,
@@ -94,20 +101,44 @@ pub(crate) fn is_simple_scalar_method(
         }
         numeric_locals.insert(id);
     }
+
+    if let Some((field, value)) = body.field_write {
+        // A guarded or generic-argument fallback would run the real method on
+        // a materialized heap receiver, leaving the scalar slots stale after
+        // the merge. Keep the first mutating summary deliberately zero-arity
+        // until codegen can rehydrate effects from such a fallback.
+        if !method.params.is_empty()
+            || !matches!(return_kind, ScalarMethodReturnKind::Numeric)
+            || !public_numeric_field(classes, class_name, field)
+            || !numeric_scalar_method_expr_is_safe(classes, class_name, value, &numeric_locals)
+            || !matches!(
+                body.return_expr,
+                Expr::PropertyGet {
+                    object,
+                    property,
+                    ..
+                } if matches!(object.as_ref(), Expr::This) && property == field
+            )
+        {
+            return false;
+        }
+    }
+
     scalar_method_return_expr_is_safe(
         classes,
         class_name,
-        return_expr,
+        body.return_expr,
         &numeric_locals,
         return_kind,
     )
 }
 
-fn scalar_method_straight_line_return<'a>(
+fn scalar_method_straight_line_body<'a>(
     method: &'a Function,
     return_kind: ScalarMethodReturnKind,
-) -> Option<(&'a Expr, Vec<(u32, &'a Expr)>)> {
+) -> Option<ScalarMethodStraightLineBody<'a>> {
     let mut local_temps = Vec::new();
+    let mut field_write = None;
     for (idx, stmt) in method.body.iter().enumerate() {
         match stmt {
             Stmt::Let {
@@ -116,11 +147,25 @@ fn scalar_method_straight_line_return<'a>(
                 mutable,
                 init: Some(init),
                 ..
-            } if !*mutable && scalar_method_temp_type_is_safe(ty, return_kind) => {
+            } if !*mutable
+                && field_write.is_none()
+                && scalar_method_temp_type_is_safe(ty, return_kind) =>
+            {
                 local_temps.push((*id, init));
             }
+            Stmt::Expr(Expr::PropertySet {
+                object,
+                property,
+                value,
+            }) if matches!(object.as_ref(), Expr::This) && field_write.is_none() => {
+                field_write = Some((property.as_str(), value.as_ref()));
+            }
             Stmt::Return(Some(expr)) if idx + 1 == method.body.len() => {
-                return Some((expr, local_temps));
+                return Some(ScalarMethodStraightLineBody {
+                    return_expr: expr,
+                    local_temps,
+                    field_write,
+                });
             }
             _ => return None,
         }

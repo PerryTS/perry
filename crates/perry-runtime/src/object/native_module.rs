@@ -29,8 +29,9 @@ pub(crate) use callable_exports::{
     bound_native_callable_value_arity, buffer_constructor_value,
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
-    is_buffer_constructor_value, is_cluster_emitter_method, module_cjs_cache_value,
-    module_cjs_extensions_value, module_cjs_global_paths_value, module_cjs_path_cache_value,
+    is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
+    module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
+    module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
     native_string_value, scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
     set_builtin_closure_length, set_builtin_closure_non_constructable,
     sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
@@ -39,6 +40,8 @@ pub(crate) use callable_exports::{
 };
 pub(crate) use constants::get_native_module_constant;
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
+#[cfg(test)]
+pub(crate) use namespace_builders::create_fs_constants_object;
 pub(crate) use namespace_builders::{
     create_cached_sub_namespace, create_sub_namespace, http_global_agent_object,
     http_methods_array, http_status_codes_object, https_global_agent_object,
@@ -67,6 +70,9 @@ crate::perry_thread_local! {
     pub(crate) static MODULE_CJS_EXTENSIONS_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static MODULE_CJS_PATH_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static MODULE_CJS_GLOBAL_PATHS_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_CJS_PROTOTYPE_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_BUILTIN_MODULES_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_CONSTANTS_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     /// User overrides of native-module namespace properties, keyed
@@ -75,6 +81,8 @@ crate::perry_thread_local! {
     /// `require('node:timers').setImmediate = patched` must store and win
     /// subsequent property reads instead of throwing read-only.
     static NATIVE_NAMESPACE_PROP_OVERRIDES: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+    static NATIVE_ESM_EXPORT_VALUES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
 
@@ -129,6 +137,12 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     NATIVE_NAMESPACE_PROP_OVERRIDES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    NATIVE_ESM_EXPORT_VALUES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
@@ -225,6 +239,27 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_PROTOTYPE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_BUILTIN_MODULES_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CONSTANTS_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -477,6 +512,9 @@ pub extern "C" fn js_create_native_module_namespace(
 
     // Return as NaN-boxed pointer
     let value = crate::value::js_nanbox_pointer(obj as i64);
+    if module_name == "module" {
+        crate::object::js_object_seal(value);
+    }
     if should_cache_native_module_namespace(module_name) {
         NATIVE_MODULE_NAMESPACES.with(|cache| {
             cache
@@ -764,6 +802,22 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    native_module_property_by_name_impl(
+        module_name_ptr,
+        module_name_len,
+        property_name_ptr,
+        property_name_len,
+        true,
+    )
+}
+
+unsafe fn native_module_property_by_name_impl(
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    consult_overrides: bool,
+) -> f64 {
     // Codegen NativeModuleRef fast path — can mint native-module-backed
     // values without a namespace object; the vtable must be live for the
     // generic paths that later touch them.
@@ -784,8 +838,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     // `vt_get_own_field`, which the generic object-by-name read path uses; the
     // codegen `NativeModuleRef` fast-path landed here without consulting the
     // side-table, so writes via `PutValueSet` didn't round-trip on reads.
-    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
-        return value;
+    if consult_overrides {
+        if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+            return value;
+        }
     }
     if module_name == "process.namespace" && property_name == "default" {
         return cjs_default_export_value("process")
@@ -913,6 +969,90 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if js_val.to_bits() != crate::value::TAG_UNDEFINED {
         return js_val;
     }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn native_module_string_arg(value: f64) -> Option<String> {
+    let value = JSValue::from_bits(value.to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = unsafe { crate::string::js_string_key_bytes(value, &mut sso) }?;
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Snapshot-backed value used for named ESM imports from builtins. CommonJS
+/// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
+#[no_mangle]
+pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
+    let Some(module) = native_module_string_arg(module) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let Some(property) = native_module_string_arg(property) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let module = normalize_native_module_alias(&module).to_string();
+    let key = format!("{module}\0{property}");
+    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+    let value = unsafe {
+        native_module_property_by_name_impl(
+            module.as_ptr(),
+            module.len(),
+            property.as_ptr(),
+            property.len(),
+            false,
+        )
+    };
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        return value;
+    }
+    NATIVE_ESM_EXPORT_VALUES.with(|values| {
+        values.borrow_mut().insert(key, value.to_bits());
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    value
+}
+
+pub(crate) fn module_constructor_identity_value() -> f64 {
+    const KEY: &str = "module\0Module";
+    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(KEY).copied()) {
+        return f64::from_bits(bits);
+    }
+    if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|values| values.borrow().get(KEY).copied()) {
+        return f64::from_bits(bits);
+    }
+    bound_native_callable_export_value("module", "Module")
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_sync_builtin_esm_exports() -> f64 {
+    let keys =
+        NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().keys().cloned().collect::<Vec<_>>());
+    for key in keys {
+        let Some((module, property)) = key.split_once('\0') else {
+            continue;
+        };
+        let value = unsafe {
+            native_module_property_by_name_impl(
+                module.as_ptr(),
+                module.len(),
+                property.as_ptr(),
+                property.len(),
+                true,
+            )
+        };
+        NATIVE_ESM_EXPORT_VALUES.with(|values| {
+            values.borrow_mut().insert(key.clone(), value.to_bits());
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_run_main() -> f64 {
+    // Perry's AOT entry point has already run before JavaScript can call this
+    // compatibility export, so there is no unevaluated main module to dispatch.
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

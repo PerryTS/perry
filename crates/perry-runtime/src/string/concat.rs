@@ -115,12 +115,36 @@ fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
         .all(|&b| b < 0x80)
 }
 
+/// SSO-aware pairwise `a + b` for two operands the codegen believes are
+/// strings. Both operands arrive NaN-boxed so an SSO operand stays inline, and
+/// the result is NaN-boxed too — SSO when the total fits five ASCII bytes, a
+/// heap `StringHeader` otherwise.
+///
+/// **A non-string operand is delegated, not treated as empty.** Perry does not
+/// validate declared types at runtime, so "the codegen believes these are
+/// strings" is a claim about an annotation, not about the bits. This function
+/// used to `unwrap_or((null, 0))` such an operand, which silently rendered
+/// `"ab" + 42` as `"ab"`; the codegen then had to route every possibly-lying
+/// operand around it (see the `dother`/`cold` arms of the self-append lowering
+/// in `lower_string_concat.rs`, whose comment says exactly that). Handing the
+/// pair to [`js_dynamic_string_or_number_add`] instead gives a lie the full
+/// spec answer — `ToPrimitive`, string concat when either side really is a
+/// string, numeric add when neither is — so a static string proof is now a
+/// PERFORMANCE claim that cannot change a program's output.
+///
+/// [`js_dynamic_string_or_number_add`]: crate::value::js_dynamic_string_or_number_add
 #[no_mangle]
 pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     let mut scratch_l = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut scratch_r = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let l = str_bytes_from_jsvalue(l_value, &mut scratch_l).unwrap_or((std::ptr::null(), 0));
-    let r = str_bytes_from_jsvalue(r_value, &mut scratch_r).unwrap_or((std::ptr::null(), 0));
+    let (Some(l), Some(r)) = (
+        str_bytes_from_jsvalue(l_value, &mut scratch_l),
+        str_bytes_from_jsvalue(r_value, &mut scratch_r),
+    ) else {
+        // `str_bytes_from_jsvalue` returns `None` for exactly the non-string
+        // values, so this is the annotation-lie arm and nothing else.
+        return unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) };
+    };
     let total_blen = l.1 + r.1;
 
     // SSO encodes its length tag as the JS `.length`, so it is only sound for
@@ -422,6 +446,11 @@ pub extern "C" fn js_string_concat_value(
     js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
 }
 
+/// Ceiling on the per-call part count. Must match `CONCAT_CHAIN_MAX_PARTS` in
+/// `perry-codegen/src/lower_string_concat.rs`. The cap keeps the stack scratch
+/// bounded so a pathological fold cannot overflow the stack.
+const CONCAT_CHAIN_MAX_PARTS: usize = 32;
+
 /// N-way string concatenation (v0.5.771).
 ///
 /// Replaces a left-spine of `Binary { Add }` string-concat nodes with a
@@ -447,22 +476,154 @@ pub extern "C" fn js_string_concat_value(
 /// with STRING_TAG via the standard `nanbox_string_inline` helper.
 #[no_mangle]
 pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut StringHeader {
-    // Cap the per-call part count. The codegen-side fold limits chains
-    // to 32; in practice user code rarely exceeds 8-10 (CSV row, log
-    // line, prompt template). The cap keeps the stack arrays bounded so
-    // we don't risk stack overflow on a pathological 10k-element fold.
-    const MAX_PARTS: usize = 32;
-    let n = (n as usize).min(MAX_PARTS);
-    if n == 0 {
-        return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
-    }
-    if parts.is_null() {
+    let n = (n as usize).min(CONCAT_CHAIN_MAX_PARTS);
+    if n == 0 || parts.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
 
+    // ★ Size the stack scratch to the chain actually being built. One
+    // `MAX_PARTS = 32` shape made EVERY call pay ~2 KB of stack
+    // initialisation — the release disassembly opens `sub sp, sp, #0x7e0`,
+    // then `memset(sp+0x20, _, 0x400)` for `num_bufs`, then 32 `str xzr` for
+    // the handle array — whether the chain had 32 parts or 2. Real chains are
+    // 2-4 parts: `seen = seen + "[" + names[i] + "]"` in an environment-lookup
+    // loop is four, and was memsetting 2 KB per append.
+    if n <= 4 {
+        concat_chain_sized::<4>(parts, n)
+    } else if n <= 8 {
+        concat_chain_sized::<8>(parts, n)
+    } else {
+        concat_chain_sized::<CONCAT_CHAIN_MAX_PARTS>(parts, n)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+/// #7912 counter: how many chains took the unrooted fast path below. A gate
+/// that cannot see its subject run is not a gate — the unit tests assert this
+/// moves, so a refactor that quietly stops taking the fast path is red rather
+/// than "still correct, just slow again".
+    pub(crate) static CONCAT_CHAIN_NO_COLLECT_HITS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[inline]
+fn note_no_collect_hit() {
+    CONCAT_CHAIN_NO_COLLECT_HITS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn note_no_collect_hit() {}
+
+/// The unrooted arm of [`concat_chain_sized`]: every part is already a live
+/// heap string, so classification touches no allocator at all, and the one
+/// allocation it needs is taken through the **no-collect** entry point.
+///
+/// ★ Why this is sound, stated as the invariant it rests on:
+///
+/// > `string_storage_alloc_no_collect` returns `Some` only when the request
+/// > was served by bumping the nursery block that was already open. That is
+/// > the one path through `arena_cell_alloc` that precedes `gc_check_trigger`,
+/// > so a `Some` is a proof that no collection ran and therefore that nothing
+/// > moved.
+///
+/// With that proof in hand the transient handle stack is not merely
+/// unnecessary, it is unreachable work: the pointers read in the sizing loop
+/// are still the pointers to copy from. `None` (block full, oversized result)
+/// re-enters the rooted path below, which behaves exactly as it always did —
+/// and re-reads its operands from `parts`, which is still valid because
+/// nothing has collected *yet* either.
+///
+/// The rooted path costs ~2N thread-local + `RefCell` round trips per call
+/// (N `root_string_ptr` pushes in the classify loop, N
+/// `get_raw_const_ptr` reads in the copy loop) plus the scope's own two.
+/// On Darwin every one of those is an `_tlv_get_addr` call. On a
+/// tree-walking-interpreter workload whose environment lookup appends
+/// `seen = seen + "[" + names[i] + "]"` per frame, that bookkeeping measured
+/// **12.6%** of total run time — more than the concatenation it was
+/// protecting.
+#[inline]
+fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
+    parts: *const f64,
+    n: usize,
+) -> Option<*mut StringHeader> {
+    let mut piece_ptrs: [*const StringHeader; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
+    let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
+    let mut piece_flags: u32 = 0;
+    let mut total_blen: u32 = 0;
+    let mut total_u16: u32 = 0;
+
+    // Admission scan FIRST, and it touches nothing but `parts`. A chain with
+    // a number, an SSO value or an object in it needs `js_jsvalue_to_string`,
+    // which allocates, so it belongs on the rooted path — and it must reach
+    // that path having paid only n register compares, not n cold
+    // `StringHeader` loads it is about to throw away and redo.
+    // STRING_TAG = 0x7FFF; `is_valid_string_ptr` is a range test, no deref.
+    for i in 0..n {
+        let bits = unsafe { *parts.add(i) }.to_bits();
+        if bits >> 48 != 0x7FFF {
+            return None;
+        }
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if !is_valid_string_ptr(ptr) {
+            return None;
+        }
+        piece_ptrs[i] = ptr;
+    }
+
+    for i in 0..n {
+        // Mirrors the rooted loop exactly, including that an EMPTY part
+        // contributes no flags: `piece_flags |= flags` sits inside its
+        // `blen > 0` guard there, and a divergence here would be a
+        // silent WTF-8 behaviour change rather than a slowdown.
+        let ptr = piece_ptrs[i];
+        let blen = unsafe { (*ptr).byte_len };
+        if blen > 0 {
+            piece_lens[i] = blen;
+            piece_flags |= unsafe { (*ptr).flags };
+            total_blen = total_blen.saturating_add(blen);
+            total_u16 = total_u16.saturating_add(unsafe { (*ptr).utf16_len });
+        }
+    }
+
+    let (ptr, mut cursor) = string_storage_alloc_no_collect(total_blen)?;
+    note_no_collect_hit();
+
+    unsafe {
+        init_string_header(ptr, total_u16, total_blen, total_blen, 0, piece_flags);
+        for i in 0..n {
+            let l = piece_lens[i] as usize;
+            if l == 0 {
+                continue;
+            }
+            ptr::copy_nonoverlapping(string_data(piece_ptrs[i]), cursor, l);
+            cursor = cursor.add(l);
+        }
+        Some(canonicalize_surrogate_pairs(ptr))
+    }
+}
+
+/// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
+/// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
+/// dispatcher establishes.
+///
+/// The `#7912` fast arm above answers first for an all-heap-string chain;
+/// everything below is the original rooted path, reached when it declines.
+fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *mut StringHeader {
+    debug_assert!(n > 0 && n <= MAX_PARTS);
+    if let Some(result) = concat_chain_all_heap_strings_no_collect::<MAX_PARTS>(parts, n) {
+        return result;
+    }
     // Per-part scratch buffer for number formatting. 32 bytes is enough
-    // for any f64 string representation (max ~24 chars).
-    let mut num_bufs: [[u8; 32]; MAX_PARTS] = [[0u8; 32]; MAX_PARTS];
+    // for any f64 string representation (max ~24 chars). Left UNINITIALISED:
+    // a slot becomes readable only via `MaybeUninit::write`, on exactly the
+    // two numeric arms, which are also the only arms that publish a
+    // `piece_ptrs[i]` into it — so the copy loop can never read an
+    // uninitialised slot.
+    let mut num_bufs: [core::mem::MaybeUninit<[u8; 32]>; MAX_PARTS] =
+        [core::mem::MaybeUninit::uninit(); MAX_PARTS];
     // For each part: (ptr, len, flags). ptr is either a pointer into
     // num_bufs[i] (numeric path) or null for a rooted string handle;
     // len is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
@@ -527,8 +688,8 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         // Plain f64 (no NaN-box tag in upper 16 bits). Format inline.
         let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
         if is_plain_f64 {
-            let len = format_number_into(value, &mut num_bufs[i]);
-            piece_ptrs[i] = num_bufs[i].as_ptr();
+            let len = format_number_into(value, num_bufs[i].write([0u8; 32]));
+            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
             piece_u16[i] = len as u32; // ASCII for all formatted numbers
             total_blen = total_blen.saturating_add(len as u32);
@@ -541,15 +702,18 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         // renders as function source, not its numeric id.
         if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
-            let len = if v >= 0 {
-                fast_itoa_u32(v as u32, &mut num_bufs[i])
-            } else {
-                let s = format!("{}", v);
-                let l = s.len().min(32);
-                num_bufs[i][..l].copy_from_slice(&s.as_bytes()[..l]);
-                l
+            let len = {
+                let buf = num_bufs[i].write([0u8; 32]);
+                if v >= 0 {
+                    fast_itoa_u32(v as u32, buf)
+                } else {
+                    let s = format!("{}", v);
+                    let l = s.len().min(32);
+                    buf[..l].copy_from_slice(&s.as_bytes()[..l]);
+                    l
+                }
             };
-            piece_ptrs[i] = num_bufs[i].as_ptr();
+            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
             piece_u16[i] = len as u32;
             total_blen = total_blen.saturating_add(len as u32);
@@ -739,6 +903,58 @@ pub extern "C" fn js_value_concat_string(
     // Reload `suffix` after the user `toString` (#6655).
     let value_str = crate::value::js_jsvalue_to_string(value);
     js_string_concat(value_str, suffix_handle.get_raw_const_ptr::<StringHeader>())
+}
+
+/// Resolve a value the caller has already established `is_any_string()` to a
+/// raw `StringHeader*`, materialising SSO bits exactly the way the codegen's
+/// `unbox_str_handle` does.
+///
+/// The caller must pass the result straight into a helper that roots it —
+/// nothing may allocate between the SSO materialisation and that root.
+#[inline]
+fn string_handle_of(value: f64) -> *const StringHeader {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_string() {
+        return jsval.as_string_ptr();
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const StringHeader
+}
+
+/// `l + r` where the codegen's only evidence that `l` is a string is a
+/// DECLARED type (or a receiver-blind method-name guess) — #7837 defect 1.
+///
+/// The fused `js_string_concat_value` cannot make this decision itself,
+/// because codegen hands it an already-unboxed `StringHeader*` and the tag is
+/// gone by then. So a declared-only operand is passed NaN-BOXED instead, and
+/// the operator is chosen from the bits:
+///
+/// * `l` really is a string → the identical fused single-allocation concat the
+///   strict path emits, so an honest program pays one predictable compare
+///   inside a call it was already making, and no codegen diamond at all;
+/// * `l` is anything else → the spec's `+`, which is what
+///   `const s: string = (42 as any); s + 7` must answer (`49`, not `"427"`).
+///
+/// See [`js_value_add_string`] for the mirrored operand order.
+#[no_mangle]
+pub unsafe extern "C" fn js_string_add_value(l_value: f64, r_value: f64) -> f64 {
+    if crate::value::JSValue::from_bits(l_value.to_bits()).is_any_string() {
+        let handle = string_handle_of(l_value);
+        let out = js_string_concat_value(handle, r_value);
+        return crate::value::js_nanbox_string(out as i64);
+    }
+    crate::value::js_dynamic_string_or_number_add(l_value, r_value)
+}
+
+/// `l + r` where the declared-only string operand is on the RIGHT — the mirror
+/// of [`js_string_add_value`], guarding `js_value_concat_string` the same way.
+#[no_mangle]
+pub unsafe extern "C" fn js_value_add_string(l_value: f64, r_value: f64) -> f64 {
+    if crate::value::JSValue::from_bits(r_value.to_bits()).is_any_string() {
+        let handle = string_handle_of(r_value);
+        let out = js_value_concat_string(l_value, handle);
+        return crate::value::js_nanbox_string(out as i64);
+    }
+    crate::value::js_dynamic_string_or_number_add(l_value, r_value)
 }
 
 /// Fast integer-to-ASCII formatting into a provided buffer.

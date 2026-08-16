@@ -72,7 +72,7 @@ fn a_live_pointer_local_is_a_root_in_the_emitted_map() {
         );
         let _pin = NativeRootsPin::native();
         let ir = native_ir(&module, target, false);
-        let symbol = probe_symbol(name);
+        let symbol = probe_body_symbol(&ir, name);
         let fn_ir = function_slice(&ir, &symbol);
 
         // (1) the request
@@ -83,9 +83,9 @@ fn a_live_pointer_local_is_a_root_in_the_emitted_map() {
         );
         assert_eq!(
             root_allocas(fn_ir),
-            2,
-            "[{target}] both heap locals must be `ptr addrspace(1)` root \
-             slots:\n{fn_ir}"
+            3,
+            "[{target}] both heap locals and the unchecked generic-ABI \
+             parameter must be `ptr addrspace(1)` root slots:\n{fn_ir}"
         );
 
         // (2) the result
@@ -160,7 +160,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
             ],
         );
         let dead_ir = native_ir(&dead, target, false);
-        let dead_sym = probe_symbol(dead_name);
+        let dead_sym = probe_body_symbol(&dead_ir, dead_name);
         let dead_points = statepoints_of(&dead_ir, target, &dead_sym);
         let dead_allocs = dead_points.at("js_map_alloc");
         assert_eq!(dead_allocs.len(), 2, "[{target}] {dead_allocs:?}");
@@ -182,7 +182,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
             ],
         );
         let live_ir = native_ir(&live, target, false);
-        let live_sym = probe_symbol(live_name);
+        let live_sym = probe_body_symbol(&live_ir, live_name);
         let live_allocs = statepoints_of(&live_ir, target, &live_sym);
         let live_allocs = live_allocs.at("js_map_alloc");
         assert_eq!(
@@ -226,7 +226,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
 ///
 /// **Sabotage** — `function/precise_roots.rs`, retyping every `alloca double`
 /// rather than only the bound roots: RED, the numeric program's root slots went
-/// 1 → 2 while the heap control stayed at 2, collapsing the difference the
+/// 2 → 3 while the heap control stayed at 3, collapsing the difference the
 /// mechanic is about.
 #[test]
 fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
@@ -245,7 +245,7 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
             ],
         );
         let numeric_ir = native_ir(&numeric, target, false);
-        let numeric_sym = probe_symbol(numeric_name);
+        let numeric_sym = probe_body_symbol(&numeric_ir, numeric_name);
         let numeric_fn = function_slice(&numeric_ir, &numeric_sym);
 
         let heap_name = "m3_heap.ts";
@@ -258,14 +258,15 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
             ],
         );
         let heap_ir = native_ir(&heap, target, false);
-        let heap_sym = probe_symbol(heap_name);
+        let heap_sym = probe_body_symbol(&heap_ir, heap_name);
         let heap_fn = function_slice(&heap_ir, &heap_sym);
 
         assert_eq!(
             (root_allocas(numeric_fn), root_allocas(heap_fn)),
-            (1, 2),
-            "[{target}] two locals, of which only the heap one may reserve a \
-             root slot. Stated as a pair so a lowering that stopped rooting \
+            (2, 3),
+            "[{target}] the unchecked parameter is the common baseline; of \
+             the two locals, only the heap one may reserve another root slot. \
+             Stated as a pair so a lowering that stopped rooting \
              ANYTHING fails the second half instead of passing the first.\
              \nnumeric:\n{numeric_fn}\nheap:\n{heap_fn}"
         );
@@ -435,7 +436,7 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
             ],
         );
         let subject_ir = native_ir(&subject, target, false);
-        let subject_sym = probe_symbol(subject_name);
+        let subject_sym = probe_body_symbol(&subject_ir, subject_name);
         let subject_points = statepoints_of(&subject_ir, target, &subject_sym);
         let subject_allocs = subject_points.at("js_map_alloc");
         assert_eq!(
@@ -446,9 +447,10 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
         );
         assert_eq!(
             subject_allocs[1].live.len(),
-            1,
-            "[{target}] only `acc` may be live at the in-loop allocation. A \
-             second root here is the previous iteration's `tmp` surviving the \
+            2,
+            "[{target}] only `acc` and the unchecked loop-bound parameter may \
+             be live at the in-loop allocation. A third root here is the \
+             previous iteration's `tmp` surviving the \
              back edge: {:?}",
             subject_allocs[1]
         );
@@ -465,14 +467,15 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
             ],
         );
         let control_ir = native_ir(&control, target, false);
-        let control_sym = probe_symbol(control_name);
+        let control_sym = probe_body_symbol(&control_ir, control_name);
         let control_points = statepoints_of(&control_ir, target, &control_sym);
         let control_allocs = control_points.at("js_map_alloc");
         assert_eq!(
             control_allocs.last().unwrap().live.len(),
-            2,
-            "[{target}] CONTROL: two outer locals live across the loop must \
-             both be roots at the in-loop allocation — so the count above is \
+            3,
+            "[{target}] CONTROL: two outer locals plus the unchecked bound \
+             parameter live across the loop must all be roots at the in-loop \
+             allocation — so the count above is \
              not a cap: {:?}",
             control_allocs.last().unwrap()
         );
@@ -529,7 +532,7 @@ fn a_deduplicated_slot_index_still_reaches_the_native_root_set() {
             ],
         );
         let ir = native_ir(&module, target, false);
-        let symbol = probe_symbol(name);
+        let symbol = probe_body_symbol(&ir, name);
 
         // Both locals are live across the returned array's allocation, so the
         // collector must find TWO roots at that safepoint. A slot index that

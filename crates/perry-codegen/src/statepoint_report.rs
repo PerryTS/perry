@@ -11,7 +11,6 @@
 //! knob with no CI arm, so that spelling was deleted under CLAUDE.md's GC knob
 //! kill policy. `gc-native-roots.yml` exercises the report through the flag.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Mutex, OnceLock};
 
@@ -162,21 +161,6 @@ fn totals(records: &[FunctionRecord]) -> Totals {
         out.calls_with_live_roots += record.calls_with_live_roots;
     }
     out
-}
-
-fn render_ranked_map(out: &mut String, heading: &str, values: &BTreeMap<String, u64>) {
-    if values.is_empty() {
-        return;
-    }
-    let mut rows: Vec<_> = values.iter().collect();
-    rows.sort_by(|(name_a, count_a), (name_b, count_b)| {
-        count_b.cmp(count_a).then_with(|| name_a.cmp(name_b))
-    });
-    let _ = writeln!(out, "{heading}");
-    for (name, count) in rows.into_iter().take(25) {
-        let _ = writeln!(out, "  {count:>6}  {name}");
-    }
-    out.push('\n');
 }
 
 pub fn render_text(records: &[FunctionRecord]) -> String {

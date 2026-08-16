@@ -312,7 +312,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
     if crate::map::is_registered_map(ptr) {
         return "#<Map>".to_string();
     }
-    match crate::weakref::weak_class_id_from_receiver(value) {
+    match crate::object::weak_class_id_from_receiver(value) {
         Some(crate::weakref::CLASS_ID_WEAKSET) => return "#<WeakSet>".to_string(),
         Some(crate::weakref::CLASS_ID_WEAKMAP) => return "#<WeakMap>".to_string(),
         _ => {}
@@ -417,7 +417,7 @@ fn map_receiver_or_throw(method: &str) -> *mut crate::map::MapHeader {
 #[inline]
 fn weak_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    match crate::weakref::weak_class_id_from_receiver(receiver) {
+    match super::weak_class_id_from_receiver(receiver) {
         Some(cid) if cid == expected => receiver,
         _ => throw_incompatible_receiver(proto, method, receiver.to_bits()),
     }

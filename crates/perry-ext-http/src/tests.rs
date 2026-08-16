@@ -15,6 +15,21 @@ impl GcTestGuard {
         let lock = GC_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // These tests assert that a scanner REWROTE a root, which only has an
+        // observable answer if the collection actually MOVED the object. That
+        // is a policy decision (C4b weighs nursery/RSS pressure against
+        // measured movable candidates), and under unit-test conditions the
+        // policy legitimately declines — at which point the assertions read
+        // "the address did not change" and fail, with nothing wrong in the
+        // code under test. Force evacuation for the duration of the guard so
+        // the subject is guaranteed live; `perry-runtime`'s own
+        // `ForcedEvacuationTestGuard` is `#[cfg(test)]`-internal and cannot be
+        // reached from this crate's test binary, but the env knob is read
+        // fresh on every query and the guard already serializes these tests.
+        //
+        // SAFETY: `GC_TEST_LOCK` is held for the guard's whole lifetime, so no
+        // other GC test in this binary observes the mutation window.
+        unsafe { std::env::set_var("PERRY_GC_FORCE_EVACUATE", "1") };
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
         let frame = perry_runtime::gc::js_shadow_frame_push(0);
         Self { frame, _lock: lock }
@@ -25,6 +40,8 @@ impl Drop for GcTestGuard {
     fn drop(&mut self) {
         perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        // SAFETY: still under `GC_TEST_LOCK` (dropped after this body).
+        unsafe { std::env::remove_var("PERRY_GC_FORCE_EVACUATE") };
     }
 }
 

@@ -166,6 +166,11 @@ thread_local! {
     static NURSERY_CAP_SCALE: Cell<u8> = const { Cell::new(1) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// #7929: mean size of the objects the last copying minor moved. Seeded at
+    /// the calibration reference so a process with no completed copying minor
+    /// paces exactly as it did before the object denomination existed.
+    static MEAN_SURVIVING_OBJECT_BYTES: Cell<usize> =
+        const { Cell::new(NURSERY_CAP_REFERENCE_OBJECT_BYTES) };
 }
 
 /// The survivals threshold the next copying minor should promote at:
@@ -173,7 +178,48 @@ thread_local! {
 /// original fixed policy, 1 promotes every live nursery object on first
 /// copy.
 pub(super) fn tenuring_survivals() -> u8 {
+    if let Some(forced) = tenuring_survivals_override() {
+        return forced;
+    }
     TENURING_SURVIVALS.with(Cell::get)
+}
+
+/// `PERRY_GC_TENURING_SURVIVALS=<u8>` pins the promotion age, overriding the
+/// adaptive threshold (#7432). Diagnostic only; unset means adaptive.
+///
+/// # Why (#7803)
+///
+/// Three independent measurements say this bug gets LESS likely as collections
+/// get denser — paced ~30-50%, interpreter safepoints on 2/8 vs 6/8, unpaced
+/// (9.4x the cycles) passing. That is backwards for a value held unrooted
+/// across a collection point, and it is what four separate rooting fixes
+/// failing to move the rate looks like.
+///
+/// `moved_objects` explains it: 892k unpaced against 862k paced, despite 9.4x
+/// the cycles. The extra collections are not relocating MORE, they are
+/// promoting the same objects SOONER — and an old-gen object is not moved by a
+/// minor. So denser collections mean fewer relocations per object.
+///
+/// If the defect needs an object RELOCATED while a stale reference to it
+/// exists, this knob tests it directly instead of through the schedule:
+///
+///   `=1`   promote on the first minor  -> fewest relocations -> predicts the
+///          failure disappears;
+///   `=255` never promote by age        -> every survivor re-evacuated every
+///          cycle -> predicts the failure becomes reliable, which would be the
+///          deterministic reproducer this bug has never had.
+///
+/// Pair it with `PERRY_GC_SCHEDULE_ALLOC_KB=0`, which pins the schedule
+/// exactly (63,941 safepoints, reproduced to the digit), so a change in
+/// outcome at a fixed seed is attributable to this knob and nothing else.
+fn tenuring_survivals_override() -> Option<u8> {
+    use std::sync::OnceLock;
+    static OVERRIDE: OnceLock<Option<u8>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        std::env::var("PERRY_GC_TENURING_SURVIVALS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+    })
 }
 
 /// The effective scavenge nursery cap: the configured base
@@ -211,10 +257,107 @@ pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
 }
 
 /// The influx-driven half of the cap on its own: the configured base times
-/// the debounced `NURSERY_CAP_SCALE`. Named so the composition below reads as
-/// the two-term policy it is.
-fn influx_driven_nursery_cap_bytes() -> usize {
-    gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize)
+/// the debounced `NURSERY_CAP_SCALE`, **re-denominated in objects** by
+/// [`nursery_cap_object_scale_permille`]. Named so the composition below reads
+/// as the two-term policy it is.
+pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
+    let constant_band =
+        gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
+    // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
+    // ILP32 target (watchOS/visionOS are 32-bit) would saturate a 64 MB band
+    // against a 1000-per-mille factor at `u32::MAX` and the following divide
+    // would then hand back ~4 MB — a silent 16x cap collapse on exactly the
+    // devices with the least headroom. A 64-bit intermediate cannot overflow:
+    // the band is bounded by 4 GB and the factor by 1000.
+    let scaled = constant_band as u64
+        * nursery_cap_object_scale_permille(mean_surviving_object_bytes()) as u64
+        / 1000;
+    scaled.min(usize::MAX as u64) as usize
+}
+
+/// #7929: the mean size of the objects the last copying minor actually moved,
+/// in bytes — `(copied + promoted) bytes / (copied + promoted) objects`.
+///
+/// Seeded at [`NURSERY_CAP_REFERENCE_OBJECT_BYTES`] so a process that has never
+/// completed a copying minor paces bit-identically to the pre-#7929 collector.
+pub(super) fn mean_surviving_object_bytes() -> usize {
+    MEAN_SURVIVING_OBJECT_BYTES.with(Cell::get)
+}
+
+/// Mean surviving object size the 16 MB constant band was calibrated against.
+///
+/// #7056 (the cap) and #7377/#7592 (its scale ladder) were measured on a heap
+/// whose two-field object literal was **72 bytes**; #7928 right-sized that to
+/// 56. The constant is the *calibration anchor*, not a claim about any current
+/// representation — moving it re-tunes the cap for every program at once.
+pub(super) const NURSERY_CAP_REFERENCE_OBJECT_BYTES: usize = 72;
+/// Floor for the object-denomination factor (per mille). At the corpus's
+/// smallest measured mean (32.8 B on `tree_wide`) the unclamped factor is 456;
+/// the floor bounds how far a shrinking representation may pull the cap down,
+/// so the collection *count* cannot run away on a workload whose survivors are
+/// atypically small.
+const NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE: usize = 500;
+
+/// #7929: how much of the byte-denominated constant band this representation
+/// should get, in per mille, so the band buys a **constant number of objects**.
+///
+/// The collector's trigger is denominated in bytes and its per-cycle cost is
+/// per object, so a fixed byte band silently buys more collector work as
+/// objects shrink: #7928 took a two-field object 72 B → 56 B and every minor
+/// then moved 1.286× (= 72/56) as many objects for the same bytes, costing
+/// `deeplist` +10.5% and `retain1` +8.8% wall. Scaling the band by
+/// `mean / reference` restores `band / mean` — the object budget — to what the
+/// band was calibrated to buy.
+///
+/// **Deliberately one-sided.** The factor is clamped at 1000, so a
+/// representation *larger* than the reference gets the unchanged band rather
+/// than a proportionally larger one. Two reasons, both measured:
+///
+/// * The byte-weighted mean is not a representative object size on a workload
+///   whose survivors are dominated by large allocations — `push_num`'s mean is
+///   **3600 B** because it survives arrays, not objects (the documented blocker
+///   on #7929). One-sided clamping turns that from a ×50 cap explosion into
+///   exactly today's behaviour.
+/// * The corpus response to the cap is threshold-dominated (which cycle *kinds*
+///   fire), so *raising* a cap is the risky direction: it is how a program
+///   crosses `GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES` or lands in a #7909 budgeted
+///   stall. Every program at or above the reference — `retain_wide`,
+///   `retain_wide1`, `push_num`, `shapes` — is left bit-identical.
+pub(super) fn nursery_cap_object_scale_permille(mean_surviving_object_bytes: usize) -> usize {
+    if mean_surviving_object_bytes == 0 {
+        return 1000;
+    }
+    (mean_surviving_object_bytes * 1000 / NURSERY_CAP_REFERENCE_OBJECT_BYTES)
+        .clamp(NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE, 1000)
+}
+
+/// Feed one finished copying minor's move census into the object denomination.
+///
+/// Called from the copying minor immediately before [`retune_after_scavenge`],
+/// so everything that end-of-cycle computes is policy for the *next* cycle and
+/// sees one consistent factor. A cycle that moved nothing carries the previous
+/// estimate forward rather than resetting it — `tree`/`cycles` move single
+/// digits of objects per minor and a zero denominator there is a missing
+/// measurement, not a measurement of zero.
+pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: usize) {
+    if moved_objects == 0 {
+        return;
+    }
+    let mean = moved_bytes / moved_objects;
+    if mean == 0 {
+        return;
+    }
+    let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
+    if previous != mean && crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
+             (scale {} permille, band {} B)",
+            previous,
+            mean,
+            nursery_cap_object_scale_permille(mean),
+            influx_driven_nursery_cap_bytes()
+        );
+    }
 }
 
 /// The cap policy as a **pure function of its two inputs**, so it is testable
@@ -421,7 +564,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     // mark-sweep, including refusals. A policy that silently declines is
     // indistinguishable from one that never ran (#7024/#7025), and the
     // refusal reason is the number a future tuning decision needs.
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
         let pct = if classified == 0 {
             0
@@ -445,7 +588,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}x -> {to}x (eden_live_bytes={eden_live_bytes})"
         );
@@ -457,7 +600,7 @@ fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
         return;
     }
     TENURING_SURVIVALS.with(|s| s.set(next));
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={})",
             current,
@@ -478,6 +621,7 @@ pub(super) fn reset_for_test() {
     NURSERY_CAP_SCALE.with(|s| s.set(1));
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
+    MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
 }
 
 #[cfg(test)]
@@ -485,6 +629,117 @@ mod tests {
     use super::*;
 
     const MB: usize = 1024 * 1024;
+
+    /// #7929: the constant band must buy a CONSTANT NUMBER OF OBJECTS.
+    ///
+    /// The discriminating quantity is deliberately `band / mean` (the object
+    /// budget), not "the band changed". A test that only asserted the band
+    /// moved would pass under any scaling at all — including one that made the
+    /// mismatch worse. Only a band proportional to the mean holds this ratio
+    /// fixed, and the final assertion shows the *un*-denominated band does not:
+    /// without the term this test cannot pass.
+    #[test]
+    fn constant_band_buys_a_constant_object_count() {
+        reset_for_test();
+        let base = gc_scavenge_nursery_cap_bytes();
+        let band_of = |mean: usize| base * nursery_cap_object_scale_permille(mean) / 1000;
+
+        // The two representations #7928 moved between.
+        let reference = NURSERY_CAP_REFERENCE_OBJECT_BYTES; // 72 B
+        let shrunk = 56; // #7928's two-field literal
+        let objects_at_reference = band_of(reference) / reference;
+        let objects_at_shrunk = band_of(shrunk) / shrunk;
+        let drift = objects_at_reference.abs_diff(objects_at_shrunk) * 1000 / objects_at_reference;
+        assert!(
+            drift <= 5,
+            "object budget must be representation-invariant: {objects_at_reference} objects at \
+             {reference} B vs {objects_at_shrunk} at {shrunk} B ({drift} permille drift)"
+        );
+
+        // The band this replaces does NOT hold the ratio: 72 -> 56 is exactly
+        // the 1.286x the issue measured. This is the sabotage arm inline — it
+        // is what the assertion above is distinguishing itself from.
+        let undenominated = base / shrunk * 1000 / (base / reference);
+        assert!(
+            undenominated >= 1250,
+            "a byte-denominated band must inflate the object budget by ~72/56; measured \
+             {undenominated} permille — if this is 1000 the two arms are the same and the \
+             assertion above proves nothing"
+        );
+        reset_for_test();
+    }
+
+    /// The clamp is one-sided, and each endpoint is a named failure it exists
+    /// to prevent.
+    #[test]
+    fn object_scale_clamps_are_one_sided() {
+        // No measurement yet: exactly today's band.
+        assert_eq!(nursery_cap_object_scale_permille(0), 1000);
+        // The calibration anchor is a no-op by construction.
+        assert_eq!(
+            nursery_cap_object_scale_permille(NURSERY_CAP_REFERENCE_OBJECT_BYTES),
+            1000
+        );
+        // Shrunk representations scale proportionally.
+        assert_eq!(nursery_cap_object_scale_permille(56), 777);
+        assert_eq!(nursery_cap_object_scale_permille(54), 750);
+        // Larger-than-reference is NOT scaled up: retain_wide (104 B) keeps
+        // the band it has today...
+        assert_eq!(nursery_cap_object_scale_permille(104), 1000);
+        // ...and push_num's 3600 B array-dominated mean — the documented
+        // #7929 blocker — cannot explode the cap ~50x.
+        assert_eq!(nursery_cap_object_scale_permille(3600), 1000);
+        // The floor bounds how far a small-survivor workload pulls the band
+        // down (tree_wide measures 32.8 B; unclamped that is 456 permille).
+        assert_eq!(nursery_cap_object_scale_permille(32), 500);
+        assert_eq!(nursery_cap_object_scale_permille(8), 500);
+    }
+
+    /// The census is the only writer, and a cycle that moved nothing must not
+    /// be read as "mean size zero" — `tree`/`cycles` move single digits of
+    /// objects per minor and skip cycles entirely.
+    #[test]
+    fn census_carries_forward_across_a_cycle_that_moved_nothing() {
+        reset_for_test();
+        let base = gc_scavenge_nursery_cap_bytes();
+        assert_eq!(
+            influx_driven_nursery_cap_bytes(),
+            base,
+            "unmeasured process must pace exactly as the pre-#7929 collector did"
+        );
+
+        note_surviving_object_census(56 * 1000, 1000);
+        let after_measurement = influx_driven_nursery_cap_bytes();
+        assert_eq!(after_measurement, base * 777 / 1000);
+
+        note_surviving_object_census(0, 0);
+        note_surviving_object_census(4096, 0);
+        assert_eq!(
+            influx_driven_nursery_cap_bytes(),
+            after_measurement,
+            "a cycle with no moved objects is a missing measurement, not a zero one"
+        );
+        reset_for_test();
+        assert_eq!(influx_driven_nursery_cap_bytes(), base);
+    }
+
+    /// The tenured-proportional term is representation-invariant by
+    /// cancellation (`tenured_bytes / 2` is `tenured_objects / 2` objects), so
+    /// the object denomination must apply to the constant band ONLY. If it
+    /// leaked into `scavenge_nursery_cap_from` the proportional arm would be
+    /// scaled twice.
+    #[test]
+    fn only_the_constant_band_is_re_denominated() {
+        reset_for_test();
+        note_surviving_object_census(56 * 1000, 1000);
+        let tenured = 512 * MB;
+        assert_eq!(
+            scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes(), tenured),
+            tenured / TENURED_EDEN_DIVISOR,
+            "the proportional arm must reach the max() unscaled"
+        );
+        reset_for_test();
+    }
 
     #[test]
     fn target_formula_matches_projected_occupancy() {

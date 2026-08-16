@@ -30,14 +30,28 @@ fn throw_invalid_index(index: f64) -> ! {
 /// `arr.toReversed()` — return a new reversed copy (immutable)
 #[no_mangle]
 pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHeader {
+    // #3148/#2879/#8096: %TypedArray% receiver — reverse over element-typed
+    // storage. Asked BEFORE `clean_arr_ptr` for the reason
+    // `typed_array_receiver` documents: written after the clean this branch is
+    // unreachable, because since #7574 the funnel returns null for every
+    // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
+    // `GC_TYPE_TYPED_ARRAY` one. Reached that way the helper answered an EMPTY
+    // plain array, not the receiver's reversed elements.
+    if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+    }
+    // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
+    // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
+    // so `typed_array_receiver` legitimately answers `None` and the clean
+    // below rejects it as a tracked non-array. See
+    // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
+    // for the immutable methods.
+    if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+    }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
-    }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_to_reversed(
-            arr as *const crate::typedarray::TypedArrayHeader,
-        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as usize;
@@ -57,12 +71,30 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
 /// `arr.toSorted()` — return a new sorted copy (default string sort, immutable)
 #[no_mangle]
 pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
-    if !arr.is_null() && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_to_sorted_default(
-            arr as *const crate::typedarray::TypedArrayHeader,
-        ) as *mut ArrayHeader;
+    // #3148/#2879/#8096: %TypedArray% receiver — sort over element-typed
+    // storage. Asked BEFORE `clean_arr_ptr` for the reason
+    // `typed_array_receiver` documents: written after the clean this branch is
+    // unreachable, because since #7574 the funnel returns null for every
+    // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
+    // `GC_TYPE_TYPED_ARRAY` one.
+    // The typed twin also carries the right ORDER: `%TypedArray%.prototype.
+    // toSorted` with no comparator sorts NUMERICALLY (§23.2.3.32 ->
+    // CompareTypedArrayElements), where `Array.prototype.toSorted` sorts by
+    // ToString. Falling through to the plain-array body would be the string
+    // order even if the slots were readable (#8096).
+    if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
     }
+    // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
+    // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
+    // so `typed_array_receiver` legitimately answers `None` and the clean
+    // below rejects it as a tracked non-array. See
+    // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
+    // for the immutable methods.
+    if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
+    }
+    let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -102,13 +134,27 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     if comparator.is_null() {
         return js_array_to_sorted_default(arr);
     }
-    let arr = clean_arr_ptr(arr);
-    if !arr.is_null() && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_to_sorted_with_comparator(
-            arr as *const crate::typedarray::TypedArrayHeader,
-            comparator,
-        ) as *mut ArrayHeader;
+    // #3148/#2879/#8096: %TypedArray% receiver — sort over element-typed
+    // storage. Asked BEFORE `clean_arr_ptr` for the reason
+    // `typed_array_receiver` documents: written after the clean this branch is
+    // unreachable, because since #7574 the funnel returns null for every
+    // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
+    // `GC_TYPE_TYPED_ARRAY` one.
+    if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
+            as *mut ArrayHeader;
     }
+    // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
+    // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
+    // so `typed_array_receiver` legitimately answers `None` and the clean
+    // below rejects it as a tracked non-array. See
+    // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
+    // for the immutable methods.
+    if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
+            as *mut ArrayHeader;
+    }
+    let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -239,16 +285,29 @@ pub extern "C" fn js_array_with(
     // source local can't corrupt it. No-op for SSO / non-string. The cloned
     // elements come from `arr` and are already shared. (Mirrors #5548.)
     crate::string::js_string_addref_if_heap_string(value);
+    // #3148/#2879/#8096: %TypedArray% receiver — replace one element over
+    // element-typed storage. Asked BEFORE `clean_arr_ptr` for the reason
+    // `typed_array_receiver` documents: written after the clean this branch is
+    // unreachable, because since #7574 the funnel returns null for every
+    // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
+    // `GC_TYPE_TYPED_ARRAY` one.
+    // The typed twin also owns the per-kind coercion of `value` (a `300` into
+    // a `Uint8Array` must read back `44`) and the typed RangeError text.
+    if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+    }
+    // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
+    // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
+    // so `typed_array_receiver` legitimately answers `None` and the clean
+    // below rejects it as a tracked non-array. See
+    // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
+    // for the immutable methods.
+    if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
+        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+    }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
-    }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_with(
-            arr as *const crate::typedarray::TypedArrayHeader,
-            index,
-            value,
-        ) as *mut ArrayHeader;
     }
     unsafe {
         let len = (*arr).length as isize;
@@ -286,25 +345,49 @@ pub extern "C" fn js_array_copy_within(
     has_end: i32,
     end: f64,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        return arr;
-    }
-    // #3148: TypedArray receiver — copy over element-typed storage. The typed
-    // impl treats an undefined `end` as "to length", so pass TAG_UNDEFINED
-    // when no end argument was provided.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    // #3148/#2879: TypedArray receiver — copy over element-typed storage. The
+    // typed impl treats an undefined `end` as "to length", so pass
+    // TAG_UNDEFINED when no end argument was provided. Asked BEFORE
+    // `clean_arr_ptr_mut` for the reason `typed_array_receiver` documents — as
+    // a post-clean branch this was unreachable, so `ta.copyWithin(…)` was a
+    // silent no-op for BOTH a statically-typed receiver (codegen's
+    // `lower_array_method` arm) and an `any`-typed one (whose HIR
+    // `Expr::ArrayCopyWithin` fold lands on this same helper).
+    if let Some(ta) = typed_array_receiver(arr) {
         let end_value = if has_end != 0 {
             end
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        return crate::typedarray::js_typed_array_copy_within(
-            arr as *mut crate::typedarray::TypedArrayHeader,
+        return crate::typedarray::js_typed_array_copy_within(ta, target, start, end_value)
+            as *mut ArrayHeader;
+    }
+    // #2879: the Buffer/`Uint8Array` shape lands here too — its elements are
+    // single bytes in a `BufferHeader`, so the buffer dispatcher owns the copy
+    // (`object/buffer_dispatch.rs`'s `copyWithin` arm). Reached whenever the
+    // receiver's static type is unknown, because the HIR `copyWithin` fold
+    // (`local_array_methods.rs`) declines only for a *known* typed array and
+    // otherwise lowers straight to this helper.
+    let addr = array_receiver_addr(arr);
+    if crate::buffer::is_registered_buffer(addr) {
+        let args = [
             target,
             start,
-            end_value,
-        ) as *mut ArrayHeader;
+            if has_end != 0 {
+                end
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            },
+        ];
+        let len = if has_end != 0 { 3 } else { 2 };
+        unsafe {
+            crate::object::dispatch_buffer_method(addr, "copyWithin", args.as_ptr(), len);
+        }
+        return arr;
+    }
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return arr;
     }
     // Spec order (ECMA-262 §23.1.3.4): ToIntegerOrInfinity(target), then
     // (start), then (end). Each coerces via ToNumber → fires `valueOf` /

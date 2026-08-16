@@ -231,11 +231,16 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
         }
     }
-    if let Some(cid) = crate::weakref::weak_class_id_from_receiver(value) {
-        let tag = if cid == crate::weakref::CLASS_ID_WEAKSET {
-            "WeakSet"
-        } else {
-            "WeakMap"
+    // #7947: `WeakRef` / `FinalizationRegistry` were missing here, so
+    // `Object.prototype.toString.call(new WeakRef(x))` answered
+    // `[object Object]` instead of `[object WeakRef]`. Same reserved-class_id
+    // question as WeakMap/WeakSet, just two more arms.
+    if let Some(cid) = crate::object::weak_wrapper_class_id(value) {
+        let tag = match cid {
+            crate::weakref::CLASS_ID_WEAKSET => "WeakSet",
+            crate::weakref::CLASS_ID_WEAKREF => "WeakRef",
+            crate::weakref::CLASS_ID_FINALIZATION_REGISTRY => "FinalizationRegistry",
+            _ => "WeakMap",
         };
         let formatted = format!("[object {}]", tag);
         let str_ptr =
@@ -378,6 +383,8 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                 tag_str = Some("DecompressionStream".to_string());
             } else if class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 tag_str = Some("RegExp String Iterator".to_string());
+            } else if class_id == crate::object::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+                tag_str = Some("Module".to_string());
             }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);
@@ -429,6 +436,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
 /// caller's `None` arm.
 fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
     match module {
+        "module" => Some("Module"),
         // `Object.prototype.toString.call(performance)` is
         // "[object Performance]" in Node.
         "perf_hooks" => Some("Performance"),

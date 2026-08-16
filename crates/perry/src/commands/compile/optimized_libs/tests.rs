@@ -1052,3 +1052,133 @@ fn retain_workspace_declared_features_keeps_all_without_manifests() {
     assert!(dropped.is_empty());
     assert_eq!(cross_features.len(), 2);
 }
+
+/// The well-known flip drops `compression-brotli`/`compression-zstd` from the
+/// stdlib rebuild on a stated premise: "The ext crate carries all codecs, so
+/// nothing is lost by dropping them here."
+///
+/// #8005: that premise was a comment and nothing checked it. It is false for
+/// the RAW one-shots — `js_zlib_deflate_raw_sync` and `js_zlib_inflate_raw_sync`
+/// exist only in perry-stdlib — so the flip removed them from the link and
+/// `test_gap_zlib_4917_level` failed with two undefined symbols, two stages
+/// downstream of the decision that caused it.
+///
+/// This scans both crates for exported `js_zlib_*` symbols and requires the ext
+/// surface to be a superset, minus an explicit shrink-only list. A name that
+/// leaves stdlib, or gains an ext implementation, must be deleted from
+/// `KNOWN_EXT_GAPS` in the same commit — an entry matching nothing FAILS, so
+/// the list cannot rot into an alibi.
+#[test]
+fn ext_zlib_covers_every_stdlib_symbol_the_flip_strips() {
+    /// Symbols perry-stdlib exports that perry-ext-zlib does not implement yet.
+    /// SHRINKS ONLY. Every entry is reachable today only because the flip does
+    /// not strip the feature that defines it; adding one is how #8005 happened.
+    const KNOWN_EXT_GAPS: &[&str] = &[
+        // Stream constructors — perry-ext-zlib owns streams through its own
+        // dispatch (`js_ext_zlib_dispatch_method`) rather than these entry
+        // points, so these are a naming difference, not a hole. Listed so the
+        // superset check stays honest instead of being weakened to ignore them.
+        "js_zlib_create_brotli_compress",
+        "js_zlib_create_brotli_decompress",
+        "js_zlib_create_deflate",
+        "js_zlib_create_deflate_raw",
+        "js_zlib_create_gunzip",
+        "js_zlib_create_gzip",
+        "js_zlib_create_inflate",
+        "js_zlib_create_inflate_raw",
+        "js_zlib_create_unzip",
+        "js_zlib_create_zstd_compress",
+        "js_zlib_create_zstd_decompress",
+        // Pump/dispatch plumbing, supplied by the `external-zlib-pump` feature
+        // the flip ADDS rather than strips.
+        "js_zlib_has_active_handles",
+        "js_zlib_native_dispatch",
+        "js_zlib_process_pending",
+        // Genuine one-shot gaps. Same shape as the #8005 pair; they have not
+        // broken a link only because no gap test links them on this path yet.
+        "js_zlib_crc32",
+        "js_zlib_deflate_raw",
+        "js_zlib_inflate_raw",
+        "js_zlib_unzip",
+        "js_zlib_unzip_sync",
+    ];
+
+    fn exported_zlib_symbols(dir: &Path) -> std::collections::BTreeSet<String> {
+        let mut found = std::collections::BTreeSet::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for line in text.lines() {
+                    if let Some(rest) = line.split("fn js_zlib_").nth(1) {
+                        let name: String = rest
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect();
+                        if !name.is_empty() {
+                            found.insert(format!("js_zlib_{name}"));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    let root = find_perry_workspace_root().expect("workspace root");
+    let stdlib = exported_zlib_symbols(&root.join("crates/perry-stdlib/src"));
+    let ext = exported_zlib_symbols(&root.join("crates/perry-ext-zlib/src"));
+
+    // Live-subject check: a scan that found nothing would make every assertion
+    // below vacuously true, which is precisely the failure mode this test is
+    // about.
+    assert!(
+        stdlib.len() > 20 && ext.len() > 10,
+        "symbol scan looks broken — stdlib {} / ext {}; the superset check \
+         below would pass without proving anything",
+        stdlib.len(),
+        ext.len()
+    );
+    assert!(
+        ext.contains("js_zlib_deflate_raw_sync") && ext.contains("js_zlib_inflate_raw_sync"),
+        "#8005's pair must stay implemented in perry-ext-zlib; the flip strips \
+         the stdlib feature that would otherwise supply them"
+    );
+
+    let missing: Vec<&String> = stdlib
+        .iter()
+        .filter(|name| !ext.contains(*name) && !KNOWN_EXT_GAPS.contains(&name.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "perry-stdlib exports these `js_zlib_*` symbols and perry-ext-zlib does \
+         not: {missing:?}. The well-known flip routes `node:zlib` to the ext \
+         crate on the premise that it carries everything, so a symbol only \
+         stdlib defines disappears from the link. Implement it in \
+         perry-ext-zlib, or add it to KNOWN_EXT_GAPS with the reason."
+    );
+
+    let stale: Vec<&&str> = KNOWN_EXT_GAPS
+        .iter()
+        .filter(|name| !stdlib.contains(**name) || ext.contains(**name))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these KNOWN_EXT_GAPS entries no longer describe reality — the symbol \
+         left perry-stdlib or gained an ext implementation: {stale:?}. Delete \
+         them; a list that outlives its entries stops being a ratchet."
+    );
+}

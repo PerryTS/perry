@@ -93,7 +93,34 @@
                     &[(DOUBLE, &from), (DOUBLE, &specifier)],
                 ));
             }
-            // Next.js wall 54: register an AOT-compiled module by absolute path.
+            // Next.js wall 54: publish a CJS module's partial exports before
+            // its body so same-thread recursive requires can observe them.
+            "registerPathModulePartial" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let exports = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                ctx.block().call_void(
+                    "js_register_path_module_partial",
+                    &[(DOUBLE, &path), (DOUBLE, &exports)],
+                );
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            // #6769: link `module.parent` before the wrapper body runs.
+            "linkPathModuleParent" => {
+                let record = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                ctx.block()
+                    .call_void("js_link_path_module_parent", &[(DOUBLE, &record)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            // Next.js wall 54: publish the final exports by absolute path.
             "registerPathModule" => {
                 let path = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
@@ -118,6 +145,17 @@
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_require_path_module", &[(DOUBLE, &path)]));
+            }
+            // Presence bit for a real path module whose export value is
+            // JavaScript `undefined` (which cannot itself signal a hit).
+            "hasPathModule" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_has_path_module", &[(DOUBLE, &path)]));
             }
             _ => {}
         }

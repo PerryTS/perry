@@ -9,6 +9,28 @@
 
 use super::*;
 
+extern "C" {
+    #[link_name = "js_closure_alloc"]
+    fn provider_js_closure_alloc(
+        function: *const u8,
+        capture_count: u32,
+    ) -> *mut perry_runtime::closure::ClosureHeader;
+    #[link_name = "js_closure_set_capture_f64"]
+    fn provider_js_closure_set_capture_f64(
+        closure: *mut perry_runtime::closure::ClosureHeader,
+        index: u32,
+        value: f64,
+    );
+    #[link_name = "js_closure_set_capture_ptr"]
+    fn provider_js_closure_set_capture_ptr(
+        closure: *mut perry_runtime::closure::ClosureHeader,
+        index: u32,
+        value: i64,
+    );
+    #[link_name = "js_nanbox_pointer"]
+    fn provider_js_nanbox_pointer(pointer: i64) -> f64;
+}
+
 lazy_static::lazy_static! {
     static ref HEADERS_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
         Mutex::new(HashMap::new());
@@ -29,11 +51,13 @@ pub(crate) fn headers_bound_method_value(headers_id: usize, method_name: &'stati
     }
 
     let closure =
-        perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
-    perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(headers_id));
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
-    let value = perry_runtime::value::js_nanbox_pointer(closure as i64);
+        unsafe { provider_js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3) };
+    unsafe {
+        provider_js_closure_set_capture_f64(closure, 0, handle_to_f64(headers_id));
+        provider_js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
+        provider_js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
+    }
+    let value = unsafe { provider_js_nanbox_pointer(closure as i64) };
     unsafe { js_write_barrier_root_nanbox(value.to_bits()) };
     HEADERS_METHOD_VALUE_CACHE
         .lock()

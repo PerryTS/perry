@@ -474,13 +474,23 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
     // prototype under an address nothing will look up, and `instanceof
     // SuppressedError` quietly stops resolving.
     //
-    // So root once and re-read at every use, which is what the handle gives.
+    // So root once and re-read at every use, which is what the handle gives —
+    // through `across_mut`, so the pre-call address is never *nameable* (#7341).
+    // Note the second `across_mut` below is not cosmetic: `set_property_attrs`
+    // keys the attribute side table on `obj as usize`, and it runs AFTER
+    // `js_object_set_field_by_name`, which allocates when the object grows. A
+    // pre-call address there does not fault — it files the attributes under an
+    // address nothing will look up, and the property silently becomes
+    // enumerable.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let set_nonenum = |key: &str, value: f64| {
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        js_object_set_field_by_name(obj, key_ptr, value);
+        let (key_ptr, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            js_string_from_bytes(key.as_ptr(), key.len() as u32)
+        });
+        let ((), obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            js_object_set_field_by_name(obj, key_ptr, value)
+        });
         crate::object::set_property_attrs(
             obj as usize,
             key.to_string(),
@@ -501,16 +511,26 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
         };
         set_nonenum("message", message_val);
     }
-    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-    let result = js_nanbox_pointer(obj as i64);
     // Link the instance to `SuppressedError.prototype` so `name`/`message`
     // defaults and `instanceof SuppressedError` resolve through the chain.
-    let proto = crate::object::builtin_prototype_value("SuppressedError");
-    if proto.to_bits() != TAG_UNDEFINED && js_nanbox_get_pointer(proto) != 0 {
-        let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
-    }
-    result
+    //
+    // The NaN-box of the result is built LAST, after every allocating call. The
+    // pre-#7341 shape built it before the prototype lookup and returned that
+    // copy, which is a stale address by the same argument as everything above —
+    // `js_nanbox_pointer` freezes an address into a return value the collector
+    // cannot rewrite.
+    let (proto, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+        crate::object::builtin_prototype_value("SuppressedError")
+    });
+    let ((), obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+        if proto.to_bits() != TAG_UNDEFINED && js_nanbox_get_pointer(proto) != 0 {
+            crate::object::prototype_chain::object_set_static_prototype(
+                obj as usize,
+                proto.to_bits(),
+            );
+        }
+    });
+    js_nanbox_pointer(obj as i64)
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 use super::*;
 use crate::collectors::PtrShapeLocal;
 use perry_hir::types::{FuncId, Type};
-use perry_hir::{ClassField, Function, Param};
+use perry_hir::{ClassField, Decorator, Function, Param};
 
 fn field(name: &str) -> ClassField {
     ClassField {
@@ -286,11 +286,639 @@ fn call_to_a_return_shape_producer_is_provenance() {
     );
 }
 
+fn returning_method_class(class_name: &str, method_id: u32) -> Class {
+    let mut class = class_c();
+    class.id = 2;
+    class.name = class_name.to_string();
+    class.fields.clear();
+    class.methods = vec![function(
+        method_id,
+        "make",
+        vec![Stmt::Return(Some(new_c()))],
+    )];
+    class
+}
+
+fn method_call_result(receiver_id: u32, result_id: u32) -> Stmt {
+    Stmt::Let {
+        id: result_id,
+        name: "result".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(receiver_id)),
+                property: "make".to_string(),
+                byte_offset: 0,
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    }
+}
+
+/// #7170 R2: a fresh-returning instance method is the same producer proof as
+/// a function, but its consumer additionally depends on exact receiver shape
+/// and stable prototype dispatch.
+///
+/// Sabotage: remove `collect_return_shape_methods` or the `PropertyGet` callee
+/// arm in `find_return_shape_candidates`; the result loses its fact.
+#[test]
+fn method_return_shape_is_provenance_on_a_proven_receiver() {
+    let maker = returning_method_class("Maker", 60);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 60),
+        Some("C")
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(
+        promoted.contains_key(&1),
+        "the exact receiver proof must survive"
+    );
+    let result = promoted
+        .get(&2)
+        .expect("the method result must be a Ptr<Shape> candidate");
+    assert_eq!(result.class_name, "C");
+    assert!(
+        result.numeric_fields.is_empty(),
+        "a method-seeded candidate cannot see producer-side stores"
+    );
+}
+
+/// The method result depends on the receiver's FINAL proof, not merely its
+/// initial `new` seed. A later bare reference aliases the receiver and must
+/// remove both facts.
+///
+/// Sabotage: delete the method-receiver fixpoint at the end of
+/// `collect_shape_proven_ptr_locals`; the result incorrectly survives.
+#[test]
+fn method_result_is_dropped_when_its_receiver_proof_fails() {
+    let maker = returning_method_class("Maker", 61);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+        Stmt::Expr(Expr::LocalGet(1)),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(!promoted.contains_key(&1));
+    assert!(
+        !promoted.contains_key(&2),
+        "the result cannot outlive the exact receiver proof that resolved its callee"
+    );
+}
+
+/// The seeded result's call remains part of the receiver's use walk. Skipping
+/// the callee while handling `const result = maker.make()` would omit `make`
+/// from `method_calls`, allowing an unsafe `this` escape in the producer and
+/// leaving both the receiver and its dependent result incorrectly promoted.
+#[test]
+fn method_return_call_audits_the_receivers_this_flow() {
+    let mut maker = returning_method_class("Maker", 64);
+    maker.methods[0].body = vec![Stmt::Expr(Expr::This), Stmt::Return(Some(new_c()))];
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 64),
+        Some("C"),
+        "fresh return provenance is independent of receiver containment"
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(
+        !promoted.contains_key(&1),
+        "the called method's bare `this` must disqualify its receiver"
+    );
+    assert!(
+        !promoted.contains_key(&2),
+        "the method result must be dropped when its receiver proof fails"
+    );
+}
+
+/// Duplicate method declarations in one class use last-declaration semantics
+/// in JavaScript. Until Perry's symbol and dispatch paths agree on that rule,
+/// a first-declaration return fact must not license the call result.
+#[test]
+fn method_return_shape_refuses_duplicate_method_declarations() {
+    let mut maker = returning_method_class("Maker", 65);
+    maker.methods.push(function(
+        66,
+        "make",
+        vec![Stmt::Return(Some(Expr::LocalGet(999)))],
+    ));
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 65),
+        Some("C"),
+        "the test requires a tempting fact on the first declaration"
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    assert!(
+        !promote(&caller, &classes, &facts).contains_key(&2),
+        "duplicate declarations must keep return-shape dispatch fail-closed"
+    );
+}
+
+/// Merely declaring a receiver type does not establish its exact dynamic
+/// class. Likewise, naming a prototype anywhere makes dispatch mutable. Both
+/// cases must remain on the guarded protocol.
+#[test]
+fn method_return_shape_refuses_unproven_or_unstable_receivers() {
+    let maker = returning_method_class("Maker", 62);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let unproven = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::Undefined),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    assert!(!promote(&unproven, &classes, &facts).contains_key(&2));
+
+    let mut hir = Module::new("unstable");
+    hir.classes = vec![c.clone(), maker.clone()];
+    hir.init = vec![Stmt::Expr(Expr::PropertyGet {
+        object: Box::new(Expr::ClassRef("Maker".to_string())),
+        property: "prototype".to_string(),
+        byte_offset: 0,
+    })];
+    let unstable = super::super::collect_module_dispatch_facts(&hir);
+    let proven_receiver = vec![
+        Stmt::Let {
+            id: 3,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(3, 4),
+        store_x(4),
+    ];
+    assert!(
+        !promote(&proven_receiver, &classes, &unstable).contains_key(&4),
+        "a mutable prototype must prevent static method resolution"
+    );
+}
+
+/// A legacy decorator is arbitrary code and may replace `Maker.prototype.make`
+/// from another module, beyond this module's prototype-expression scan.
+#[test]
+fn decorated_method_class_carries_no_return_shape_fact() {
+    let mut maker = returning_method_class("Maker", 63);
+    maker.methods[0].decorators.push(Decorator {
+        name: "replace".to_string(),
+        args: Vec::new(),
+        is_factory: false,
+        is_reflect_metadata: false,
+    });
+    let (facts, _) = facts_for_classes(vec![maker], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 63),
+        None,
+        "arbitrary decorator code must keep method dispatch fail-closed"
+    );
+}
+
+/// #7170 R2: the compile driver resolves an imported function binding to a
+/// source return-shape fact before parallel codegen. An `ExternFuncRef`
+/// carrying that exact LOCAL binding is therefore the same rule-1 provenance
+/// seed as the local `FuncRef` case above.
+///
+/// Sabotage: remove the `ExternFuncRef` arm in
+/// `find_return_shape_candidates`, or key it by an origin/export name instead
+/// of the HIR's local binding, and the positive/alias controls fail.
+#[test]
+fn imported_return_shape_is_provenance_by_exact_local_binding() {
+    let mut facts = super::super::collect_module_dispatch_facts(&Module::new("consumer"));
+    facts.install_imported_return_shapes(HashMap::from([(
+        "makeLocal".to_string(),
+        "C".to_string(),
+    )]));
+    let c = class_c();
+    let classes = classes_of(&c);
+
+    let caller = |callee_name: &str, local_id: u32| {
+        vec![
+            Stmt::Let {
+                id: local_id,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: callee_name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            },
+            store_x(local_id),
+        ]
+    };
+
+    let promoted = promote(&caller("makeLocal", 20), &classes, &facts);
+    assert_eq!(
+        promoted.get(&20).map(|fact| fact.class_name.as_str()),
+        Some("C")
+    );
+    assert!(
+        !promote(&caller("makeAtOrigin", 21), &classes, &facts).contains_key(&21),
+        "an origin/export spelling must not match a differently-named local import"
+    );
+}
+
+/// The whole-program pre-pass exports only direct function symbols returning
+/// content-addressed anonymous records. Named user classes remain fail-closed
+/// in this first cross-module increment, and aliases in `exported_functions`
+/// carry the same proven body under their consumer-visible export name.
+#[test]
+fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
+    const ANON: &str = "__AnonShape_0123456789abcdef";
+
+    let mut anon = class_c();
+    anon.name = ANON.to_string();
+    let mut producer = function(
+        70,
+        "makeRecord",
+        vec![Stmt::Return(Some(Expr::New {
+            class_name: ANON.to_string(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }))],
+    );
+    producer.is_exported = true;
+
+    let mut hir = Module::new("producer");
+    hir.classes = vec![anon, class_c()];
+    hir.functions = vec![
+        producer,
+        function(71, "makeNamed", vec![Stmt::Return(Some(new_c()))]),
+    ];
+    hir.exported_functions = vec![
+        ("recordAlias".to_string(), 70),
+        ("namedAlias".to_string(), 71),
+    ];
+
+    let exports = super::collect_exported_return_shapes(&hir);
+    assert_eq!(exports.get("makeRecord").map(String::as_str), Some(ANON));
+    assert_eq!(exports.get("recordAlias").map(String::as_str), Some(ANON));
+    assert!(!exports.contains_key("namedAlias"));
+
+    // The source module's barrier must suppress the exported fact just as it
+    // suppresses a same-module caller fact; the driver may not resurrect it.
+    hir.init = vec![Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(999)),
+        property: "x".to_string(),
+        byte_offset: 0,
+    })))];
+    assert!(super::collect_exported_return_shapes(&hir).is_empty());
+}
+
 /// `return new C()` directly is fresh by construction — no body proof needed.
 #[test]
 fn direct_new_return_is_a_fact() {
     let (facts, _) = facts_for(vec![function(3, "mk", vec![Stmt::Return(Some(new_c()))])]);
     assert_eq!(facts.return_shape_class(3), Some("C"));
+}
+
+/// #7170 R2: both arms of a returned conditional are the complete set of
+/// values the caller can observe. When every leaf is fresh and agrees on the
+/// class, the producer carries the same fact as a direct `return new C()` and
+/// its caller is seeded.
+///
+/// The nested arm is deliberate: accepting only one syntactic conditional
+/// layer would leave the same proof structurally unreachable after transforms
+/// introduce another conditional inside a branch.
+///
+/// Sabotage: remove the `Expr::Conditional` arm from
+/// `collect_fresh_return_sources` and this fails at the producer assertion.
+#[test]
+fn agreeing_conditional_return_is_a_fact_and_seeds_its_caller() {
+    let conditional = Expr::Conditional {
+        condition: Box::new(Expr::Bool(true)),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(Expr::Conditional {
+            condition: Box::new(Expr::Bool(false)),
+            then_expr: Box::new(new_c()),
+            else_expr: Box::new(new_c()),
+        }),
+    };
+    let (facts, c) = facts_for(vec![function(
+        30,
+        "conditional",
+        vec![Stmt::Return(Some(conditional))],
+    )]);
+    assert_eq!(
+        facts.return_shape_class(30),
+        Some("C"),
+        "all conditional result arms are fresh instances of C"
+    );
+
+    let classes = classes_of(&c);
+    let caller = call_and_store(31, Expr::FuncRef(30));
+    assert!(
+        promote(&caller, &classes, &facts).contains_key(&31),
+        "the conditional-return fact must reach the caller-side seed"
+    );
+}
+
+/// A conditional fact is all-arms, not "one object-looking arm is enough".
+/// A cached/unknown value on either side may be aliased or may not be an
+/// object at all.
+///
+/// Sabotage: accept only `then_expr` in `collect_fresh_return_sources` and the
+/// first half fails; accept only `else_expr` and the second half fails.
+#[test]
+fn conditional_return_with_any_non_fresh_arm_gets_no_fact() {
+    for (fresh_first, then_expr, else_expr) in [
+        (true, new_c(), Expr::LocalGet(999)),
+        (false, Expr::LocalGet(999), new_c()),
+    ] {
+        let returned = Expr::Conditional {
+            condition: Box::new(Expr::Bool(true)),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(else_expr),
+        };
+        let (facts, _) = facts_for(vec![function(
+            31,
+            "maybe_cached",
+            vec![Stmt::Return(Some(returned))],
+        )]);
+        assert_eq!(
+            facts.return_shape_class(31),
+            None,
+            "the {} conditional arm being fresh cannot license the other arm",
+            if fresh_first { "first" } else { "second" }
+        );
+    }
+}
+
+/// Freshness is not enough when the arms have different shapes: the caller
+/// would use one fixed field-offset table for two dynamic classes.
+///
+/// Sabotage: remove the existing class-agreement check after flattening the
+/// conditional and this fails. The agreeing control keeps the test live.
+#[test]
+fn disagreeing_conditional_return_classes_get_no_fact() {
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let returned = |else_expr| Expr::Conditional {
+        condition: Box::new(Expr::Bool(true)),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(else_expr),
+    };
+    let (facts, _) = facts_for_classes(
+        vec![class_d()],
+        vec![function(
+            32,
+            "different",
+            vec![Stmt::Return(Some(returned(new_d)))],
+        )],
+    );
+    assert_eq!(facts.return_shape_class(32), None);
+
+    let (control, _) = facts_for(vec![function(
+        33,
+        "same",
+        vec![Stmt::Return(Some(returned(new_c())))],
+    )]);
+    assert_eq!(control.return_shape_class(33), Some("C"));
+}
+
+/// #7170 R2: `&&` and `||` return operand values, not booleans. A statically
+/// truthy left side of `&&` and a statically falsy left side of `||` both make
+/// the fresh right allocation the only observable result.
+///
+/// Sabotage: remove the `Expr::Logical` arm from
+/// `collect_return_outcomes` and both producer assertions fail.
+#[test]
+fn deterministic_logical_return_is_a_fact_and_seeds_its_caller() {
+    let logical = |op, left| Expr::Logical {
+        op,
+        left: Box::new(left),
+        right: Box::new(new_c()),
+    };
+    let (facts, c) = facts_for(vec![
+        function(
+            34,
+            "and_fresh",
+            vec![Stmt::Return(Some(logical(
+                perry_hir::LogicalOp::And,
+                Expr::Bool(true),
+            )))],
+        ),
+        function(
+            35,
+            "or_fresh",
+            vec![Stmt::Return(Some(logical(
+                perry_hir::LogicalOp::Or,
+                Expr::Bool(false),
+            )))],
+        ),
+    ]);
+    assert_eq!(facts.return_shape_class(34), Some("C"));
+    assert_eq!(facts.return_shape_class(35), Some("C"));
+
+    let classes = classes_of(&c);
+    let caller = call_and_store(36, Expr::FuncRef(34));
+    assert!(
+        promote(&caller, &classes, &facts).contains_key(&36),
+        "a logical-return fact must reach the caller-side seed"
+    );
+}
+
+/// A logical expression may filter a non-object intermediate without letting
+/// it escape. `(flag && new C()) || new C()` returns the inner allocation when
+/// `flag` is truthy and the fallback allocation otherwise, so every complete
+/// path is fresh even though neither `flag && new C()` nor `flag || new C()`
+/// is independently a return-shape producer.
+///
+/// Sabotage: flatten logical operands like conditional arms instead of
+/// tracking truthiness and the positive assertion fails.
+#[test]
+fn nested_logical_fallback_returns_only_fresh_objects() {
+    let flag = Expr::LocalGet(999);
+    let inner = Expr::Logical {
+        op: perry_hir::LogicalOp::And,
+        left: Box::new(flag.clone()),
+        right: Box::new(new_c()),
+    };
+    let with_fallback = Expr::Logical {
+        op: perry_hir::LogicalOp::Or,
+        left: Box::new(inner),
+        right: Box::new(new_c()),
+    };
+    let (facts, _) = facts_for(vec![
+        function(36, "with_fallback", vec![Stmt::Return(Some(with_fallback))]),
+        function(
+            37,
+            "and_without_fallback",
+            vec![Stmt::Return(Some(Expr::Logical {
+                op: perry_hir::LogicalOp::And,
+                left: Box::new(flag.clone()),
+                right: Box::new(new_c()),
+            }))],
+        ),
+        function(
+            38,
+            "or_without_guard",
+            vec![Stmt::Return(Some(Expr::Logical {
+                op: perry_hir::LogicalOp::Or,
+                left: Box::new(flag),
+                right: Box::new(new_c()),
+            }))],
+        ),
+    ]);
+    assert_eq!(facts.return_shape_class(36), Some("C"));
+    assert_eq!(facts.return_shape_class(37), None);
+    assert_eq!(facts.return_shape_class(38), None);
+}
+
+/// A fresh object is always truthy. Therefore `new D() && new C()` returns
+/// only `C`, while `new C() || new D()` also returns only `C`. The consumed
+/// allocation must not make the classes appear to disagree.
+#[test]
+fn consumed_logical_allocation_does_not_set_the_return_class() {
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let (facts, _) = facts_for_classes(
+        vec![class_d()],
+        vec![
+            function(
+                39,
+                "and_consumes_left",
+                vec![Stmt::Return(Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::And,
+                    left: Box::new(new_d.clone()),
+                    right: Box::new(new_c()),
+                }))],
+            ),
+            function(
+                40,
+                "or_consumes_right",
+                vec![Stmt::Return(Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::Or,
+                    left: Box::new(new_c()),
+                    right: Box::new(new_d),
+                }))],
+            ),
+        ],
+    );
+    assert_eq!(facts.return_shape_class(39), Some("C"));
+    assert_eq!(facts.return_shape_class(40), Some("C"));
+}
+
+/// `??` branches on nullishness rather than truthiness and deliberately stays
+/// outside this increment. Treating it as `||` would be wrong for `0`, `false`
+/// and the empty string.
+#[test]
+fn nullish_coalescing_return_remains_fail_closed() {
+    let (facts, _) = facts_for(vec![function(
+        41,
+        "coalesce",
+        vec![Stmt::Return(Some(Expr::Logical {
+            op: perry_hir::LogicalOp::Coalesce,
+            left: Box::new(Expr::Null),
+            right: Box::new(new_c()),
+        }))],
+    )]);
+    assert_eq!(facts.return_shape_class(41), None);
 }
 
 /// A producer that can fall off the end returns `undefined` on that path; a

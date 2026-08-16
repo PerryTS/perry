@@ -133,6 +133,16 @@ pub(crate) fn track_decl_aliases(
     if let Some(method_name) = array_method_alias {
         ctx.array_static_method_aliases.insert(id, method_name);
     }
+    // #7775: bind "is a proxy" to THIS resolved binding rather than to the
+    // name. Keyed off the lowered init, so it inherits `lower_new_expr`'s
+    // `shadowed_by_user_binding` check for free — a user `class Proxy {}` never
+    // lowers to `Expr::ProxyNew`, so it never registers here. This is also the
+    // only registration that reaches a proxy declared in a class method or an
+    // arrow body: the pre-scan's `walk_stmt` does not descend into either, so
+    // those bindings were absent from `proxy_locals` entirely.
+    if matches!(init, Some(Expr::ProxyNew { .. })) {
+        ctx.register_proxy_local(id);
+    }
     if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
         if module == "fetch"
             && matches!(

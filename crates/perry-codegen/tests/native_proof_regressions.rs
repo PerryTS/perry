@@ -134,6 +134,7 @@ fn module_with_classes_and_params(
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -365,6 +366,16 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
         ty: Type::Number,
         mutable,
         init: Some(init),
+    }
+}
+
+fn string_let(id: u32, name: &str, value: &str) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::String,
+        mutable: false,
+        init: Some(Expr::String(value.to_string())),
     }
 }
 
@@ -690,6 +701,107 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 // i8` in the module satisfied.
 use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
 
+fn truthiness_probe(condition: Expr) -> Stmt {
+    Stmt::Expr(Expr::Conditional {
+        condition: Box::new(condition),
+        then_expr: Box::new(int(1)),
+        else_expr: Box::new(int(0)),
+    })
+}
+
+#[test]
+fn local_type_hints_never_answer_truthiness() {
+    let body = vec![
+        // Erased declarations can lie at the initializer without any later
+        // LocalSet for the reassignment collector to find.
+        Stmt::Let {
+            id: 1,
+            name: "declared_number_holds_string".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::String("truthy".to_string())),
+        },
+        truthiness_probe(local(1)),
+        Stmt::Let {
+            id: 2,
+            name: "declared_boolean_holds_number".to_string(),
+            ty: Type::Boolean,
+            mutable: false,
+            init: Some(int(7)),
+        },
+        truthiness_probe(local(2)),
+        // Initializer refinement is equally stale after a write.
+        Stmt::Let {
+            id: 3,
+            name: "refined_number_reassigned".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(int(0)),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            3,
+            Box::new(Expr::String("truthy after write".to_string())),
+        )),
+        truthiness_probe(local(3)),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = compile_ir("local_binding_truthiness_7846.ts", body);
+
+    assert_eq!(
+        ir.matches("call i32 @js_is_truthy(").count(),
+        3,
+        "declared and initializer-refined local types may select only the total runtime truthiness predicate:\n{ir}"
+    );
+}
+
+#[test]
+fn array_isarray_reassigned_local_uses_runtime_predicate() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "number_to_array".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(int(0)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)])))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
+        Stmt::Let {
+            id: 2,
+            name: "array_to_number".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
+        Stmt::Let {
+            id: 3,
+            name: "unchanged_array".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(3)))),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = String::from_utf8(
+        compile_module(
+            &module("array_isarray_reassignment_7844.ts", body),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("call double @js_array_is_array(").count(),
+        2,
+        "both reassigned locals must use the runtime predicate, while the unchanged array may \
+         retain its compile-time true fold:\n{ir}"
+    );
+}
+
 #[test]
 fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     let body = vec![
@@ -700,7 +812,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -733,7 +845,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -780,7 +892,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -999,6 +1111,81 @@ fn defined_function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     let rest = &ir[start..];
     let end = rest.find("\n}\n").map(|idx| idx + 3).unwrap_or(rest.len());
     &rest[..end]
+}
+
+/// What `!ir.contains("$generic")` used to mean.
+///
+/// Before #8094 the `$generic` suffix had exactly one producer — the typed-ABI
+/// trampoline — so its absence was a sound way to say "this function was not
+/// split onto a raw ABI". #8094 added a second, unrelated producer: a
+/// guard-eligible function keeps its public name for a routing trampoline and
+/// moves its body to `$generic`. So the bare suffix no longer discriminates,
+/// and this restores the negative it stood for: every split present must be
+/// the guarded route, i.e. have a `$spec_*` sibling that its public entry
+/// reaches only after a runtime argument guard.
+fn assert_only_guarded_generic_splits(ir: &str, case: &str) {
+    for line in ir.lines().filter(|line| line.starts_with("define ")) {
+        let Some(at) = line.find('@') else { continue };
+        let Some(open) = line[at..].find('(') else {
+            continue;
+        };
+        let name = &line[at + 1..at + open];
+        let Some(base) = name.strip_suffix("$generic") else {
+            continue;
+        };
+        assert!(
+            ir.contains(&format!("@{base}$spec_")),
+            "{case}: `{base}` was split onto a non-guarded ABI:\n{ir}"
+        );
+        let entry = function_ir_section(ir, base);
+        assert!(
+            entry.contains("call i32 @js_param_type_guard(")
+                || entry.contains("_arg_guard(double "),
+            "{case}: `{base}`'s public entry reaches a clone without guarding:\n{entry}"
+        );
+    }
+}
+
+/// The IR of `symbol`'s BODY.
+///
+/// #8094 can split a guard-eligible module-level function into three symbols:
+/// a `noinline` routing trampoline that keeps the public name and the JSValue
+/// ABI, an unchanged `$generic` body, and a `$spec_*` clone that carries the
+/// post-guard parameter proofs. A test whose subject is what the BODY lowers
+/// to must follow the body; a test whose subject is the public entry (the
+/// typed-ABI wrapper, for instance) keeps using `function_ir_section`.
+///
+/// The split is pure relocation EXCEPT where a parameter's guard establishes a
+/// proof the body did not already have. That is measured, not assumed: across
+/// the 24 `$generic`/`$spec_*` pairs the callers of this helper produce, the
+/// clone makes the same set of runtime calls as its sibling in 19, and the
+/// five that differ each pin the difference themselves rather than leaning on
+/// this helper —
+///
+/// - `map_string_int32_param_without_native_i32_proof_uses_f64_helper`
+/// - `set_int32_param_without_native_i32_proof_uses_generic_helpers`
+/// - `compiler_private_async_iter_result_annotated_numeric_payload_stays_generic`
+/// - `compiler_private_async_iter_result_annotated_i32_payload_stays_generic`
+///   (the four above: the clone gains a raw slot the unproven body must not have)
+/// - `scalar_method_boolean_predicate_guards_public_numeric_argument_expressions`
+///   (the clone only LOSES calls — proven parameters need no argument guard —
+///   so its subject, block order on the unproven path, lives in the body)
+fn body_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
+    let generic = format!("{symbol}$generic");
+    if ir.contains(&format!("@{generic}(")) {
+        defined_function_ir_section(ir, &generic)
+    } else {
+        defined_function_ir_section(ir, symbol)
+    }
+}
+
+/// The IR of the `$spec_*` clone #8094 emitted for `symbol`, if there is one.
+fn spec_clone_ir_section<'a>(ir: &'a str, symbol: &str) -> Option<&'a str> {
+    let prefix = format!("@{symbol}$spec_");
+    let at = ir.find(&prefix)?;
+    let end = ir[at..].find('(')? + at;
+    let name = ir[at + 1..end].to_string();
+    Some(defined_function_ir_section(ir, &name))
 }
 
 fn error_chain(err: &anyhow::Error) -> String {
@@ -1278,7 +1465,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert!(
         artifact["records"]
             .as_array()
@@ -1397,11 +1584,11 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
 }
 
 #[test]
-fn typed_array_f64_store_coerces_raw_numeric_array_fallback_value() {
+fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
     let module = module_with_classes_and_params(
-        "typed_array_f64_store_coerces_numeric_array_fallback.ts",
+        "typed_array_f64_store_coerces_annotation_only_value.ts",
         Vec::new(),
-        vec![param(3, "values", Type::Array(Box::new(Type::Number)))],
+        vec![param(3, "value", Type::Number)],
         Type::Number,
         vec![
             native_arena_owner_let(1, "arena", int(64), false),
@@ -1417,10 +1604,7 @@ fn typed_array_f64_store_coerces_raw_numeric_array_fallback_value() {
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(local(2)),
                 index: Box::new(int(0)),
-                value: Box::new(Expr::IndexGet {
-                    object: Box::new(local(3)),
-                    index: Box::new(int(0)),
-                }),
+                value: Box::new(local(3)),
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -1428,7 +1612,7 @@ fn typed_array_f64_store_coerces_raw_numeric_array_fallback_value() {
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
         ir.contains("call double @js_number_coerce"),
-        "Float64Array native stores must coerce guarded numeric-array fallback values before raw storage:\n{ir}"
+        "Float64Array native stores must coerce annotation-only numeric values before raw storage:\n{ir}"
     );
     assert!(
         ir.contains("store double"),
@@ -1515,7 +1699,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1567,7 +1751,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -1617,8 +1801,29 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
     );
 }
 
+/// #8150 flips exactly ONE of this test's expectations, and leaves the
+/// soundness guard it was really protecting untouched.
+///
+/// Unchanged: a reassignment still drops the DECLARATION-derived proof — the
+/// `LocalSet` f64 record is still absent. `ty: Type::Number` is not a runtime
+/// fact and Perry does no runtime type validation (#7773: a wrong-typed value
+/// passes through arithmetic unchanged), so that negative must keep holding
+/// and it does.
+///
+/// Changed: `binary_f64_count` is no longer 0. The local below is seeded from
+/// a literal and reassigned only from `local + literal`, making it a Number
+/// **by construction** — a fact about the values actually written, not about
+/// what the declaration claims. #8150 proves that separately and lets the
+/// reads lower to raw `fmul`/`fadd` instead of `js_dynamic_*` (-87.6%
+/// instructions on `15_mandelbrot`).
+///
+/// The limit is pinned elsewhere, not here: a local seeded from a PARAMETER,
+/// or written from a STRING, still keeps the dynamic helper — see
+/// `a_reassigned_local_seeded_from_a_parameter_keeps_the_dynamic_helper` and
+/// `a_reassigned_local_written_from_a_string_keeps_the_dynamic_helper` in
+/// `type_analysis/numeric/tests.rs`.
 #[test]
-fn representation_first_numeric_locals_stay_f64_until_abi() {
+fn representation_first_numeric_reassignment_keeps_a_by_construction_f64_proof() {
     let add_total = Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(local(1)),
@@ -1666,14 +1871,14 @@ fn representation_first_numeric_locals_stay_f64_until_abi() {
         "expected numeric let init to stay region-local f64:\n{artifact:#}"
     );
     assert!(
-        records.iter().any(|record| {
+        !records.iter().any(|record| {
             record["expr_kind"] == "LocalSet"
                 && record["consumer"] == "ordinary_expr_value.local_set_f64"
                 && record["local_id"] == 1
                 && record["native_rep_name"] == "f64"
                 && record["native_value_state"] == "region_local"
         }),
-        "expected numeric local assignment to stay region-local f64:\n{artifact:#}"
+        "a reassignment must drop the declaration-derived local f64 proof:\n{artifact:#}"
     );
     let binary_f64_count = records
         .iter()
@@ -1685,36 +1890,28 @@ fn representation_first_numeric_locals_stay_f64_until_abi() {
         })
         .count();
     assert!(
-        binary_f64_count >= 3,
-        "expected binary ops to stay region-local f64:\n{artifact:#}"
+        binary_f64_count > 0,
+        "operations reading a by-construction numeric local must lower to raw \
+         f64 rather than the dynamic helper — this is #8150's win (-87.6% \
+         instructions on 15_mandelbrot):\n{artifact:#}"
     );
     let materialized: Vec<_> = records
         .iter()
         .filter(|record| record["native_value_state"] == "materialized")
         .collect();
-    assert_eq!(
-        materialized.len(),
-        1,
-        "numeric locals should materialize only at the return ABI boundary:\n{artifact:#}"
-    );
-    let return_materialization = materialized[0];
-    assert_eq!(return_materialization["consumer"], "materialize_js_value");
-    assert_eq!(
-        return_materialization["materialization_reason"],
-        "return_abi"
-    );
-    assert_eq!(
-        return_materialization["native_abi_transition"]["from_native_rep"],
-        "f64"
-    );
-    assert_eq!(
-        return_materialization["native_abi_transition"]["to_native_rep"],
-        "js_value"
+    assert!(
+        materialized.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["materialization_reason"] == "runtime_api"
+                && record["native_abi_transition"]["from_native_rep"] == "f64"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value"
+        }),
+        "the conservative dynamic path should materialize literal operands at its runtime boundary:\n{artifact:#}"
     );
 }
 
 #[test]
-fn representation_first_boolean_locals_stay_i1_until_abi() {
+fn representation_first_boolean_reassignment_drops_local_i1_proof() {
     let not_flag = Expr::Unary {
         op: UnaryOp::Not,
         operand: Box::new(local(1)),
@@ -1779,7 +1976,7 @@ fn representation_first_boolean_locals_stay_i1_until_abi() {
         "expected boolean let init to stay region-local i1:\n{artifact:#}"
     );
     assert!(
-        records.iter().any(|record| {
+        !records.iter().any(|record| {
             record["expr_kind"] == "LocalSet"
                 && record["consumer"] == "ordinary_expr_value.local_set_i1"
                 && record["local_id"] == 1
@@ -1787,7 +1984,7 @@ fn representation_first_boolean_locals_stay_i1_until_abi() {
                 && record["llvm_ty"] == "i1"
                 && record["native_value_state"] == "region_local"
         }),
-        "expected boolean local assignment to stay region-local i1:\n{artifact:#}"
+        "a reassignment must drop the declaration-derived local i1 proof:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
@@ -1800,47 +1997,37 @@ fn representation_first_boolean_locals_stay_i1_until_abi() {
         "expected numeric comparison to produce region-local i1:\n{artifact:#}"
     );
     assert!(
-        records.iter().any(|record| {
+        !records.iter().any(|record| {
             record["expr_kind"] == "Compare"
                 && record["consumer"] == "ordinary_expr_value.boolean_compare_i1"
                 && record["native_rep_name"] == "i1"
                 && record["llvm_ty"] == "i1"
                 && record["native_value_state"] == "region_local"
         }),
-        "expected boolean comparison to consume and produce region-local i1:\n{artifact:#}"
+        "a comparison that reads the reassigned local must stay off raw i1 lowering:\n{artifact:#}"
     );
     assert!(
-        records.iter().any(|record| {
+        !records.iter().any(|record| {
             record["expr_kind"] == "Unary"
                 && record["consumer"] == "ordinary_expr_value.boolean_not_i1"
                 && record["native_rep_name"] == "i1"
                 && record["llvm_ty"] == "i1"
                 && record["native_value_state"] == "region_local"
         }),
-        "expected boolean not to stay region-local i1:\n{artifact:#}"
+        "a boolean operation derived from the reassigned local must stay off raw i1 lowering:\n{artifact:#}"
     );
     let materialized: Vec<_> = records
         .iter()
         .filter(|record| record["native_value_state"] == "materialized")
         .collect();
-    assert_eq!(
-        materialized.len(),
-        1,
-        "boolean locals should materialize only at the return ABI boundary:\n{artifact:#}"
-    );
-    let return_materialization = materialized[0];
-    assert_eq!(return_materialization["consumer"], "materialize_js_value");
-    assert_eq!(
-        return_materialization["materialization_reason"],
-        "return_abi"
-    );
-    assert_eq!(
-        return_materialization["native_abi_transition"]["from_native_rep"],
-        "i1"
-    );
-    assert_eq!(
-        return_materialization["native_abi_transition"]["op"],
-        "bool_to_js_value"
+    assert!(
+        materialized.iter().any(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["materialization_reason"] == "runtime_api"
+                && record["native_abi_transition"]["from_native_rep"] == "i1"
+                && record["native_abi_transition"]["op"] == "bool_to_js_value"
+        }),
+        "the conservative truthiness path should materialize the boolean at its runtime boundary:\n{artifact:#}"
     );
 }
 
@@ -2099,6 +2286,58 @@ fn small_bigint_literal_stays_i128_until_js_boundary() {
 }
 
 #[test]
+fn bigint_binary_result_live_across_collection_keeps_a_precise_root() {
+    let _pin = NativeRootsPin::shadow();
+    let module = module_with_classes_and_params(
+        "bigint_binary_root_across_collection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::BigInt,
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "value".to_string(),
+                ty: Type::BigInt,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(Expr::BigInt("1n".to_string())),
+                    right: Box::new(Expr::BigInt("2n".to_string())),
+                }),
+            },
+            Stmt::Expr(native_module_call(
+                "console",
+                "log",
+                vec![Expr::String("collection point".to_string())],
+            )),
+            Stmt::Return(Some(local(10))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe = defined_function_ir_section(
+        &ir,
+        "perry_fn_bigint_binary_root_across_collection_ts__probe",
+    );
+    let collection = probe
+        .find("call void @js_console_log_spread")
+        .expect("fixture should contain a collection-capable console call");
+    assert!(
+        probe[..collection].contains("call void @js_shadow_slot_bind"),
+        "the BigInt result local must be bound as a precise root before the collection point:\n{probe}"
+    );
+    assert_eq!(
+        probe.matches("call void @js_shadow_slot_bind").count(),
+        1,
+        "the fixture has exactly one pointer-bearing frame local, so its root must be the BigInt result:\n{probe}"
+    );
+    assert!(
+        probe[collection..].contains("load double, ptr "),
+        "the returned BigInt must be reloaded from its rooted slot after the collection point:\n{probe}"
+    );
+}
+
+#[test]
 fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
     let too_wide = format!("0x1{}n", "0".repeat(32));
     let body = vec![Stmt::Return(Some(Expr::BigInt(too_wide)))];
@@ -2137,9 +2376,10 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
     let module = module_with_classes_and_params(
         "packed_f64_store_update_side_exit.ts",
         Vec::new(),
-        vec![param(2, "delta", Type::Number)],
+        Vec::new(),
         Type::Number,
         vec![
+            number_let(2, "delta", false, number(0.5)),
             number_array_let(1, "values", vec![1, 2, 3]),
             for_loop(
                 4,
@@ -2191,11 +2431,30 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
         "packed fast clone must not perform a boxed fallback before side-exiting:\n{fallback_block}\n\n{ir}"
     );
     let slow_start = ir
-        .find("for.packed_f64_slow")
-        .expect("expected packed-f64 slow clone");
+        .find("\nfor.packed_f64_slow.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-f64 slow-clone block");
+    let slow_tail = &ir[slow_start..];
+    let slow_end = slow_tail
+        .find("\n}\n")
+        .map(|offset| slow_start + offset)
+        .expect("expected packed-f64 slow-clone function boundary");
+    let slow_clone = &ir[slow_start..slow_end];
+    // (#8094) `const values = [1, 2, 3]` is a CONSTRUCTION proof now, not an
+    // annotation, so the slow clone lowers its store the same way the fast one
+    // does — a runtime numeric/layout guard with an out-of-line boxed arm —
+    // instead of unconditionally inlining the boxed store. The subject is
+    // unchanged: the side exit must still end in a COMPLETE store, never a
+    // dropped one, and a value the guard rejects must still be stored. So this
+    // pins both arms. The layout and write-barrier bookkeeping the inlined
+    // store used to carry is now inside
+    // `js_typed_feedback_array_index_set_fallback_boxed`, which stores through
+    // `js_array_set_index_or_string`.
     assert!(
-        ir[slow_start..].contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
-        "packed store side exit must preserve the generic boxed fallback in the slow clone:\n{ir}"
+        slow_clone.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+            && slow_clone.contains("idxset.bounded_numeric_fallback")
+            && slow_clone.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
+        "packed store side exit must preserve a complete guarded store with a boxed fallback arm in the slow clone:\n{ir}"
     );
 
     let artifact = compile_artifact_json_for_module(module);
@@ -2791,12 +3050,11 @@ fn map_string_number_set_has_use_string_key_specialization() {
     let module = module_with_classes_and_params(
         "map_string_number_specialization.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Number),
-        ],
+        Vec::new(),
         Type::Number,
         vec![
+            string_let(2, "key", "key"),
+            number_let(3, "value", false, number(7.0)),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -2909,7 +3167,7 @@ fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_key_specialization_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_key_specialization_ts__probe");
     assert!(
         probe_ir.contains("call i32 @js_typed_f64_arg_guard")
             && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
@@ -2955,12 +3213,10 @@ fn map_number_key_string_value_set_uses_string_ref_until_slot() {
     let module = module_with_classes_and_params(
         "map_number_string_value_specialization.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::Number),
-            param(3, "value", Type::String),
-        ],
+        vec![param(2, "key", Type::Number)],
         Type::Boolean,
         vec![
+            string_let(3, "value", "value"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -2981,7 +3237,7 @@ fn map_number_key_string_value_set_uses_string_ref_until_slot() {
     );
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
-    let probe_ir = function_ir_section(
+    let probe_ir = body_ir_section(
         &ir,
         "perry_fn_map_number_string_value_specialization_ts__probe",
     );
@@ -3073,7 +3329,7 @@ fn map_number_key_string_value_rejects_unproven_value() {
     );
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_string_value_rejection_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_string_value_rejection_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set_number_key"),
         "unproven string values should preserve the guarded numeric-key helper:\n{probe_ir}"
@@ -3112,9 +3368,10 @@ fn map_string_key_has_delete_specialize_independent_of_value_type() {
     let module = module_with_classes_and_params(
         "map_string_boolean_delete_specialization.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3185,12 +3442,10 @@ fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() 
     let module = module_with_classes_and_params(
         "map_string_boolean_param_fallback.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Boolean),
-        ],
+        vec![param(3, "value", Type::Boolean)],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3211,7 +3466,7 @@ fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() 
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_boolean_param_fallback_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_string_boolean_param_fallback_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set_string_key"),
         "annotation-only boolean map values should keep the generic-value string-key helper until a native-i1 proof exists:\n{probe_ir}"
@@ -3231,9 +3486,10 @@ fn map_string_int32_set_uses_typed_i32_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_int32_value_specialization.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3281,12 +3537,10 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
     let module = module_with_classes_and_params(
         "map_string_int32_param_fallback.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Int32),
-        ],
+        vec![param(3, "value", Type::Int32)],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3307,7 +3561,8 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_int32_param_fallback_ts__probe");
+    let symbol = "perry_fn_map_string_int32_param_fallback_ts__probe";
+    let probe_ir = body_ir_section(&ir, symbol);
     assert!(
         probe_ir.contains("call i64 @js_map_set_string_number"),
         "annotation-only Int32 values should keep the f64 helper until a native-i32 proof or guard exists:\n{probe_ir}"
@@ -3316,6 +3571,31 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
         !probe_ir.contains("call i64 @js_map_set_string_i32"),
         "annotation-only Int32 values must not use the raw i32 helper without proof:\n{probe_ir}"
     );
+
+    // (#8094) The annotation is still not a proof — but the guarded entry now
+    // supplies one. This is one of the four fixtures named on `body_ir_section`
+    // whose `$spec_*` clone lowers differently from its `$generic` sibling, so
+    // it carries its own discriminating negative rather than leaning on that
+    // helper: the raw i32 helper is admitted ONLY inside a clone whose sole
+    // entry ran `js_typed_i32_arg_guard` and passed the argument as a raw
+    // `i32`.
+    let clone_ir = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone_ir.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %")),
+        "the guarded clone must take the value in a raw i32 slot:\n{clone_ir}"
+    );
+    assert!(
+        clone_ir.contains("call i64 @js_map_set_string_i32")
+            && !clone_ir.contains("call i64 @js_map_set_string_number"),
+        "the guarded clone should consume its raw i32 proof:\n{clone_ir}"
+    );
+    let entry_ir = function_ir_section(&ir, symbol);
+    assert!(
+        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
+            && entry_ir.contains(&format!("@{symbol}$generic(double ")),
+        "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
+    );
 }
 
 #[test]
@@ -3323,9 +3603,10 @@ fn map_string_u32_set_uses_typed_u32_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_u32_value_specialization.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3373,12 +3654,10 @@ fn map_string_u32_param_without_native_u32_proof_uses_generic_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_u32_param_fallback.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Named("PerryU32".to_string())),
-        ],
+        vec![param(3, "value", Type::Named("PerryU32".to_string()))],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3415,9 +3694,10 @@ fn map_string_f32_set_uses_typed_f32_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_f32_value_specialization.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3465,12 +3745,10 @@ fn map_string_f32_param_without_native_f32_proof_uses_generic_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_f32_param_fallback.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Named("PerryF32".to_string())),
-        ],
+        vec![param(3, "value", Type::Named("PerryF32".to_string()))],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3507,12 +3785,11 @@ fn map_string_string_set_uses_typed_string_value_helper() {
     let module = module_with_classes_and_params(
         "map_string_string_value_specialization.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::String),
-        ],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
+            string_let(3, "value", "value"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3556,9 +3833,10 @@ fn map_string_any_set_uses_generic_value_string_key_helper() {
     let module = module_with_classes_and_params(
         "map_string_any_value_specialization.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String), param(3, "value", Type::Any)],
+        vec![param(3, "value", Type::Any)],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3636,7 +3914,7 @@ fn map_unproven_number_key_keeps_generic_fallback() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_unproven_key_generic_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_map_number_unproven_key_generic_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_map_set("),
         "Map<number, boolean>.set with an unproven key should keep the generic helper:\n{probe_ir}"
@@ -3683,9 +3961,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_module = module_with_classes_and_params(
         "artifact_map_string_key_selection.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3789,12 +4068,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let boolean_fallback_module = module_with_classes_and_params(
         "artifact_map_string_boolean_value_rejection.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Boolean),
-        ],
+        vec![param(3, "value", Type::Boolean)],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3846,9 +4123,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_i32_value_module = module_with_classes_and_params(
         "artifact_map_string_i32_value_selection.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3907,9 +4185,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_u32_value_module = module_with_classes_and_params(
         "artifact_map_string_u32_value_selection.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -3968,9 +4247,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_f32_value_module = module_with_classes_and_params(
         "artifact_map_string_f32_value_selection.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -4029,12 +4309,11 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_string_value_module = module_with_classes_and_params(
         "artifact_map_string_value_selection.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::String),
-        ],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
+            string_let(3, "value", "value"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -4093,9 +4372,10 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let generic_value_module = module_with_classes_and_params(
         "artifact_map_string_any_value_selection.ts",
         Vec::new(),
-        vec![param(2, "key", Type::String), param(3, "value", Type::Any)],
+        vec![param(3, "value", Type::Any)],
         Type::Boolean,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -4130,12 +4410,11 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
     let selected_get_module = module_with_classes_and_params(
         "artifact_map_string_get_selection.ts",
         Vec::new(),
-        vec![
-            param(2, "key", Type::String),
-            param(3, "value", Type::Number),
-        ],
+        Vec::new(),
         Type::Number,
         vec![
+            string_let(2, "key", "key"),
+            number_let(3, "value", false, number(7.0)),
             Stmt::Let {
                 id: 1,
                 name: "m".to_string(),
@@ -4485,9 +4764,10 @@ fn set_string_add_has_delete_use_string_specialization() {
     let module = module_with_classes_and_params(
         "set_string_specialization.ts",
         Vec::new(),
-        vec![param(2, "value", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "value", "value"),
             Stmt::Let {
                 id: 1,
                 name: "s".to_string(),
@@ -4587,7 +4867,7 @@ fn set_number_add_has_delete_use_guarded_number_specialization() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_number_specialization_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_set_number_specialization_ts__probe");
     assert!(
         probe_ir.contains("call i32 @js_typed_f64_arg_guard")
             && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
@@ -4762,7 +5042,8 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_int32_param_fallback_ts__probe");
+    let symbol = "perry_fn_set_int32_param_fallback_ts__probe";
+    let probe_ir = body_ir_section(&ir, symbol);
     assert!(
         probe_ir.contains("call i64 @js_set_add("),
         "annotation-only Int32 Set.add should keep the generic helper until a native-i32 proof exists:\n{probe_ir}"
@@ -4786,6 +5067,33 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
     assert!(
         !probe_ir.contains("call i32 @js_set_delete_i32"),
         "annotation-only Int32 Set.delete must not use the raw int32 helper without proof:\n{probe_ir}"
+    );
+
+    // (#8094) The annotation is still not a proof — the guarded entry is.
+    // Another of the four fixtures named on `body_ir_section`, and it pins the
+    // limit: the raw int32 Set helpers are admitted ONLY inside a clone whose
+    // sole entry ran `js_typed_i32_arg_guard` and handed over a raw `i32`.
+    let clone_ir = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone_ir.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %")),
+        "the guarded clone must take the value in a raw i32 slot:\n{clone_ir}"
+    );
+    for (raw, generic) in [
+        ("call i64 @js_set_add_i32", "call i64 @js_set_add("),
+        ("call i32 @js_set_has_i32", "call i32 @js_set_has("),
+        ("call i32 @js_set_delete_i32", "call i32 @js_set_delete("),
+    ] {
+        assert!(
+            clone_ir.contains(raw) && !clone_ir.contains(generic),
+            "the guarded clone should consume its raw i32 proof for {raw}:\n{clone_ir}"
+        );
+    }
+    let entry_ir = function_ir_section(&ir, symbol);
+    assert!(
+        entry_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && entry_ir.contains(&format!("@{symbol}$spec_i32(i32 "))
+            && entry_ir.contains(&format!("@{symbol}$generic(double ")),
+        "the public entry must guard before the clone and keep the generic fallback:\n{entry_ir}"
     );
 }
 
@@ -5152,7 +5460,7 @@ fn set_boolean_param_without_native_i1_proof_uses_generic_helpers() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    let probe_ir = function_ir_section(&ir, "perry_fn_set_boolean_param_fallback_ts__probe");
+    let probe_ir = body_ir_section(&ir, "perry_fn_set_boolean_param_fallback_ts__probe");
     assert!(
         probe_ir.contains("call i64 @js_set_add("),
         "annotation-only boolean Set.add should keep the generic helper until a native-i1 proof exists:\n{probe_ir}"
@@ -5184,9 +5492,10 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
     let selected_module = module_with_classes_and_params(
         "artifact_set_string_key_selection.ts",
         Vec::new(),
-        vec![param(2, "value", Type::String)],
+        Vec::new(),
         Type::Boolean,
         vec![
+            string_let(2, "value", "value"),
             Stmt::Let {
                 id: 1,
                 name: "s".to_string(),
@@ -6381,11 +6690,11 @@ fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
         Vec::new(),
         vec![
             param(1, "xs", Type::Array(Box::new(Type::Any))),
-            param(2, "key", Type::Number),
             param(3, "value", Type::Any),
         ],
         Type::Number,
         vec![
+            number_let(2, "key", false, number(1.5)),
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
@@ -6415,13 +6724,11 @@ fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
     let module = module_with_classes_and_params(
         "artifact_write_barrier_f64_to_js_value_bits.ts",
         Vec::new(),
-        vec![
-            param(1, "xs", Type::Array(Box::new(Type::Any))),
-            param(2, "key", Type::String),
-            param(3, "value", Type::Number),
-        ],
+        vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Number,
         vec![
+            string_let(2, "key", "key"),
+            number_let(3, "value", false, number(1.5)),
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
@@ -6459,12 +6766,10 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
     let module = module_with_classes_and_params(
         "artifact_write_barrier_i1_to_js_value_bits.ts",
         Vec::new(),
-        vec![
-            param(1, "xs", Type::Array(Box::new(Type::Any))),
-            param(2, "key", Type::String),
-        ],
+        vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Number,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Let {
                 id: 3,
                 name: "value".to_string(),
@@ -6509,12 +6814,10 @@ fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
     let module = module_with_classes_and_params(
         "artifact_write_barrier_elided_primitive.ts",
         Vec::new(),
-        vec![
-            param(1, "xs", Type::Array(Box::new(Type::Any))),
-            param(2, "key", Type::String),
-        ],
+        vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Number,
         vec![
+            string_let(2, "key", "key"),
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
@@ -6633,6 +6936,46 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
             Stmt::Return(Some(local(11))),
         ],
     )
+}
+
+#[test]
+fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
+    // An unresolved Worker construction lowers to a runtime throw followed by
+    // `unreachable`.  The enclosing LocalSet must not create its post-store
+    // write-barrier blocks after that terminator: the store and its SSA inputs
+    // were never emitted, so such a block is unreachable *and* refers to
+    // undefined registers (the Pi agent bundle exposed this at LLVM parse
+    // time).
+    let replacement = Expr::WorkerNew {
+        paths: Vec::new(),
+        filename: Box::new(Expr::LocalGet(99)),
+        options: None,
+        is_eval: false,
+    };
+    let module = boxed_local_storage_module(
+        "abrupt_captured_local_set_barrier.ts",
+        Expr::Array(Vec::new()),
+        replacement,
+    );
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let throw = ir
+        .find("call void @js_throw_error_with_code")
+        .expect("unresolved Worker construction should lower to the deferred runtime throw");
+    let function_tail = &ir[throw..];
+    let function_end = function_tail
+        .find("\n}\n")
+        .expect("throwing closure should have a complete definition");
+    let throwing_body = &function_tail[..function_end];
+
+    assert!(
+        throwing_body.contains("\n  unreachable"),
+        "fixture should terminate the assignment before its store:\n{throwing_body}"
+    );
+    assert!(
+        !throwing_body.contains("wb.maybe")
+            && !throwing_body.contains("call void @js_write_barrier("),
+        "a terminated assignment cannot reach or supply operands to a write barrier:\n{throwing_body}"
+    );
 }
 
 fn boxed_param_capture_module(name: &str) -> Module {
@@ -7046,19 +7389,31 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         compiler_private_async_control_body(),
     );
 
-    for symbol in [
-        "call i64 @js_i32_box_alloc",
-        "call i32 @js_i32_box_get",
-        "call void @js_i32_box_set",
-        "call i64 @js_bool_box_alloc",
-        "call i32 @js_bool_box_get",
-        "call void @js_bool_box_set",
-    ] {
+    for symbol in ["call i64 @js_i32_box_alloc", "call i64 @js_bool_box_alloc"] {
         assert!(
             ir.contains(symbol),
             "expected compiler-private control lowering to emit {symbol}:\n{ir}"
         );
     }
+    for checked_access in [
+        "call i32 @js_i32_box_get",
+        "call void @js_i32_box_set",
+        "call i32 @js_bool_box_get",
+        "call void @js_bool_box_set",
+    ] {
+        assert!(
+            !ir.contains(checked_access),
+            "proven compiler-private control cells must bypass checked box access ({checked_access}):\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("inttoptr i64")
+            && ir.contains("load i32, ptr")
+            && ir.contains("store i32")
+            && ir.contains("load i1, ptr")
+            && ir.contains("store i1"),
+        "compiler-private controls should use direct typed cell loads/stores:\n{ir}"
+    );
     assert!(
         ir.contains("icmp eq i32"),
         "__gen_state constant comparisons should stay as i32 compares:\n{ir}"
@@ -7160,7 +7515,7 @@ fn compiler_private_async_iter_result_i32_slot_uses_typed_handoff() {
 }
 
 #[test]
-fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_before_raw_slot() {
+fn compiler_private_async_iter_result_annotated_numeric_payload_stays_generic() {
     let ir = compile_ir_for_module_with_opts(
         module_with_classes_and_params(
             "compiler_private_async_iter_result_annotated_numeric_param.ts",
@@ -7173,17 +7528,33 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_befor
     )
     .unwrap();
 
+    // The subject is the word "unguarded". An annotation is still not a proof:
+    // the body reached by an unvalidated caller must keep the live JSValue.
+    // (#8094) A guarded clone may hold a raw slot, but only behind the entry
+    // guard that established it, so the negative moves from "nowhere in the
+    // module" to "nowhere on the unguarded path" — and gains a positive that
+    // pins where the raw slot IS allowed to appear.
+    let symbol = "perry_fn_compiler_private_async_iter_result_annotated_numeric_param_ts__probe";
+    let body = body_ir_section(&ir, symbol);
     assert!(
-        ir.contains("call double @js_number_coerce"),
-        "annotation-only numeric async payloads must be coerced before raw f64 storage:\n{ir}"
+        body.contains("call double @js_iter_result_set("),
+        "annotation-only numeric async payloads must preserve the live JSValue:\n{body}"
     );
     assert!(
-        ir.contains("call double @js_iter_result_set_f64"),
-        "coerced numeric async payload should still use the raw f64 scratch slot:\n{ir}"
+        !body.contains("call double @js_iter_result_set_f64"),
+        "annotation-only numeric async payloads must not use the unguarded raw-f64 slot:\n{body}"
     );
+    let clone = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
     assert!(
-        !ir.contains("call double @js_iter_result_set("),
-        "coerced numeric async payload should avoid the generic JSValue setter:\n{ir}"
+        clone.contains("call double @js_iter_result_set_f64")
+            && !clone.contains("call double @js_iter_result_set("),
+        "the guarded clone should consume its descriptor proof:\n{clone}"
+    );
+    let entry = function_ir_section(&ir, symbol);
+    assert!(
+        entry.contains("call i32 @js_param_type_guard(")
+            && entry.contains(&format!("@{symbol}$generic(")),
+        "the raw-f64 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );
 }
 
@@ -7212,7 +7583,7 @@ fn compiler_private_async_iter_result_annotated_boolean_payload_stays_generic() 
 }
 
 #[test]
-fn compiler_private_async_iter_result_annotated_i32_payload_stays_off_raw_i32_slot() {
+fn compiler_private_async_iter_result_annotated_i32_payload_stays_generic() {
     let ir = compile_ir_for_module_with_opts(
         module_with_classes_and_params(
             "compiler_private_async_iter_result_annotated_i32_param.ts",
@@ -7225,13 +7596,36 @@ fn compiler_private_async_iter_result_annotated_i32_payload_stays_off_raw_i32_sl
     )
     .unwrap();
 
+    // "without proof" is the operative phrase — see the numeric sibling above.
+    // (#8094) The declared Int32 becomes a raw `i32` parameter slot only inside
+    // the clone the public entry enters after `js_typed_i32_arg_guard`; every
+    // unvalidated caller still reaches a body that keeps the runtime JSValue.
+    let symbol = "perry_fn_compiler_private_async_iter_result_annotated_i32_param_ts__probe";
+    let body = body_ir_section(&ir, symbol);
     assert!(
-        !ir.contains("call double @js_iter_result_set_i32"),
-        "annotation-only Int32 async payloads must not use the raw i32 slot without proof:\n{ir}"
+        !body.contains("call double @js_iter_result_set_i32"),
+        "annotation-only Int32 async payloads must not use the raw i32 slot without proof:\n{body}"
     );
     assert!(
-        ir.contains("call double @js_iter_result_set_f64"),
-        "annotation-only Int32 async payloads should keep the existing numeric-compatible raw f64 slot:\n{ir}"
+        body.contains("call double @js_iter_result_set("),
+        "annotation-only Int32 async payloads must preserve the runtime JSValue:\n{body}"
+    );
+    assert!(
+        !body.contains("call double @js_iter_result_set_f64"),
+        "annotation-only Int32 async payloads must not use the raw f64 slot without proof:\n{body}"
+    );
+    let clone = spec_clone_ir_section(&ir, symbol).expect("guarded clone");
+    assert!(
+        clone.starts_with(&format!("define internal double @{symbol}$spec_i32(i32 %"))
+            && clone.contains("call double @js_iter_result_set_i32")
+            && !clone.contains("call double @js_iter_result_set("),
+        "the guarded clone should consume its raw i32 slot:\n{clone}"
+    );
+    let entry = function_ir_section(&ir, symbol);
+    assert!(
+        entry.contains("call i32 @js_typed_i32_arg_guard")
+            && entry.contains(&format!("@{symbol}$generic(double ")),
+        "the raw-i32 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );
 }
 
@@ -7465,6 +7859,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7639,6 +8034,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7731,6 +8127,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     };
     match case {
@@ -7845,6 +8242,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7922,6 +8320,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -8048,8 +8447,60 @@ fn typed_i32_return_module(case: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
+}
+
+fn typed_parse_spec_clone_rodata_module() -> Module {
+    let properties = [
+        (
+            "a".to_string(),
+            PropertyInfo {
+                ty: Type::String,
+                optional: false,
+                readonly: false,
+            },
+        ),
+        (
+            "b".to_string(),
+            PropertyInfo {
+                ty: Type::String,
+                optional: false,
+                readonly: false,
+            },
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let record_type = Type::Object(ObjectType {
+        name: None,
+        properties,
+        property_order: Some(vec!["a".to_string(), "b".to_string()]),
+        index_signature: None,
+    });
+    let return_type = Type::Array(Box::new(record_type.clone()));
+    let mut module = module_with_classes_and_params(
+        "typed_parse_spec_clone_rodata.ts",
+        Vec::new(),
+        vec![param(1, "n", Type::Number)],
+        return_type.clone(),
+        vec![Stmt::Return(Some(Expr::JsonParseTyped {
+            text: Box::new(Expr::String("[{\"a\":\"x\",\"b\":\"y\"}]".to_string())),
+            ty: return_type,
+            ordered_keys: Some(vec!["a".to_string(), "b".to_string()]),
+        }))],
+    );
+    module.functions[0].name = "parse_records".to_string();
+    // The integer argument selects a full-body `$spec_i32` entry while the
+    // ordinary boxed body remains present. Both lower the typed parse site.
+    module.init = vec![Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::Integer(1)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    })];
+    module
 }
 
 fn typed_f64_method_clone_module() -> Module {
@@ -9321,6 +9772,123 @@ fn scalar_method_summary_module() -> Module {
     )
 }
 
+fn scalar_method_field_write_module() -> Module {
+    let mut counter = class(111, "Counter", vec![class_field("value", Type::Number)]);
+    counter.constructor = Some(Function {
+        id: 110,
+        name: "Counter_constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(10, "value", Type::Number)],
+        return_type: Type::Any,
+        body: vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(local(10)),
+        })],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    counter.methods.push(Function {
+        id: 111,
+        name: "bump".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                    }),
+                    right: Box::new(int(1)),
+                }),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    let bump = || Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(local(20)),
+            property: "bump".to_string(),
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    module_with_classes_and_params(
+        "scalar_method_field_write.ts",
+        vec![counter],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: vec![number(40.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Expr(bump()),
+            Stmt::Return(Some(bump())),
+        ],
+    )
+}
+
+fn scalar_method_parameterized_field_write_module() -> Module {
+    let mut module = scalar_method_field_write_module();
+    module.name = "scalar_method_parameterized_field_write.ts".to_string();
+    let method = &mut module.classes[0].methods[0];
+    method.params = vec![param(12, "delta", Type::Number)];
+    let Stmt::Expr(Expr::PropertySet { value, .. }) = &mut method.body[0] else {
+        panic!("unexpected scalar field-write fixture method body");
+    };
+    let Expr::Binary { right, .. } = value.as_mut() else {
+        panic!("unexpected scalar field-write fixture assignment");
+    };
+    **right = local(12);
+    for stmt in &mut module.functions[0].body {
+        let call = match stmt {
+            Stmt::Expr(Expr::Call { args, .. }) | Stmt::Return(Some(Expr::Call { args, .. })) => {
+                args
+            }
+            _ => continue,
+        };
+        call.push(number(1.0));
+    }
+    module
+}
+
 fn scalar_method_shadowed_by_field_module() -> Module {
     let mut module = scalar_method_summary_module();
     module.name = "scalar_method_shadowed_by_field.ts".to_string();
@@ -10058,7 +10626,7 @@ fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
     let generic_body = "perry_fn_typed_string_function_abi_ts__id$generic";
     let caller = "perry_fn_typed_string_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %arg1)")),
@@ -10127,9 +10695,10 @@ fn typed_string_function_clone_rejects_unsupported_string_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_string") && !ir.contains("$generic"),
+            !ir.contains("$typed_string"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -10180,7 +10749,7 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     let caller = "perry_fn_typed_f64_mixed_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10253,7 +10822,7 @@ fn typed_f64_function_clone_keeps_i32_locals_raw_until_f64_use() {
     let caller = "perry_fn_typed_f64_i32_local_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10316,9 +10885,10 @@ fn typed_f64_function_clone_rejects_any_and_unsafe_mixed_parameter_signatures() 
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_f64") && !ir.contains("$generic"),
+            !ir.contains("$typed_f64"),
             "{case} unsafe ABI surface must stay generic:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -10634,9 +11204,10 @@ fn typed_i1_function_clone_rejects_any_and_mixed_parameter_signatures() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_i1") && !ir.contains("$generic"),
+            !ir.contains("$typed_i1"),
             "{case} boolean ABI surface must stay generic:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -10648,7 +11219,7 @@ fn typed_i1_function_clone_rejects_mixed_direct_call_inputs() {
     let generic = "perry_fn_typed_i1_function_abi_ts__both";
     let typed = "perry_fn_typed_i1_function_abi_ts__both$typed_i1";
     let caller = "perry_fn_typed_i1_function_abi_ts__caller";
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     assert!(
         ir.contains(&format!("define internal i1 @{typed}")),
         "callee should still have an eligible typed-i1 clone:\n{ir}"
@@ -10679,7 +11250,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
     let caller = "perry_fn_typed_i1_numeric_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10751,7 +11322,7 @@ fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
     let caller = "perry_fn_typed_i1_i32_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10821,7 +11392,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
     let caller = "perry_fn_typed_i32_return_positive_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -10867,6 +11438,38 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
 }
 
 #[test]
+fn typed_parse_rodata_names_are_unique_across_spec_and_boxed_bodies() {
+    let ir = String::from_utf8(
+        compile_module(&typed_parse_spec_clone_rodata_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("perry_fn_typed_parse_spec_clone_rodata_ts__parse_records$spec_i32"),
+        "fixture must exercise the specialised and boxed body pair:\n{ir}"
+    );
+
+    let globals: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("@perry_typed_parse_keys_"))
+        .collect();
+    assert_eq!(
+        globals.len(),
+        2,
+        "both function bodies must materialise their parse schema:\n{ir}"
+    );
+    let names: std::collections::HashSet<&str> = globals
+        .iter()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert_eq!(
+        names.len(),
+        globals.len(),
+        "module-level LLVM globals must not be redefined:\n{}",
+        globals.join("\n")
+    );
+}
+
+#[test]
 fn artifact_records_typed_i32_function_clone_selection() {
     let artifact = compile_artifact_json_for_module(typed_i32_return_module("positive"));
     let records = artifact["records"].as_array().unwrap();
@@ -10904,9 +11507,10 @@ fn typed_i32_return_function_rejects_annotation_only_or_unsafe_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("$typed_i32") && !ir.contains("$generic"),
+            !ir.contains("$typed_i32"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
+        assert_only_guarded_generic_splits(&ir, case);
     }
 }
 
@@ -10922,8 +11526,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
     let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir =
-        defined_function_ir_section(&ir, "perry_fn_typed_i32_method_eligible_ts__probe");
+    let caller_ir = body_ir_section(&ir, "perry_fn_typed_i32_method_eligible_ts__probe");
 
     assert!(
         ir.contains(&format!(
@@ -11076,8 +11679,7 @@ fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
     let generic_body = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir =
-        defined_function_ir_section(&ir, "perry_fn_typed_f64_i32_local_method_abi_ts__probe");
+    let caller_ir = body_ir_section(&ir, "perry_fn_typed_f64_i32_local_method_abi_ts__probe");
 
     assert!(
         ir.contains(&format!(
@@ -11122,7 +11724,7 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
     let generic_body = "perry_method_typed_string_method_eligible_ts__Labeler__pick$generic";
     let caller = "perry_fn_typed_string_method_eligible_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %arg21)")),
@@ -11433,7 +12035,7 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
     let caller = "perry_fn_typed_i1_numeric_method_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -11691,7 +12293,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
 
     assert!(
         ir.contains(&format!(
@@ -11710,7 +12312,9 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
             && typed_ir.contains("getelementptr i8, ptr")
             && typed_ir.matches("load double").count() >= 2
             && typed_ir.contains(" fadd ")
-            && typed_ir.contains(" fmul "),
+            && typed_ir.contains(" fmul ")
+            && !typed_ir.contains("js_number_coerce")
+            && !typed_ir.contains("js_dynamic_string_or_number_add"),
         "typed receiver clone should raw-load receiver fields and stay in f64 SSA:\n{typed_ir}"
     );
     let method_guard = caller_ir
@@ -11741,34 +12345,80 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     //      offsets but must NOT assume the slots hold canonical raw f64
     //
     // What makes (3) sound is not which symbol it is, it is that the callee
-    // coerces what it loads. `$pshape` does: it emits `inttoptr` +
-    // `getelementptr` + `load double` — the shape guarantees the OFFSETS — and
-    // then routes every loaded slot through `js_number_coerce`, which is
-    // exactly the right handling for a slot that may hold a NaN-boxed value.
-    // `$generic` is also acceptable here; what must never appear on this edge
-    // is `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    // preserves coercion semantics after loading. `$pshape` may use
+    // `inttoptr` + `getelementptr` + `load double` because the shape guarantees
+    // the OFFSETS, but it must tag-dispatch the `+` and then ToNumber that
+    // possibly boxed result before the following multiply. `$generic` is also
+    // acceptable here; what must never appear on this edge is
+    // `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    let field_guard_branch = caller_ir[field_guard..]
+        .lines()
+        .find(|line| line.trim_start().starts_with("br i1 "))
+        .unwrap_or_else(|| panic!("field guards should feed a conditional branch:\n{caller_ir}"));
+    let mut field_guard_successors = field_guard_branch
+        .split("label %")
+        .skip(1)
+        .map(|part| part.split([',', ' ']).next().unwrap());
+    let success_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a success edge: {field_guard_branch}")
+    });
+    let failure_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a failure edge: {field_guard_branch}")
+    });
+    let basic_block = |label: &str| {
+        let marker = format!("\n{label}:\n");
+        let start = caller_ir
+            .find(&marker)
+            .unwrap_or_else(|| panic!("basic block `{label}` not found:\n{caller_ir}"))
+            + marker.len();
+        let rest = &caller_ir[start..];
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    };
+    let success_block = basic_block(success_label);
+    let failure_block = basic_block(failure_label);
+    assert!(
+        success_block.contains(&format!("call double @{typed}(i64 ")),
+        "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
+         {success_block}"
+    );
+    assert!(
+        !failure_block.contains(&format!("call double @{typed}(")),
+        "the raw-f64 field-guard failure edge must not call the raw-f64 receiver clone:\n\
+         {failure_block}"
+    );
     let failure_edge_callee = [generic_body, pshape_body]
         .into_iter()
-        .find(|sym| caller_ir.contains(&format!("call double @{sym}(")))
+        .find(|sym| failure_block.contains(&format!("call double @{sym}(")))
         .unwrap_or_else(|| {
             panic!(
                 "raw-f64 field guard failure must reach a clone that does not \
-                 assume raw-f64 slots (`$generic` or `$pshape`):\n{caller_ir}"
+                 assume raw-f64 slots (`$generic` or `$pshape`):\n{failure_block}"
             )
         });
-    assert!(
-        !caller_ir.contains(&format!("call double @{typed}(double ")),
-        "the guard-failure edge must not reach the raw-f64 receiver clone \
-         (that clone is only valid when the guard PASSED):\n{caller_ir}"
-    );
     if failure_edge_callee == pshape_body {
         let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        let dynamic_add = pshape_ir
+            .find("call double @js_dynamic_string_or_number_add(")
+            .unwrap_or_else(|| {
+                panic!("the Ptr<Shape> clone must tag-dispatch declared-only `+`:\n{pshape_ir}")
+            });
+        let multiply = pshape_ir
+            .find("call double @js_dynamic_mul(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Ptr<Shape> clone must dynamically coerce the possibly boxed `+` result and annotation-only argument:\n\
+                     {pshape_ir}"
+                )
+            });
         assert!(
-            pshape_ir.contains("call double @js_number_coerce("),
-            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must coerce \
-             every slot it loads — without that it is the typed clone under \
-             another name, and a receiver whose fields are not raw f64 would \
-             take raw loads anyway:\n{pshape_ir}"
+            dynamic_add < multiply,
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must \
+             keep the possibly boxed `+` result on semantically dynamic multiplication:\n\
+             {pshape_ir}"
+        );
+        assert!(
+            !pshape_ir.contains(" fmul "),
+            "annotation-only operands must not reach raw f64 multiplication in `$pshape`:\n{pshape_ir}"
         );
     }
     assert!(
@@ -11940,13 +12590,29 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
         compile_module(&typed_f64_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
+    let public = "perry_closure_typed_f64_closure_abi_ts__300";
+    let generic_body = "perry_closure_typed_f64_closure_abi_ts__300$generic";
     let typed = "perry_closure_typed_f64_closure_abi_ts__300$typed_f64";
+    let caller_ir = defined_function_ir_section(&ir, "perry_fn_typed_f64_closure_abi_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
+    let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
             && typed_ir.contains("call double @js_typed_f64_arg_to_raw"),
         "typed-f64 captured closure should load immutable numeric capture as JSValue bits through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && wrapper_ir.contains("call i32 @js_typed_f64_arg_guard"),
+        "public typed-f64 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("closure_direct.typed_f64")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-f64 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call double @{typed}(i64 ")),
@@ -12067,13 +12733,30 @@ fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
         compile_module(&typed_i32_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
+    let public = "perry_closure_typed_i32_closure_capture_ts__303";
+    let generic_body = "perry_closure_typed_i32_closure_capture_ts__303$generic";
     let typed = "perry_closure_typed_i32_closure_capture_ts__303$typed_i32";
+    let caller_ir =
+        defined_function_ir_section(&ir, "perry_fn_typed_i32_closure_capture_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
+    let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
             && typed_ir.contains("call i32 @js_typed_i32_arg_to_raw"),
         "typed-i32 captured closure should load immutable Int32 capture through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_guard"),
+        "public typed-i32 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("closure_direct.typed_i32")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-i32 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call i32 @{typed}(i64 ")),
@@ -12127,7 +12810,7 @@ fn typed_i32_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_i32_closure_dynamic_ts__303";
     let generic_body = "perry_closure_typed_i32_closure_dynamic_ts__303$generic";
     let typed = "perry_closure_typed_i32_closure_dynamic_ts__303$typed_i32";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i32 @{typed}(i64 %this_closure")),
@@ -12326,13 +13009,29 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
         compile_module(&typed_i1_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
+    let public = "perry_closure_typed_i1_closure_capture_ts__301";
+    let generic_body = "perry_closure_typed_i1_closure_capture_ts__301$generic";
     let typed = "perry_closure_typed_i1_closure_capture_ts__301$typed_i1";
+    let caller_ir = defined_function_ir_section(&ir, "perry_fn_typed_i1_closure_capture_ts__probe");
     let typed_ir = defined_function_ir_section(&ir, typed);
+    let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
             && typed_ir.contains("bitcast i64")
             && typed_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
         "typed-i1 captured closure should load immutable boolean capture as JSValue bits through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && wrapper_ir.contains("call i32 @js_typed_i1_arg_guard"),
+        "public typed-i1 wrapper must validate capture bits before entering the raw clone:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("closure_direct.typed_i1")
+            && caller_ir.contains("call i64 @js_closure_get_capture_bits")
+            && caller_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && caller_ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct typed-i1 calls must guard captures and retain their generic branch:\n{caller_ir}"
     );
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 ")),
@@ -12364,7 +13063,7 @@ fn typed_i1_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_i1_closure_dynamic_ts__301";
     let generic_body = "perry_closure_typed_i1_closure_dynamic_ts__301$generic";
     let typed = "perry_closure_typed_i1_closure_dynamic_ts__301$typed_i1";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i1 @{typed}(i64 %this_closure")),
@@ -12538,7 +13237,7 @@ fn typed_string_closure_clone_rejects_dynamic_callee_call_site() {
     let public = "perry_closure_typed_string_closure_dynamic_ts__302";
     let generic_body = "perry_closure_typed_string_closure_dynamic_ts__302$generic";
     let typed = "perry_closure_typed_string_closure_dynamic_ts__302$typed_string";
-    let caller_ir = function_ir_section(&ir, caller);
+    let caller_ir = body_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!("define internal i64 @{typed}(i64 %this_closure")),
@@ -12601,6 +13300,92 @@ fn artifact_records_scalar_replaced_method_summary_inline() {
                 })
         }),
         "expected scalar method summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_replaced_field_write_method_updates_slot_without_dispatch_or_allocation() {
+    let ir = String::from_utf8(
+        compile_module(&scalar_method_field_write_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_scalar_method_field_write_ts__probe");
+    assert!(
+        !probe_ir.contains("call double @js_native_call_method")
+            && !probe_ir
+                .contains("call double @perry_method_scalar_method_field_write_ts__Counter__bump"),
+        "scalar-replaced field-write method should inline without dispatch:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_object_alloc")
+            && !probe_ir.contains("call ptr @js_inline_arena_slow_alloc"),
+        "scalar-replaced field-write receiver should not heap-allocate:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.matches("fadd double").count() >= 2,
+        "both field updates should remain scalar numeric arithmetic:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_scalar_replaced_field_write_effect() {
+    let artifact = compile_artifact_json_for_module(scalar_method_field_write_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records
+            .iter()
+            .filter(|record| {
+                record["expr_kind"] == "ScalarMethodCall"
+                    && record["consumer"] == "scalar_method_summary_inline"
+                    && record["local_id"] == 20
+                    && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                    && record_has_note(record, "method=bump")
+                    && record_has_note(record, "summary_effect=field_write")
+                    && record_has_note(record, "summary_write_field=value")
+                    && record["consumed_facts"].as_array().is_some_and(|facts| {
+                        facts.iter().any(|fact| {
+                            fact["kind"] == "effect"
+                                && fact["state"] == "consumed"
+                                && fact["detail"] == "scalar_method_field_write:Counter.value"
+                        })
+                    })
+            })
+            .count()
+            == 2,
+        "both inlined calls should record the consumed field-write effect:\n{artifact:#}"
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|record| {
+                record["expr_kind"] == "ScalarThisFieldSet"
+                    && record["consumer"] == "scalar_object_field_store.raw_f64"
+                    && record["local_id"] == 20
+                    && record_has_note(record, "field=value")
+                    && record_has_note(record, "raw_f64_field=1")
+            })
+            .count()
+            >= 2,
+        "the inlined field writes should retain raw-f64 scalar-slot evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_field_write_rejects_parameterized_fallback_shape() {
+    let module = scalar_method_parameterized_field_write_module();
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_scalar_method_parameterized_field_write_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_object_alloc"),
+        "parameterized mutation must keep a heap receiver because a guarded fallback could stale scalar slots:\n{probe_ir}"
+    );
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        !artifact_has_scalar_method_inline(&artifact, "bump"),
+        "parameterized mutation must not claim scalar method effect-summary consumption:\n{artifact:#}"
     );
 }
 
@@ -12981,6 +13766,14 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
 fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() {
     let module = scalar_method_boolean_public_numeric_expr_arg_module();
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    // (#8094) `probe(limit: number, delta: int32)` is guard-eligible, so the
+    // module now holds more than one lowering of this body. Block ORDER is a
+    // property of ONE function, so scope the search to the unproven body —
+    // the context these expectations were written for.
+    let ir = body_ir_section(
+        &ir,
+        "perry_fn_scalar_method_boolean_guarded_expr_arg_ts__probe",
+    );
     assert!(
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
@@ -13346,8 +14139,32 @@ fn static_name_spread_method_fallback_uses_method_id_wrapper() {
     );
 }
 
+/// The text of the `define` block whose signature line contains `marker`,
+/// through to the start of the next one. A guarded function (#8094) puts its
+/// public trampoline, its specialized clone and its generic sibling in one
+/// module, and the assertions below differ per body.
+fn ir_function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
+    let start = ir
+        .match_indices("define ")
+        .find(|(index, _)| {
+            let line_end = ir[*index..]
+                .find('\n')
+                .map(|offset| index + offset)
+                .unwrap_or(ir.len());
+            ir[*index..line_end].contains(marker)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| panic!("no `define` line containing {marker:?} in:\n{ir}"));
+    let rest = &ir[start..];
+    let end = rest[1..]
+        .find("\ndefine ")
+        .map(|offset| offset + 1)
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 #[test]
-fn static_name_class_method_value_uses_method_id_bind_wrapper() {
+fn annotated_class_method_value_uses_generic_lookup() {
     let mut calc = class(209, "Calc", Vec::new());
     calc.methods.push(Function {
         id: 2090,
@@ -13378,13 +14195,30 @@ fn static_name_class_method_value_uses_method_id_bind_wrapper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    // (#8033) An erased annotation is never a proof, so the body reachable
+    // WITHOUT a validated argument must keep generic lookup. (#8099) A
+    // class-typed parameter is now additionally admitted into the #8094
+    // runtime-guarded clone, where the direct bind ABI is legal because
+    // `js_param_type_guard` established the receiver's class identity. Assert
+    // both halves: the interesting failure is the direct ABI appearing in the
+    // fallback, which is the exact regression #8033 exists to prevent.
+    let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
-        ir.contains("call double @js_class_method_bind_by_id"),
-        "static-name class method value reads should use method-id bind ABI:\n{ir}"
+        generic.contains("call double @js_object_get_field_ic_miss"),
+        "an annotation-only class receiver must preserve generic property \
+         lookup in the unguarded body:\n{generic}"
     );
     assert!(
-        !ir.contains("call double @js_class_method_bind(double"),
-        "static-name class method value reads should not pass raw name bytes:\n{ir}"
+        !generic.contains("call double @js_class_method_bind_by_id")
+            && !generic.contains("call double @js_class_method_bind(double"),
+        "the unguarded body must not select a direct class-method bind ABI:\n{generic}"
+    );
+    let specialized = ir_function_body(&ir, "__probe$spec_b(");
+    assert!(
+        specialized.contains("call double @js_class_method_bind_by_id")
+            || specialized.contains("call double @js_class_method_bind(double"),
+        "the guarded clone is what the validated annotation buys — if it stops \
+         selecting the direct bind, the assertions above pass vacuously:\n{specialized}"
     );
 }
 
@@ -13557,23 +14391,23 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
     let module = module_with_classes_and_params(
         "static_put_value_write_pic",
         Vec::new(),
-        vec![
-            param(object, "object", Type::Any),
-            param(left, "left", Type::Number),
-            param(right, "right", Type::Number),
-        ],
+        vec![param(object, "object", Type::Any)],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::PutValueSet {
-            target: Box::new(Expr::LocalGet(object)),
-            key: Box::new(Expr::String("x".to_string())),
-            value: Box::new(Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(Expr::LocalGet(left)),
-                right: Box::new(Expr::LocalGet(right)),
-            }),
-            receiver: Box::new(Expr::LocalGet(object)),
-            strict: false,
-        }))],
+        vec![
+            number_let(left, "left", false, number(1.0)),
+            number_let(right, "right", false, number(2.0)),
+            Stmt::Return(Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::String("x".to_string())),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(left)),
+                    right: Box::new(Expr::LocalGet(right)),
+                }),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+            })),
+        ],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -13593,8 +14427,14 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         ir.contains("put.pic.guard2")
             && ir.contains("put.pic.guard3")
             && ir.contains("put.pic.guard4")
-            && ir.contains("put.pic.miss4"),
-        "the write PIC should retain four bounded shape entries"
+            && ir.contains("put.pic.miss4")
+            && ir.contains("put.pic.tail")
+            && ir.contains("call double @js_put_value_set_ic_poly_tail"),
+        "the write PIC should retain four inline entries plus a bounded outlined tail"
+    );
+    assert!(
+        ir.contains("@perry_ic_0_poly_tail = private global"),
+        "the outlined ways must use a distinct zero-initialized cache:\n{ir}"
     );
 }
 
@@ -13708,6 +14548,169 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
         ir.contains("call double @js_put_value_set_dyn_ic("),
         "the rejected static PIC case must retain sloppy-mode semantics through the \
          dynamic-key fallback:\n{ir}"
+    );
+}
+
+/// The body of the first block whose label starts with `label_prefix`.
+///
+/// Block labels carry per-function numeric suffixes (`put.dynic.store.ref.60`),
+/// so callers pass the stable prefix. A block header is a line-initial
+/// `label:`; lines that merely mention the label (branches, phis) are indented
+/// and skipped.
+fn dyn_ic_block_body<'a>(ir: &'a str, label_prefix: &str) -> Option<&'a str> {
+    let needle = format!("\n{label_prefix}");
+    let mut from = 0;
+    while let Some(rel) = ir[from..].find(&needle) {
+        let label_start = from + rel + 1;
+        let line_end = label_start + ir[label_start..].find('\n')?;
+        if ir[label_start..line_end].ends_with(':') {
+            let rest = &ir[line_end + 1..];
+            let end = match (rest.find("\n\n"), rest.find("\n}")) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(rest.len()),
+            };
+            return Some(&rest[..end]);
+        }
+        from = line_end;
+    }
+    None
+}
+
+fn dyn_ic_reference_store_ir() -> String {
+    let object = 1u32;
+    let value = 2u32;
+    let key = 3u32;
+    let module = module_with_classes_and_params(
+        "dyn_ic_reference_store",
+        Vec::new(),
+        vec![
+            param(object, "object", Type::Any),
+            param(value, "value", Type::Any),
+        ],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: key,
+                name: "key".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("x".to_string())),
+            },
+            Stmt::Return(Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::LocalGet(key)),
+                value: Box::new(Expr::LocalGet(value)),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+            })),
+        ],
+    );
+    compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+}
+
+/// #8108: a reference-tagged value stored through the inline dynamic-key write
+/// IC takes a BARRIERED inline arm instead of leaving the inline path.
+///
+/// Before this, the value tag gated ENTRY: `o[k] = <object|string|bigint>` was
+/// pushed straight to `put.dynic.slow`, i.e. one cross-crate
+/// `js_put_value_set_dyn_ic` call per write that re-validated in Rust exactly
+/// the guards the inline block had already proved. The tag now SELECTS an arm.
+///
+/// The reference arm is byte-for-byte the static write PIC's pointer-capable
+/// store (`emit_jsvalue_slot_store_scalar_aware_on_block`) reached under
+/// strictly stronger conditions, so this test pins all three bookkeeping calls
+/// — dropping any one of them is the #5094 / #7511 family of silent-stranding
+/// bugs, and none of them is visible to a runtime GC probe.
+#[test]
+fn dyn_ic_inline_store_barriers_a_reference_value() {
+    let ir = dyn_ic_reference_store_ir();
+
+    let scalar = dyn_ic_block_body(&ir, "put.dynic.store.scalar")
+        .unwrap_or_else(|| panic!("the non-reference store arm must survive:\n{ir}"));
+    let reference = dyn_ic_block_body(&ir, "put.dynic.store.ref").unwrap_or_else(|| {
+        panic!("a reference-tagged value must take an inline barriered arm:\n{ir}")
+    });
+    // An emitted block is not a reached block. Routing reference values back to
+    // `put.dynic.slow` leaves this block behind as dead IR, which every
+    // assertion below would happily inspect — so require the branch INTO it
+    // before believing anything it contains.
+    assert!(
+        ir.lines()
+            .any(|line| line.contains("br i1") && line.contains("%put.dynic.store.ref")),
+        "the reference arm must be a branch target, not dead IR:\n{ir}"
+    );
+
+    for helper in [
+        "js_string_addref_if_heap_string",
+        "js_gc_note_slot_layout_aware",
+        "js_write_barrier_slot",
+    ] {
+        assert!(
+            reference.contains(helper),
+            "the reference store arm must keep the full layout-note / string-alias / \
+             write-barrier path; missing {helper}:\n{reference}"
+        );
+    }
+    assert!(
+        reference.contains("store double"),
+        "the reference arm must still perform the slot store:\n{reference}"
+    );
+
+    // The scalar arm is the pre-#8108 IR: a bare store, no bookkeeping. A
+    // barrier appearing here would mean the tag test stopped discriminating.
+    assert!(
+        scalar.contains("store double"),
+        "the non-reference arm must still store:\n{scalar}"
+    );
+    for helper in [
+        "js_string_addref_if_heap_string",
+        "js_gc_note_slot_layout_aware",
+        "js_write_barrier_slot",
+    ] {
+        assert!(
+            !scalar.contains(helper),
+            "GC_STORE_AUDIT(POINTER_FREE): the non-reference arm proved the value carries \
+             no heap pointer, so it must not call {helper}:\n{scalar}"
+        );
+    }
+}
+
+/// #8108, the other half: admitting reference values inline must not cost the
+/// semantic fallback. Every guard failure and every way miss still reaches
+/// `js_put_value_set_dyn_ic`, which bottoms out at full `[[Set]]`.
+#[test]
+fn dyn_ic_inline_store_keeps_its_semantic_fallback_for_reference_values() {
+    let ir = dyn_ic_reference_store_ir();
+
+    assert!(
+        ir.contains("call double @js_put_value_set_dyn_ic("),
+        "the outlined helper must remain the miss path:\n{ir}"
+    );
+    // The arm is SELECTED by the value tag, not gated at entry: the branch into
+    // the two store arms is what proves a reference value can reach the inline
+    // store at all, rather than being diverted to the slow block above it.
+    let selector = ir
+        .lines()
+        .find(|line| {
+            line.contains("br i1")
+                && line.contains("%put.dynic.store.scalar")
+                && line.contains("%put.dynic.store.ref")
+        })
+        .unwrap_or_else(|| {
+            panic!("the value tag must SELECT a store arm, not gate inline entry:\n{ir}")
+        });
+    assert!(
+        selector.trim_start().starts_with("br i1"),
+        "expected a conditional branch into the two store arms, got: {selector}"
+    );
+    // Entry must no longer reject on the value tag. The three tag compares
+    // still exist (they build the selector), but the entry predicate is now
+    // receiver-shaped plus the empty-way sentinel only.
+    let entry = dyn_ic_block_body(&ir, "put.dynic.guard")
+        .unwrap_or_else(|| panic!("the receiver guard block must exist:\n{ir}"));
+    assert!(
+        entry.contains("call double @js_put_value_set_dyn_ic(") || ir.contains("%put.dynic.slow"),
+        "the receiver guard must still fall through to the outlined helper:\n{ir}"
     );
 }
 

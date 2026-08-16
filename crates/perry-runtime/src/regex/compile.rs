@@ -31,6 +31,10 @@ pub extern "C" fn js_regexp_compile_value(
     if !is_valid_regex_ptr(re) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let re_handle = scope.root_raw_mut_ptr(re);
+    let pattern_handle = scope.root_nanbox_f64(pattern_val);
+    let flags_value_handle = scope.root_nanbox_f64(flags_val);
     let pj = crate::value::JSValue::from_bits(pattern_val.to_bits());
     let fj = crate::value::JSValue::from_bits(flags_val.to_bits());
 
@@ -43,13 +47,19 @@ pub extern "C" fn js_regexp_compile_value(
             );
         }
         let src_re = pj.as_pointer::<RegExpHeader>();
-        let src = js_regexp_get_source(src_re);
-        let flg = js_regexp_get_flags(src_re);
+        let ((src, pattern_val), _) = re_handle.across_mut::<RegExpHeader, _>(|| {
+            pattern_handle.across_nanbox(|| js_regexp_get_source(src_re))
+        });
         let src_s = if is_valid_ptr(src) {
             string_as_str(src).to_string()
         } else {
             String::new()
         };
+        let src_re =
+            crate::value::JSValue::from_bits(pattern_val.to_bits()).as_pointer::<RegExpHeader>();
+        let ((flg, _), _) = re_handle.across_mut::<RegExpHeader, _>(|| {
+            pattern_handle.across_nanbox(|| js_regexp_get_flags(src_re))
+        });
         let flg_s = if is_valid_ptr(flg) {
             string_as_str(flg).to_string()
         } else {
@@ -61,22 +71,27 @@ pub extern "C" fn js_regexp_compile_value(
         // Abstract ToString (§7.1.17) rejects a Symbol with a `TypeError` — the
         // lenient `js_string_coerce` would otherwise stringify it to
         // "Symbol(desc)" (annexB `.../compile/{pattern,flags}-to-string-err`).
-        let pat = if pj.is_undefined() {
-            String::new()
+        let (pat, flags_val) = if pj.is_undefined() {
+            (String::new(), flags_val)
         } else {
             crate::builtins::reject_symbol_to_string(pattern_val);
-            let p = crate::builtins::js_string_coerce(pattern_val);
-            if is_valid_ptr(p) {
+            let ((p, flags_val), _) = re_handle.across_mut::<RegExpHeader, _>(|| {
+                flags_value_handle.across_nanbox(|| crate::builtins::js_string_coerce(pattern_val))
+            });
+            let pat = if is_valid_ptr(p) {
                 string_as_str(p).to_string()
             } else {
                 String::new()
-            }
+            };
+            (pat, flags_val)
         };
+        let fj = crate::value::JSValue::from_bits(flags_val.to_bits());
         let flg = if fj.is_undefined() {
             String::new()
         } else {
             crate::builtins::reject_symbol_to_string(flags_val);
-            let f = crate::builtins::js_string_coerce(flags_val);
+            let (f, _) = re_handle
+                .across_mut::<RegExpHeader, _>(|| crate::builtins::js_string_coerce(flags_val));
             if is_valid_ptr(f) {
                 string_as_str(f).to_string()
             } else {
@@ -146,8 +161,13 @@ pub extern "C" fn js_regexp_compile_value(
             None => std::ptr::null(),
         }
     });
-    let canonical_flags_ptr = js_string_from_str(flags_str);
-    let pattern_ptr = js_string_from_str(pattern_str);
+    let (canonical_flags_ptr, _) =
+        re_handle.across_mut::<RegExpHeader, _>(|| js_string_from_str(flags_str));
+    let canonical_flags_handle = scope.root_string_ptr(canonical_flags_ptr);
+    let ((pattern_ptr, canonical_flags_ptr), re) = re_handle.across_mut::<RegExpHeader, _>(|| {
+        canonical_flags_handle
+            .across_const::<crate::StringHeader, _>(|| js_string_from_str(pattern_str))
+    });
     unsafe {
         let old_regex_ptr = (*re).regex_ptr;
         let old_fancy_ptr = (*re).fancy_ptr;
@@ -183,6 +203,7 @@ pub extern "C" fn js_regexp_compile_value(
     // (`Object.defineProperty(re, "lastIndex", { writable: false })`) makes this
     // a `TypeError` — but only *after* `.source`/`.flags` have already been
     // updated above (annexB `.../compile/pattern-regexp-immutable-lastindex`).
-    super::set_last_index_throwing(re, 0);
+    let ((), re) =
+        re_handle.across_mut::<RegExpHeader, _>(|| super::set_last_index_throwing(re, 0));
     f64::from_bits(crate::value::JSValue::pointer(re as *const u8).bits())
 }

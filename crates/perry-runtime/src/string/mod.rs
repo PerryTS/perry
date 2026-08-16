@@ -58,7 +58,7 @@ pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_end_index_to_i32, js_string_from_char_code, js_string_from_char_code_array,
     js_string_from_code_point, js_string_from_code_point_array, js_string_index_get,
-    js_string_index_to_i32, js_string_to_char_array,
+    js_string_index_get_boxed, js_string_index_to_i32, js_string_to_char_array,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
@@ -73,8 +73,8 @@ pub(crate) use compare::{
     js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
 };
 pub use concat::{
-    js_string_concat, js_string_concat_box, js_string_concat_chain, js_string_concat_value,
-    js_value_concat_string,
+    js_string_add_value, js_string_concat, js_string_concat_box, js_string_concat_chain,
+    js_string_concat_value, js_value_add_string, js_value_concat_string,
 };
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
@@ -506,6 +506,28 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
+}
+
+/// [`string_storage_alloc`] with **no collection point**: `Some` means the
+/// bytes came out of the nursery block that was already open, so nothing on
+/// the heap moved and any raw string pointer the caller read *before* this
+/// call is still valid. `None` means the caller must root its operands and
+/// re-issue through [`string_storage_alloc`].
+///
+/// See `arena::arena_alloc_gc_no_collect` for why the guarantee holds.
+#[inline(always)]
+pub(crate) fn string_storage_alloc_no_collect(
+    capacity: u32,
+) -> Option<(*mut StringHeader, *mut u8)> {
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::arena::arena_alloc_gc_no_collect(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    if raw.is_null() {
+        return None;
+    }
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
+    Some((ptr, data))
 }
 
 #[inline]

@@ -116,14 +116,43 @@ fn typed_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
-    let Expr::Closure { captures, .. } = expr else {
+    let Expr::Closure {
+        params,
+        body,
+        captures,
+        ..
+    } = expr
+    else {
         return None;
     };
-    let mut reps = Vec::with_capacity(captures.len());
-    for id in captures {
-        let ty = module_local_types.get(id)?;
+    // Match the capture allocator/body map order: explicit captures first,
+    // followed by referenced outer ids in deterministic order. Module globals
+    // are absent from the typed-ABI type oracle, so encountering one rejects
+    // the clone; emitted capture slots filter the same ids. This keeps every
+    // enumerated representation aligned with the slot index guarded by the
+    // trampoline and loaded by the typed body, even when HIR capture
+    // conversion omitted an id that codegen auto-detects.
+    let mut effective = captures.clone();
+    let mut referenced = HashSet::new();
+    crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
+    let mut inner_lets = HashSet::new();
+    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    let param_ids: HashSet<u32> = params.iter().map(|param| param.id).collect();
+    let explicit: HashSet<u32> = effective.iter().copied().collect();
+    let mut auto: Vec<u32> = referenced.into_iter().collect();
+    auto.sort_unstable();
+    effective.extend(auto.into_iter().filter(|id| {
+        !param_ids.contains(id) && !inner_lets.contains(id) && !explicit.contains(id)
+    }));
+
+    let mut reps = Vec::with_capacity(effective.len());
+    for id in effective {
+        // This is a candidate representation derived from source metadata,
+        // not a proof. Both typed-clone entry paths guard the current capture
+        // bits against `rep` before entering the raw ABI.
+        let ty = module_local_types.get(&id)?;
         let rep = typed_param_rep_for_type(ty)?;
-        reps.push((*id, rep));
+        reps.push((id, rep));
     }
     Some(reps)
 }
@@ -193,21 +222,71 @@ pub(crate) fn typed_param_reps_match_args(
     args: &[Expr],
 ) -> bool {
     reps.len() == args.len()
-        && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
-            TypedParamRep::F64 => crate::type_analysis::is_numeric_expr(ctx, arg),
-            TypedParamRep::I32 => {
-                matches!(
+        && args
+            .iter()
+            .zip(reps.iter())
+            .all(|(arg, rep)| typed_arg_is_guard_candidate(ctx, *rep, arg))
+}
+
+/// Whether an argument is worth routing through a typed-call guard.
+///
+/// Runtime-derived facts admit the route directly. A local's erased source
+/// type may also nominate a route because every caller of this predicate emits
+/// `rep.guard_fn()` over the live JSValue and takes the generic body on guard
+/// failure. The hint never authorizes raw lowering on its own.
+pub(crate) fn typed_arg_is_guard_candidate(
+    ctx: &crate::expr::FnCtx<'_>,
+    rep: TypedParamRep,
+    arg: &Expr,
+) -> bool {
+    let runtime_proven = match rep {
+        TypedParamRep::F64 => crate::type_analysis::is_numeric_expr(ctx, arg),
+        TypedParamRep::I32 => {
+            matches!(arg, Expr::LocalGet(id) if ctx.integer_locals.contains(id))
+                || matches!(
                     crate::type_analysis::static_type_of(ctx, arg),
                     Some(Type::Int32)
-                ) || matches!(
+                )
+                || matches!(
                     arg,
                     Expr::Integer(n)
                         if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n)
                 )
+        }
+        TypedParamRep::I1 => crate::type_analysis::is_bool_expr(ctx, arg),
+        TypedParamRep::StringRef => {
+            crate::type_analysis::string_value_is_runtime_guaranteed(ctx, arg)
+        }
+    };
+    if runtime_proven {
+        return true;
+    }
+
+    let hinted_rep = match arg {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).and_then(typed_param_rep_for_type),
+        // An element annotation may nominate a guarded route even when the
+        // separately proven outer Array kind intentionally erases its element
+        // details to `Any`. The consumer still validates/coerces the live
+        // result before using a raw representation.
+        Expr::IndexGet { object, index } if crate::type_analysis::is_numeric_expr(ctx, index) => {
+            let Expr::LocalGet(array_id) = object.as_ref() else {
+                return false;
+            };
+            match ctx.local_type_hint(array_id) {
+                Some(Type::Array(elem)) => typed_param_rep_for_type(elem),
+                Some(Type::Generic { base, type_args })
+                    if base == "Array" && type_args.len() == 1 =>
+                {
+                    typed_param_rep_for_type(&type_args[0])
+                }
+                _ => None,
             }
-            TypedParamRep::I1 => crate::type_analysis::is_bool_expr(ctx, arg),
-            TypedParamRep::StringRef => crate::type_analysis::is_definitely_string_expr(ctx, arg),
-        })
+        }
+        _ => crate::type_analysis::static_type_of(ctx, arg)
+            .as_ref()
+            .and_then(typed_param_rep_for_type),
+    };
+    hinted_rep == Some(rep)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -639,7 +718,7 @@ pub(crate) fn typed_i1_closure_rejection_reason_with_types(
     if *captures_new_target {
         return Some(TypedCloneRejectionReason::CapturesNewTarget);
     }
-    if captures.iter().any(|id| mutable_captures.contains(id)) {
+    if !mutable_captures.is_empty() || captures.iter().any(|id| mutable_captures.contains(id)) {
         return Some(TypedCloneRejectionReason::Captures);
     }
 

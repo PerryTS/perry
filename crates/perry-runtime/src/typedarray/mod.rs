@@ -22,6 +22,10 @@ pub use format::format_typed_array;
 
 mod access;
 mod construct;
+/// #8100: the element READ helpers against a receiver the static typed-array
+/// hint no longer describes — the shape codegen emits for a reassigned local.
+#[cfg(test)]
+mod element_read_receiver_tests;
 mod iterate;
 mod slice_ops;
 mod transform;
@@ -346,10 +350,31 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     crate::typedarray_props::typed_array_clear_no_extend(owner);
 }
 
+#[cfg(test)]
+thread_local! {
+/// Every entry into [`lookup_typed_array_kind`], i.e. every caller that could
+/// not rule a typed array out more cheaply. Mirrors
+/// `map::TEST_MAP_REGISTRY_PROBES` (#7765) and exists for the same reason: the
+/// receiver-tag gates that let a `GC_TYPE_ARRAY` receiver skip this probe are
+/// asserted against it, so deleting a gate fails a test even though the ANSWER
+/// stays correct. A fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: the registry is thread-local and `cargo test`
+/// runs each case on its own thread in one process.
+    static TEST_TA_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_typed_array_registry_probe_count() -> u64 {
+    TEST_TA_REGISTRY_PROBES.with(|c| c.get())
+}
+
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
 #[inline]
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
+    #[cfg(test)]
+    TEST_TA_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // Nothing has ever been registered ⟹ nothing to find. Checked ahead of the
     // #5525 cache because it is the only arm that costs neither a cache-slot
     // load nor a negative-entry write-back: a program with no typed arrays runs
@@ -427,6 +452,103 @@ pub fn clean_ta_ptr(ptr: *const TypedArrayHeader) -> *const TypedArrayHeader {
         return ptr::null();
     }
     addr as *const TypedArrayHeader
+}
+
+/// What an element-READ helper (`js_typed_array_get`,
+/// `js_typed_array_index_get_dynamic`) was ACTUALLY handed.
+///
+/// See [`classify_element_read_receiver`].
+pub(crate) enum ElementReadReceiver {
+    /// A registered %TypedArray% (or a `GC_TYPE_TYPED_ARRAY` /
+    /// `GC_TYPE_NATIVE_TYPED_VIEW` allocation the registry does not know)
+    /// at this de-NaN-boxed address. Stay on the typed element path.
+    TypedArray(usize),
+    /// NOT a typed array. Read it through the ordinary `[[Get]]`
+    /// ([`crate::value::js_dyn_index_get`]) with this NaN-boxed receiver,
+    /// re-tagged the way the value reached codegen before codegen masked
+    /// the tag off.
+    Ordinary(f64),
+    /// Nothing indexable — a masked-away non-pointer tag (`42 as any`), a
+    /// null receiver, or an address no managed header backs. `undefined`.
+    Absent,
+}
+
+/// Classify the raw receiver word an element-READ helper was handed, BEFORE
+/// anything dereferences it as a `TypedArrayHeader`.
+///
+/// **Ask this before `clean_ta_ptr`, never after** — the mirror of
+/// `array/header.rs`'s [`crate::array::header`] `typed_array_receiver`
+/// (#8090), which had to ask the typed-array question before
+/// `clean_arr_ptr` rejected the receiver. Here the direction is reversed
+/// and the failure is worse, because `clean_ta_ptr` performs **no registry
+/// check at all**: it only rejects addresses below `0x1000`. So a plain
+/// array or object that arrives through a stale *static* typed-array hint
+/// was read AS a `TypedArrayHeader` — `(*ta).length` landed on
+/// `ArrayHeader::length` (both at offset 0, so bounds checks "passed"),
+/// `(*ta).kind` / `elem_size` on the low bytes of element 0's NaN box, and
+/// `data_ptr(ta)` 8 bytes past the real element region. The observable
+/// result was a silent `0` for every element read (#8100).
+///
+/// This is reachable in the shipped default configuration:
+/// `perry-codegen`'s `is_width_tracked_typed_array_receiver` (#7494)
+/// deliberately keeps a reassigned local's declared typed-array kind — see
+/// its comment, which explains that dropping the hint sends a REAL typed
+/// array through the plain-array layout instead — and pays for that by
+/// promising the runtime helper "re-validates the object's actual GC kind
+/// before touching memory". This function is that validation, and it
+/// dispatches instead of only rejecting.
+///
+/// Codegen masks the NaN-box tag off the receiver (`and i64 %bits,
+/// 0x0000_FFFF_FFFF_FFFF`) before the call, so the tag cannot simply be
+/// read back: it is RECONSTRUCTED from the managed header. That matters for
+/// exactly one case — a heap string must be re-boxed with `STRING_TAG`, or
+/// `js_dyn_index_get` walks a `StringHeader` as an `ObjectHeader` instead of
+/// taking its string arm. Symbols share `GC_TYPE_STRING` and are
+/// POINTER-tagged, which is what `js_is_symbol` separates.
+///
+/// The registry is the authority for "is a typed array", the same gate
+/// `js_typed_array_read_int32` and `strict_typed_array_from_raw` already
+/// use. A `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_VIEW` header still
+/// wins on a registry miss, so a lookup failure can only cost the diversion,
+/// never the element read.
+pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
+    // No hand-rolled address floor: every probe below is either a side-table
+    // lookup (safe for any bit pattern) or `try_read_gc_header`, which
+    // magnitude-classifies — handle band included — before it dereferences.
+    let addr = strip_nanbox(raw);
+    if lookup_typed_array_kind(addr).is_some() {
+        return ElementReadReceiver::TypedArray(addr);
+    }
+    // Only a POSITIVELY identified receiver is diverted. `try_read_gc_header`
+    // magnitude-classifies before it dereferences, so garbage bits that
+    // survived the mask never reach a managed-header read.
+    let obj_type = match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) => header.obj_type,
+        None => {
+            // Small-buffer slab entries are heap-plausible but carry NO
+            // GcHeader, so the registry is the only way to see a Buffer /
+            // `Uint8Array`-backed receiver here.
+            return if crate::buffer::is_registered_buffer(addr) {
+                ElementReadReceiver::Ordinary(crate::value::js_nanbox_pointer(addr as i64))
+            } else {
+                ElementReadReceiver::Absent
+            };
+        }
+    };
+    match obj_type {
+        crate::gc::GC_TYPE_TYPED_ARRAY | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW => {
+            ElementReadReceiver::TypedArray(addr)
+        }
+        crate::gc::GC_TYPE_STRING => {
+            let boxed = crate::value::js_nanbox_pointer(addr as i64);
+            if unsafe { crate::symbol::js_is_symbol(boxed) } != 0 {
+                ElementReadReceiver::Ordinary(boxed)
+            } else {
+                ElementReadReceiver::Ordinary(crate::value::js_nanbox_string(addr as i64))
+            }
+        }
+        _ => ElementReadReceiver::Ordinary(crate::value::js_nanbox_pointer(addr as i64)),
+    }
 }
 
 #[inline]
@@ -611,7 +733,7 @@ fn is_arena_backed_addr(addr: usize) -> bool {
 }
 
 #[inline]
-unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
+pub(crate) unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
     if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return false;
     }

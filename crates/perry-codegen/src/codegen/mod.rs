@@ -29,7 +29,11 @@
 //! Anything else (objects, arrays, classes, closures, async, imports, …)
 //! errors with an actionable "Phase X not yet supported" message.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use perry_hir::Module as HirModule;
@@ -37,7 +41,138 @@ use perry_hir::Module as HirModule;
 use crate::module::LlModule;
 use crate::runtime_decls;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I32, I64};
+
+pub(super) struct CompileProgress {
+    enabled: bool,
+    started: Instant,
+    last_checkpoint: Cell<Instant>,
+    phase: Arc<AtomicU8>,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    module: String,
+}
+
+impl CompileProgress {
+    fn new(module: &str, callables: usize) -> Self {
+        let progress_mode = std::env::var("PERRY_CODEGEN_PROGRESS").unwrap_or_default();
+        // Avoid three status lines for every tiny module in dependency-heavy
+        // projects. Long modules get automatic reporting; `=all` is the
+        // diagnostic override when per-module detail is wanted regardless.
+        let enabled = progress_mode == "all" || (progress_mode == "1" && callables >= 1_000);
+        let started = Instant::now();
+        let phase = Arc::new(AtomicU8::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        if enabled {
+            eprintln!("[perry] codegen: lowering {module} ({callables} callables)");
+        }
+        let worker = enabled.then(|| {
+            let phase = Arc::clone(&phase);
+            let stop = Arc::clone(&stop);
+            let module = module.to_string();
+            std::thread::Builder::new()
+                .name("perry-progress".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::park_timeout(Duration::from_secs(30));
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let label = match phase.load(Ordering::Relaxed) {
+                            0 => "lowering HIR",
+                            1 => "finalizing generated IR",
+                            2 => "partitioning/freezing/LLVM codegen",
+                            3 => "releasing generated IR",
+                            _ => "LLVM optimization and object emission",
+                        };
+                        eprintln!(
+                            "[perry] codegen: {module}: {label}, elapsed {:.1} min",
+                            started.elapsed().as_secs_f64() / 60.0
+                        );
+                    }
+                })
+                .expect("spawn Perry progress reporter")
+        });
+        Self {
+            enabled,
+            started,
+            last_checkpoint: Cell::new(started),
+            phase,
+            stop,
+            worker,
+            module: module.to_string(),
+        }
+    }
+
+    fn phase(&self, phase: u8, label: &str) {
+        self.phase.store(phase, Ordering::Relaxed);
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: {} ({:.1}s elapsed)",
+                self.module,
+                label,
+                self.started.elapsed().as_secs_f64()
+            );
+        }
+    }
+
+    /// Report a completed lowering subphase. Large generated bundles can spend
+    /// minutes before LLVM sees any IR, so a coarse heartbeat is not enough to
+    /// distinguish useful progress from a stuck compiler. Keeping the lap time
+    /// here also makes the output directly usable as a lightweight profile.
+    pub(super) fn checkpoint(&self, label: &str) {
+        let now = Instant::now();
+        let previous = self.last_checkpoint.replace(now);
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: {} in {:.1}s ({:.1}s total)",
+                self.module,
+                label,
+                now.duration_since(previous).as_secs_f64(),
+                now.duration_since(self.started).as_secs_f64()
+            );
+        }
+    }
+
+    pub(super) fn items(&self, label: &str, done: usize, total: usize, started: Instant) {
+        if !self.enabled || total == 0 {
+            return;
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        let eta = if done == 0 {
+            0.0
+        } else {
+            elapsed * (total.saturating_sub(done)) as f64 / done as f64
+        };
+        eprintln!(
+            "[perry] codegen: {}: {} {}/{} ({:.0}%; {:.1}s elapsed; ETA ~{:.1}s)",
+            self.module,
+            label,
+            done,
+            total,
+            done as f64 * 100.0 / total as f64,
+            elapsed,
+            eta
+        );
+    }
+}
+
+impl Drop for CompileProgress {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            let _ = worker.join();
+        }
+        if self.enabled {
+            eprintln!(
+                "[perry] codegen: {}: stage finished in {:.1}s",
+                self.module,
+                self.started.elapsed().as_secs_f64()
+            );
+        }
+    }
+}
 
 pub(crate) mod arguments;
 mod artifacts;
@@ -53,6 +188,8 @@ mod function;
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 #[cfg(test)]
 mod clone_suffix_tests;
+#[cfg(test)]
+mod declared_string_add_tests;
 pub(crate) mod helpers;
 mod method;
 mod method_registry;
@@ -60,14 +197,22 @@ mod module_globals_emit;
 #[cfg(test)]
 mod number_exactness_tests;
 mod opts;
+#[cfg(test)]
+mod ordinary_param_guard_tests;
+mod param_guard;
 mod spec_abi;
+mod spec_return_proof;
+#[cfg(test)]
+mod spec_self_recursion_tests;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
+#[cfg(test)]
+mod unknown_func_tests;
 
-pub(crate) use closure::emit_typed_string_capture_guard;
+pub(crate) use closure::emit_typed_capture_guard;
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{
     decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
@@ -80,12 +225,12 @@ pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
-    typed_f64_function_name, typed_f64_method_name, typed_f64_receiver_method_info,
-    typed_f64_receiver_method_name, typed_i1_closure_name, typed_i1_function_name,
-    typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name, typed_i32_method_name,
-    typed_param_reps_match_args, typed_string_closure_name, typed_string_function_name,
-    typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
+    generic_function_body_name, generic_method_body_name, typed_arg_is_guard_candidate,
+    typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
+    typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
+    typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name,
+    typed_i32_method_name, typed_param_reps_match_args, typed_string_closure_name,
+    typed_string_function_name, typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
 };
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
@@ -185,6 +330,7 @@ pub(crate) fn static_method_registry_key(method_name: &str) -> String {
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+    let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
@@ -205,10 +351,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // callbacks before any region is lowered, so their denials carry the
     // per-element hotness column. No-op when the report is off.
     crate::opt_report::scan_module(hir);
+    if let Some(source) = opts.module_source.as_deref() {
+        crate::opt_report::register_module_source(&hir.name, source, opts.debug_source_line_offset);
+    }
     // Module-wide fallback attribution scope. Per-region scopes nest inside
     // it and restore it on drop, so decisions taken outside any region (the
     // specialized-ABI entry decision) still know their module.
-    let _opt_report_module_scope = crate::opt_report::enter_module(&hir.name);
+    let _opt_report_module_scope = crate::opt_report::enter_module(hir);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
@@ -836,6 +985,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");
+        llmod.add_internal_global(
+            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
 
         // Build the packed-keys string. Format: each field name
         // followed by `\0`. Parent classes contribute their fields
@@ -1014,6 +1168,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");
+        llmod.add_internal_global(
+            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
         let mut total_field_count = c.fields.len() as u32;
@@ -1121,6 +1280,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             0.0
         } // macOS / darwin default
     };
+    progress.checkpoint("symbol tables and initial declarations");
+
     // Pre-scan hir.init for compile-time constant variables. These are
     // `declare const __platform__: number` / `declare const __plugins__: number`
     // that other backends (JS, WASM) inject at build time. The LLVM backend
@@ -1301,6 +1462,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    progress.checkpoint("module constant and export analysis");
+
     // Build the cross-module context bundle from CompileOptions.
     let disable_buffer_fast_path = opts.disable_buffer_fast_path
         || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
@@ -1397,12 +1560,25 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    progress.checkpoint("cross-module and typed-ABI analysis");
+
     // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
     // eligibility loop because representation-selection Phase 5a's
     // proven-`this` admission consults them (§5.2 shape barriers, the
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
-    let module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let imported_return_shapes = opts
+        .imported_classes
+        .iter()
+        .flat_map(|class| {
+            class
+                .return_shape_imports
+                .iter()
+                .map(move |local| (local.clone(), class.name.clone()))
+        })
+        .collect();
+    module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),
@@ -1626,6 +1802,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         local_async_funcs,
         local_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
+        module_global_proven_types: std::collections::HashMap::new(),
         funcs_reading_dynamic_this,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
@@ -1704,6 +1881,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             hir,
             crate::codegen::helpers::inline_hot_small_max_call_sites(),
         ),
+        // #7871: the allocator's own "is this hot" set — same in-loop proxy,
+        // no call-site cap (the cap prices `inlinehint`'s duplication, which
+        // the inline bump allocator does not incur), plus direct recursion.
+        alloc_hot_functions: crate::collectors::collect_alloc_hot_functions(hir),
         clamp3_functions: hir
             .functions
             .iter()
@@ -1731,6 +1912,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
+        spec_return_proofs: std::collections::HashMap::new(),
         spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
         typed_i32_functions,
@@ -1749,7 +1931,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
         typed_string_closures: std::collections::HashSet::new(),
-        typed_string_closure_capture_counts: std::collections::HashMap::new(),
+        typed_closure_capture_reps: std::collections::HashMap::new(),
         typed_i1_closure_param_reps: std::collections::HashMap::new(),
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
@@ -1904,6 +2086,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let module_globals_emit::ModuleGlobals {
         module_globals,
         module_global_types,
+        module_global_proven_types,
         static_field_globals,
     } = module_globals_emit::emit_module_globals(
         &mut llmod,
@@ -1912,6 +2095,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &cross_module.compile_time_constants,
         &module_prefix,
     );
+    cross_module.module_global_proven_types = module_global_proven_types;
 
     // Method registry + cross-module method/getter/setter/ctor/static
     // extern declares. See `method_registry::build_method_names`.
@@ -1942,6 +2126,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         func_signatures,
         func_synthetic_arguments,
     } = func_registry::build_func_registry(hir, &module_prefix);
+
+    progress.checkpoint("class dispatch and representation analysis");
 
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
@@ -2040,9 +2226,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     cross_module.typed_i32_closures.clear();
     cross_module.typed_i1_closures.clear();
     cross_module.typed_string_closures.clear();
-    cross_module.typed_string_closure_capture_counts.clear();
+    cross_module.typed_closure_capture_reps.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
+        if let Some(captures) =
+            typed_abi::typed_f64_closure_capture_reps(expr, &typed_abi_local_types)
+        {
+            cross_module
+                .typed_closure_capture_reps
+                .insert(*func_id, captures.into_iter().map(|(_, rep)| rep).collect());
+        }
         match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
         {
             None => {
@@ -2146,13 +2339,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                             .insert(*func_id, reps);
                     }
                 }
-                let capture_count =
-                    typed_abi::typed_string_closure_capture_reps(expr, &typed_abi_local_types)
-                        .map(|captures| captures.len())
-                        .unwrap_or(0);
-                cross_module
-                    .typed_string_closure_capture_counts
-                    .insert(*func_id, capture_count);
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -2206,14 +2392,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // BEFORE any rejection was constructed, so `--opt-report` said
             // nothing at all about the function: indistinguishable from "not
             // analysed" and from "analysed and denied". Say "moot" instead.
-            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
-                reject(
-                    typed_abi::TypedCloneRejectionReason::SpecNoCallSites,
-                    &mut typed_clone_rejection_records,
-                );
-                continue;
-            };
-            if f.is_async || f.is_generator || f.was_plain_async {
+            let sites = spec_facts.call_sites.get(&f.id);
+            // A guard executed when a generator object is CREATED cannot
+            // prove the argument when its body later runs. Likewise, an
+            // async body may let external code mutate a reachable argument
+            // across `await`. Async functions with no suspension execute
+            // their entire body synchronously and are safe to clone.
+            if f.is_generator
+                || f.was_plain_async
+                || (f.is_async && param_guard::body_contains_await(&f.body))
+            {
                 reject(
                     typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
                     &mut typed_clone_rejection_records,
@@ -2278,23 +2466,115 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .iter()
                 .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
                 .collect();
-            let plan = match spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted) {
-                Some((reps, _matching_sites)) => SpecFnPlan {
-                    reps,
-                    dispatch: SpecDispatch::Static,
-                },
+            // (#8094) A descriptor proof describes a heap object and is
+            // established once, at entry. Any call in this body can run code
+            // that reaches that same object — not only through an argument we
+            // hand over, but through any alias the caller arranged before we
+            // were entered (a global, a closure, a field of another live
+            // object). So a REFERENCE-typed parameter cannot keep its proof
+            // across a call. Primitive parameters are immune: a callee has no
+            // route to the caller's copy of a number, string or boolean.
+            //
+            // A write THROUGH the parameter in this body invalidates the same
+            // proof without any call being involved (`node.left = x`,
+            // `values[i] = v`), so it belongs here too — and ONLY here. It is
+            // a claim about the object's CONTENTS; a raw slot (I32 / F64 /
+            // TaPtr) makes no such claim, so putting this on `demoted` deletes
+            // representation choices that predate this PR. Measured: with it
+            // on `demoted`, `fill(values: Float64Array, nodes: number)` loses
+            // `fill$spec_ta7x10000_i32` entirely, because writing an element
+            // reads as "mutation" of the typed-array parameter.
+            let body_calls = crate::collectors::body_contains_call(&f.body);
+            let guard_blocked: Vec<bool> = f
+                .params
+                .iter()
+                .map(|p| {
+                    crate::collectors::has_any_mutation(&f.body, p.id)
+                        || (body_calls
+                            && spec_return_proof::is_reference_like(
+                                &cross_module.type_aliases,
+                                &p.ty,
+                                0,
+                            ))
+                })
+                .collect();
+            let declaration_guards = param_guard::declaration_guards(
+                f.id,
+                &module_prefix,
+                &f.params,
+                &demoted,
+                &guard_blocked,
+                &cross_module.type_aliases,
+                &cross_module.interfaces,
+                &class_table,
+                &class_ids,
+            );
+            let plan = match sites
+                .and_then(|sites| spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted))
+            {
+                Some((reps, _matching_sites)) => {
+                    // Raw slots already carry a by-construction proof. Boxed
+                    // slots may additionally recover an ordinary declared
+                    // parameter fact, but only through their runtime
+                    // descriptor. TaPtr remains a construction-only ABI: an
+                    // unknown/public caller has no equivalent cheap guard for
+                    // the raw pointer + length contract, so mixed TaPtr plans
+                    // keep their existing static-only route.
+                    let guards: Vec<_> = if reps
+                        .iter()
+                        .any(|rep| matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }))
+                    {
+                        vec![None; reps.len()]
+                    } else {
+                        declaration_guards
+                            .into_iter()
+                            .zip(reps.iter())
+                            .map(|(guard, rep)| {
+                                matches!(rep, crate::collectors::SpecParamRep::Boxed)
+                                    .then_some(guard)
+                                    .flatten()
+                            })
+                            .collect()
+                    };
+                    let dispatch = if guards.iter().any(Option::is_some) {
+                        SpecDispatch::Guarded
+                    } else {
+                        SpecDispatch::Static
+                    };
+                    SpecFnPlan {
+                        reps,
+                        dispatch,
+                        guards,
+                    }
+                }
                 None => {
-                    // Tier B: declaration-derived tuple, runtime-guarded
-                    // dispatch. Only viable with ≥1 declared-Int32 param.
+                    // Tier B: declaration-derived tuple plus descriptors for
+                    // boxed ordinary parameters. The raw tuple can be all
+                    // Boxed here: the clone's win is its post-guard parameter
+                    // facts rather than a calling-convention change.
                     let reps = spec_abi::declaration_tuple(&f.params, &demoted);
-                    if spec_abi::spec_tuple_is_viable(&reps) {
+                    let guards: Vec<_> = declaration_guards
+                        .into_iter()
+                        .zip(reps.iter())
+                        .map(|(guard, rep)| {
+                            matches!(rep, crate::collectors::SpecParamRep::Boxed)
+                                .then_some(guard)
+                                .flatten()
+                        })
+                        .collect();
+                    if spec_abi::spec_tuple_is_viable(&reps) || guards.iter().any(Option::is_some) {
                         SpecFnPlan {
                             reps,
                             dispatch: SpecDispatch::Guarded,
+                            guards,
                         }
                     } else {
                         reject(
-                            typed_abi::TypedCloneRejectionReason::SpecTupleUnproven,
+                            if sites.is_none() {
+                                typed_abi::TypedCloneRejectionReason::SpecNoCallSites
+                            } else {
+                                typed_abi::TypedCloneRejectionReason::SpecTupleUnproven
+                            },
                             &mut typed_clone_rejection_records,
                         );
                         continue;
@@ -2312,7 +2592,29 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             cross_module.spec_abi_functions.insert(f.id, plan);
         }
         cross_module.spec_ta_bindings = spec_facts.ta_bindings;
+        cross_module.spec_return_proofs = spec_return_proof::collect_proven_returns(
+            hir,
+            &cross_module.spec_abi_functions,
+            &cross_module.type_aliases,
+        );
+
+        // The descriptor is immutable rodata, not a GC object. Emit in HIR
+        // order (never HashMap order) so cache/object bytes stay deterministic.
+        for f in &hir.functions {
+            let Some(plan) = cross_module.spec_abi_functions.get(&f.id) else {
+                continue;
+            };
+            for guard in plan.guards.iter().flatten() {
+                llmod.add_named_string_constant(
+                    &guard.descriptor_name,
+                    guard.descriptor.len() + 1,
+                    &param_guard::descriptor_llvm_literal(&guard.descriptor),
+                );
+            }
+        }
     }
+
+    progress.checkpoint("locals, closures, and module globals analysis");
 
     // Emit internal typed-f64 clones before their public/generic wrappers. The
     // public wrapper keeps the JSValue ABI; it and direct proven numeric call
@@ -2389,8 +2691,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
     }
 
-    // Lower each user function into the module.
-    for f in &hir.functions {
+    progress.checkpoint("typed top-level function clones");
+
+    // Lower each user function into the module. Generated single-file bundles
+    // can spend minutes here; report real item progress instead of making the
+    // 30-second heartbeat the only proof that lowering is advancing.
+    let function_bodies_started = Instant::now();
+    let function_bodies_progress_step = (hir.functions.len() / 20).max(1);
+    for (function_index, f) in hir.functions.iter().enumerate() {
         let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
             Some(typed_abi::TypedFunctionTrampolineKind::F64)
         } else if cross_module.typed_i32_functions.contains(&f.id) {
@@ -2424,6 +2732,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             None,
         )
         .with_context(|| format!("lowering function '{}'", f.name))?;
+        let done = function_index + 1;
+        if done == hir.functions.len() || done % function_bodies_progress_step == 0 {
+            progress.items(
+                "top-level function bodies",
+                done,
+                hir.functions.len(),
+                function_bodies_started,
+            );
+        }
     }
 
     // Closes #460: emit forwarding wrappers for `export { local as exported }`
@@ -2535,6 +2852,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    progress.checkpoint("top-level function bodies and export stubs");
+
     // ── End of compile_module prelude (data + initial emission). ──
     // The remainder (closures, methods, ctors, statics, function /
     // ExternFuncRef / export-rename / unknown-func / method
@@ -2543,6 +2862,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `artifacts::emit_module_artifacts`. Behavior is unchanged —
     // see the doc on that fn for the split rationale.
     emit_module_artifacts(ModuleArtifactsCtx {
+        progress: &progress,
         llmod: &mut llmod,
         target_triple: &triple,
         strings: &mut strings,
@@ -2598,6 +2918,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // renderer and the in-process constructor see the same IR; a pass living in
     // one of them would silently not apply to the other.
     // See `crate::root_reload`.
+    progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
 
     let verify_native_regions = opts.verify_native_regions
@@ -2620,12 +2941,25 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let n_units = if opts.emit_ir_only {
         1
     } else {
-        decide_codegen_units(module_callable_count(hir))
+        decide_codegen_units(
+            module_callable_count(hir),
+            llmod.estimated_function_ir_bytes(),
+        )
     };
     if n_units > 1 {
+        progress.phase(2, &format!("partitioning into {n_units} codegen units"));
         if let Some(result) =
-            try_native_units(&llmod, n_units, opts.target.as_deref(), &module_prefix)
+            try_native_units(&mut llmod, n_units, opts.target.as_deref(), &module_prefix)
         {
+            // `result` already contains the final object/archive here. The
+            // generated `LlModule` can own millions of small allocations in a
+            // minified bundle, and Rust must destroy that graph before this
+            // function (and its `CompileProgress` guard) can return. On the
+            // 8.8 MiB OpenCode code-mode chunk this took about five minutes
+            // after LLVM reported 77/77, previously making the build look
+            // stuck in LLVM. Name the real phase while the heartbeat thread is
+            // still alive; a future arena-backed IR can make this O(arenas).
+            progress.phase(3, "object ready; releasing generated IR");
             return result;
         }
         let units = llmod.render_codegen_units(n_units);
@@ -2683,18 +3017,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 /// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].
 #[cfg(feature = "llvm-inprocess")]
 fn try_native_units(
-    llmod: &crate::module::LlModule,
+    llmod: &mut crate::module::LlModule,
     n_units: usize,
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
-    // SEH funclets are the one EH shape the in-process reader cannot
-    // construct (see LlModule::needs_eh_funclets). Decline to the textual
-    // path rather than failing the compile.
-    if llmod.needs_eh_funclets() {
-        return None;
-    }
-    match crate::native_emit::native_mode() {
+    // Personality-carrying Windows functions are parsed as small textual
+    // islands inside each otherwise-native unit; ordinary functions still use
+    // typed C-API construction. See `native_emit::freeze_unit`.
+    match crate::native_emit::native_units_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(
             crate::native_emit::compile_module_units_native(llmod, n_units, target, module_prefix),
@@ -2707,7 +3038,7 @@ fn try_native_units(
 
 #[cfg(not(feature = "llvm-inprocess"))]
 fn try_native_units(
-    _llmod: &crate::module::LlModule,
+    _llmod: &mut crate::module::LlModule,
     _n_units: usize,
     _target: Option<&str>,
     _module_prefix: &str,

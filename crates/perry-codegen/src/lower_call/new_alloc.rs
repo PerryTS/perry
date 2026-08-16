@@ -42,9 +42,72 @@ use crate::types::{I32, I64, I8, PTR};
 /// scan-outward-past-switch-frames logic uses. A `new` inside a bare `switch`
 /// is therefore correctly treated as not-in-a-loop.
 fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
-    ctx.loop_targets
+    if ctx
+        .loop_targets
         .iter()
         .any(|(continue_label, _, _)| !continue_label.is_empty())
+    {
+        return true;
+    }
+    // #7834: a `new` in a function the hot-loop-callee pre-pass admitted is a
+    // `new` in a loop, one frame out.
+    //
+    // The gate below this comment is about SPEED-vs-SIZE, and
+    // `collect_hot_loop_callees` answers exactly the question the loop test
+    // does — is this site hot enough to be worth ~268 bytes — with the
+    // anti-bloat backstop already attached: it admits only a function that
+    // (a) has a direct call site inside a loop and (b) has at most
+    // `inline_hot_small_max_call_sites` (4) direct call sites in the whole
+    // module. So the added code is bounded by 4 × (news in the function),
+    // which is the same order the loop arm already accepts.
+    //
+    // Deliberately NOT `func.inline_hint`: that is this set intersected with a
+    // 9..=20-statement window and with "not already `alwaysinline`", and the
+    // functions this needs most fall out of BOTH. `makeCycle` is 5 statements,
+    // so it is `alwaysinline` and never hinted — while being the single
+    // hottest function in the program.
+    //
+    // `cycles.ts` is the shape that needs it: `makeCycle` is called 10M times
+    // from `main`'s loop and allocates two `Cell`s, but its own body has no
+    // loop, so both allocations took the outlined
+    // `js_object_alloc_class_inline_keys` — 22% of the program's samples, plus
+    // a further 5% in `arena_alloc`'s inline-state sync, for work the inline
+    // bump does in eight stores.
+    //
+    // Reading `func.hot_loop_callee` here is well-ordered: `codegen/function.rs`
+    // sets it from `cross_module.hot_loop_callees` before the entry block is
+    // created and before any expression is lowered.
+    if ctx.func.hot_loop_callee {
+        return true;
+    }
+    // #7871: the same question, asked with the right cost model.
+    //
+    // `hot_loop_callee` above carries `inline_hot_small_max_call_sites` (4),
+    // which is `inlinehint`'s anti-bloat backstop — it bounds a cost that
+    // scales with CALL SITES because LLVM duplicates the callee body at each
+    // one. The inline bump allocator's cost is ~268 bytes per `new` SITE in
+    // this function, paid once regardless of how many callers there are. So
+    // the cap prices a cost that does not exist here, and it excludes exactly
+    // the functions that earn the inline form: a recursive-descent evaluator's
+    // hot function has one call site per recursion arm.
+    //
+    // `gc-handoff/apps/interp.ts`'s `evalNode` had 11 (10 of them its own
+    // recursion) and allocated a `Value` per invocation through the outlined
+    // call, ~20M times. Whole-corpus A/B with `PERRY_INLINE_NEW=1` (the
+    // force-everywhere knob, i.e. a strict superset of this rule): `interp`
+    // −16.2%, `iso_miss` −10.4%, `pipeline` −8.4%, zero regressions outside a
+    // ±1.6% floor — and 15 of 19 binaries came out byte-identical, so the
+    // widening reaches four programs, not the corpus.
+    ctx.func.alloc_hot
+}
+
+/// Whether the raw inline allocator can publish the class's pre-minted
+/// descriptor without asking the runtime to repair its live-slot facts.
+fn inline_shape_descriptor_facts_exact(
+    canonical_key_count: Option<u32>,
+    allocation_field_count: u32,
+) -> bool {
+    canonical_key_count.is_some_and(|key_count| key_count == allocation_field_count)
 }
 
 /// Emit the instance allocation for `new <class_name>(...)` and return the raw
@@ -62,7 +125,37 @@ fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
 /// emission, which is the `RootedGroup::adopt_emitted` push that roots it for
 /// the constructor body; nothing between the allocator call and that push can
 /// collect.
-pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: &Class) -> String {
+/// What [`emit_instance_alloc`] produced: the instance's user pointer, plus
+/// whether the allocation already stamped this class's canonical typed-shape
+/// layout into the object's `GcHeader` constant (#7834).
+pub(super) struct InstanceAlloc {
+    pub(super) handle: String,
+    /// `true` ⟹ the header already reads `GC_LAYOUT_POINTER_FREE |
+    /// GC_OBJ_TYPED_LAYOUT_INTACT`, so the construction site owes the runtime
+    /// only the address-dependent half of `js_gc_declare_typed_shape_layout`
+    /// (clearing a recycled address's stale per-object record).
+    pub(super) typed_layout_baked: bool,
+}
+
+pub(super) fn emit_instance_alloc(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class: &Class,
+) -> InstanceAlloc {
+    let mut typed_layout_baked = false;
+    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut typed_layout_baked);
+    InstanceAlloc {
+        handle,
+        typed_layout_baked,
+    }
+}
+
+fn emit_instance_alloc_inner(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class: &Class,
+    typed_layout_baked: &mut bool,
+) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
     // mostly matters for shapes >8 fields.
@@ -236,35 +329,49 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
         // So the choice is per site, not global: a `new` inside a loop takes
         // the inline bump (it runs many times, and the size cost is bounded to
         // loop bodies); everything else keeps the outlined call and
-        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` still
-        // forces the inline form everywhere, for A/B measurement.
+        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` forces
+        // the inline form for A/B measurement only when the exact descriptor
+        // facts below admit raw inline allocation; missing or mismatched facts
+        // still use the outlined entry point.
         //
         // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
         // the inline path, because an empty string is `Some("")`.
         let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
-        if !force_inline_new && !new_site_is_in_loop(ctx) {
+        // #8067: the raw inline allocator cannot ask the runtime to validate
+        // descriptor facts after writing the ShapeId. Admit it only when the
+        // allocation's live-slot bound exactly equals the module-init keys
+        // count used to mint that id. Width-hinted/mismatched allocations use
+        // the outlined entry point, which installs an exact local descriptor.
+        let descriptor_facts_exact = inline_shape_descriptor_facts_exact(
+            ctx.class_field_counts.get(class_name).copied(),
+            field_count,
+        );
+        if !descriptor_facts_exact || (!force_inline_new && !new_site_is_in_loop(ctx)) {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), s.clone());
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
+            let shape_id =
+                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
             ctx.pending_declares.push((
-                "js_object_alloc_class_inline_keys".to_string(),
+                "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
-                vec![I32, I32, I32, I64],
+                vec![I32, I32, I32, I64, I32],
             ));
             ctx.block().call(
                 I64,
-                "js_object_alloc_class_inline_keys",
+                "js_object_alloc_class_inline_keys_stamped",
                 &[
                     (I32, &cid_str),
                     (I32, &parent_cid_str),
                     (I32, &field_count.to_string()),
                     (I64, &keys_ptr),
+                    (I32, &shape_id),
                 ],
             )
         } else {
@@ -287,8 +394,10 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             // Inline-slot floor — MUST match perry-runtime `object::INLINE_SLOT_FLOOR`
             // (they independently pad `new` objects to the same minimum; a mismatch
             // where codegen allocs fewer slots than the runtime's get/set bound-check
-            // assumes is heap corruption). Lowered 8->4 to shrink small-object footprint.
-            const MIN_FIELD_SLOTS: u64 = 4;
+            // assumes is heap corruption). Single source of truth, paired with the
+            // runtime by `target_layout::tests::inline_slot_floor_matches_runtime`.
+            // Lowered 8->4 (#6712) then 4->2 (#7916) to shrink small-object footprint.
+            const MIN_FIELD_SLOTS: u64 = crate::target_layout::INLINE_SLOT_FLOOR;
             const GC_TYPE_OBJECT: u64 = 2;
             const GC_FLAG_ARENA: u64 = 0x02;
             // PR #1146: pointer-free hint for inline-allocated regular
@@ -296,7 +405,40 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
             // slots regardless of this initial tag.
             const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+            /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit
+            /// `class_field_inline_guard` requires before it will read or write
+            /// a raw-f64 slot directly. Runtime-side name:
+            /// `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
+            const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
             const OBJECT_TYPE_REGULAR: u64 = 1;
+
+            // #7834: when this class's canonical layout is declarable at
+            // allocation AND its pointer mask is statically empty, the state
+            // this header already carries (`GC_LAYOUT_POINTER_FREE`) is the
+            // FINAL one, and the only thing `js_gc_declare_typed_shape_layout`
+            // would add per instance is the intact bit. Stamping it into the
+            // same constant store removes the call: on `churn_alloc` /
+            // `push_cls` that call was ~30% of the program, almost all of it
+            // re-deriving per object a fact that is a property of the SHAPE
+            // (see `gc::shape_install`'s module docs — the memo already reduced
+            // the map round-trip to a direct-mapped probe, and what is left is
+            // that probe, the type-table lookup, and the call itself).
+            //
+            // Requires `field_count == slot_count`: that mismatch is the one
+            // case `init_typed_shape_layout` answers by DOWNGRADING
+            // (`layout_set_typed_unknown`), and a constant cannot express "it
+            // depends". Computed here, before `ctx.block()` takes its mutable
+            // borrow.
+            *typed_layout_baked = super::typed_shape_init::layout_pointer_free_at_allocation(
+                ctx,
+                class_name,
+                field_count,
+            );
+            let typed_intact_bits = if *typed_layout_baked {
+                GC_OBJ_TYPED_LAYOUT_INTACT
+            } else {
+                0
+            };
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
             let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
@@ -330,12 +472,14 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), s.clone());
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
+            let shape_id =
+                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
 
             // Inline bump-allocator IR.
             let blk = ctx.block();
@@ -410,7 +554,7 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             //   bits 32..63  = size (u32)
             let gc_packed: u64 = GC_TYPE_OBJECT
                 | (GC_FLAG_ARENA << 8)
-                | (GC_LAYOUT_POINTER_FREE << 16)
+                | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
                 | ((total_size as u64) << 32);
             // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
             blk.store(I64, &gc_packed.to_string(), &raw);
@@ -421,10 +565,17 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
             blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
 
-            // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
+            // Second 8 bytes: ShapeId (u32, low) | field_count (u32, high).
+            // The module-init runtime call either publishes a usable ShapeId
+            // or fail-stops on exhaustion; there is no pointer-token fallback.
             let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
-            let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
-            blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
+            let shape_word64 = blk.zext(I32, &shape_id, I64);
+            let oh_word_2 = blk.or(
+                I64,
+                &shape_word64,
+                &((field_count as u64) << 32).to_string(),
+            );
+            blk.store(I64, &oh_word_2, &oh_addr_2);
 
             // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
             // above is an i64 (carries the ArrayHeader address); store as
@@ -522,5 +673,17 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
                 (I32, &keys_len_str),
             ],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_shape_descriptor_facts_exact;
+
+    #[test]
+    fn raw_inline_shape_stamp_requires_exact_descriptor_facts() {
+        assert!(inline_shape_descriptor_facts_exact(Some(5), 5));
+        assert!(!inline_shape_descriptor_facts_exact(Some(5), 8));
+        assert!(!inline_shape_descriptor_facts_exact(None, 5));
     }
 }

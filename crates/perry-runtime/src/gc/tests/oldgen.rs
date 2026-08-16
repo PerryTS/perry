@@ -488,7 +488,7 @@ fn test_old_page_defrag_policy_selection_prefers_fragmented_unpinned_pages() {
 }
 
 #[test]
-fn test_old_page_defrag_forced_moves_only_marked_old_objects_on_selected_pages() {
+fn test_old_page_defrag_moves_every_source_block_occupant_during_a_minor() {
     let _isolation = copying_nursery_isolation_lock();
     reset_remembered_set();
     clear_marks();
@@ -517,28 +517,27 @@ fn test_old_page_defrag_forced_moves_only_marked_old_objects_on_selected_pages()
         &mut original_headers,
     );
 
-    assert_eq!(moved.old_page_moved_objects, 1);
-    assert_eq!(moved.old_page_moved_bytes, movable_total);
-    assert_eq!(new_headers.len(), 1);
-    assert_eq!(original_headers, vec![movable_header]);
-    assert!(
-        old_object_pages_disjoint_from_selected(new_headers[0], movable_total, &selected_pages),
-        "old-page copy must not land in any selected source page"
-    );
-    assert!(
-        old_object_pages_disjoint_from_selected(
-            new_headers[0],
-            movable_total,
-            &source_blocks.pages
-        ),
-        "old-page copy must not land in the selected source block"
-    );
+    assert_eq!(moved.old_page_moved_objects, 2);
+    assert_eq!(new_headers.len(), 2);
+    assert!(original_headers.contains(&movable_header));
+    assert!(original_headers.contains(&unmarked_header));
+    for &new_header in &new_headers {
+        assert!(
+            old_object_pages_disjoint_from_selected(
+                new_header,
+                unsafe { (*new_header).size as usize },
+                &source_blocks.pages,
+            ),
+            "old-page copies must not land in their source block"
+        );
+    }
     unsafe {
         assert_ne!((*movable_header).gc_flags & GC_FLAG_FORWARDED, 0);
-        assert_eq!(
+        assert_ne!(
             (*unmarked_header).gc_flags & GC_FLAG_FORWARDED,
             0,
-            "unmarked old object on the selected page must not move"
+            "a minor cannot call an unmarked old neighbor dead; source-block \
+             evacuation must move it too"
         );
         assert!(crate::arena::pointer_in_old_gen(
             forwarding_address(movable_header) as usize
@@ -546,7 +545,7 @@ fn test_old_page_defrag_forced_moves_only_marked_old_objects_on_selected_pages()
     }
 
     let released = release_evacuated_original_forwarding_stubs(&original_headers);
-    assert_eq!(released.released_original_objects, 1);
+    assert_eq!(released.released_original_objects, 2);
     assert_eq!(released.released_original_reusable_bytes, 0);
     assert_eq!(released.released_original_returned_bytes, 0);
     clear_marks();
@@ -644,7 +643,9 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
     clear_mark_seeds();
     CONS_PINNED.with(|s| s.borrow_mut().clear());
 
+    let neighbor = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
     let pinned = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let (neighbor_header, _) = old_test_header_and_size(neighbor);
     let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
     let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
     for (page, _) in crate::arena::old_object_page_overlaps(pinned_header as usize, pinned_total) {
@@ -671,6 +672,12 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
             (*pinned_header).gc_flags & GC_FLAG_FORWARDED,
             0,
             "pinned old object address must remain stable"
+        );
+        assert_eq!(
+            (*neighbor_header).gc_flags & GC_FLAG_FORWARDED,
+            0,
+            "a pinned occupant must reject the whole source block before any \
+             movable neighbor is forwarded"
         );
         (*pinned_header).gc_flags &= !GC_FLAG_MARKED;
         crate::gc::unpin_object(pinned_header);
@@ -759,7 +766,7 @@ fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+    let _force = ForcedEvacuationTestGuard::on();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
     reset_shadow_stack();
     reset_global_roots();
@@ -935,6 +942,150 @@ fn test_old_page_defrag_target_gate_emits_trace() {
 }
 
 #[test]
+fn test_old_page_defrag_mixed_size_fragmentation_converges_to_released_block() {
+    let _isolation = copying_nursery_isolation_lock();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _defrag = OldDefragTestEnable::new();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    old_free_reset_for_test();
+    CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+    // Finish the allocator's current block so this fixture owns the next
+    // mapped old block. Each following 4 KiB page contains a repeatable mix:
+    // twelve 64-byte live objects alternating with 256-byte dead objects,
+    // followed by one live and one dead 128-byte object. No live-only page can
+    // accidentally make the source block unreclaimable.
+    let _old_block_filler =
+        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+    crate::arena::old_pages_begin_gc_cycle();
+    let live_small_payload = 64usize.saturating_sub(GC_HEADER_SIZE);
+    let dead_large_payload = 256usize.saturating_sub(GC_HEADER_SIZE);
+    let mixed_payload = 128usize.saturating_sub(GC_HEADER_SIZE);
+    assert!(live_small_payload > 0 && mixed_payload > 0);
+
+    let mut live_headers = Vec::new();
+    let mut dead_large_users = Vec::new();
+    for _ in 0..2 {
+        for _ in 0..12 {
+            let live =
+                crate::arena::arena_alloc_gc_old(live_small_payload, 8, GC_TYPE_STRING) as usize;
+            live_headers.push(unsafe { header_from_user_ptr(live as *const u8) });
+            dead_large_users.push(crate::arena::arena_alloc_gc_old(
+                dead_large_payload,
+                8,
+                GC_TYPE_STRING,
+            ) as usize);
+        }
+        let live = crate::arena::arena_alloc_gc_old(mixed_payload, 8, GC_TYPE_STRING) as usize;
+        live_headers.push(unsafe { header_from_user_ptr(live as *const u8) });
+        let _dead_mixed =
+            crate::arena::arena_alloc_gc_old(mixed_payload, 8, GC_TYPE_STRING) as usize;
+    }
+    for &header in &live_headers {
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+
+    let _fragmenting_sweep = sweep_with_age_bump_and_old_reclaim(false, true);
+    let selection = select_old_page_defrag_pages(true);
+    assert!(
+        selection.selected_pages >= 2,
+        "fixture must expose at least two fragmented pages (selected={})",
+        selection.selected_pages
+    );
+    let exact_total =
+        unsafe { (*header_from_user_ptr(dead_large_users[0] as *const u8)).size as usize };
+    assert_eq!(exact_total, 256, "fixture's exact-fit size drifted");
+    assert!(old_free_bytes() >= dead_large_users.len() * exact_total);
+
+    let mut found_fixture_hole = false;
+    while let Some(addr) = old_free_take_exact(exact_total, None) {
+        if dead_large_users.contains(&addr) {
+            found_fixture_hole = true;
+            break;
+        }
+    }
+    assert!(
+        found_fixture_hole,
+        "mixed-size sweep must publish an exact-fit hole from the fragmented source block"
+    );
+
+    // Sweep clears MARKED; arm the selected live objects for the direct
+    // evacuation step below. Keep the page accounting from that same sweep:
+    // invalidated hole headers are deliberately absent from later walks, so a
+    // second accounting sweep would no longer describe the fragmentation it
+    // just exposed.
+    for &header in &live_headers {
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+    for &header in &live_headers {
+        let total = unsafe { (*header).size as usize };
+        assert!(
+            old_object_pages_all_selected(header, total, &selection.pages),
+            "every live fixture object must lie wholly on selected fragmented pages"
+        );
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+
+    let source_blocks = crate::arena::old_arena_source_blocks_for_pages(&selection.pages);
+    assert!(!source_blocks.block_indices.is_empty());
+    assert!(
+        crate::arena::old_arena_walk_objects_on_pages(&source_blocks.pages, |_| {}) > 0,
+        "the selected source must still be mapped and indexed before evacuation"
+    );
+    let before = crate::arena::arena_telemetry_snapshot();
+
+    let mut new_headers = Vec::new();
+    let mut original_headers = Vec::new();
+    let moved = evacuate_selected_old_pages_collecting(
+        &selection.pages,
+        &mut new_headers,
+        &mut original_headers,
+    );
+    assert_eq!(moved.old_page_moved_objects, live_headers.len());
+    assert_eq!(original_headers.len(), live_headers.len());
+    assert_eq!(new_headers.len(), live_headers.len());
+    let released = release_evacuated_original_forwarding_stubs(&original_headers);
+    assert_eq!(released.released_original_objects, live_headers.len());
+
+    let reclaim = sweep_with_age_bump_and_targeted_old_reclaim_and_malloc(
+        true,
+        &source_blocks.block_indices,
+        false,
+    );
+    let after = crate::arena::arena_telemetry_snapshot();
+    assert!(
+        reclaim.reusable_bytes > 0 || reclaim.removed_bytes > 0,
+        "an emptied fragmented source block must become reusable, pooled, or returned"
+    );
+    assert_eq!(
+        crate::arena::old_arena_walk_objects_on_pages(&source_blocks.pages, |_| {}),
+        0,
+        "released source pages must have no stale object-index entries"
+    );
+    for page in &source_blocks.pages {
+        assert!(crate::arena::old_page_meta_for_tests(*page).is_none());
+    }
+    assert!(
+        after.old.in_use_bytes < before.old.in_use_bytes,
+        "telemetry must distinguish the released block from its live copied bytes"
+    );
+
+    old_free_reset_for_test();
+    clear_marks();
+    clear_mark_seeds();
+    reset_remembered_set();
+    CONS_PINNED.with(|s| s.borrow_mut().clear());
+}
+
+#[test]
 fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
     let mut trace = GcCycleTrace::new(
         GcCollectionKind::Minor,
@@ -955,10 +1106,18 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
     trace.evacuation.old_page_moved_bytes = 64;
     trace.evacuation.released_original_objects = 1;
     trace.evacuation.released_original_bytes = 64;
+    trace.old_pages.pooled_bytes = 48;
     trace.sweep.dead_bytes = 192;
     trace.sweep.freed_bytes = 192;
     trace.sweep.reusable_bytes = 128;
     trace.sweep.returned_bytes = 32;
+    trace.sweep.removed_blocks = 2;
+    trace.sweep.removed_bytes = 96;
+    trace.sweep.pooled_blocks = 1;
+    trace.sweep.pooled_bytes = 64;
+    trace.sweep.pool_drained_blocks = 1;
+    trace.sweep.pool_drained_bytes = 16;
+    trace.sweep.deallocated_blocks = 1;
     trace.sweep.deallocated_bytes = 32;
 
     let event = trace.into_json(GcStepSnapshot::current());
@@ -987,10 +1146,18 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
         event["evacuation"]["released_original_returned_bytes"].as_u64(),
         Some(0)
     );
+    assert_eq!(event["old_pages"]["pooled_bytes"].as_u64(), Some(48));
     assert_eq!(event["sweep"]["dead_bytes"].as_u64(), Some(192));
     assert_eq!(event["sweep"]["freed_bytes"].as_u64(), Some(192));
     assert_eq!(event["sweep"]["reusable_bytes"].as_u64(), Some(128));
     assert_eq!(event["sweep"]["returned_bytes"].as_u64(), Some(32));
+    assert_eq!(event["sweep"]["removed_blocks"].as_u64(), Some(2));
+    assert_eq!(event["sweep"]["removed_bytes"].as_u64(), Some(96));
+    assert_eq!(event["sweep"]["pooled_blocks"].as_u64(), Some(1));
+    assert_eq!(event["sweep"]["pooled_bytes"].as_u64(), Some(64));
+    assert_eq!(event["sweep"]["pool_drained_blocks"].as_u64(), Some(1));
+    assert_eq!(event["sweep"]["pool_drained_bytes"].as_u64(), Some(16));
+    assert_eq!(event["sweep"]["deallocated_blocks"].as_u64(), Some(1));
     assert_eq!(event["sweep"]["deallocated_bytes"].as_u64(), Some(32));
 }
 

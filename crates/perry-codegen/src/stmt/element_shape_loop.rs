@@ -141,6 +141,7 @@ struct ElementShapeVersionedLoop {
     /// #7771: the body's `const r = arr[counter]` binding in the two-statement
     /// form; `None` for the original single-statement accumulator body.
     element_binding: Option<u32>,
+    accumulator_id: u32,
 }
 
 /// Effect-free expression walk for the element-shape loop.
@@ -155,6 +156,7 @@ fn element_shape_loop_pure_expr_collect(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
     counter_id: u32,
+    accumulator_id: u32,
     element_binding: Option<u32>,
     array: &mut Option<u32>,
     props: &mut std::collections::BTreeSet<String>,
@@ -204,7 +206,7 @@ fn element_shape_loop_pure_expr_collect(
         Expr::LocalGet(id) => {
             element_binding != Some(*id)
                 && array.is_none_or(|a| a != *id)
-                && crate::type_analysis::is_numeric_expr(ctx, expr)
+                && (*id == accumulator_id || crate::type_analysis::is_numeric_expr(ctx, expr))
         }
         Expr::Number(_) | Expr::Integer(_) => true,
         // NOTE (#7480 step 3): deliberately NOT gated on
@@ -228,6 +230,7 @@ fn element_shape_loop_pure_expr_collect(
                 ctx,
                 left,
                 counter_id,
+                accumulator_id,
                 element_binding,
                 array,
                 props,
@@ -235,6 +238,7 @@ fn element_shape_loop_pure_expr_collect(
                 ctx,
                 right,
                 counter_id,
+                accumulator_id,
                 element_binding,
                 array,
                 props,
@@ -244,6 +248,7 @@ fn element_shape_loop_pure_expr_collect(
             ctx,
             operand,
             counter_id,
+            accumulator_id,
             element_binding,
             array,
             props,
@@ -253,6 +258,7 @@ fn element_shape_loop_pure_expr_collect(
                 ctx,
                 left,
                 counter_id,
+                accumulator_id,
                 element_binding,
                 array,
                 props,
@@ -260,13 +266,22 @@ fn element_shape_loop_pure_expr_collect(
                 ctx,
                 right,
                 counter_id,
+                accumulator_id,
                 element_binding,
                 array,
                 props,
             )
         }
         Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(|e| {
-            element_shape_loop_pure_expr_collect(ctx, e, counter_id, element_binding, array, props)
+            element_shape_loop_pure_expr_collect(
+                ctx,
+                e,
+                counter_id,
+                accumulator_id,
+                element_binding,
+                array,
+                props,
+            )
         }),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
@@ -279,6 +294,7 @@ fn element_shape_loop_pure_expr_collect(
             ctx,
             value,
             counter_id,
+            accumulator_id,
             element_binding,
             array,
             props,
@@ -305,14 +321,10 @@ fn element_shape_loop_pure_expr_collect(
 /// Neither has to be *right*: the preheader compares the class id the runtime
 /// invariant reports against this one, so a wrong answer costs the clone,
 /// never correctness. The annotation stays a hint, never layout.
-fn element_class_name(ctx: &FnCtx<'_>, array_id: u32, counter_id: u32) -> Option<String> {
-    if let Some(named) = crate::type_analysis::receiver_class_name(
-        ctx,
-        &perry_hir::Expr::IndexGet {
-            object: Box::new(perry_hir::Expr::LocalGet(array_id)),
-            index: Box::new(perry_hir::Expr::LocalGet(counter_id)),
-        },
-    ) {
+fn element_class_name(ctx: &FnCtx<'_>, array_id: u32, _counter_id: u32) -> Option<String> {
+    if let perry_hir::types::Type::Named(named) =
+        resolve_type_alias(ctx, declared_array_element_type_hint(ctx, array_id)?)
+    {
         // Only if it names a REAL class. `type Node = {v: number}` makes the
         // element type `Named("Node")`, and the receiver resolver reports
         // "Node" for it — a name no `ctx.classes` entry answers to, because the
@@ -320,8 +332,8 @@ fn element_class_name(ctx: &FnCtx<'_>, array_id: u32, counter_id: u32) -> Option
         // shadowed arm 2 for every alias-typed array, which is how the second
         // half of `churn_read`'s miss survived #7669: the anon-shape resolver
         // landed and was then never consulted for the shape it was written for.
-        if ctx.classes.contains_key(&named) {
-            return Some(named);
+        if ctx.classes.contains_key(named) {
+            return Some(named.clone());
         }
     }
     anon_shape_class_for_element_type(ctx, array_id)
@@ -352,6 +364,24 @@ fn resolve_type_alias<'t>(
 /// Content-addressed synthetic class every closed-shape object literal lowers
 /// to (`perry-hir/src/lower/context.rs::mint_anon_shape_class`).
 const ANON_SHAPE_PREFIX: &str = "__AnonShape_";
+
+/// Erased element metadata used only to choose the class-id candidate for the
+/// versioned clone. The preheader validates that candidate against the live
+/// array invariant before the clone is reachable.
+fn declared_array_element_type_hint<'a>(
+    ctx: &'a FnCtx<'_>,
+    array_id: u32,
+) -> Option<&'a perry_hir::types::Type> {
+    use perry_hir::types::Type as HirType;
+
+    match resolve_type_alias(ctx, ctx.local_type_hint(&array_id)?) {
+        HirType::Array(elem) => Some(elem.as_ref()),
+        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            Some(&type_args[0])
+        }
+        _ => None,
+    }
+}
 
 /// #7480 step 3: resolve `keep: {v: number, w: number}[]` to the
 /// `__AnonShape_<hash>` class its literals allocate.
@@ -384,15 +414,10 @@ const ANON_SHAPE_PREFIX: &str = "__AnonShape_";
 fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<String> {
     use perry_hir::types::Type as HirType;
 
-    let array_ty = resolve_type_alias(ctx, ctx.local_types.get(&array_id)?);
-    let elem = match array_ty {
-        HirType::Array(elem) => elem.as_ref(),
-        // `new Array<{v: number}>(n)` locals carry the generic spelling.
-        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
-            &type_args[0]
-        }
-        _ => return None,
-    };
+    // The annotation selects a candidate versioned clone.  The clone's
+    // preheader validates the receiver kind, array head, shape, and key token
+    // before any representation-specific access, and falls back on failure.
+    let elem = declared_array_element_type_hint(ctx, array_id)?;
     // `type Node = {v: number; w: number}` — the annotation names the shape one
     // indirection away. Both levels are resolved (`type Row = Node[]` too).
     let HirType::Object(obj) = resolve_type_alias(ctx, elem) else {
@@ -631,8 +656,10 @@ fn match_element_shape_versioned_loop(
         || !ctx.locals.contains_key(acc_id)
         || ctx.boxed_vars.contains(acc_id)
         || ctx.module_globals.contains_key(acc_id)
-        || ctx.shadow_slot_map.contains_key(acc_id)
-        || !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*acc_id))
+        // The declared type is only a candidate. The lowering validates the
+        // accumulator's current NaN-box tag in the preheader before installing
+        // the numeric fact for the fast clone.
+        || !matches!(ctx.local_type_hint(acc_id), Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32))
     {
         return None;
     }
@@ -648,6 +675,7 @@ fn match_element_shape_versioned_loop(
         ctx,
         value,
         counter_id,
+        *acc_id,
         element_binding,
         &mut array,
         &mut props,
@@ -754,6 +782,7 @@ fn match_element_shape_versioned_loop(
         keys_global_name,
         fields,
         element_binding,
+        accumulator_id: *acc_id,
     })
 }
 
@@ -837,7 +866,7 @@ pub(super) fn lower_element_shape_versioned_for(
         None => crate::expr::element_shape_guard::ElementShapeLoopTripCount::ArrayLength,
     };
     let expected_class_id_str = matched.expected_class_id.to_string();
-    let (elements_base, expected_keys, shape_ok, bound_i32) =
+    let (elements_base, expected_shape_id, shape_ok, bound_i32) =
         crate::expr::element_shape_guard::emit_element_shape_loop_preheader_check(
             ctx,
             matched.array_id,
@@ -846,16 +875,13 @@ pub(super) fn lower_element_shape_versioned_for(
             trip_count,
             &slow_pre_label,
         )?;
+    let accumulator = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.accumulator_id))?;
+    let accumulator_is_number = emit_js_value_is_number(ctx, &accumulator);
+    let fast_path_ok = ctx.block().and(I1, &shape_ok, &accumulator_is_number);
     // Deliberately unterminated: it branches into the fast clone only after
     // the clone is PROVEN call-free below.
     let deref_idx = ctx.current_block;
 
-    let max_field_index = matched
-        .fields
-        .values()
-        .copied()
-        .max()
-        .expect("matcher requires >= 1 tracked field");
     let scope_id = ctx.next_loop_proof_scope_id();
     let fast_scan_start = ctx.func.num_blocks();
     ctx.current_block = fast_pre_idx;
@@ -866,11 +892,11 @@ pub(super) fn lower_element_shape_versioned_for(
             scope_id,
             class_name: matched.class_name.clone(),
             elements_base,
-            expected_keys,
+            expected_shape_id,
             side_exit_label: slow_pre_label.clone(),
             fields: matched.fields.clone(),
-            max_field_index,
             element_binding: matched.element_binding,
+            numeric_accumulator: matched.accumulator_id,
         });
     let lowered = lower_for_after_init_with_i32_bound(
         ctx,
@@ -898,7 +924,7 @@ pub(super) fn lower_element_shape_versioned_for(
     ctx.current_block = deref_idx;
     if fast_clone_call_free {
         ctx.block()
-            .cond_br(&shape_ok, &fast_pre_label, &slow_pre_label);
+            .cond_br(&fast_path_ok, &fast_pre_label, &slow_pre_label);
     } else {
         ctx.block().br(&slow_pre_label);
     }

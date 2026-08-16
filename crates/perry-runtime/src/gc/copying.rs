@@ -1,244 +1,11 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CopyingPointerKind {
-    Eden,
-    FromSurvivor,
-    ToSurvivor,
-    Longlived,
-    Old,
-    Malloc,
-    /// On a block this cycle is promoting whole, in place (#7742). Generation
-    /// is already `Old` — so every barrier predicate reads old-gen semantics —
-    /// but the object was young when the cycle began and therefore still owes
-    /// the collector exactly one field scan.
-    PromotedYoung,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct CopyingPointer {
-    pub(crate) header: *mut GcHeader,
-    pub(super) kind: CopyingPointerKind,
-}
-
-pub(crate) struct CopyingPointerSet {
-    pub(super) malloc_registry_available: Cell<bool>,
-    pub(super) malloc_registry_empty_at_start: bool,
-    pub(super) malloc_validation_lookups: Cell<usize>,
-    pub(super) malloc_registry_rebuild_count_start: u64,
-}
-
-impl CopyingPointerSet {
-    pub(super) fn new() -> Self {
-        let (malloc_registry_available, malloc_registry_empty_at_start) = MALLOC_STATE.with(|s| {
-            let mut s = s.borrow_mut();
-            // Moving-nursery mode (`PERRY_GC_MOVING_LOOP_POLLS`): eagerly build the
-            // malloc registry so this copying minor can CLASSIFY malloc-tracked
-            // objects and evacuate, instead of hitting
-            // `MallocRegistryUnavailable` and falling back to a non-moving minor
-            // (which reclaims ~nothing on reallocation-heavy async/Map/generator
-            // code — measured: broad3 192 MiB / 100 fallbacks). The
-            // O(malloc-objects) rebuild is paid back by the RSS win. Default
-            // (non-moving) copied minors keep the lazy behavior — see
-            // `ensure_set_built`'s "keep copied-minor from rebuilding" note.
-            if super::gc_moving_loop_polls_enabled() && !s.objects.is_empty() {
-                super::malloc::ensure_set_built(&mut s);
-            }
-            (s.malloc_registry_available(), s.objects.is_empty())
-        });
-        let malloc_registry_rebuild_count_start = MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.get());
-        Self {
-            malloc_registry_available: Cell::new(malloc_registry_available),
-            malloc_registry_empty_at_start,
-            malloc_validation_lookups: Cell::new(0),
-            malloc_registry_rebuild_count_start,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn classify(&self, addr: usize) -> Option<CopyingPointer> {
-        self.classify_arena(addr)
-            .or_else(|| self.classify_malloc(addr))
-    }
-
-    #[inline]
-    pub(super) fn classify_for_preflight(
-        &self,
-        addr: usize,
-        possible_malloc: bool,
-    ) -> Result<Option<CopyingPointer>, CopiedMinorFallbackReason> {
-        if let Some(ptr) = self.classify_arena(addr) {
-            return Ok(Some(ptr));
-        }
-        if possible_malloc && !self.malloc_registry_available.get() {
-            // With no malloc-tracked objects, every non-arena candidate is
-            // exactly rejectable without activating the lazy header registry.
-            if self.malloc_registry_empty_at_start {
-                return Ok(None);
-            }
-            return Err(CopiedMinorFallbackReason::MallocRegistryUnavailable);
-        }
-        Ok(self.classify_malloc(addr))
-    }
-
-    #[inline]
-    pub(super) fn classify_arena(&self, addr: usize) -> Option<CopyingPointer> {
-        if addr < GC_HEADER_SIZE {
-            return None;
-        }
-        // ONE range lookup answers both classifications this needs. The header
-        // sits `GC_HEADER_SIZE` below the user pointer and a block always
-        // begins with a header, so a real object's header is on the same
-        // registered range as its user pointer; `range_base` is the guard that
-        // keeps a garbage candidate sitting at the very start of a range from
-        // becoming a read of the unmapped page below it. Before #7742 this was
-        // two `classify_heap_space` calls for addresses 8 bytes apart, on
-        // EVERY visited slot.
-        let Some((space, range_base)) = crate::arena::classify_heap_space_in_range(addr) else {
-            return None;
-        };
-        let header_addr = addr - GC_HEADER_SIZE;
-        if header_addr < range_base {
-            return None;
-        }
-        debug_assert_eq!(
-            crate::arena::classify_heap_space(header_addr),
-            space,
-            "an object's header and user pointer must classify identically"
-        );
-        if !matches!(
-            space,
-            crate::arena::HeapSpace::NurseryEden
-                | crate::arena::HeapSpace::Survivor0
-                | crate::arena::HeapSpace::Survivor1
-                | crate::arena::HeapSpace::Longlived
-                | crate::arena::HeapSpace::Old
-                | crate::arena::HeapSpace::PromotedYoung
-        ) {
-            return None;
-        }
-        let header = header_addr as *mut GcHeader;
-        if unsafe { !plausible_gc_header(header, true) } {
-            return None;
-        }
-        // The two survivor-space readings are TLS loads, and Darwin has no
-        // local-exec TLS — each is a real `_tlv_get_addr` call. Reading them
-        // eagerly cost two per classified pointer on workloads that never touch
-        // a survivor at all (`retain.ts` classifies Eden / PromotedYoung / Old
-        // and nothing else). They can only ever answer `Survivor0`, `Survivor1`
-        // or `Unknown`, and `space` is already narrowed to the six accepted
-        // spaces, so hoisting the non-survivor arms above them changes no
-        // verdict — it just stops paying for an answer the arm does not use.
-        let kind = match space {
-            crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
-            crate::arena::HeapSpace::PromotedYoung => CopyingPointerKind::PromotedYoung,
-            crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,
-            crate::arena::HeapSpace::Old => CopyingPointerKind::Old,
-            s if s == crate::arena::active_survivor_space() => CopyingPointerKind::FromSurvivor,
-            s if s == crate::arena::inactive_survivor_space() => CopyingPointerKind::ToSurvivor,
-            _ => return None,
-        };
-        Some(CopyingPointer { header, kind })
-    }
-
-    #[inline]
-    pub(super) fn classify_malloc(&self, addr: usize) -> Option<CopyingPointer> {
-        if addr < GC_HEADER_SIZE || !self.malloc_registry_available.get() {
-            return None;
-        }
-        let header = unsafe { header_from_user_ptr(addr as *const u8) };
-        self.malloc_validation_lookups
-            .set(self.malloc_validation_lookups.get().saturating_add(1));
-        MALLOC_STATE.with(|s| {
-            let mut s = s.borrow_mut();
-            if !s.set.contains(&(header as usize)) {
-                s.record_copied_minor_validation_lookup(None);
-                return None;
-            }
-            let obj_type =
-                unsafe { plausible_gc_header(header, false).then_some((*header).obj_type) };
-            s.record_copied_minor_validation_lookup(obj_type);
-            obj_type.map(|_| CopyingPointer {
-                header,
-                kind: CopyingPointerKind::Malloc,
-            })
-        })
-    }
-
-    #[inline]
-    pub(super) fn raw_pointer_candidate(bits: u64) -> bool {
-        (0x1000..=POINTER_MASK).contains(&bits) && bits & 0x7 == 0
-    }
-
-    #[inline]
-    pub(super) fn decode_bits(&self, bits: u64) -> Option<(usize, bool, u64)> {
-        let tag = bits & TAG_MASK;
-        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = (bits & POINTER_MASK) as usize;
-            return (addr != 0).then_some((addr, true, tag));
-        }
-        if tag >= 0x7FF8_0000_0000_0000 {
-            return None;
-        }
-        if !Self::raw_pointer_candidate(bits) {
-            return None;
-        }
-        let addr = bits as usize;
-        self.classify(addr).map(|_| (addr, false, 0))
-    }
-
-    #[inline]
-    pub(super) fn decode_bits_for_preflight(
-        &self,
-        bits: u64,
-    ) -> Result<Option<(usize, CopyingPointer)>, CopiedMinorFallbackReason> {
-        let tag = bits & TAG_MASK;
-        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = (bits & POINTER_MASK) as usize;
-            if addr == 0 {
-                return Ok(None);
-            }
-            return self
-                .classify_for_preflight(addr, true)
-                .map(|ptr| ptr.map(|ptr| (addr, ptr)));
-        }
-        if tag >= 0x7FF8_0000_0000_0000 || !Self::raw_pointer_candidate(bits) {
-            return Ok(None);
-        }
-        let addr = bits as usize;
-        self.classify_for_preflight(addr, true)
-            .map(|ptr| ptr.map(|ptr| (addr, ptr)))
-    }
-
-    #[inline]
-    pub(super) fn malloc_validation_lookups(&self) -> usize {
-        self.malloc_validation_lookups.get()
-    }
-
-    #[inline]
-    pub(super) fn malloc_registry_rebuilds(&self) -> u64 {
-        MALLOC_REGISTRY_REBUILD_COUNT.with(|c| {
-            c.get()
-                .saturating_sub(self.malloc_registry_rebuild_count_start)
-        })
-    }
-}
-
-pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> bool {
-    if header.is_null() {
-        return false;
-    }
-    let obj_type = (*header).obj_type;
-    if gc_type_info(obj_type).is_none() {
-        return false;
-    }
-    let size = (*header).size as usize;
-    if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
-        return false;
-    }
-    let is_arena = (*header).gc_flags & GC_FLAG_ARENA != 0;
-    is_arena == arena
-}
+/// Largest object `move_young` will relocate. See its use site for the
+/// corruption-guard rationale; it doubles as the hard ceiling every
+/// birth-generation threshold in `gc::types` has to stay under, because an
+/// object the allocator admits to the nursery but this refuses to move would
+/// silently be left behind in from-space.
+pub(crate) const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
 
 pub(super) struct CopyingNurseryPreflight {
     pub(super) ptrs: *const CopyingPointerSet,
@@ -366,55 +133,6 @@ impl CopyingNurseryPreflight {
     }
 }
 
-#[derive(Default)]
-pub(super) struct StickyRememberedSet {
-    pub(super) old_pages: crate::fast_hash::PtrHashSet<usize>,
-    pub(super) external_pages: Vec<(usize, usize)>,
-}
-
-impl StickyRememberedSet {
-    pub(super) fn remember_slot(
-        &mut self,
-        parent_header: *mut GcHeader,
-        slot: *mut u64,
-        external: bool,
-    ) {
-        if parent_header.is_null() || slot.is_null() {
-            return;
-        }
-        let page = crate::arena::generation_page_for_addr(slot as usize);
-        if external {
-            // #7538: an owner's external buffer can contribute thousands of
-            // slots (a lazy JSON array's sparse element cache is one 8-byte
-            // slot per element), and they are visited in address order — so
-            // one adjacent-duplicate check collapses a whole page's worth of
-            // pushes into a single entry. `restore` dedupes again inside
-            // `mark_dirty_external_slot_page`; this keeps the intermediate
-            // Vec from growing with the element count.
-            let entry = (parent_header as usize, page);
-            if self.external_pages.last() != Some(&entry) {
-                self.external_pages.push(entry);
-            }
-        } else {
-            self.old_pages.insert(page);
-        }
-    }
-
-    pub(super) fn restore(&self) {
-        for &page in &self.old_pages {
-            mark_dirty_old_page(page);
-        }
-        for &(header, page) in &self.external_pages {
-            mark_dirty_external_slot_page(header, page);
-        }
-    }
-
-    pub(super) fn extend(&mut self, other: StickyRememberedSet) {
-        self.old_pages.extend(other.old_pages);
-        self.external_pages.extend(other.external_pages);
-    }
-}
-
 pub(super) struct CopyingNurseryCollector {
     pub(super) ptrs: CopyingPointerSet,
     pub(super) worklist: Vec<*mut GcHeader>,
@@ -461,16 +179,58 @@ pub(super) struct CopyingNurseryCollector {
     /// to-space copies or non-moving objects, which don't move again within
     /// the cycle.
     pub(super) weak_slots: Vec<*mut u64>,
+    /// One-entry memo for [`CopyingNurseryCollector::mark_addr`]: the last
+    /// address it classified successfully, and the address it returned.
+    ///
+    /// `mark_addr` is idempotent with a stable result for the whole cycle —
+    /// a second call finds `GC_FLAG_MARKED` (or `GC_FLAG_FORWARDED`) already
+    /// set and returns the same address — so replaying the answer is exact,
+    /// not approximate. What it buys: an object's SHAPE-SHARED children are
+    /// the same addresses for every instance, so the mark drain classifies
+    /// one `keys_array` pointer once per surviving object. On
+    /// `gc-handoff/bench/retain.ts` that is ~750 k classifications of a
+    /// single address per cycle, each a page-map lookup plus a
+    /// `plausible_gc_header` read.
+    ///
+    /// `0` is the empty state: `classify_arena` rejects every address below
+    /// `GC_HEADER_SIZE`, so it can never be a memoized key.
+    memo_addr: usize,
+    memo_result: usize,
+}
+
+/// Survivor count of the previous copying minor, used only to pre-size this
+/// one's `worklist` / `moved_headers`.
+///
+/// Both grow to one entry per survivor — 750 k on a fully-live nursery — from
+/// `Vec::new()`, so each cycle paid ~20 reallocations whose `memmove` and
+/// `mi_malloc` were visible in a symbolicated profile of the MARK loop. A
+/// nursery's survivor count is strongly autocorrelated between adjacent cycles
+/// (it is the same program in the same phase), so the previous count is a good
+/// estimate; over-estimating costs only untouched reserved bytes, and
+/// under-estimating just falls back to the ordinary growth.
+static PREVIOUS_SURVIVOR_ESTIMATE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Cap the pre-size so a one-off huge cycle cannot make every later cycle
+/// reserve 100 MB of pointers.
+const SURVIVOR_ESTIMATE_CAP: usize = 1 << 21;
+
+pub(super) fn note_survivor_count_for_presizing(count: usize) {
+    PREVIOUS_SURVIVOR_ESTIMATE.store(
+        count.min(SURVIVOR_ESTIMATE_CAP),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 impl CopyingNurseryCollector {
     pub(super) fn new(ptrs: CopyingPointerSet) -> Self {
         let tenuring_survivals = tenuring_survivals();
+        let estimate = PREVIOUS_SURVIVOR_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
         Self {
             ptrs,
-            worklist: Vec::new(),
+            worklist: Vec::with_capacity(estimate),
             marked_headers: Vec::new(),
-            moved_headers: Vec::new(),
+            moved_headers: Vec::with_capacity(estimate),
             large_excluded_headers: crate::fast_hash::new_ptr_hash_set(),
             sticky: StickyRememberedSet::default(),
             stats: CopyingNurseryTraceStats {
@@ -483,6 +243,8 @@ impl CopyingNurseryCollector {
             tenuring_survivals,
             skip_remembering: false,
             weak_slots: Vec::new(),
+            memo_addr: 0,
+            memo_result: 0,
         }
     }
 
@@ -587,12 +349,18 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) fn mark_addr(&mut self, addr: usize) -> Option<usize> {
+        // See `memo_addr`: replaying the previous answer is exact. Only
+        // successful classifications are memoized — a `None` must stay a
+        // `None`, and re-deriving it costs one page-map probe.
+        if addr == self.memo_addr {
+            return Some(self.memo_result);
+        }
         let ptr = self.ptrs.classify(addr)?;
-        match ptr.kind {
-            CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => {
-                Some(unsafe { self.move_young(ptr) })
-            }
-            CopyingPointerKind::ToSurvivor => Some(addr),
+        let result = match ptr.kind {
+            CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => unsafe {
+                self.move_young(ptr)
+            },
+            CopyingPointerKind::ToSurvivor => addr,
             CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
@@ -602,16 +370,19 @@ impl CopyingNurseryCollector {
                         self.marked_headers.push(ptr.header);
                     }
                 }
-                Some(addr)
+                addr
             }
             CopyingPointerKind::Old => {
                 unsafe {
                     self.record_large_excluded(ptr.header);
                 }
-                Some(addr)
+                addr
             }
-            CopyingPointerKind::PromotedYoung => Some(unsafe { self.mark_promoted_young(ptr) }),
-        }
+            CopyingPointerKind::PromotedYoung => unsafe { self.mark_promoted_young(ptr) },
+        };
+        self.memo_addr = addr;
+        self.memo_result = result;
+        Some(result)
     }
 
     /// #7742: the object's block is being promoted whole, in place. It does not
@@ -693,9 +464,13 @@ impl CopyingNurseryCollector {
         // plausible-but-wrong *small* size; the root fix is stronger arena
         // classification / page unregistration so off-heap addresses never
         // reach here. See the copying-minor relocation issue.
-        const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
+        //
+        // It is also a hard ceiling on the birth-generation thresholds in
+        // `gc::types`: an object the allocator admits to the nursery but this
+        // refuses to move would silently stay in from-space across a copying
+        // minor. `pointer_bearing_large_object_threshold_is_movable` pins that.
         if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            if crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-move-guard] refusing wild young move user={:#x} obj_type={} size={}",
                     old_user as usize,
@@ -789,8 +564,8 @@ impl CopyingNurseryCollector {
         // never tombstoned and FinalizationRegistry never fired while
         // copied-minor was the operative cycle. Repair an already-moved
         // target's address now and queue the slot so `repair_weak_slots`
-        // fixes targets evacuated after this visit; the after-mark pass
-        // (`process_weak_targets_after_mark`) then tombstones dead ones.
+        // fixes targets evacuated after this visit; the registry pass then
+        // tombstones dead ones.
         // No remembered-set entry either — the write barrier skips weak
         // slots the same way.
         if !parent_header.is_null()
@@ -825,6 +600,14 @@ impl CopyingNurseryCollector {
     pub(super) unsafe fn drain(&mut self) {
         let mut i = 0usize;
         while i < self.worklist.len() {
+            // The worklist is a list of COLD headers: on a promotion-heavy
+            // cycle the marking pass that filled it has since walked tens of
+            // MB, so every `(*header).gc_flags` read below is a DRAM round
+            // trip. The addresses are known `PREFETCH_DISTANCE` iterations
+            // ahead, so overlap the round trips instead of serialising them.
+            if let Some(&ahead) = self.worklist.get(i + super::prefetch::PREFETCH_DISTANCE) {
+                super::prefetch::prefetch_read(ahead as usize);
+            }
             let header = self.worklist[i];
             i += 1;
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
@@ -837,8 +620,8 @@ impl CopyingNurseryCollector {
     /// Second pass over the weak target slots collected during the scan:
     /// a weak target evacuated via a strong edge AFTER its slot was
     /// visited still points at the from-space original — rewrite it to
-    /// the forwarding address so `process_weak_targets_after_mark` (and
-    /// the mutator) read the live copy. Targets never forwarded are
+    /// the forwarding address so weak processing (and the mutator) read the
+    /// live copy. Targets never forwarded are
     /// either old-gen/pinned live (no rewrite needed) or dead (left for
     /// the after-mark tombstone pass).
     pub(super) unsafe fn repair_weak_slots(&mut self) {
@@ -865,13 +648,81 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn clear_marks(&mut self) {
-        for &header in &self.marked_headers {
-            (*header).gc_flags &= !GC_FLAG_MARKED;
-        }
-        for &header in &self.moved_headers {
-            (*header).gc_flags &= !GC_FLAG_MARKED;
-        }
+        // Same cold-header problem as `drain`, and the same fix: this is a
+        // read-modify-write of one byte per survivor, in mark order, over a
+        // cohort far larger than any cache.
+        clear_marks_in(&self.marked_headers);
+        clear_marks_in(&self.moved_headers);
     }
+}
+
+/// Clear `GC_FLAG_MARKED` across a header list, prefetching ahead.
+unsafe fn clear_marks_in(headers: &[*mut GcHeader]) {
+    for (i, &header) in headers.iter().enumerate() {
+        if let Some(&ahead) = headers.get(i + super::prefetch::PREFETCH_DISTANCE) {
+            super::prefetch::prefetch_read(ahead as usize);
+        }
+        (*header).gc_flags &= !GC_FLAG_MARKED;
+    }
+}
+
+/// Is a stress or verification instrument armed that an untraced promotion
+/// would silently stop exercising?
+///
+/// Each of these instruments takes the trace itself as its subject:
+/// `PERRY_GC_VERIFY_EVACUATION` checks the old→young edge coverage the scan
+/// records and the rewrite the drain performs; `PERRY_GC_FROMSPACE_SCAN` walks
+/// for stale from-space pointers the trace should have rewritten;
+/// `PERRY_GC_VERIFY_MARK` reads the marks. A cycle that produces no marks and
+/// rewrites nothing would let all three report success having examined
+/// nothing — the exact failure mode CLAUDE.md's "a gate must assert its
+/// subject was live" rule names. `PERRY_GC_FORCE_EVACUATE` (and every mode
+/// that implies it) is not listed because it already vetoes in-place promotion
+/// outright, which is a precondition here.
+///
+/// Returns the NAME of the armed instrument rather than a bool (#7946): the
+/// veto is the only input to the untraced decision that another thread can
+/// move, so when `an_untraced_promotion_indexes_the_objects_it_could_not_prove_
+/// live` fails with `cycles=0, objects=0` the first question is always which of
+/// these was on. Same short-circuit order and cost as the bool it replaced.
+fn untraced_promotion_instrument_veto() -> Option<&'static str> {
+    if gc_verify_evacuation_enabled() {
+        return Some("verify_evacuation");
+    }
+    if super::fromspace_scan::fromspace_scan_enabled() {
+        return Some("fromspace_scan");
+    }
+    if crate::gc::gc_verify_mark_enabled() {
+        return Some("verify_mark");
+    }
+    if super::barrier::incremental_mark_in_progress_on_this_thread() {
+        return Some("incremental_mark_in_progress");
+    }
+    None
+}
+
+/// The veto as the cycle sees it, for
+/// `gc::tests::promote_in_place::another_agents_incremental_cycle_does_not_veto_
+/// this_threads_untraced_promotion`.
+#[cfg(test)]
+pub(super) fn test_untraced_promotion_instrument_veto() -> Option<&'static str> {
+    untraced_promotion_instrument_veto()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Why the last copying minor on this thread did NOT take the untraced
+    /// promotion path. `""` while it did. Read by
+    /// `gc::tests::promote_in_place`; see
+    /// [`untraced_promotion_instrument_veto`].
+    static UNTRACED_DECLINE_REASON: std::cell::Cell<&'static str> = const {
+        std::cell::Cell::new("no copying minor has run on this thread")
+    };
+}
+
+#[cfg(test)]
+pub(super) fn last_untraced_decline_reason() -> &'static str {
+    UNTRACED_DECLINE_REASON.with(std::cell::Cell::get)
 }
 
 pub(super) fn scan_remembered_dirty_slots_copying(
@@ -942,8 +793,11 @@ pub(super) fn scan_remembered_dirty_slots_copying(
 }
 
 /// The young-pin latch was clear, the preflight was skipped on that proof, and
-/// the copier then met a pinned young object anyway — so the latch is
-/// incomplete and a pin site exists that does not go through `gc::pin_object`.
+/// the copier then met bytes that describe a pinned young object anyway.
+/// This is the instant relocation would become unsafe, but it does not by
+/// itself identify the violated invariant. In #7990 the header was internally
+/// impossible (`GC_TYPE_MAP | GC_FLAG_INTERNED`), and the fault disappeared
+/// when comparison operands were rooted; the pin latch itself was complete.
 ///
 /// There is no recovery: leaving the object in from-space strands the
 /// referring slot on memory `copying_reset_from_spaces_and_flip` is about to
@@ -952,17 +806,19 @@ pub(super) fn scan_remembered_dirty_slots_copying(
 #[cold]
 #[inline(never)]
 unsafe fn pinned_young_move_under_skipped_preflight(header: *mut GcHeader) -> ! {
+    // #7990: the report is built in `gc/pin.rs` from the header's own flags,
+    // because those flags are the only evidence that distinguishes an
+    // incomplete pin latch from a dangling pointer into recycled memory — and
+    // this message used to assert the former as fact while `gc_pin_sites.py`,
+    // the tool it told the reader to run, answered OK.
     eprintln!(
-        "[gc-pin-latch] FATAL: copying minor is about to relocate a PINNED young \
-         object on a preflight-skipped cycle. header={:#x} obj_type={} size={} \
-         flags={:#04x}\n\
-         The young-pin latch (gc/pin.rs) is incomplete: some site sets \
-         GC_FLAG_PINNED without going through gc::pin_object. Find it with \
-         `python3 scripts/gc_pin_sites.py` and route it through pin_object (#7645).",
-        header as usize,
-        (*header).obj_type,
-        (*header).size,
-        (*header).gc_flags,
+        "{}",
+        super::pin::pinned_young_move_report(
+            header as usize,
+            (*header).obj_type,
+            (*header).size,
+            (*header).gc_flags,
+        )
     );
     std::process::abort()
 }
@@ -1160,7 +1016,10 @@ impl CopiedMinorEligibility {
         {
             let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
             for entry in scanners {
-                (entry.scanner)(&mut visitor);
+                let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                    (entry.scanner)(&mut visitor);
+                });
+                super::scanner_profile::note_scanner(entry.name, nanos, 0, 0, 0);
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
@@ -1217,12 +1076,13 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility, trigger_kind)
 }
 
-pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
+pub(super) fn run_copied_minor_attempt(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
     _trigger_kind: GcTriggerKind,
-) -> Option<CopiedMinorFastPathOutcome> {
+    may_speculate: bool,
+) -> CopiedMinorAttempt {
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
@@ -1231,7 +1091,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.root_sources.native_stack_fallback.scanned =
             matches!(decision, ConservativeStackScanDecision::Scan);
     }
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let reason = match eligibility.fallback_reason {
             CopiedMinorFallbackReason::None => "none",
             CopiedMinorFallbackReason::NotAttempted => "not_attempted",
@@ -1253,7 +1113,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         );
     }
     if !eligibility.eligible {
-        return None;
+        return CopiedMinorAttempt::Done(None);
     }
     let preflight_skipped = eligibility.preflight_skipped;
     let malloc_sweep_due = eligibility.malloc_sweep_due;
@@ -1263,14 +1123,28 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    let pre_collection_live_bytes = crate::arena::arena_live_allocated_bytes();
+    // #7901: the LIVE share of from-space inside `pre_collection_live_bytes`.
+    // Captured here, before anything moves or resets.
+    let pre_from_space_live_bytes = crate::arena::arena_live_from_space_bytes();
     // #7742: decide BEFORE anything classifies, then retag the young blocks so
     // every classification for the rest of this cycle already reads the
     // generation those objects will have when it ends. The eligibility
     // preflight above ran against the pre-retag labels, which is correct — it
     // answers "may this cycle move objects at all", a question the retag does
     // not change.
-    let promotion = if super::should_promote_young_in_place() {
-        crate::arena::retag_young_for_in_place_promotion()
+    // #7937: the FIRST copying minor has no previous cycle to read, so the
+    // steady-state policy above always declines. It may instead ATTEMPT the
+    // promotion and decide from its own trace — see
+    // `should_attempt_first_cycle_promotion` for why, and for why both extra
+    // preconditions here are about making the ROLLBACK's obligations provably
+    // empty rather than about liveness.
+    let speculate_first_cycle = may_speculate
+        && ptrs.malloc_registry_empty_at_start
+        && untraced_promotion_instrument_veto().is_none()
+        && super::should_attempt_first_cycle_promotion();
+    let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
+        crate::arena::retag_young_for_in_place_promotion(speculate_first_cycle)
     } else {
         crate::arena::InPlacePromotion::default()
     };
@@ -1283,6 +1157,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     collector.stats.malloc_sweep_due = malloc_sweep_due;
     collector.stats.preflight_skipped = preflight_skipped;
     collector.stats.in_place_promotion = promoting_in_place;
+    // `may_speculate` is false on exactly one path: the retry the wrapper runs
+    // after a rollback. So this pair is exact without threading extra state
+    // through, and it survives the retry overwriting the trace.
+    collector.stats.first_cycle_promotion_attempted = speculate_first_cycle || !may_speculate;
+    collector.stats.first_cycle_promotion_rolled_back = !may_speculate;
     collector.stats.in_place_promoted_blocks = promotion.block_count();
     // See `CopyingNurseryCollector::skip_remembering` for the proof.
     collector.skip_remembering =
@@ -1291,35 +1170,102 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         debug_assert_no_remembering_possible();
     }
     collector.stats.remembering_skipped = collector.skip_remembering;
+    // #7888: the cycle promotes the WHOLE young generation in place, so the
+    // trace has no products left worth its cost — skip it too.
+    //
+    // What the trace does on a promoting cycle, exhaustively, and why each is
+    // covered:
+    //
+    // * **Nothing moves.** `retag_young_for_in_place_promotion` takes every
+    //   in-use Eden and survivor block, so after it no address in the heap
+    //   classifies as `Nursery` and `move_young` is unreachable. Every root
+    //   walk, slot rewrite and forwarding repair is therefore a provable no-op,
+    //   not an approximation.
+    // * **No remembered-set entry can be created** — that is `skip_remembering`'s
+    //   existing proof, which this reuses verbatim (it is a precondition here).
+    //   With no young generation left, `remembered_set_clear()` is exact.
+    // * **The address-keyed death-pruning passes prune nothing anyway.**
+    //   `dead_owner::owner_is_dead` and the map/set/error finalizers all require
+    //   the owner to classify as `Nursery` on a minor; after the retag none do.
+    //   They still run below, and still find nothing, at their usual O(registered
+    //   holders) cost.
+    // * **Weak semantics need marks**, so a cycle with any weak-target holder
+    //   registered is excluded outright.
+    // * **The malloc sweep and `Longlived` marking need marks**, so this reuses
+    //   `malloc_registry_empty_at_start`.
+    // * **The stress/verify instruments need a trace to instrument**, so any of
+    //   them being armed excludes this path — an instrument that silently stops
+    //   exercising its subject is the failure mode CLAUDE.md's "a gate must
+    //   assert its subject was live" rule is about.
+    //
+    // That leaves liveness for the old-gen page index (answered by
+    // `PromotionLiveness::AssumeAllLive`) and the survival ratio itself, which
+    // is what `should_promote_young_untraced`'s budget bounds.
+    let instrument_veto = untraced_promotion_instrument_veto();
+    let untraced = promoting_in_place
+        && collector.skip_remembering
+        && !crate::weakref::weak_target_holders_allocated()
+        && instrument_veto.is_none()
+        && super::should_promote_young_untraced();
+    #[cfg(test)]
+    UNTRACED_DECLINE_REASON.with(|slot| {
+        // `instrument_veto` is the CAPTURED answer, not a re-evaluation: it is
+        // the racy one, and asking again after the fact would report whatever
+        // the other thread is doing now instead of what decided this cycle.
+        slot.set(if untraced {
+            ""
+        } else if !promoting_in_place {
+            "not promoting in place"
+        } else if !collector.skip_remembering {
+            "remembering not skipped (malloc registry non-empty at start)"
+        } else if crate::weakref::weak_target_holders_allocated() {
+            "a weak-target holder is registered on this thread"
+        } else if let Some(instrument) = instrument_veto {
+            instrument
+        } else {
+            "policy (should_promote_young_untraced)"
+        })
+    });
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
-    let native_stack_walk = visit_mutable_root_slots(|slot| unsafe {
-        let bits = slot.read();
-        if let Some(trace) = trace.as_mut() {
-            let pointer_root = collector.ptrs.decode_bits(bits).is_some();
-            root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
-                .record_scan(bits != 0, pointer_root);
-            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                trace.shadow_roots.record_scan(bits);
-            }
-        }
-        if bits == 0 {
-            return;
-        }
-        if let Some(new_bits) = collector.visit_value_bits(bits) {
-            slot.write(new_bits);
+    let native_stack_walk = if untraced {
+        Default::default()
+    } else {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("mutable_root_slots");
+        visit_mutable_root_slots(|slot| unsafe {
+            let _kind = super::pin::CopyingWalkPhaseGuard::enter(slot.kind.walk_phase_name());
+            let bits = slot.read();
             if let Some(trace) = trace.as_mut() {
-                root_source_for_mutable_slot(&mut trace.root_sources, slot.kind).record_rewrite();
+                let pointer_root = collector.ptrs.decode_bits(bits).is_some();
+                root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
+                    .record_scan(bits != 0, pointer_root);
                 if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                    trace.shadow_roots.record_rewrite();
+                    trace.shadow_roots.record_scan(bits);
                 }
             }
-        }
-    });
+            if bits == 0 {
+                return;
+            }
+            if let Some(new_bits) = collector.visit_value_bits(bits) {
+                slot.write(new_bits);
+                if let Some(trace) = trace.as_mut() {
+                    root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
+                        .record_rewrite();
+                    if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+                        trace.shadow_roots.record_rewrite();
+                    }
+                }
+            }
+        })
+    };
     let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
     record_native_stack_walk_source(native_stack_walk, &mut root_sources);
 
-    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerEntry> = if untraced {
+        Vec::new()
+    } else {
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
+    };
     {
         let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
         if let Some(sources) = &mut root_sources {
@@ -1349,46 +1295,56 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
                 },
                 None => None,
             };
+            let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
-            (entry.scanner)(&mut visitor);
+            let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
+            let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                (entry.scanner)(&mut visitor);
+            });
             visitor.set_root_source_stats(previous);
+            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
 
+    // On an untraced promotion the dirty SCAN is where the whole per-object
+    // mark pass lived: `retain`'s array store has a young child in every page
+    // of its backing store, so the scan walks all three million slots and marks
+    // the record behind each one. With nothing to mark and nothing to rewrite,
+    // it has no product left — `remembered_set_clear()` below is exact once the
+    // young generation is empty.
+    //
+    // The SNAPSHOT is still taken: it is O(dirty pages), and it is the sole
+    // read path for the remembered set, which is where #7187's lazy barrier
+    // arming happens. Skipping it would leave the barrier unarmed for the next
+    // cycle — a missing-edge bug one collection later.
     let snapshot = remembered_dirty_snapshot();
-    let remembered_stats =
-        scan_remembered_dirty_slots_copying(&snapshot, |slot, header, external, stats| unsafe {
-            let before = *slot;
-            collector.visit_slot_with_parent(slot, header, external);
-            if *slot != before {
-                stats.newly_marked += 1;
-            }
-        });
-    if let Some(trace) = trace.as_mut() {
-        trace.remembered_set = remembered_stats;
-    }
-    if !collector.skip_remembering {
-        let promoted_sticky =
-            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
-        promoted_sticky.restore();
-        collector.sticky.extend(promoted_sticky);
-    }
-    if gc_verify_evacuation_enabled() {
-        let phase_start = trace_phase_start(trace);
-        let old_young_edge_verifier = verify_old_to_young_edges_covered();
-        trace_phase_record(trace, "old_young_edge_verify", phase_start);
+    if !untraced {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
+        let remembered_stats = scan_remembered_dirty_slots_copying(
+            &snapshot,
+            |slot, header, external, stats| unsafe {
+                let before = *slot;
+                collector.visit_slot_with_parent(slot, header, external);
+                if *slot != before {
+                    stats.newly_marked += 1;
+                }
+            },
+        );
         if let Some(trace) = trace.as_mut() {
-            trace.old_young_edge_verifier = old_young_edge_verifier;
+            trace.remembered_set = remembered_stats;
         }
     }
-
     unsafe {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
         collector.drain();
     }
     {
-        let scanners: Vec<MutableRootScannerEntry> =
-            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerEntry> = if untraced {
+            Vec::new()
+        } else {
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
+        };
         let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
         let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
         for entry in scanners {
@@ -1403,13 +1359,85 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
                 },
                 None => None,
             };
+            let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
-            (entry.scanner)(&mut visitor);
+            let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
+            let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                (entry.scanner)(&mut visitor);
+            });
             visitor.set_root_source_stats(previous);
+            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
+    // #7803 THE FIX: rebuild the promoted-object remembered set AFTER the last
+    // phase that can move an object, not before the drain.
+    //
+    // This block used to sit above `collector.drain()`. At that point
+    // `moved_headers` holds only the objects the ROOT walks and the
+    // remembered-set scan moved; everything the DRAIN promotes — i.e. every
+    // transitively-reachable object, which is most of the heap — is appended
+    // after the rebuild has already run. A parent promoted to Old mid-drain
+    // whose child stays young therefore had NO remembered-set entry: the
+    // collector's own drain rewrote its slots (the mutator barrier never
+    // fires for collector writes, so its page was never dirty), the next
+    // minor moved the child again without tracing the parent, and the
+    // parent's slot kept the previous survivor-space address. zod's schema
+    // metadata — built once at module init, promoted after 2 survivals,
+    // never written again — is exactly that shape, and the whole-heap
+    // from-space scan caught it at scheduled collection #2 of every seeded
+    // run: `owner space=Old +120 bare -> Survivor1 MISSING-REWRITE
+    // [ever_dirty=false]`, i.e. `never_dirty` — a slot no barrier ever saw.
+    //
+    // Down here `moved_headers` is complete and every slot has been
+    // rewritten to its final address, so the young-pointer classification
+    // the rebuild performs is exact rather than a from-space
+    // over-approximation. Headers still carry GC_FLAG_MARKED (clear_marks
+    // runs later), which the per-object gate requires.
+    if !collector.skip_remembering {
+        let promoted_sticky =
+            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
+        promoted_sticky.restore();
+        collector.sticky.extend(promoted_sticky);
+    }
+    if gc_verify_evacuation_enabled() {
+        let phase_start = trace_phase_start(trace);
+        let old_young_edge_verifier = verify_old_to_young_edges_covered();
+        trace_phase_record(trace, "old_young_edge_verify", phase_start);
+        if let Some(trace) = trace.as_mut() {
+            trace.old_young_edge_verifier = old_young_edge_verifier;
+        }
+    }
+    // #7803: PERRY_GC_NATIVE_SLOT_VERIFY=1 — abort on the cycle that leaves a
+    // native slot naming from-space, instead of many cycles later at the
+    // pin-latch. Placed after every rewrite pass, before the from-space flip.
+    super::roots::stack_maps_publish_rewrite_walk_stats(&native_stack_walk);
+    super::roots::stack_maps_native_slot_verify(untraced, &|addr| {
+        format!("{:?}", collector.ptrs.classify(addr).map(|ptr| ptr.kind))
+    });
     trace_phase_record(trace, "copying_nursery", phase_start);
+
+    // #7937: the attempt's own trace has finished, so the ratio it was missing
+    // now exists. Nothing has been handed to old-gen yet, so rolling back
+    // restores the pre-cycle state, and the list is exactly two long: the retag
+    // (the only physical commitment) and the marks. Everything else the attempt
+    // did is a PROVABLE no-op on a promoting cycle — after the retag no address
+    // classifies as `Nursery`, so `move_young` is unreachable and every root
+    // and slot rewrite is a no-op, and `skip_remembering` (a precondition of
+    // attempting) means no remembered-set entry was created or consumed.
+    // `remembered_set_clear()` and the from-space reset are both below here.
+    if speculate_first_cycle && promoting_in_place {
+        let holds_up =
+            super::first_cycle_promotion_holds_up(from_space_bytes, collector.live_from_bytes);
+        super::note_first_cycle_promotion(!holds_up);
+        if !holds_up {
+            unsafe {
+                collector.clear_marks();
+            }
+            crate::arena::undo_in_place_promotion_retag(&promotion);
+            return CopiedMinorAttempt::RolledBack;
+        }
+    }
 
     // Weak semantics for the copied-minor fast path. This path bypasses
     // cycle.rs's `WeakProcessing` subphase entirely, so before this block
@@ -1435,8 +1463,8 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // allocated. `process_weak_targets_from_registry` instead walks only the
     // registered holders and classifies targets with the O(1) page-metadata
     // classifier the copy already built (`collector.ptrs`) — no BTreeSet, no
-    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) is
-    // untouched and still uses the valid-pointer set it built for its trace.
+    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) now uses the
+    // same registry, with its existing valid-pointer set for liveness.
     unsafe {
         collector.repair_weak_slots();
     }
@@ -1463,7 +1491,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // young objects, check that no MARKED (survived) object references an
     // UNMARKED (about-to-be-freed) child — i.e. a live parent whose child is
     // being swept. Non-fatal; logs parent/child obj_types.
-    if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+    if crate::gc::gc_verify_mark_enabled() {
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
     }
 
@@ -1482,14 +1510,20 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = trace_phase_start(trace);
         super::note_promoted_young_capacity(promotion.reserved_bytes());
-        let promotion_stats = crate::arena::finish_in_place_promotion(promotion);
+        let promotion_stats = crate::arena::finish_in_place_promotion(
+            promotion,
+            if untraced {
+                crate::arena::PromotionLiveness::AssumeAllLive
+            } else {
+                crate::arena::PromotionLiveness::Marked
+            },
+        );
         trace_phase_record(trace, "in_place_promotion", phase_start);
         (
             crate::arena::ArenaResetStats {
                 reset_blocks: 0,
                 reusable_bytes: 0,
-                deallocated_blocks: 0,
-                deallocated_bytes: 0,
+                ..crate::arena::ArenaResetStats::default()
             },
             promotion_stats,
         )
@@ -1500,10 +1534,25 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         )
     };
     collector.stats.reset_blocks += reset.reset_blocks;
+    if untraced {
+        // The finish walk is the only census an untraced cycle has, and it is
+        // an exact one for everything except liveness: it parsed every object
+        // on every promoted block. Promotion counters come from it so the trace
+        // and the `[gc-copy-minor]` line stay comparable across both paths —
+        // ns-per-promoted-object is the acceptance measurement, and a path that
+        // reported zero promotions would read as infinitely fast.
+        collector.stats.promoted_objects = promotion_stats.objects;
+        collector.stats.in_place_promoted_objects = promotion_stats.objects;
+        collector.stats.promoted_bytes = promotion_stats.bytes;
+        collector.stats.eden_live_bytes = promotion_stats.bytes;
+        collector.live_from_bytes = promotion_stats.bytes;
+    }
     collector.stats.in_place_dead_bytes = promotion_stats
         .bytes
         .saturating_sub(promotion_stats.live_bytes);
     collector.stats.in_place_sparse_blocks = promotion_stats.sparse_blocks;
+    collector.stats.in_place_dead_blocks = promotion_stats.dead_blocks;
+    collector.stats.in_place_dead_block_bytes = promotion_stats.dead_block_bytes;
     if let Some(trace) = trace.as_mut() {
         trace.old_pages = crate::arena::old_page_summary();
     }
@@ -1525,10 +1574,27 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
 
     CONS_PINNED.with(|s| s.borrow_mut().clear());
-    // #7742: feed the policy its measurement. This runs on EVERY copying minor
-    // — promoting ones included, which is the whole reason a promoting cycle
-    // still traces — so the ratio the next decision reads is never stale.
-    super::note_young_survival(from_space_bytes, collector.live_from_bytes);
+    // #7742: feed the policy its measurement. This runs on every copying minor
+    // that TRACED — promoting ones included, which is why a promoting cycle
+    // still traces once its untraced budget is spent — so the ratio the next
+    // decision reads is never stale.
+    //
+    // #7888: an untraced cycle measured nothing. Recording its own assumption
+    // as a measurement would make the predictor a mirror — permanently 1000‰,
+    // permanently armed, and unable to notice the workload changing. It charges
+    // the untraced budget instead, and the cycle that spends that budget is the
+    // one that measures.
+    if untraced {
+        super::note_untraced_promotion(promotion_stats.bytes, promotion_stats.objects);
+    } else {
+        super::note_young_survival(from_space_bytes, collector.live_from_bytes);
+    }
+    if !untraced {
+        // An untraced cycle marked nothing, so its `moved_headers` is empty and
+        // says nothing about the next cycle's survivor count. Leave the last
+        // real observation in place rather than resetting the estimate to zero.
+        note_survivor_count_for_presizing(collector.moved_headers.len());
+    }
     collector.stats.young_survival_permille =
         super::last_young_survival_permille().unwrap_or_default();
     // A promoting cycle frees NOTHING: the dead young bytes were promoted
@@ -1556,6 +1622,12 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             reusable_bytes: reset.reusable_bytes,
             returned_bytes: reset.deallocated_bytes,
             reset_blocks: reset.reset_blocks,
+            removed_blocks: reset.removed_blocks,
+            removed_bytes: reset.removed_bytes,
+            pooled_blocks: reset.pooled_blocks,
+            pooled_bytes: reset.pooled_bytes,
+            pool_drained_blocks: 0,
+            pool_drained_bytes: 0,
             deallocated_blocks: reset.deallocated_blocks,
             deallocated_bytes: reset.deallocated_bytes,
             retained_forwarded_stub_objects: 0,
@@ -1565,6 +1637,10 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             // the collections that run NO copying minor.
             eden_live_bytes: 0,
             eden_dead_bytes: 0,
+            // The copied minor publishes its census directly (below), not
+            // through these sweep fields.
+            arena_live_bytes: 0,
+            arena_live_from_space_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
@@ -1579,26 +1655,82 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         collector.stats.copied_objects,
         collector.stats.promoted_objects,
     );
-    // #7592: promoted bytes are live by construction — credit them to the
-    // old-reclaim baseline BEFORE the pressure check below, or the check reads
-    // the stale baseline and schedules a full that is guaranteed to free
-    // nothing (see `credit_promoted_bytes_to_old_baseline`).
+    // #7592: credit the bytes this minor moved into old-gen to the old-reclaim
+    // baseline BEFORE the pressure check below, or the check reads a stale
+    // baseline and schedules a full that is guaranteed to free nothing (see
+    // `credit_promoted_bytes_to_old_baseline`).
+    //
+    // #7965: UNCONDITIONAL, including for an untraced promotion — see
+    // `credit_promoted_bytes_to_old_baseline`, which carries the argument. In
+    // one line: the baseline is the base of a GROWTH measurement, not a
+    // liveness claim, and withholding it pins that base at 0 on exactly the
+    // workloads that reach this path.
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    // Everything outside from-space retains its pre-minor accounting. Remove
+    // the from-space share of that accounting, then add back exactly the
+    // objects that survived by copy or promotion. This also preserves objects
+    // promoted by an EARLIER minor: old-page cycle summaries do not retain a
+    // complete allocated-byte census across later cycles (#7879 A/B caught
+    // `12_large_live_set` dropping ~38 MiB of prior promotions from heapUsed).
+    //
+    // #7901: subtract the LIVE from-space share, not `from_space_bytes` (the
+    // block high-water captured above for fragmentation telemetry). After a
+    // non-moving sweep the high-water still covers dead holes beside surviving
+    // objects — holes the exact census already excluded — so subtracting it
+    // charges the same garbage twice, and `saturating_sub` then quietly eats
+    // unrelated old-gen occupancy out of `heapUsed` and major-GC pacing.
+    debug_assert!(
+        pre_from_space_live_bytes <= from_space_bytes,
+        "live from-space bytes ({pre_from_space_live_bytes}) exceeded the from-space \
+         high-water ({from_space_bytes}) — the census split is inconsistent"
+    );
+    debug_assert!(
+        pre_from_space_live_bytes <= pre_collection_live_bytes,
+        "a from-space subtraction ({pre_from_space_live_bytes}) larger than the whole \
+         live census ({pre_collection_live_bytes}) would consume unrelated generations"
+    );
+    let arena_live_bytes = pre_collection_live_bytes
+        .saturating_sub(pre_from_space_live_bytes)
+        .saturating_add(collector.stats.copied_bytes)
+        .saturating_add(collector.stats.promoted_bytes);
+    // `None`: to-space is compacted by construction — Eden is empty after the
+    // flip and the new active survivor holds only the copies, so from-space
+    // live == from-space high-water.
+    crate::arena::record_arena_live_census(arena_live_bytes, None);
+    note_collection_finished_arena_occupancy();
     // The same argument one trigger over: a young generation that did not die
     // is a heap growing by LIVE data, so arena-growth pacing must not read that
-    // growth as garbage accumulating. Fed here, after the reset, so the
-    // re-baseline sees post-collection occupancy.
+    // growth as garbage accumulating. Fed after publishing the census so the
+    // re-baseline sees post-collection live allocation rather than high-water.
     note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
+    // #7929: the object denomination of the nursery constant band, fed BEFORE
+    // the tenuring loop so every number `retune_after_scavenge` derives from
+    // the effective cap (desired survivor occupancy, the cap-scale band) reads
+    // one consistent factor. Both tenuring ratios are representation-invariant
+    // by cancellation, so this only re-denominates the constant band itself.
+    super::tenuring::note_surviving_object_census(
+        collector
+            .stats
+            .copied_bytes
+            .saturating_add(collector.stats.promoted_bytes),
+        collector
+            .stats
+            .copied_objects
+            .saturating_add(collector.stats.promoted_objects),
+    );
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
         collector.stats.copied_bytes,
         collector.stats.survivor_live_bytes,
     );
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
-            "[gc-copy-minor] ran in_place={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
             collector.stats.in_place_promotion,
+            untraced,
+            super::untraced_promotion_cycles(),
+            super::untraced_promoted_objects(),
             collector.stats.in_place_promoted_blocks,
             collector.stats.in_place_dead_bytes,
             collector.stats.in_place_sparse_blocks,
@@ -1614,10 +1746,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
     }
-    Some(CopiedMinorFastPathOutcome {
+    super::scanner_profile::report_and_reset("copying_minor");
+    CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,
-    })
+    }))
 }
 
 fn finalize_dead_copied_minor_from_space_side_allocations() {

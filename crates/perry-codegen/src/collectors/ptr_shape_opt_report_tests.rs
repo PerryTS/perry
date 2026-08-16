@@ -280,6 +280,73 @@ fn module_barrier_still_enumerates_the_candidates_it_killed() {
     assert_eq!(e.rule.as_deref(), Some("rule 5 (module-wide barrier)"));
 }
 
+/// #7112: the provenance scan filters boxed and module-global bindings before
+/// the containment walk. They are still real `let o = new C()` shape
+/// candidates, so an empty report must not make them look unexamined.
+#[test]
+fn provenance_prefilters_report_boxed_and_module_global_new_bindings() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![let_c(1, "boxed"), let_c(2, "module_global")];
+    let boxed = HashSet::from([1]);
+    let module_globals = HashMap::from([(2, "module_global".to_string())]);
+
+    let session = Session::start();
+    let facts = collect_shape_proven_ptr_locals(
+        &stmts,
+        &boxed,
+        &module_globals,
+        &classes,
+        &clean_dispatch(),
+        &HashSet::new(),
+        &crate::collectors::ptr_shape_elements::ElementShapeFacts::default(),
+    );
+    let entries = session.entries();
+
+    assert!(facts.is_empty(), "neither filtered binding may be promoted");
+    assert_eq!(entries.len(), 2, "each filtered candidate is reported once");
+    let boxed_entry = entries
+        .iter()
+        .find(|e| e.name == "boxed")
+        .expect("the boxed candidate must be reported");
+    assert_eq!(boxed_entry.outcome, Outcome::Denied);
+    assert_eq!(boxed_entry.position, Position::Local);
+    assert_eq!(boxed_entry.rule.as_deref(), Some("rule 1 (provenance)"));
+    assert_eq!(
+        boxed_entry.tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+    assert!(
+        boxed_entry
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("boxed"),
+        "the denial must name the storage prefilter: {boxed_entry:?}"
+    );
+
+    let global_entry = entries
+        .iter()
+        .find(|e| e.name == "module_global")
+        .expect("the module-global candidate must be reported");
+    assert_eq!(global_entry.outcome, Outcome::Denied);
+    assert_eq!(global_entry.position, Position::Local);
+    assert_eq!(global_entry.rule.as_deref(), Some("rule 1 (provenance)"));
+    assert_eq!(
+        global_entry.tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+    assert!(
+        global_entry
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("module-global"),
+        "the denial must name the storage prefilter: {global_entry:?}"
+    );
+}
+
 /// The `.map(x => ({...}))` idiom: an allocation never bound to a local.
 /// Rule 1 can never see it, so it must be reported as an allocation site
 /// rather than silently omitted.
@@ -451,6 +518,32 @@ fn a_return_in_a_return_shape_producer_is_reported_as_served() {
         "a served return must leave the rule-1 bucket, not merely annotate it"
     );
     assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// #7170 R2 extends the same report correction to instance-method producers.
+/// A served allocation must not reappear in the rule-1 wall merely because
+/// codegen labels its region `method` rather than `function`.
+#[test]
+fn a_return_in_a_method_shape_producer_is_reported_as_served() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let guard = crate::opt_report::enter_method_region("Factory.make", true);
+    let _ = run(&stmts, &classes);
+    drop(guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].rule.as_deref(),
+        Some("rule 1 (provenance) — already served by return-shape")
+    );
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+    assert_eq!(rows[0].region, crate::opt_report::RegionKind::Method);
 }
 
 /// The same site in a function WITHOUT a return-shape fact stays an ordinary
@@ -677,19 +770,16 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
 // inherited the `return` label and, in a region flagged as a return-shape
 // producer, `Tier::Served` with it.
 //
-// The return-shape fact covers the function's RETURN VALUE. It says nothing
-// about an operand of a conditional, a `&&`, an `await` or a member base that
-// happens to sit inside the returned expression. Two consequences, both live:
+// The return-shape fact originally covered only the function's direct RETURN
+// VALUE. #7170 R2 additionally consumes fresh, agreeing conditional and
+// logical result allocations. It still says nothing about a conditional's
+// condition, a consumed short-circuit operand, an `await` or a member base
+// that happens to sit inside the returned expression.
 //
-//   * the `return` bucket over-counts — and 323 of it was published as R1's
-//     ceiling on #7170;
-//   * servedness is decided by a string that means the wrong thing. Today no
-//     production region can hit that (`producer_return_class` admits only a
-//     bare `Expr::New` or `Expr::LocalGet` return, so a ternary/await/binary
-//     return yields no fact at all) — but that is a distant invariant in
-//     another file, and R2 widening the producer side would silently turn this
-//     into a wrong `Served` row. These tests force the producer flag on so the
-//     classifier is tested on its own terms rather than on that invariant.
+// R0 separated the syntactic bucket from the servedness bit precisely so R2
+// could make that distinction. These tests force the producer flag on so the
+// classifier is tested on its own terms rather than passing only because a
+// different producer-side guard happens to reject the region.
 
 fn ternary(a: Expr, b: Expr) -> Expr {
     Expr::Conditional {
@@ -716,10 +806,10 @@ fn c_classes() -> Class {
     class_with_fields("C", &["x"])
 }
 
-/// `return cond ? new C() : new C()` — two operands of a conditional, neither
-/// of which is the function's return value.
+/// `return cond ? new C() : new C()` — the arms retain their honest syntactic
+/// bucket, but R2 now consumes both allocations to issue the producer fact.
 #[test]
-fn a_conditional_arm_under_a_return_is_not_a_return_position() {
+fn a_conditional_result_arm_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
@@ -734,17 +824,54 @@ fn a_conditional_arm_under_a_return_is_not_a_return_position() {
             Some("return"),
             "a conditional arm is not the returned value"
         );
-        assert_ne!(
+        assert_eq!(
             e.tier,
             Some(crate::opt_report::Tier::Served),
-            "the return-shape fact does not cover a conditional arm"
+            "R2 consumes each fresh conditional result arm"
         );
     }
 }
 
-/// `return flag && new C()` — a binary operand.
+/// The condition is evaluated but is not one of the values returned. Keep its
+/// allocation unserved while both result arms are served; otherwise the R2
+/// walker has merely reintroduced R0's "every nested operand is a return"
+/// defect under a new boolean.
 #[test]
-fn a_logical_operand_under_a_return_is_not_a_return_position() {
+fn a_conditional_condition_is_not_a_return_shape_source() {
+    let c = c_classes();
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(Expr::Conditional {
+        condition: Box::new(new_c()),
+        then_expr: Box::new(new_c()),
+        else_expr: Box::new(new_c()),
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier == Some(crate::opt_report::Tier::Served))
+            .count(),
+        2,
+        "only the two result arms feed the return-shape fact"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier != Some(crate::opt_report::Tier::Served))
+            .count(),
+        1,
+        "the conditional's allocation-valued condition stays unserved"
+    );
+}
+
+/// `return true && new C()` — the right operand is the only value this
+/// expression can return, so the logical-return proof consumes it. It keeps
+/// the honest operand-position label rather than masquerading as a bare
+/// return.
+#[test]
+fn a_logical_result_operand_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
@@ -758,7 +885,48 @@ fn a_logical_operand_under_a_return_is_not_a_return_position() {
     let rows = alloc_rows(&entries);
     assert_eq!(rows.len(), 1);
     assert_ne!(rows[0].alloc_context.as_deref(), Some("return"));
-    assert_ne!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+}
+
+/// A fresh left operand is always truthy. In `new C() || new D()` it is the
+/// returned value and the right allocation is consumed by short-circuiting.
+/// Marking both served would put a structurally unreachable site back into the
+/// population R0 corrected.
+#[test]
+fn a_consumed_logical_operand_is_not_a_return_shape_source() {
+    let c = c_classes();
+    let d = class_with_fields("D", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    classes.insert("D".to_string(), &d);
+    let new_d = Expr::New {
+        class_name: "D".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let stmts = vec![Stmt::Return(Some(Expr::Logical {
+        op: perry_hir::LogicalOp::Or,
+        left: Box::new(new_c()),
+        right: Box::new(new_d),
+    }))];
+
+    let entries = run_as_producer(&stmts, &classes);
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.tier == Some(crate::opt_report::Tier::Served))
+            .count(),
+        1,
+        "only the allocation that can become the logical result is served"
+    );
+    let served = rows
+        .iter()
+        .find(|e| e.tier == Some(crate::opt_report::Tier::Served))
+        .expect("one served allocation");
+    assert!(served.name.contains("C"));
 }
 
 /// `return await new C()` — the awaited operand is not the returned value

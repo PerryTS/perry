@@ -410,6 +410,7 @@ fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> 
 /// already compile-gated. Now it produces nothing, which is the same amount of
 /// information and looks far more like success. The trace dump uses this to say
 /// so out loud rather than writing an empty file.
+#[cfg(feature = "diagnostics")]
 pub(crate) fn no_sites_were_instrumented() -> bool {
     registry().sites.is_empty()
 }
@@ -764,49 +765,17 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
             return (0, 0, gc_type);
         }
         let class_id = (*ptr).class_id;
-        // #6804: plain objects canonicalize the token on the stable
-        // ShapeId. Shape-cached literals are stamped at birth; anything
-        // else is stamped HERE on first observation (self-healing), so one
-        // logical shape can never split into a pre-stamp address token and
-        // a post-stamp id token within a site. Class instances keep the
-        // keys-address token (their `parent_class_id` is inheritance data).
-        let shape = if class_id == 0 {
-            let stamp = (*ptr).parent_class_id;
-            if crate::object::shapes::is_shape_id(stamp) {
-                stamp as usize
-            } else if crate::regex::regex_header_has_magic(
-                addr as *const crate::regex::RegExpHeader,
-            ) {
-                // RegExpHeader aliases GC_TYPE_OBJECT with a different
-                // layout — never write through the ObjectHeader view; keep
-                // the legacy (equality-only) address token.
-                (*ptr).keys_array as usize
-            } else {
-                let keys = (*ptr).keys_array;
-                if let Some(keys_header) =
-                    crate::value::addr_class::try_read_gc_header(keys as usize)
-                {
-                    if keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
-                        || keys_header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
-                    {
-                        let id =
-                            crate::object::shapes::shape_id_for_keys_ensure(keys, (*keys).length);
-                        if id != 0 {
-                            (*(ptr as *mut ObjectHeader)).parent_class_id = id;
-                            id as usize
-                        } else {
-                            keys as usize
-                        }
-                    } else {
-                        keys as usize
-                    }
-                } else {
-                    keys as usize
-                }
-            }
-        } else {
-            (*ptr).keys_array as usize
-        };
+        // #8067 rung 3: every genuine ObjectHeader uses one token domain.
+        // Runtime allocators birth-stamp objects; the synchronization call is
+        // a defensive self-heal for old/synthetic callers and never falls back
+        // to a keys pointer.
+        let mut shape = crate::object::shapes::object_shape_id(ptr);
+        if shape == 0 {
+            shape = crate::object::shapes::synchronize_object_shape_descriptor(
+                ptr as *mut ObjectHeader,
+            );
+        }
+        let shape = shape as usize;
         (shape, class_id, gc_type)
     }
 }
@@ -1698,15 +1667,13 @@ fn object_key_matches_field(
     }
     unsafe {
         let obj = object_addr as *mut ObjectHeader;
-        let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
-        if field_index >= alloc_limit {
+        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
+            return false;
+        };
+        if field_index >= descriptor.live_inline_slot_count {
             return false;
         }
-        let keys = (*obj).keys_array;
-        // #6804: `shape_addr` is an opaque TOKEN (a stable ShapeId for
-        // stamped plain objects), not necessarily the keys address — the
-        // actual contract is carried by the key/slot validation below.
+        let keys = descriptor.keys as usize as *const ArrayHeader;
         if keys.is_null() {
             return false;
         }
@@ -2118,6 +2085,17 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         );
     }
 
+    // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
+    // buffers with NO integer-indexed own properties — node answers `undefined`
+    // for `dv[0]`. Asked ABOVE the byte arm, which answers unconditionally.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_addr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            return crate::buffer::buffer_get_own_prop(raw_addr, &key)
+                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+        }
+    }
     if crate::buffer::is_registered_buffer(raw_addr) {
         let Some(index) = finite_nonnegative_i32_index(index) else {
             return f64::from_bits(TAG_UNDEFINED);
@@ -2446,6 +2424,16 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
+    // #8149: an index store on an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` creates an ordinary own property, it does not write a byte.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_addr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            crate::buffer::buffer_set_own_prop(raw_addr, &key, value);
+            return receiver;
+        }
+    }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if let Some(index) = finite_nonnegative_i32_index(index) {
             crate::buffer::js_buffer_set(

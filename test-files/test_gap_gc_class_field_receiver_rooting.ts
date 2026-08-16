@@ -18,22 +18,19 @@
 //    IR, so it protects the shadow (`PERRY_RS4GC=0`) and native
 //    (`PERRY_RS4GC=1`, default) backends identically.
 //  * `object` a compound receiver — a class-field READ, `this.target.x = …`
-//    (`Runner.run` below) — FALSE. The receiver register is the `phi` result
-//    of a class-field GET, not a direct shadow-slot load, so `root_reload`
-//    has nothing to re-derive from, and it is reused unreloaded after the
-//    RHS's allocating call in the emitted IR (confirmed by hand). This shape
-//    stays genuinely open — see the note in `property_set.rs` and
-//    changelog.d/ for why it is not fixed in the same change (the fix is a
-//    measured-cost one on a hot path, the finding is not).
+//    (`Runner.run` below) — `root_reload` cannot help because the receiver is
+//    the `phi` result of a class-field GET, not a direct root-slot load. #7640
+//    now gives only this shape an explicit operand root when the RHS can
+//    collect. Bare locals / `this` keep the zero-extra-root path above, and a
+//    compound receiver with an inert RHS also emits no root traffic.
 //
 // This test is the permanent corpus member for both halves: it exercises the
 // receiver-then-allocating-value shape on plain field (raw-f64 and boxed),
 // an accessor (`set` method) dispatch, and the compound `this.target.field =`
 // shape, under enough allocation pressure (`PERRY_GC_MOVING_LOOP_POLLS=1`
 // back-edge polls) that a moving minor is reachable inside the RHS, and
-// asserts the stored values are never stale. The safe arms pin the finding;
-// the `Runner.run` arm keeps the open shape in the corpus for when an
-// instrument that can see it exists.
+// asserts the stored values are never stale. The direct arms pin the existing
+// zero-cost repair; `Runner.run` pins the explicit compound-receiver repair.
 //
 // Verified directly against `scripts/gc_root_dominance_check.py` on this
 // exact shape (both `--stale-registers` and `--statepoints`, both lowerings):

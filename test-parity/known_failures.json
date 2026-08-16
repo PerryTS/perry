@@ -52,12 +52,6 @@
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #3088 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. node:perf_hooks cluster (#3088/#3008/#3010/#3011) module-inventory gap."
   },
-  "test_gap_stream_tee_tick_parity": {
-    "issue": "6477",
-    "added": "2026-07-20",
-    "category": "bug-open",
-    "reason": "Re-verified still failing 2026-08-07 (#7582 audit); #6477 is the one tracking issue in this file that is still OPEN. Web Streams tee cold-start fires one extra microtask tick before the first branch read on a pre-buffered+closed source (t2 vs Node's t1). Delicate cadence calibration (post-#6657 tee/pipe tick parity); a naive fix risks the Next.js Flight byte-parity #6657 tuned. Deferred to the streams pull-ordering work in #6477."
-  },
   "test_gap_v8_2_3680plus": {
     "issue": "3680",
     "added": "2026-07-04",

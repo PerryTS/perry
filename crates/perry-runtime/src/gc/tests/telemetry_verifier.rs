@@ -27,37 +27,129 @@ fn complete_budgeted_cycle_trace() -> serde_json::Value {
     take_test_last_gc_trace_json().expect("budgeted GC completion should emit test trace JSON")
 }
 
+/// Verify the ordinary-pause contract of a budgeted cycle's trace.
+///
+/// # Why this does not assert elapsed microseconds (#7956)
+///
+/// It used to: every included step had to satisfy
+/// `elapsed_pause_us <= soft_pause_target_us`. That assertion failed ~2 runs in
+/// 100 of `cargo test --release -p perry-runtime` on a loaded host — and it
+/// failed for a reason no change to the GC could fix, because the quantity it
+/// bounds is not one the code under test controls:
+///
+///   * `GcPauseBudget`'s own definition is "hard work-unit limit plus a **soft
+///     pause target for telemetry**". `pause_us` is an annotation on the
+///     trace, not a guarantee the stepper offers;
+///   * `GcCycle::step` runs a phase for `budget.work_units` and measures
+///     `elapsed` *afterwards*. No code path anywhere consults the clock to
+///     decide when a step ends, so `elapsed <= pause_us` is not a
+///     postcondition the collector can establish — it is a property of the
+///     host;
+///   * these fixtures drive the cycle with `js_gc_step_work_units(1, …)`, the
+///     smallest step that exists. When one work unit takes 4.9 ms there is no
+///     smaller step the pacer could have chosen, so the failure carries no
+///     information about pacing at all.
+///
+/// The second arm was worse than uninformative: `within_soft_pause_target` is
+/// computed in `pause_step_json` as `elapsed_us <= target`, so
+/// "did not self-report within_soft_pause_target" could only fire when the
+/// first check had already fired. Two assertions, one bit — the presence-check
+/// shape, not a proof.
+///
+/// What replaces it is the part of the contract that IS deterministic: an
+/// ordinary budgeted step is bounded in **work units** (the unit the trace
+/// itself names as `budget_unit`), it is never labelled unbounded, its
+/// self-report agrees with the numbers printed beside it, and the cycle-level
+/// pause aggregate is the max of the per-step figures it summarises. Elapsed
+/// microseconds stay in the trace and in these messages as a diagnostic; they
+/// are no longer a verdict.
 fn verify_ordinary_pause_budget(event: &serde_json::Value) -> Result<(), String> {
-    let soft_target = event["pause_budget"]["soft_pause_target_us"]
-        .as_u64()
-        .ok_or_else(|| "missing pause_budget.soft_pause_target_us".to_string())?;
     let steps = event["pause_steps"]
         .as_array()
         .ok_or_else(|| "missing pause_steps".to_string())?;
     if steps.is_empty() {
         return Err("ordinary cycle emitted no pause_steps".to_string());
     }
+
+    let mut included = 0usize;
+    let mut max_elapsed = 0u64;
     for (index, step) in steps.iter().enumerate() {
-        let include = step["budget"]["ordinary_pause_stats_include"]
-            .as_bool()
-            .unwrap_or(false);
-        if !include {
-            continue;
-        }
         let elapsed = step["elapsed_pause_us"]
             .as_u64()
             .ok_or_else(|| format!("pause_steps[{index}] missing elapsed_pause_us"))?;
-        if elapsed > soft_target {
+        max_elapsed = max_elapsed.max(elapsed);
+
+        if !step["budget"]["ordinary_pause_stats_include"]
+            .as_bool()
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        included += 1;
+
+        // An ordinary step must be BOUNDED. A `null` work budget is how the
+        // trace spells "this path is intentionally unbounded", and a step
+        // carrying that label while counted in ordinary pause stats is the
+        // real pacing defect the elapsed check was reaching for.
+        let work_budget = step["budget"]["configured_work_budget"]
+            .as_u64()
+            .ok_or_else(|| {
+                format!(
+                    "pause_steps[{index}] is counted in ordinary pause stats but \
+                     carries no configured_work_budget — an ordinary step must \
+                     never run unbounded (elapsed {elapsed}us)"
+                )
+            })?;
+        let applied = step["applied_work_units"].as_u64().ok_or_else(|| {
+            format!("pause_steps[{index}] missing applied_work_units (elapsed {elapsed}us)")
+        })?;
+        if applied > work_budget {
             return Err(format!(
-                "pause_steps[{index}] elapsed {elapsed}us exceeded soft target {soft_target}us"
+                "pause_steps[{index}] applied {applied} work units over a \
+                 configured budget of {work_budget} (elapsed {elapsed}us)"
             ));
         }
-        if step["budget"]["within_soft_pause_target"].as_bool() != Some(true) {
+
+        // The self-report must agree with the numbers reported beside it. This
+        // is a coherence check on the telemetry, not a claim about the host:
+        // it fires when the flag is computed against the wrong step or the
+        // wrong progress kind's budget, and never because the box was busy.
+        let soft_target = step["budget"]["soft_pause_target_us"]
+            .as_u64()
+            .ok_or_else(|| format!("pause_steps[{index}] missing soft_pause_target_us"))?;
+        let self_report = step["budget"]["within_soft_pause_target"].as_bool();
+        if self_report != Some(elapsed <= soft_target) {
             return Err(format!(
-                "pause_steps[{index}] did not self-report within_soft_pause_target"
+                "pause_steps[{index}] self-reported within_soft_pause_target = \
+                 {self_report:?}, but elapsed {elapsed}us against a soft target \
+                 of {soft_target}us says {}",
+                elapsed <= soft_target
             ));
         }
     }
+
+    if included == 0 {
+        return Err(
+            "ordinary cycle emitted no step counted in ordinary pause stats — \
+             the pause budget under test never ran"
+                .to_string(),
+        );
+    }
+
+    // The cycle-level aggregate must summarise the very steps printed in the
+    // same event (#7025's shape: a counter that sums something other than what
+    // it names). Deterministic — both sides come out of `record_pause_step`.
+    let reported_max = event["pause_budget"]["max_observed_step_pause_us"]
+        .as_u64()
+        .ok_or_else(|| "missing pause_budget.max_observed_step_pause_us".to_string())?;
+    if reported_max != max_elapsed {
+        return Err(format!(
+            "pause_budget.max_observed_step_pause_us = {reported_max}us but the \
+             maximum elapsed_pause_us over the {} reported steps is {max_elapsed}us",
+            steps.len()
+        ));
+    }
+
     Ok(())
 }
 
@@ -328,26 +420,126 @@ fn emergency_full_trace_is_excluded_from_ordinary_pause_stats() {
     drop(trigger_guard);
 }
 
-#[test]
-fn verifier_rejects_over_budget_ordinary_step() {
-    let event = serde_json::json!({
+/// A well-formed ordinary trace, as a base for the sabotage cases below.
+///
+/// Deliberately over the soft pause target (`elapsed_pause_us` 4936 against a
+/// 2000 us target — the figure from #7956's real failure), with a self-report
+/// that says so. A slow host is not a defect, and this asserts that directly:
+/// the shape that used to fail 2 runs in 100 must now VERIFY.
+fn coherent_ordinary_trace() -> serde_json::Value {
+    serde_json::json!({
         "pause_budget": {
-            "soft_pause_target_us": 10,
+            "soft_pause_target_us": 2000,
+            "configured_work_budget": 64,
+            "max_observed_step_pause_us": 4936,
         },
         "pause_steps": [
             {
-                "elapsed_pause_us": 11,
+                "applied_work_units": 1,
+                "elapsed_pause_us": 4936,
                 "budget": {
+                    "configured_work_budget": 64,
+                    "soft_pause_target_us": 2000,
                     "ordinary_pause_stats_include": true,
                     "within_soft_pause_target": false,
                 },
             },
+            {
+                "applied_work_units": 1,
+                "elapsed_pause_us": 12,
+                "budget": {
+                    "configured_work_budget": 64,
+                    "soft_pause_target_us": 2000,
+                    "ordinary_pause_stats_include": true,
+                    "within_soft_pause_target": true,
+                },
+            },
         ],
-    });
+    })
+}
 
+/// #7956: an over-target step on a loaded host is REPORTED, not failed. Kept as
+/// a test rather than a comment so the decision cannot be reverted silently.
+#[test]
+fn verifier_accepts_a_slow_but_coherent_ordinary_step() {
+    assert_eq!(
+        verify_ordinary_pause_budget(&coherent_ordinary_trace()),
+        Ok(())
+    );
+}
+
+/// The work-unit budget is the HARD limit (`GcPauseBudget`'s own wording), so
+/// a step that applied more work than it was granted is a real defect.
+#[test]
+fn verifier_rejects_a_step_over_its_work_budget() {
+    let mut event = coherent_ordinary_trace();
+    event["pause_steps"][1]["applied_work_units"] = serde_json::json!(65);
     assert!(
-        verify_ordinary_pause_budget(&event).is_err(),
-        "synthetic over-budget ordinary step should fail verifier"
+        verify_ordinary_pause_budget(&event)
+            .unwrap_err()
+            .contains("applied 65 work units"),
+        "a step exceeding its configured work budget must fail the verifier"
+    );
+}
+
+/// `null` is how the trace spells "unbounded". An ordinary budgeted step
+/// carrying that label is the pacing defect the old elapsed check was aimed at.
+#[test]
+fn verifier_rejects_an_unbounded_ordinary_step() {
+    let mut event = coherent_ordinary_trace();
+    event["pause_steps"][0]["budget"]["configured_work_budget"] = serde_json::Value::Null;
+    assert!(
+        verify_ordinary_pause_budget(&event)
+            .unwrap_err()
+            .contains("must never run unbounded"),
+        "an ordinary step with no work budget must fail the verifier"
+    );
+}
+
+/// The self-report must track the numbers printed beside it — a flag computed
+/// against the wrong step or the wrong progress kind's budget is a telemetry
+/// bug that no timing threshold would catch.
+#[test]
+fn verifier_rejects_an_incoherent_pause_self_report() {
+    let mut event = coherent_ordinary_trace();
+    event["pause_steps"][0]["budget"]["within_soft_pause_target"] = serde_json::json!(true);
+    assert!(
+        verify_ordinary_pause_budget(&event)
+            .unwrap_err()
+            .contains("self-reported within_soft_pause_target"),
+        "a self-report contradicting elapsed vs target must fail the verifier"
+    );
+}
+
+/// #7025's shape: an aggregate that summarises something other than what it
+/// names.
+#[test]
+fn verifier_rejects_a_pause_aggregate_that_misses_its_own_steps() {
+    let mut event = coherent_ordinary_trace();
+    event["pause_budget"]["max_observed_step_pause_us"] = serde_json::json!(12);
+    assert!(
+        verify_ordinary_pause_budget(&event)
+            .unwrap_err()
+            .contains("max_observed_step_pause_us"),
+        "the cycle-level pause max must equal the max over the reported steps"
+    );
+}
+
+/// The subject-was-live check: a trace whose every step is excluded from
+/// ordinary pause stats proves nothing about the ordinary pause budget, so the
+/// verifier must not report success for it.
+#[test]
+fn verifier_rejects_a_trace_with_no_ordinary_step() {
+    let mut event = coherent_ordinary_trace();
+    for index in 0..2 {
+        event["pause_steps"][index]["budget"]["ordinary_pause_stats_include"] =
+            serde_json::json!(false);
+    }
+    assert!(
+        verify_ordinary_pause_budget(&event)
+            .unwrap_err()
+            .contains("never ran"),
+        "a verifier that passes when its subject never ran is not a gate"
     );
 }
 
@@ -384,29 +576,4 @@ fn test_pause_ring_records_max_and_window() {
     assert!(max_us >= 900);
     assert!(recent_max >= GC_RECENT_PAUSE_WINDOW as u64);
     assert!(recent_avg > 0 && recent_avg <= recent_max);
-}
-
-/// #6080a: `record_collection` is the single per-collection funnel, and the
-/// read-PIC epoch bump rides it — a completed collection may have recycled a
-/// keys-array address some `@perry_ic_N` cache still holds as a raw pointer
-/// token, so every collection must strand those primes. Asserting >= (not ==)
-/// keeps the test robust against concurrent collections on other test threads
-/// (the epoch is process-global by design).
-#[test]
-fn test_record_collection_bumps_read_pic_epoch() {
-    use std::sync::atomic::Ordering;
-    let before = crate::object::PERRY_IC_EPOCH.load(Ordering::Relaxed);
-    assert!(
-        before >= 1,
-        "epoch starts at 1 so zeroinitializer never hits"
-    );
-    GC_STATS.with(|stats| {
-        stats.borrow_mut().record_collection(0, 1);
-    });
-    let after = crate::object::PERRY_IC_EPOCH.load(Ordering::Relaxed);
-    assert!(
-        after > before,
-        "every completed collection must advance PERRY_IC_EPOCH \
-         (before={before}, after={after})"
-    );
 }

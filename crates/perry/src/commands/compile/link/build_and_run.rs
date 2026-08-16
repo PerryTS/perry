@@ -92,8 +92,7 @@ pub(crate) fn build_and_run_link(
              (glibc) Linux target, or drop perry/ui for a headless musl build."
         );
     }
-    let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
-        || (target.is_none() && cfg!(target_os = "windows"));
+    let is_windows = is_windows_target(target);
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
     let is_cross_visionos = is_visionos && !cfg!(target_os = "macos");
@@ -928,7 +927,7 @@ pub(crate) fn build_and_run_link(
             cmd.arg("-lssl").arg("-lcrypto");
         }
     } else if is_windows {
-        windows_link::add_system_libs(&mut cmd);
+        windows_link::add_system_libs(&mut cmd, target);
         windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
     } else {
         // macOS frameworks for the stdlib (rustls platform verifier /
@@ -1139,6 +1138,14 @@ pub(crate) fn build_and_run_link(
                 OutputFormat::Json => {}
             }
         } else {
+            let windows_rust_triple = windows_target_arch(target)
+                .map(WindowsTargetArch::rust_triple)
+                .unwrap_or("x86_64-pc-windows-msvc");
+            let windows_ui_build_cmd =
+                format!("cargo build --release -p perry-ui-windows --target {windows_rust_triple}");
+            let windows_winui_build_cmd = format!(
+                "cargo build --release -p perry-ui-windows-winui --target {windows_rust_triple}"
+            );
             let (lib_name, build_cmd) = if is_watchos {
                 (
                     "libperry_ui_watchos.a",
@@ -1182,13 +1189,10 @@ pub(crate) fn build_and_run_link(
             } else if matches!(target, Some("windows-winui")) {
                 (
                     "perry_ui_windows_winui.lib",
-                    "cargo build --release -p perry-ui-windows-winui --target x86_64-pc-windows-msvc",
+                    windows_winui_build_cmd.as_str(),
                 )
             } else if is_windows {
-                (
-                    "perry_ui_windows.lib",
-                    "cargo build --release -p perry-ui-windows --target x86_64-pc-windows-msvc",
-                )
+                ("perry_ui_windows.lib", windows_ui_build_cmd.as_str())
             } else {
                 (
                     "libperry_ui_macos.a",
