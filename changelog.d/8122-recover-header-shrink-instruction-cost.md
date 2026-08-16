@@ -146,6 +146,24 @@ arms, `otool` diffs) says otherwise:
   live (`copied_objects` 237k per cycle on `retain` under forced evacuation;
   87 `[gc-fromspace-protect]` retire lines on `churn`).
 
+#### A crash the shrink exposed, found by the gap suite
+
+`fs::extract_string_ptr` accepted ANY non-finite NaN-box with a plausible
+payload — no `STRING_TAG` test — so `mkdir_mode_from_options`'s
+`string_value(options)` read a `StringHeader` off the **options object**. On
+`main` that misread `byte_len` from `ObjectHeader::class_id` (a small number:
+a harmless one-byte garbage string that `parse_mode_string` rejected). With
+the #8113 layout the same read lands on the ShapeId (`0x8000_0000` and up),
+`from_utf8_lossy` walks 2 GB, and every `fs.mkdirSync(dir, { recursive: true
+})` segfaulted — `test_gap_fs_fd_2749`, `test_gap_fs_errprop_2735plus` and
+`test_gap_fs_errprop2_2745plus` CRASH on the held #8122. Fixed at the source:
+the pointer read is now preceded by the tag that says what it points at
+(heap `STRING_TAG` only); `string_value` and `stream::bytes_from_value` go
+through `str_bytes_from_jsvalue` so inline SSO strings are read correctly
+instead of as garbage pointers; `numeric_fd_value` uses `is_any_string`.
+The gap suite (564 tests, all against Node 26.5.1) is otherwise at parity
+with `main`: every remaining mismatch reproduces on `main`'s binary.
+
 #### Not closed here
 
 * `asyncpipe` peak footprint +2.8% at 120 batches (+7.7% at 1200). The GC
