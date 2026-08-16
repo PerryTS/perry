@@ -8,31 +8,34 @@ The release is now real, with pooled reuse:
 - Codegen lowers it to `js_box_release` / `js_i32_box_release` / `js_bool_box_release`, mirroring `emit_preallocate_boxes`' kind selection, through local slots or closure-capture slots.
 - The runtime release clears the cell, de-registers it, evicts the positive-cache slot, and parks the address in a per-kind quarantine that drains into a free pool at the outermost microtask-pump exit once the task queue is empty; `js_*box_alloc*` reuses pooled cells before calling `std::alloc`. Cell memory is never handed back to the allocator, so "was a box" can never become "is another object" — perry#4898 and #7906 survive unchanged. A stray duplicate resume of a terminal activation observes parked terminal values (`__gen_done`=true, `__gen_state`=-1) and takes byte-for-byte the pre-release short-circuit path; by the time the pool is eligible for reuse the task queue has drained, so no such resume can exist.
 
-**Measured on `07c8040bf`** (i.e. after #8204's header shrink + GC pacing change and #8196's side-table prunes, neither of which moved this residue). `asyncpipe` at BATCHES=120/600/1200, `PERRY_GC_DIAG=1` `[box-stats]`:
+**Measured on `b8d32ab19`** with both arms rebuilt at that commit (the earlier run on `07c8040bf` reproduced within 0.3 MB on every row, so #8204's header shrink and GC pacing change, #8196's side-table prunes, and #8211/#8212/#8162 none of them move this residue). `asyncpipe` at BATCHES=120/600/1200, `PERRY_GC_DIAG=1` `[box-stats]`:
 
 | BATCHES | allocs | releases | resident cells | peak RSS before | peak RSS after |
 |--:|--:|--:|--:|--:|--:|
-| 120 | 192,868 | 192,868 | **65,915** | 40.9 MB | 41.5 MB |
-| 600 | 964,228 | 964,228 | **65,915** | 83.2 MB | 58.6 MB |
-| 1200 | 1,928,428 | 1,928,428 | **65,915** | 148.9 MB | 79.7 MB |
+| 120 | 192,868 | 192,868 | **65,915** | 41.0 MB | 41.8 MB |
+| 600 | 964,228 | 964,228 | **65,915** | 83.3 MB | 58.8 MB |
+| 1200 | 1,928,428 | 1,928,428 | **65,915** | 149.0 MB | **79.9 MB** |
 
 Allocations grow exactly linearly (1,607 cells/batch) and `releases == allocs` at every size, while the malloc-side residue `allocs - pool_reuses` is a **constant 65,915** across a 10× range — one inter-`tick()` cascade's working set, slope zero. Both registries are empty at exit. Baseline peak RSS grows ~100 KB/batch; `vmmap` Memory Tag 240 (mimalloc) resident falls 141.1 MB → 71.6 MB at BATCHES=1200 (dirty 104.5 → 57.2 MB), which is the whole of the RSS delta. Program stdout is byte-identical at all three sizes.
 
-Corpus, best-of-5, instructions and peak RSS together (same-binary run-to-run spread on this host is ±0.42% instructions / ±0.15% RSS, so every positive below is at or under the noise floor):
+Corpus, best-of-5, instructions and peak RSS together, both arms rebuilt at `b8d32ab19`. All 10 rows produce byte-identical stdout across the arms.
 
 | row | instructions | peak RSS |
 |---|--:|--:|
-| **asyncpipe_big** | **−10.38%** | **−42.06%** (141.4 → 81.9 MB) |
-| pipeline | −4.07% | ±0.00% |
-| asyncpipe | −0.96% | −2.41% |
-| iso_STRWORK / streq | −0.15% | −0.35% / +0.13% |
-| interp | −0.07% | +0.15% |
-| churn_alloc | −0.07% | −0.33% |
-| fib35 | −0.03% | −0.90% |
-| shapes | +0.11% | −0.29% |
-| iso_SUMLOOP | +0.27% | −0.48% |
+| **asyncpipe_big** | **−10.73%** | **−42.01%** (141.3 → 81.9 MB) |
+| asyncpipe | −1.35% | −2.34% |
+| streq | −0.20% | +0.44% |
+| interp | −0.15% | +0.05% |
+| pipeline | −0.12% | +0.40% |
+| shapes | −0.11% | +0.24% |
+| churn_alloc | +0.01% | +0.40% |
+| iso_SUMLOOP | +0.07% | +0.96% |
+| fib35 | +0.08% | +0.62% |
+| iso_STRWORK | +0.09% | +0.55% |
 
-The instruction win is not incidental: not growing `BOX_REGISTRY` without bound removes the rehash traffic its own doc comment already blamed for ~3% CPU on promise-heavy workloads. All 10 rows produce byte-identical stdout across the two arms.
+Instructions are flat everywhere outside the async rows (|Δ| ≤ 0.20%, inside the ±0.42% same-binary spread). The instruction win on the target row is not incidental: not growing `BOX_REGISTRY` without bound removes the rehash traffic its own doc comment already blamed for ~3% CPU on promise-heavy workloads.
+
+**The RSS positives are real, and they are a fixed cost, not a scaling one.** At 9 reps the deltas exceed the 0.07–0.31% run-to-run spread: fib35 +32 KB, churn_alloc +96 KB, iso_SUMLOOP +161 KB. A `hello.ts` that runs no async at all pays **+80 KB** (5,136 → 5,216 KB, zero spread on the base arm), so this is a constant per-process cost paid at startup, not something that grows with the workload. It is *not* code size — the linked binary grows 72–80 **bytes** and `__TEXT` is unchanged — nor the pool data itself, which is 144 bytes of empty `Vec` headers; at 16 KB pages it is five pages of first-touch. Weighed plainly: every program pays ≲0.16 MB, and the target row saves 59.4 MB, a ratio of roughly 700:1. Reported rather than rounded away, because "strictly not worse on any other row" is not literally true.
 
 The GC ratchet is unmoved: an A/B of both arms over all 14 probes compares 126 gated (probe, metric) cells — retention, evacuation and promotion counters — with **0 differences** and correctness `pass` on every probe in both arms (non-vacuous: `copied_objects` and `promoted_objects` are non-zero on several rows).
 
