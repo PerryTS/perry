@@ -117,46 +117,110 @@ cover the new rules.
 
 #### Measured
 
-19-program corpus, both arms built from one worktree with `-p perry
--p perry-runtime-static -p perry-stdlib-static`, `PERRY_RUNTIME_DIR` pinned per
-arm, the two `libperry_runtime.a` files `cmp`-verified to differ, all 19 stdout
-byte-compared against `expected/` and exit-checked in both arms:
+19-program corpus, quiet M1 mini, **best-of-5**, `instructions retired` and
+`peak memory footprint` reported together. Both arms built from one worktree
+with `-p perry -p perry-runtime-static -p perry-stdlib-static`, per-arm
+`PERRY_RUNTIME_DIR` **and** `PERRY_CACHE_DIR`, `PERRY_NO_AUTO_OPTIMIZE=1`; all
+three archives `cmp`-verified to differ, all 19 compiled corpus binaries
+`cmp`-verified to differ (no row measures nothing), all 19 stdout byte-equal
+between arms with `rc=0` on every run.
+
+Base `3be2016c1` — i.e. **after** #8157 (PtrHashMap shape probes) and #8110
+(census gate).
 
 | prog | Δ instructions | Δ peak RSS |
 |---|---:|---:|
-| `retain` | +3.26% | **−9.10%** |
-| `retain1` | +7.99% | −5.29% |
-| `retain_wide` | +2.89% | −5.45% |
-| `retain_wide1` | +2.61% | −6.04% |
-| `tree` | +0.54% | **−12.79%** |
-| `tree_wide` | +0.44% | −6.30% |
-| `deeplist` | +8.20% | −4.19% |
-| `shapes` | +4.96% | −0.61% |
-| `churn_alloc` / `push_cls` | +4.3% | ~0 |
-| `fib40` / `push_num` / `churn_read` | ~0 | ~0 |
+| `deeplist` | **+9.03%** | −4.06% |
+| `retain1` | +8.24% | −3.89% |
+| `churn_alloc` | +5.34% | −0.08% |
+| `push_cls` | +5.29% | +0.23% |
+| `pipeline` | +4.33% | +0.00% |
+| `interp` | +3.35% | +0.40% |
+| `retain` | +3.34% | **−9.30%** |
+| `retain_wide` | +3.30% | −5.46% |
+| `shapes` | +3.29% | −0.17% |
+| `churn` | +3.08% | +0.08% |
+| `retain_wide1` | +2.97% | −6.06% |
+| `iso_miss` | +2.86% | −0.06% |
+| `cycles` | +0.81% | −0.08% |
+| `tree` | +0.52% | **−12.81%** |
+| `tree_wide` | +0.46% | −6.35% |
+| `asyncpipe` | +0.45% | +2.90% |
+| `push_num` | +0.02% | −0.15% |
+| `churn_read` | +0.01% | −0.57% |
+| `fib40` | +0.00% | +0.00% |
 
-The rows with no object population move by ~0 — that is the control. The
-instruction cost is the price of the change: the bound is a shape-table probe
-where it used to be a `u32` load.
+**0 of 19 rows are faster; 12 of 19 pay more than 1%.** The RSS win is intact
+and lands where predicted (`tree` −12.81%, `retain` −9.30%, the object-literal
+retain family −3.9…−6.1%), and the rows with no object population (`fib40`,
+`push_num`, `churn_read`) move by ~0 — that is the control.
 
-**Where the residual actually is.** A per-callsite counter (`#[track_caller]` +
-`libc::atexit`, on `tls_hot.rs::maybe_install_stats_hook`'s pattern) over every
-shape-table entry point found it is **one site**: `proxy.rs`'s #6595 store-plan
-gate, which this rung changed from `object_type == OBJECT_TYPE_REGULAR` (a free
-`u32` compare) to `object_is_regular` — a `GcHeader` re-derivation plus a
-shape-table probe, firing **exactly once per allocated object** (3,000,000 on
-`retain`, 20,000,002 on `churn`, and still 1.00 per object on `retain_wide`'s
-8-field literals, which is the per-object/flat-in-width signature the corpus
-showed). Reducing it means weakening a predicate #6595 constrains, so it is
-tracked separately with the counts attached; the obvious "free" repair was tried
-here and reverted (see below).
+**`asyncpipe`'s +2.90% peak RSS is not a footprint regression.** It is exactly
+1024 KB — one arena block — and it is *arena block quantization*: sweeping
+`PERRY_GC_SCAVENGE_NURSERY_MB` moves it and **flips its sign** (−288 KB at cap 4,
++80 KB at 8, +944 KB at 12, +992 KB at the default 16, +624 KB at 24/32). Under
+`PERRY_GC_DIAG=1` the two arms run the same single copying minor with the same
+6767 copied objects, and the shrunk arm holds strictly *less* live data
+(`copied_bytes` 449,480 vs 452,896; `post_in_use` 450,160 vs 453,576). With 48 B
+objects the allocation stream lands differently against the 1 MB block
+granularity, so the peak straddles one extra block at some caps and one fewer at
+others.
 
-The same counter established something that matters more for anyone optimising
-this later: **`object_live_slot_count` — the bound derivation this rung
-introduces — is called ZERO times on every hot row.** Not once, across all nine
-programs measured. Two separate memo attempts in front of it measured null
-because they were caching a function that never runs on the measured path. Check
-the call count before reaching for a memo there.
+#### Where the residual is — the earlier attribution is RETRACTED
+
+An earlier revision of this fragment named `proxy.rs`'s #6595 store-plan gate as
+the site. **That is wrong and is withdrawn.** Direct instrumentation at the gate
+counts `total=1` on `interp`, `2` on `shapes`, `1` on `iso_miss`, and the counter
+never arms at all on `retain`/`retain_wide`/`retain1`/`deeplist`/`churn`/
+`pipeline`/`push_cls`/`tree`/`churn_read`. The counter had been reading a
+`#[inline]`, non-`#[track_caller]` frame and swallowing its callers. With
+`#[track_caller]` on `object_is_regular` itself the true caller is
+`array/element_shape.rs:258` — the element-shape check on array push — which is
+**pre-existing on main**, byte-identical between arms. `object_live_slot_count`,
+the derivation this rung actually introduces, is called **zero** times on every
+hot row.
+
+Two components, separated by an arm-C probe (deletion *without* the shrink: the
+same code with 8 B of inert padding, which validates as a control at ~0.00% RSS
+on every row):
+
+* **Footprint-coupled** — `deeplist` +8.28 SIZE / −0.07 CODE, `retain1` +6.75
+  SIZE. Smaller objects genuinely cost instructions here, opposite in sign to
+  #8047's pad probe on a neighbouring benchmark. The cache-line count is not the
+  mechanism; it is unexplained.
+* **Code** — +1.0…+2.5% on every allocation-heavy row.
+
+#### What #8157 did and did not recover
+
+#8122 was held on #8125 in the expectation that #8157 — which made every ShapeId
+probe 15–25% cheaper and is worth `deeplist` −17.2% / `churn` −25.2% **on main
+alone** — would absorb this rung's cost, since that cost is extra descriptor
+probing. **Re-measured on post-#8157 main, it does not.** The regression is
+slightly *worse* than the pre-#8157 table on most rows (`deeplist` +8.20 → +9.03,
+`retain1` +7.99 → +8.24, `churn` +1.76 → +3.08); only `shapes` improves (+4.96 →
++3.29). This is consistent with the arm-C partition: the dominant rows are
+footprint-coupled, and a cheaper probe cannot recover a cost that is not probing.
+
+**A new consumer arrived in the meantime.** #8094 (guarded ordinary-parameter
+specialization) landed 2026-08-15 18:00, *after* this branch's original base
+(`83b6b8c69`, 02:35), and `param_type_guard::GuardState::plain_object` read both
+deleted words directly. The rebase necessarily converts those two free `u32`
+loads into `object_is_regular` + `object_live_slot_count`. `js_param_type_guard`
+is the **#2 self-time symbol on `interp` in both arms**, and the three rows that
+newly regressed are exactly the app-shaped ones: `interp` +0.29 → **+3.35**,
+`iso_miss` +0.30 → **+2.86**, `pipeline` +0.34 → **+4.33**. A differential symbol
+profile on `interp` (`PERRY_DEBUG_SYMBOLS=1`, three repeats per arm) shows the
+shift is in the guard's *callees*, not its own body:
+
+| self-time samples, `interp` | arm A (base) | arm B (shrunk) |
+|---|---:|---:|
+| `shapes::shape_descriptor_by_id` | 19 / 23 / 17 | **46 / 38 / 28** |
+| `gc::layout::init_typed_shape_layout` | absent | **27 / 18 / 20** |
+| `js_param_type_guard` (own body) | 110 / 96 / 101 | 98 / 86 / 96 |
+
+Direction stable across all three pairs. Caveat: this row family has a documented
+sensitivity to codegen/inlining perturbation (finding 3 below), so "probe cost"
+versus "inlining perturbation" is supported but not fully separated.
 
 Three findings worth carrying forward, all from measuring rather than assuming:
 
