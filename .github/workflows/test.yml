@@ -501,6 +501,21 @@ jobs:
           python3 scripts/raw_handle_debt.py --self-test
           python3 scripts/raw_handle_debt.py
 
+      # #8233. The debt ratchet above counts bare reads OUT OF a RuntimeHandle --
+      # debt in code that ALREADY adopted the rooting API. Code that never roots
+      # at all has no `get_raw_*_ptr` to count and scores ZERO, the ratchet's best
+      # possible result, and its scope is perry-runtime only. This one detects the
+      # SHAPE instead -- a local bound from an allocator return, used after an
+      # intervening call that can allocate or run JS -- over perry-stdlib and
+      # perry-ext-*, which sit outside that denominator entirely. Ratchet, not a
+      # zero target: it fails only on an INCREASE over
+      # scripts/unrooted_local_shape_baseline.json.
+      - name: Unrooted-local shape ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/unrooted_local_shape.py --self-test
+          python3 scripts/unrooted_local_shape.py --check
+
       # #7659: the step above compares the count against a baseline the SAME
       # DIFF is free to move -- add bare reads, raise the recorded number to
       # match, and it passes. `--update` refuses to raise, but nothing made CI
