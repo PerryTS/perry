@@ -274,12 +274,20 @@ pub(crate) fn has_active_h2_clients() -> bool {
 }
 
 pub(crate) fn process_pending_h2_events() -> i32 {
-    let events: Vec<Http2PendingEvent> = match H2_PENDING_EVENTS.lock() {
-        Ok(mut q) => q.drain(..).collect(),
-        Err(_) => return 0,
+    // Drain into the SCANNED thread-local (super::H2_DRAINED_EVENTS), not a
+    // bare local: every event dispatched below can run arbitrary JS and
+    // collect, and the callbacks of the not-yet-dispatched events must stay
+    // visible to scan_h2_pending_event_roots until their turn.
+    let count = {
+        let drained: Vec<Http2PendingEvent> = match H2_PENDING_EVENTS.lock() {
+            Ok(mut q) => q.drain(..).collect(),
+            Err(_) => return 0,
+        };
+        let n = drained.len() as i32;
+        super::H2_DRAINED_EVENTS.with(|d| d.borrow_mut().extend(drained));
+        n
     };
-    let count = events.len() as i32;
-    for event in events {
+    while let Some(event) = super::H2_DRAINED_EVENTS.with(|d| d.borrow_mut().pop_front()) {
         match event {
             Http2PendingEvent::Session {
                 server_handle,
@@ -388,6 +396,14 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 session_handle,
                 callback,
             } => {
+                // Park the callback in the scanned stack across the
+                // listener fan-out (arbitrary JS + GC), and read the
+                // possibly-rewritten value back right before the call — a
+                // bare `callback` local would go stale on evacuation, and
+                // the retain-by-value below would then compare the STALE
+                // bits against the rewritten close_callbacks entries and
+                // remove nothing.
+                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
                 let listeners = get_handle::<Http2SessionHandle>(session_handle)
                     .and_then(|s| s.listeners.get("close").cloned())
                     .unwrap_or_default();
@@ -397,6 +413,8 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                         js_promise_run_microtasks();
                     }
                 }
+                let callback =
+                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
                 call0(callback);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.close_callbacks.retain(|cb| *cb != callback);
@@ -423,7 +441,14 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 callback,
                 settings,
             } => {
-                call2(callback, null_value(), settings_value(&settings));
+                // `settings_value` allocates the JS settings object and can
+                // collect; keep the callback in the scanned stack across it.
+                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
+                let err = null_value();
+                let settings_arg = settings_value(&settings);
+                let callback =
+                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
+                call2(callback, err, settings_arg);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.pending_callbacks.retain(|cb| *cb != callback);
                     session.pending_settings_ack = false;
@@ -437,12 +462,14 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 callback,
                 payload,
             } => {
-                call3(
-                    callback,
-                    null_value(),
-                    0.0,
-                    buffer_value_from_bytes(&payload),
-                );
+                // `buffer_value_from_bytes` allocates; same custody dance as
+                // the settings callback above.
+                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
+                let err = null_value();
+                let payload_arg = buffer_value_from_bytes(&payload);
+                let callback =
+                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
+                call3(callback, err, 0.0, payload_arg);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.pending_callbacks.retain(|cb| *cb != callback);
                 }

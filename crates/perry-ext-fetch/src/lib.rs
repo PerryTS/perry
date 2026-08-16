@@ -19,6 +19,7 @@ use std::sync::Mutex;
 
 // Web Fetch constructor validation helpers (#2640 / #2643) — split out to
 // keep lib.rs under the 2,000-line lint gate.
+mod gc;
 mod validation;
 use validation::{
     is_forbidden_method, is_null_body_status, is_redirect_status, is_valid_status_text,
@@ -183,7 +184,8 @@ lazy_static! {
     static ref BLOB_HANDLES: Mutex<HashMap<usize, BlobData>> = Mutex::new(HashMap::new());
     static ref NEXT_BLOB_ID: Mutex<usize> = Mutex::new(1);
 
-    static ref REQUEST_HANDLES: Mutex<HashMap<usize, RequestData>> = Mutex::new(HashMap::new());
+    pub(crate) static ref REQUEST_HANDLES: Mutex<HashMap<usize, RequestData>> =
+        Mutex::new(HashMap::new());
     static ref NEXT_REQUEST_ID: Mutex<usize> = Mutex::new(1);
 
     static ref FORM_DATA_HANDLES: Mutex<HashMap<usize, FormDataStore>> =
@@ -392,6 +394,7 @@ fn store_blob(data: BlobData) -> usize {
 }
 
 fn store_request(data: RequestData) -> usize {
+    gc::ensure_gc_scanner_registered();
     let mut id_guard = NEXT_REQUEST_ID.lock().unwrap();
     let id = *id_guard;
     *id_guard += 1;
@@ -687,9 +690,18 @@ pub extern "C" fn js_fetch_response_status(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_fetch_response_status_text(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = FETCH_RESPONSES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => alloc_string(&r.status_text).as_raw(),
+    // Clone out, drop the guard, THEN allocate — same discipline as the
+    // REQUEST_HANDLES readers: a GC allocation under a registry guard hangs
+    // any scanner that takes the same lock on this thread.
+    let text = {
+        FETCH_RESPONSES
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.status_text.clone())
+    };
+    match text {
+        Some(text) => alloc_string(&text).as_raw(),
         None => std::ptr::null_mut(),
     }
 }
@@ -707,9 +719,15 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_fetch_response_type(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = FETCH_RESPONSES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => alloc_string(&r.type_name).as_raw(),
+    let type_name = {
+        FETCH_RESPONSES
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.type_name.clone())
+    };
+    match type_name {
+        Some(type_name) => alloc_string(&type_name).as_raw(),
         None => alloc_string("").as_raw(),
     }
 }
@@ -717,9 +735,15 @@ pub extern "C" fn js_fetch_response_type(handle: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_fetch_response_url(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = FETCH_RESPONSES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => alloc_string(&r.url).as_raw(),
+    let url = {
+        FETCH_RESPONSES
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.url.clone())
+    };
+    match url {
+        Some(url) => alloc_string(&url).as_raw(),
         None => alloc_string("").as_raw(),
     }
 }
@@ -1641,9 +1665,18 @@ pub unsafe extern "C" fn js_request_new(
 #[no_mangle]
 pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = REQUEST_HANDLES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => alloc_string(&r.url).as_raw(),
+    // Clone out, drop the guard, THEN allocate: `alloc_string` can trigger a
+    // collection, and `scan_fetch_roots` takes this same lock on this same
+    // thread — allocating under the guard is a self-deadlock.
+    let url = {
+        REQUEST_HANDLES
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.url.clone())
+    };
+    match url {
+        Some(url) => alloc_string(&url).as_raw(),
         None => alloc_string("").as_raw(),
     }
 }
@@ -1651,21 +1684,27 @@ pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = REQUEST_HANDLES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => alloc_string(&r.method).as_raw(),
+    let method = {
+        REQUEST_HANDLES
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.method.clone())
+    };
+    match method {
+        Some(method) => alloc_string(&method).as_raw(),
         None => alloc_string("GET").as_raw(),
     }
 }
 
 fn request_string_field(handle: f64, f: impl FnOnce(&RequestData) -> &str) -> *mut StringHeader {
     let id = handle_id(handle);
-    let g = REQUEST_HANDLES.lock().unwrap();
-    match g.get(&id) {
-        Some(r) => {
-            let s = f(r);
-            alloc_string(s).as_raw()
-        }
+    let value = {
+        let g = REQUEST_HANDLES.lock().unwrap();
+        g.get(&id).map(|r| f(r).to_string())
+    };
+    match value {
+        Some(value) => alloc_string(&value).as_raw(),
         None => alloc_string("").as_raw(),
     }
 }
@@ -1746,10 +1785,13 @@ pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     let id = handle_id(handle);
-    let g = REQUEST_HANDLES.lock().unwrap();
-    match g.get(&id).and_then(|r| r.body.as_ref()) {
+    let body = {
+        let g = REQUEST_HANDLES.lock().unwrap();
+        g.get(&id).and_then(|r| r.body.clone())
+    };
+    match body {
         Some(b) => {
-            let ptr = alloc_string(&String::from_utf8_lossy(b)).as_raw();
+            let ptr = alloc_string(&String::from_utf8_lossy(&b)).as_raw();
             f64::from_bits(STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         None => f64::from_bits(TAG_UNDEFINED),

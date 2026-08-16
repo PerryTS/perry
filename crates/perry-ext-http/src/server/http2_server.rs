@@ -81,6 +81,67 @@ lazy_static! {
     pub(crate) static ref H2_PENDING_EVENTS: Mutex<Vec<Http2PendingEvent>> = Mutex::new(Vec::new());
 }
 
+thread_local! {
+    /// Events drained out of [`H2_PENDING_EVENTS`] but not yet dispatched.
+    /// The drain used to snapshot into a bare local `Vec`, so every
+    /// not-yet-fired callback was unrooted again while earlier events ran
+    /// arbitrary JS (`call1` + microtasks). Parked here instead, one event
+    /// popped at a time, so the scanner below keeps custody until dispatch.
+    pub(crate) static H2_DRAINED_EVENTS: std::cell::RefCell<std::collections::VecDeque<Http2PendingEvent>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    /// Callback(s) of the event(s) currently being dispatched — a stack so a
+    /// re-entrant pump cannot clobber an outer frame's slot. An arm pushes
+    /// its callback BEFORE any allocating prep (`settings_value`,
+    /// `buffer_value_from_bytes`, listener fan-out) and pops the — possibly
+    /// rewritten — value right before the call.
+    pub(crate) static H2_ACTIVE_CALLBACKS: std::cell::RefCell<Vec<i64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// GC root scanner hook — visit every user closure parked in
+/// [`H2_PENDING_EVENTS`], the drained-but-undelivered events in
+/// [`H2_DRAINED_EVENTS`], and the in-dispatch [`H2_ACTIVE_CALLBACKS`] stack.
+///
+/// `session.close(cb)` / `session.settings(obj, cb)` / `session.ping(cb)`
+/// queue their callback as raw NaN-box bits in an event that crosses at
+/// least one pump tick before `call0`/`call2`/`call3` fires it. A collection
+/// in that window moves (copying minor) or frees (full sweep — the settings
+/// and ping callbacks have NO other holder) the closure, and the drain then
+/// calls through a stale pointer. Wired into
+/// `super::scan_http_server_roots`, the scanner this crate registers.
+pub(crate) fn scan_h2_pending_event_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    fn visit_event_callbacks(
+        events: &mut dyn Iterator<Item = &mut Http2PendingEvent>,
+        visitor: &mut perry_ffi::GcRootVisitor<'_>,
+    ) {
+        for event in events {
+            match event {
+                Http2PendingEvent::ClientClose { callback, .. }
+                | Http2PendingEvent::SessionSettingsCallback { callback, .. }
+                | Http2PendingEvent::SessionPingCallback { callback, .. } => {
+                    if *callback != 0 {
+                        visitor.visit_i64_slot(callback);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Ok(mut queue) = H2_PENDING_EVENTS.lock() {
+        visit_event_callbacks(&mut queue.iter_mut(), visitor);
+    }
+    H2_DRAINED_EVENTS.with(|drained| {
+        visit_event_callbacks(&mut drained.borrow_mut().iter_mut(), visitor);
+    });
+    H2_ACTIVE_CALLBACKS.with(|active| {
+        for callback in active.borrow_mut().iter_mut() {
+            if *callback != 0 {
+                visitor.visit_i64_slot(callback);
+            }
+        }
+    });
+}
+
 static NEXT_H2_STREAM_ID: AtomicI64 = AtomicI64::new(1);
 
 pub(crate) fn next_stream_id() -> i64 {

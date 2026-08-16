@@ -326,3 +326,107 @@ fn request_binary_body_round_trips_byte_exact() {
         "arrayBuffer()/bytes() must be byte-exact"
     );
 }
+
+/// The fetch root scanner (`scan_fetch_roots`) takes `REQUEST_HANDLES`
+/// during a collection ON THE MUTATOR THREAD, so no reader may still hold
+/// (or leak) that guard when it performs a GC allocation. The failure mode
+/// is not a panic: under this repo's panic=abort + invoke-EH transport an
+/// unwind does not run `Drop`, so a guard alive at the wrong moment means
+/// the mutex is NEVER released and the next scan or reader BLOCKS — a hang,
+/// which a hanging test cannot report. This probes with `try_lock` after
+/// every reader instead, so a re-introduced held guard turns into a
+/// FAILURE.
+#[test]
+fn request_reads_release_the_registry_guard() {
+    let id = store_request(RequestData {
+        url: "https://guard.test/x".to_string(),
+        method: "GET".to_string(),
+        body: Some(b"guard-body".to_vec()),
+        headers: HeadersStore::default(),
+        destination: "document".to_string(),
+        referrer: "about:client".to_string(),
+        referrer_policy: String::new(),
+        mode: "cors".to_string(),
+        credentials: "same-origin".to_string(),
+        cache: "default".to_string(),
+        redirect: "follow".to_string(),
+        integrity: String::new(),
+        keepalive: false,
+        duplex: "half".to_string(),
+        signal: f64::from_bits(TAG_UNDEFINED),
+    });
+    let handle = id as f64;
+
+    let probe = |label: &str| {
+        let free = REQUEST_HANDLES.try_lock().is_ok();
+        assert!(
+            free,
+            "{label} left REQUEST_HANDLES locked — the fetch root scanner would hang"
+        );
+    };
+
+    let url = js_request_get_url(handle);
+    assert!(!url.is_null());
+    probe("js_request_get_url");
+    let method = js_request_get_method(handle);
+    assert!(!method.is_null());
+    probe("js_request_get_method");
+    let destination = js_request_get_destination(handle);
+    assert!(!destination.is_null());
+    probe("js_request_get_destination (request_string_field)");
+    let body = js_request_get_body(handle);
+    assert_ne!(body.to_bits(), 0);
+    probe("js_request_get_body");
+    let _signal = js_request_get_signal(handle);
+    probe("js_request_get_signal");
+
+    REQUEST_HANDLES.lock().unwrap().remove(&id);
+}
+
+/// Companion source invariant for the test above: the pre-fix bug shape was
+/// `alloc_string(&r.url)` with `r` borrowed out of the live
+/// `REQUEST_HANDLES` guard — a GC allocation whose argument keeps the guard
+/// alive across the collection the allocation can trigger. Scan the source
+/// for that shape, and prove the scanner can still FIRE with a planted
+/// sample (a matcher that silently stopped matching would hold this gate
+/// green forever).
+#[test]
+fn no_allocation_is_taken_off_a_live_registry_borrow() {
+    let source = include_str!("lib.rs");
+    let forbidden = regex_lite_scan(source);
+    assert!(
+        forbidden.is_empty(),
+        "GC allocation reaches through a live REQUEST_HANDLES borrow — hoist the \
+         clone out of the guard first (self-deadlock with scan_fetch_roots): {forbidden:?}"
+    );
+    let planted =
+        "let g = REQUEST_HANDLES.lock().unwrap();\n    Some(r) => alloc_string(&r.url).as_raw(),";
+    assert!(
+        !regex_lite_scan(planted).is_empty(),
+        "the forbidden-pattern scan no longer matches its own planted sample"
+    );
+}
+
+/// Textual matcher for `no_allocation_is_taken_off_a_live_registry_borrow`:
+/// an `alloc_string` whose argument reaches through the registry-borrow
+/// convention names (`r`, `req`) used by every reader in this file.
+fn regex_lite_scan(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                return false;
+            }
+            [
+                "alloc_string(&r.",
+                "alloc_string(r.",
+                "alloc_string(&req.",
+                "alloc_string(req.",
+            ]
+            .iter()
+            .any(|pattern| line.contains(pattern))
+        })
+        .map(|line| line.trim().to_string())
+        .collect()
+}
