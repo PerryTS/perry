@@ -404,9 +404,9 @@ mod keep_typed_feedback {
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K08: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader, f64) = js_typed_feedback_object_set_field_by_name_fast;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K09: unsafe extern "C" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
+#[used] static K09: unsafe extern "C-unwind" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K10: unsafe extern "C" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
+#[used] static K10: unsafe extern "C-unwind" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K11: extern "C" fn(u64, *const ArrayHeader, u32) -> f64 = js_typed_feedback_array_get_f64;
     #[cfg(feature = "keepalive-anchors")]
@@ -446,7 +446,7 @@ mod keep_typed_feedback {
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K29: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K30: unsafe extern "C" fn(u64, f64, i64, *const f64, usize) -> f64 = js_typed_feedback_native_call_method_by_id;
+#[used] static K30: unsafe extern "C-unwind" fn(u64, f64, i64, *const f64, usize) -> f64 = js_typed_feedback_native_call_method_by_id;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K31: unsafe extern "C" fn(u64, f64, i64, i64) -> f64 = js_typed_feedback_native_call_method_apply_by_id;
+#[used] static K31: unsafe extern "C-unwind" fn(u64, f64, i64, i64) -> f64 = js_typed_feedback_native_call_method_apply_by_id;
 }

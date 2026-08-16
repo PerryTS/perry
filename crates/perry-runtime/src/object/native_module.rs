@@ -1135,6 +1135,25 @@ pub extern "C" fn js_class_method_bind_by_id(instance: f64, method_id: i64) -> f
 #[used]
 static KEEP_CLASS_METHOD_BIND_BY_ID: extern "C" fn(f64, i64) -> f64 = js_class_method_bind_by_id;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static TEST_BOUND_METHOD_MOVE: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_collect_bound_method_after_capture_init() {
+    TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT.with(|armed| armed.set(true));
+    TEST_BOUND_METHOD_MOVE.with(|trace| trace.set((0, 0)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_take_bound_method_move() -> (usize, usize) {
+    TEST_BOUND_METHOD_MOVE.with(|trace| trace.replace((0, 0)))
+}
+
 /// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
 /// named method, stamping its `.name`/`.length`. This is the raw builder used
 /// by both `js_class_method_bind` (after its canonical-identity short-circuit)
@@ -1146,18 +1165,56 @@ pub(crate) fn build_bound_method_closure(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-    crate::closure::js_closure_set_capture_f64(closure, 0, instance);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    // `js_closure_alloc` can collect before it returns, so keep the receiver
+    // live across that allocation. The metadata installation below allocates a
+    // string for `.name` and can collect again; keep the newly-created closure
+    // in an outer handle and reload it after every such call. Without the outer
+    // handle, `set_bound_native_closure_name` protected the closure only inside
+    // its own scope and this function could return the now-forwarded from-space
+    // address. A caller such as Next's Reflect.get adapter observes that stale
+    // method value at an immediately-following `typeof` check (#8036).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance_handle = scope.root_nanbox_f64(instance);
+    let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::closure::BOUND_METHOD_FUNC_PTR,
+        3,
+    ));
+    // Capture-slot writes are scoped arguments to non-allocating stores, so
+    // the address cannot go stale inside the call. Each value is read from its
+    // own handle first, exactly as before.
+    let instance_value = instance_handle.get_nanbox_f64();
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::closure::js_closure_set_capture_f64(closure, 0, instance_value);
+        crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    });
+    #[cfg(test)]
+    TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT.with(|armed| {
+        if armed.replace(false) {
+            let before = closure_handle
+                .with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| closure as usize);
+            // The reload IS the subject of this hook: `across_mut` hands back
+            // the post-collection address without ever binding a pre-call one.
+            let (_, after) = closure_handle
+                .across_mut::<crate::closure::ClosureHeader, _>(crate::gc::gc_collect_minor);
+            let after = after as usize;
+            TEST_BOUND_METHOD_MOVE.with(|trace| trace.set((before, after)));
+        }
+    });
     if !method_name_ptr.is_null() && method_name_len > 0 {
         if let Ok(name) = unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
-            set_bound_native_closure_name(closure, name);
+            closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                set_bound_native_closure_name(closure, name)
+            });
             if let Some(length) = bound_native_method_length(name) {
-                set_builtin_closure_length(closure as usize, length);
-            } else if let Some(class_id) = class_id_from_method_receiver(instance) {
+                closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                    set_builtin_closure_length(closure as usize, length)
+                });
+            } else if let Some(class_id) =
+                class_id_from_method_receiver(instance_handle.get_nanbox_f64())
+            {
                 // User class method bound as a value (`C.prototype.m`, `c.m`):
                 // stamp its spec `.length` from the registered param count so
                 // `C.prototype.m.length` reflects the declared arity instead of
@@ -1165,12 +1222,16 @@ pub(crate) fn build_bound_method_closure(
                 if let Some(length) =
                     super::class_registry::class_method_bind_length(class_id, name)
                 {
-                    set_builtin_closure_length(closure as usize, length);
+                    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                        set_builtin_closure_length(closure as usize, length)
+                    });
                 }
             }
         }
     }
-    crate::value::js_nanbox_pointer(closure as i64)
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// #6173: sentinel "method name" installed in the name-capture slots (1, 2) of
@@ -1209,31 +1270,47 @@ pub(crate) fn build_symbol_bound_method_closure(
     has_rest: bool,
     is_static: bool,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 5);
-    if closure.is_null() {
+    // The allocation itself is a safepoint. Keep the receiver current before
+    // storing it into the freshly allocated closure.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::closure::BOUND_METHOD_FUNC_PTR,
+        5,
+    ));
+    if closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|c| c.is_null()) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_closure_set_capture_f64(closure, 0, receiver);
-    crate::closure::js_closure_set_capture_ptr(
-        closure,
-        1,
-        SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
-    );
-    crate::closure::js_closure_set_capture_ptr(closure, 2, SYMBOL_BOUND_METHOD_NAME.len() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
+    let receiver_value = receiver_handle.get_nanbox_f64();
     let meta: i64 = (param_count as i64) | ((has_rest as i64) << 32) | ((is_static as i64) << 33);
-    crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::closure::js_closure_set_capture_f64(closure, 0, receiver_value);
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            1,
+            SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            2,
+            SYMBOL_BOUND_METHOD_NAME.len() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+    });
     // Spec `.length` = declared params minus a trailing rest param.
-    set_builtin_closure_length(
-        closure as usize,
-        if has_rest {
-            param_count.saturating_sub(1)
-        } else {
-            param_count
-        },
-    );
-    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
-    crate::value::js_nanbox_pointer(closure as i64)
+    let spec_length = if has_rest {
+        param_count.saturating_sub(1)
+    } else {
+        param_count
+    };
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        set_builtin_closure_length(closure as usize, spec_length);
+        crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// Resolve the owning class id for a `js_class_method_bind` receiver: a class

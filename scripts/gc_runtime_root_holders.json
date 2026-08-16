@@ -141,6 +141,12 @@
       "name": "TRANSFORM_CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "TEST_BOUND_METHOD_MOVE",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     }
   ]
 }

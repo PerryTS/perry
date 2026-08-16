@@ -821,25 +821,27 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
-        // Runtime `require(absolutePath.js)` of a module Perry AOT-compiled but
-        // that is only reachable via a runtime-computed path (Next.js / turbopack
-        // load page + chunk modules by a manifest path at request time, not a
-        // static specifier). Resolve it from the path->module registry that each
-        // compiled module self-registers into at init; `undefined` = not
-        // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
+        // Runtime `require(path)` of a module Perry AOT-compiled but that is
+        // only reachable via a computed path. Next's webpack runtime uses both
+        // absolute page paths and relative chunk paths (`./chunks/` + id).
+        // Resolve the latter against this CJS module's directory before probing
+        // the path registry, mirroring Node's per-module `require` binding.
+        // `js_require_path_module` canonicalizes the joined path, so `./` and
+        // `../` segments need no source-level normalization here.
         {{
-            const __perry_path_mod = __perry_require_path_module(specifier);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(specifier)) return __perry_path_mod;
-        }}
-        // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
-        // manifests this way: `require(this.middlewareManifestPath)`). Node's
-        // require reads + JSON.parses `.json` files; the statically-resolved
-        // cases above only cover specifiers known at compile time, so a path
-        // computed at runtime falls here. `.json` is pure data (no eval), so we
-        // read it from disk and parse it. `.js`/`.node` runtime require stays
-        // unsupported — that would require evaluating arbitrary code.
-        if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
-            return __perry_require_json_disk(specifier);
+            const __perry_path_specifier =
+                specifier === '.' || specifier === '..' ||
+                specifier.slice(0, 2) === './' || specifier.slice(0, 3) === '../'
+                    ? {module_dir_literal} + '/' + specifier
+                    : specifier;
+            const __perry_path_mod = __perry_require_path_module(__perry_path_specifier);
+            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_specifier)) return __perry_path_mod;
+            // Runtime `.json` require uses the same relative base. JSON is pure
+            // data, so a registry miss can safely fall through to a disk read;
+            // arbitrary uncompiled `.js` / `.node` evaluation stays unsupported.
+            if ((__perry_path_specifier.charCodeAt(0) === 47 || (__perry_path_specifier.length > 2 && __perry_path_specifier.charCodeAt(1) === 58)) && __perry_path_specifier.slice(-5) === '.json') {{
+                return __perry_require_json_disk(__perry_path_specifier);
+            }}
         }}
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
     }}

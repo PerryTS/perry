@@ -110,6 +110,7 @@ impl LoweringContext {
             ui_widget_type_aliases: HashMap::new(),
             deferred_unknown_native_imports: HashMap::new(),
             current_class: None,
+            current_class_scope_depth: None,
             current_class_inner_name: None,
             pending_class_inner_name: None,
             current_class_member_is_static: false,

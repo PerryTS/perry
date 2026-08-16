@@ -205,7 +205,9 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
         .expect("CJS wrapper must publish its final module.exports value");
     assert!(partial < body && body < final_publish, "{wrapped}");
     assert!(
-        wrapped.contains("__perry_path_mod !== undefined || __perry_has_path_module(specifier)"),
+        wrapped.contains(
+            "__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_specifier)"
+        ),
         "an exported undefined value must not be mistaken for a registry miss\n{wrapped}"
     );
 
