@@ -203,8 +203,10 @@ run_cold_start() {
   local verifier label
   for verifier in $(seq 1 "$VERIFIERS_PER_START"); do
     if (( verifier == 1 )); then label="cold"; else label="warm"; fi
-    BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 \
-      || fail "$mode cold start $index: $label verifier $verifier/$VERIFIERS_PER_START failed"
+    BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || {
+      tail -40 "$log" | sed 's/^/    /'
+      fail "$mode cold start $index: $label verifier $verifier/$VERIFIERS_PER_START failed"
+    }
   done
   if [[ "$mode" == "forced" ]]; then
     python3 "$REPO_ROOT/scripts/gc_evacuation_liveness_assert.py" \
