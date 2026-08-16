@@ -79,6 +79,11 @@ use root_words::*;
 mod layout;
 mod layout_slot_visit;
 use layout_slot_visit::*;
+/// #8112: the one question the remembered set asks about the shape table's
+/// shared keys word. Its own file because both `barrier/mod.rs` (1995 lines)
+/// and `cycle.rs` (1991) are at the 2000-line cap.
+mod shape_keys_edge;
+use shape_keys_edge::slot_is_shared_shape_keys_word;
 /// #7510: the per-object slot-layout side tables and the emptiness flag that
 /// keeps them off the allocation, store, death and trace paths. Split out of
 /// `layout.rs` so it stays under the repo's 2000-line-per-file cap.

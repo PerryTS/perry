@@ -561,6 +561,13 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
             return;
         }
+        // #8112: the shape table's shared keys word is not a slot this parent
+        // owns, so per-parent coverage is the wrong question to ask of it.
+        // `gc/shape_keys_edge.rs` says why; the table's `old_carrier` root is
+        // what covers it instead.
+        if slot_is_shared_shape_keys_word(header, slot.slot) {
+            return;
+        }
         slot.record_layout_read();
         verify_old_young_slot_covered(snapshot, stats, header, slot.slot);
     });
