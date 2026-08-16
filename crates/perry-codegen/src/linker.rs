@@ -350,6 +350,47 @@ fn ll_size_opt_max_fn_bytes() -> usize {
         .unwrap_or(DEFAULT_LL_SIZE_OPT_MAX_FN_BYTES)
 }
 
+/// For an oversized unit, the size of its **widest single function** above
+/// which we drop the whole unit to `-O0`.
+///
+/// This is the per-function counterpart of the average cap above, and it is the
+/// arm that can actually see the `#4880` shape. An average cannot: a bundle is
+/// hundreds of ordinary functions plus one generated monolith, and the ordinary
+/// ones dilute the monolith out of the mean. `next@16.3.0`'s bundled
+/// `jsonwebtoken` is exactly that — 468 functions averaging 28 KB with one at
+/// 3.5 MB — so its average sits nine times UNDER the average cap while one
+/// body is a monolith (#8132).
+///
+/// **The default is deliberately unchanged at 6 MiB, and lowering it is a
+/// measured bad trade.** The arm previously borrowed `ll_o0_threshold_bytes()`,
+/// which is a *whole-unit* constant answering a different question; it now has
+/// its own name and its own override so the two stop moving together. What it
+/// is NOT is a retune, because the corpus does not support one. Over the 52
+/// oversized codegen units Perry produces from `next@16.3.0`'s 17 largest
+/// `dist/compiled/**` bundles, the widest function runs from 751 KB to 11.1 MB
+/// *continuously* (deciles 0.73/1.3/1.6/1.9/2.1/2.2/2.7/3.4/3.8/5.4 MB) — there
+/// is no empty band between "ordinary bundle" and "monolith", because in real
+/// webpack output every oversized unit is monolith-bearing. (Their averages run
+/// 19-67 KB/fn, so all 52 clear the average cap and this arm is the only one
+/// that ever fires.) A cap low enough to catch #8132's two units (3.5 MB and
+/// 1.5 MB) is ≤ 1.5 MB, which reclassifies 44 of 52; 1 MiB reclassifies 50 of
+/// 52. Measured on that same bundle, reclassifying costs **+95% `__text`
+/// (2.80 MB → 5.45 MB) to buy −62% clang CPU (43.8 s → 16.5 s)**. Whether that
+/// trade is worth making is a product call; `PERRY_LL_O0_MAX_FN_BYTES` makes it
+/// one env var instead of a rebuild, and the default declines to make it on
+/// everybody's behalf.
+///
+/// `0` disables this arm entirely (leaving only the average cap);
+/// `PERRY_LL_SIZE_OPT` still overrides both.
+const DEFAULT_LL_O0_MAX_FN_BYTES: usize = 6 * 1024 * 1024;
+
+fn ll_o0_max_fn_bytes() -> usize {
+    std::env::var("PERRY_LL_O0_MAX_FN_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LL_O0_MAX_FN_BYTES)
+}
+
 /// Decide the clang opt flag for an oversized unit: `-Os` when the unit is many
 /// ordinary functions (size-optimize, big `__text` win), `-O0` when it is a
 /// pathological few-giant-function monolith (`#4880`). `ll_fn_count` is the
@@ -368,7 +409,8 @@ fn oversized_opt_flag(
     // hundreds of small functions dilute one pathological generated function's
     // average: that sent a 20+ MiB body through -Os in the Claude bundle and
     // spent minutes in LLVM where the same body finishes in seconds at -O0.
-    if max_fn_bytes.is_some_and(|bytes| bytes > ll_o0_threshold_bytes()) {
+    let max_fn_cap = ll_o0_max_fn_bytes();
+    if max_fn_cap > 0 && max_fn_bytes.is_some_and(|bytes| bytes > max_fn_cap) {
         return "-O0";
     }
     let avg_fn_bytes = ll_byte_size / ll_fn_count.max(1);
@@ -414,15 +456,25 @@ fn build_clang_compile_plan(
     let o0_threshold = ll_o0_threshold_bytes();
     let opt_flag = if o0_threshold > 0 && ll_byte_size > o0_threshold {
         let flag = oversized_opt_flag(ll_byte_size, ll_fn_count, max_fn_bytes);
+        // `widest` is the quantity the -O0 arm actually decides on, so print
+        // it: an average alone cannot explain why a unit was routed, and a
+        // corpus sweep needs the per-unit distribution to retune the cap.
+        // `?` when the caller could not supply it (the textual clang path,
+        // which has no per-function sizes).
         eprintln!(
             "perry: module IR is {:.1} MB (> {:.1} MB), {} functions \
-             (~{:.0} KB/fn); compiling at {} instead of -O3 so LLVM's -O1+ \
-             pipeline doesn't blow up on oversized functions (#4880). Override \
-             with PERRY_LL_O0_THRESHOLD_BYTES / PERRY_LL_SIZE_OPT.",
+             (~{:.0} KB/fn avg, widest {}); compiling at {} instead of -O3 so \
+             LLVM's -O1+ pipeline doesn't blow up on oversized functions \
+             (#4880). Override with PERRY_LL_O0_THRESHOLD_BYTES / \
+             PERRY_LL_O0_MAX_FN_BYTES / PERRY_LL_SIZE_OPT.",
             ll_byte_size as f64 / (1024.0 * 1024.0),
             o0_threshold as f64 / (1024.0 * 1024.0),
             ll_fn_count,
             (ll_byte_size as f64 / ll_fn_count.max(1) as f64) / 1024.0,
+            match max_fn_bytes {
+                Some(bytes) => format!("{:.0} KB", bytes as f64 / 1024.0),
+                None => "?".to_string(),
+            },
             flag,
         );
         flag

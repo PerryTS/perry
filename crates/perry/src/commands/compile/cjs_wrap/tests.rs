@@ -63,18 +63,21 @@ fn computed_relative_require_uses_the_calling_module_directory() {
     let path = PathBuf::from("/fixture/.next/server/webpack-runtime.js");
     let wrapped = wrap_commonjs(source, &path);
 
-    // Asserted as two independent facts rather than one string carrying the
-    // emitter's newline and indentation: reindenting `wrap.rs` should not fail
-    // a test whose subject is the rebasing, not the formatting.
+    // #8146 replaced this branch's ternary with an explicit prefix test that
+    // also STRIPS the leading `./` — `std::fs::canonicalize` only normalizes a
+    // path that exists on disk, and registration falls back to the raw string
+    // when it does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
+    // in exactly the deployed case. Pin that shape, not the superseded one.
     assert!(
-        wrapped.contains("? \"/fixture/.next/server\" + '/' + specifier"),
-        "computed relative require must be rebased before the path-registry lookup"
+        wrapped
+            .contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier.slice(2);"),
+        "computed relative require must be rebased before the path-registry lookup\n{wrapped}"
     );
+    assert!(wrapped.contains("__perry_require_path_module(__perry_path_spec)"));
     assert!(
-        wrapped.contains(": specifier"),
-        "a non-relative specifier must pass through unchanged"
+        !wrapped.contains("__perry_require_path_module(specifier)"),
+        "the registry lookup must not use the un-rebased specifier\n{wrapped}"
     );
-    assert!(wrapped.contains("__perry_require_path_module(__perry_path_specifier)"));
 }
 
 #[test]
@@ -90,7 +93,7 @@ fn computed_bare_directory_requires_use_the_calling_module_directory() {
         );
     }
     assert!(
-        wrapped.contains("? \"/fixture/.next/server\" + '/' + specifier"),
+        wrapped.contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier;"),
         "bare directory specifiers must be rebased before registry lookup\n{wrapped}"
     );
 }

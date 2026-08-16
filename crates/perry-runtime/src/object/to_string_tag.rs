@@ -383,6 +383,8 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                 tag_str = Some("DecompressionStream".to_string());
             } else if class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 tag_str = Some("RegExp String Iterator".to_string());
+            } else if class_id == crate::object::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+                tag_str = Some("Module".to_string());
             }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);
@@ -434,6 +436,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
 /// caller's `None` arm.
 fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
     match module {
+        "module" => Some("Module"),
         // `Object.prototype.toString.call(performance)` is
         // "[object Performance]" in Node.
         "perf_hooks" => Some("Performance"),

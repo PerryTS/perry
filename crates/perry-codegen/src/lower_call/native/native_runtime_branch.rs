@@ -110,6 +110,16 @@
                 );
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // #6769: link `module.parent` before the wrapper body runs.
+            "linkPathModuleParent" => {
+                let record = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                ctx.block()
+                    .call_void("js_link_path_module_parent", &[(DOUBLE, &record)]);
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             // Next.js wall 54: publish the final exports by absolute path.
             "registerPathModule" => {
                 let path = args.first().map_or_else(

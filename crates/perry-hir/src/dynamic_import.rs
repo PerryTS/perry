@@ -28,8 +28,10 @@ use std::collections::{HashMap, HashSet};
 pub const DYNAMIC_IMPORT_PATH_CAP: usize = 64;
 
 mod binding_origin;
+mod top_level_await;
 mod visitors;
 use binding_origin::{resolve_binding_origin, BindingOrigin};
+pub use top_level_await::detect_top_level_await;
 pub use visitors::{
     for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
     for_each_worker_new_mut,
@@ -440,36 +442,57 @@ pub fn collect_dynamic_import_local_candidate_literals<V: Borrow<Expr>>(
         collect_local_candidate_defs_expr(expr, &mut defs, &mut invalid);
     }
 
-    let mut out: HashMap<u32, Vec<String>> = HashMap::new();
-    for (id, exprs) in defs {
-        if invalid.contains(&id) {
-            continue;
+    // Async lowering moves locals into the generated step closure and emits a
+    // leading `LocalSet(id, undefined)` before replaying the source-level
+    // assignments. Ignore only that leading initializer; a later undefined
+    // assignment still invalidates the candidate set.
+    for exprs in defs.values_mut() {
+        if exprs.len() > 1 && matches!(exprs.first(), Some(Expr::Undefined)) {
+            exprs.remove(0);
         }
-        let mut candidates: Vec<String> = Vec::new();
-        let mut ok = true;
-        for expr in exprs {
-            let mut visiting = HashSet::new();
-            match resolve_import_path_with_consts_and_params(
-                expr,
-                consts,
-                param_literals,
-                &mut visiting,
-            ) {
-                Resolution::Set(paths) => {
-                    for path in paths {
-                        if !candidates.contains(&path) {
-                            candidates.push(path);
+    }
+
+    // Resolve to a fixed point so one candidate local can feed another (for
+    // example `name = flag ? "a" : "b"; path = `./${name}.ts``). The old
+    // one-pass map walk could not resolve these chains and was order-dependent.
+    let mut out: HashMap<u32, Vec<String>> = HashMap::new();
+    loop {
+        let mut changed = false;
+        for (&id, exprs) in &defs {
+            if invalid.contains(&id) || out.contains_key(&id) {
+                continue;
+            }
+            let mut candidates: Vec<String> = Vec::new();
+            let mut ok = true;
+            for expr in exprs {
+                let mut visiting = HashSet::new();
+                match resolve_import_path_with_context(
+                    expr,
+                    consts,
+                    param_literals,
+                    &out,
+                    &mut visiting,
+                ) {
+                    Resolution::Set(paths) => {
+                        for path in paths {
+                            if !candidates.contains(&path) {
+                                candidates.push(path);
+                            }
                         }
                     }
-                }
-                Resolution::Unresolved(_) => {
-                    ok = false;
-                    break;
+                    Resolution::Unresolved(_) => {
+                        ok = false;
+                        break;
+                    }
                 }
             }
+            if ok && !candidates.is_empty() {
+                out.insert(id, candidates);
+                changed = true;
+            }
         }
-        if ok && !candidates.is_empty() {
-            out.insert(id, candidates);
+        if !changed {
+            break;
         }
     }
     out
@@ -1222,6 +1245,15 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
 ) -> Resolution {
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
+        // Template interpolation lowers through StringCoerce even when the
+        // wrapped local has a finite string candidate set.
+        Expr::StringCoerce(value) => resolve_import_path_with_context(
+            value,
+            consts,
+            param_literals,
+            local_literals,
+            visiting,
+        ),
         Expr::Call { callee, args, .. } => match static_string_replace_target(callee, args) {
             Some(string) => resolve_string_replace_parts(
                 string,
@@ -1724,107 +1756,6 @@ fn split_static_path_prefix(path: &str) -> (&str, &str) {
         return (&path[..2], &path[2..]);
     }
     ("", path)
-}
-
-/// Scan `module.init` for an `await` expression outside any function/
-/// closure body and set `module.has_top_level_await` accordingly.
-///
-/// Idempotent — safe to call multiple times. Closure bodies are NOT
-/// descended into because awaits inside them belong to the closure's
-/// own async scope, not the module's top level.
-pub fn detect_top_level_await(module: &mut Module) {
-    let mut found = false;
-    for stmt in &module.init {
-        if stmt_has_top_level_await(stmt) {
-            found = true;
-            break;
-        }
-    }
-    module.has_top_level_await = found;
-}
-
-fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_top_level_await),
-        Stmt::Expr(e) => expr_has_top_level_await(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_has_top_level_await),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_has_top_level_await(condition)
-                || then_branch.iter().any(stmt_has_top_level_await)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|b| b.iter().any(stmt_has_top_level_await))
-        }
-        Stmt::While { condition, body } => {
-            expr_has_top_level_await(condition) || body.iter().any(stmt_has_top_level_await)
-        }
-        Stmt::DoWhile { body, condition } => {
-            body.iter().any(stmt_has_top_level_await) || expr_has_top_level_await(condition)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_deref().is_some_and(stmt_has_top_level_await)
-                || condition.as_ref().is_some_and(expr_has_top_level_await)
-                || update.as_ref().is_some_and(expr_has_top_level_await)
-                || body.iter().any(stmt_has_top_level_await)
-        }
-        Stmt::Labeled { body, .. } => stmt_has_top_level_await(body),
-        Stmt::Throw(e) => expr_has_top_level_await(e),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(stmt_has_top_level_await)
-                || catch
-                    .as_ref()
-                    .is_some_and(|c| c.body.iter().any(stmt_has_top_level_await))
-                || finally
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_has_top_level_await))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_has_top_level_await(discriminant)
-                || cases.iter().any(|c| {
-                    c.test.as_ref().is_some_and(expr_has_top_level_await)
-                        || c.body.iter().any(stmt_has_top_level_await)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => false,
-    }
-}
-
-fn expr_has_top_level_await(expr: &Expr) -> bool {
-    // The walker's `Closure` arm intentionally does NOT descend into the
-    // closure body, which is exactly the semantics we need: an `await`
-    // inside a nested closure/function belongs to that function's scope,
-    // not the module's top level.
-    if matches!(expr, Expr::Await(_)) {
-        return true;
-    }
-    let mut found = false;
-    walk_expr_children(expr, &mut |child| {
-        if !found && expr_has_top_level_await(child) {
-            found = true;
-        }
-    });
-    found
 }
 
 #[cfg(test)]

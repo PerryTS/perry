@@ -1251,3 +1251,114 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
     );
     js_shadow_slot_set(0, 0);
 }
+
+// ── FUNCTION_CLASS_IDS (#8040) ──────────────────────────────────────────────
+//
+// The synthetic-class table is keyed by a function value's NaN-boxed closure
+// ADDRESS, and — unlike every other table in this file — it is *rekeyed* when
+// its key object moves (`scan_function_class_id_keys_mut`). So a key that
+// outlives its closure does not merely leak: the next collection follows the
+// forwarding pointer of whatever object now occupies the address and rebinds
+// the class id onto it.
+
+fn alloc_nursery_test_closure() -> usize {
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        8,
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    ptr as usize
+}
+
+#[test]
+fn test_dead_function_class_id_key_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::test_clear_class_side_table_roots();
+
+    let addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8040);
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(addr))),
+        0x8200_8040,
+        "test premise: the synthetic class id must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8040),
+        0,
+        "a dead closure's FUNCTION_CLASS_IDS key must be pruned"
+    );
+}
+
+#[test]
+fn test_live_function_class_id_key_survives_and_is_rekeyed_on_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let addr = alloc_nursery_test_closure();
+    js_shadow_slot_set(0, ptr_bits(addr));
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8041);
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(moved, ptr_bits(addr), "test premise: the closure must move");
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8041),
+        moved,
+        "a LIVE closure's key must be rekeyed to its new address, not pruned"
+    );
+}
+
+/// The #8040 shape, end to end: a dead key that survives one collection is
+/// re-pointed at the next tenant of its address, and the collection after that
+/// follows THAT object's forwarding pointer.
+#[test]
+fn test_dead_function_class_id_key_cannot_follow_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(dead_addr), 0x8200_8042);
+
+    let _ = gc_collect_minor();
+
+    let replacement = alloc_nursery_test_closure();
+    assert_eq!(
+        replacement, dead_addr,
+        "test premise: the copied-minor Eden reset must reuse the exact address"
+    );
+    js_shadow_slot_set(0, ptr_bits(replacement));
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(replacement))),
+        0,
+        "an unrelated closure allocated at the recycled address must not inherit \
+         the dead function's synthetic class id"
+    );
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(
+        moved,
+        ptr_bits(replacement),
+        "test premise: the replacement must move"
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(moved)),
+        0,
+        "and the stale key must not have been REKEYED onto the replacement's new \
+         address by the metadata rewrite pass"
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_count(),
+        0,
+        "no FUNCTION_CLASS_IDS entry may outlive its closure"
+    );
+}

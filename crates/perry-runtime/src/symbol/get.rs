@@ -779,11 +779,36 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     }
     // Buffers inherit TypedArray iteration semantics in Node: the default
     // iterator is `values()`, yielding numeric bytes.
-    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+    let is_pointer = (bits >> 48) == 0x7FFD;
+    let raw_addr = if is_pointer {
         (bits & POINTER_MASK) as usize
     } else {
         bits as usize
     };
+    // Module namespace exotic objects expose an own @@toStringTag. Perry's
+    // namespaces share one synthetic class and virtualize their exports, so
+    // resolve the tag from the stored module name instead of duplicating a
+    // physical symbol property on every namespace instance.
+    if is_pointer
+        && crate::value::addr_class::is_above_handle_band(raw_addr)
+        && crate::object::is_valid_obj_ptr(raw_addr as *const u8)
+    {
+        let obj = raw_addr as *const crate::object::ObjectHeader;
+        if unsafe { (*obj).class_id } == crate::object::NATIVE_MODULE_CLASS_ID {
+            let tag_wk = well_known_symbol("toStringTag");
+            if !tag_wk.is_null() {
+                let tag_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(tag_wk as *const u8).bits());
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(tag_f64)
+                    && crate::object::read_native_module_name(obj).as_deref() == Some("module")
+                {
+                    let tag = b"Module";
+                    let value = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+                    return f64::from_bits(STRING_TAG | (value as u64 & POINTER_MASK));
+                }
+            }
+        }
+    }
     if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {

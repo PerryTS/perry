@@ -235,7 +235,8 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("perf_hooks", "PerformanceObserverEntryList") => Some(0),
         ("perf_hooks", "PerformanceResourceTiming") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
-        ("module", "createRequire") => Some(1),
+        ("module", "createRequire" | "SourceMap") => Some(1),
+        ("module", "findPackageJSON" | "findSourceMap") => Some(1),
         ("module", "Module") => Some(0),
         ("module", "enableCompileCache") => Some(1),
         ("module", "flushCompileCache") => Some(0),
@@ -451,6 +452,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         "module",
         &[
             ("Module", 0),
+            ("SourceMap", 1),
             ("_findPath", 3),
             ("_initPaths", 0),
             ("_load", 3),
@@ -460,6 +462,8 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("_resolveLookupPaths", 2),
             ("createRequire", 1),
             ("enableCompileCache", 1),
+            ("findPackageJSON", 1),
+            ("findSourceMap", 1),
             ("flushCompileCache", 0),
             ("getCompileCacheDir", 0),
             ("getSourceMapsSupport", 0),

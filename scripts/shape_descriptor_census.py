@@ -279,7 +279,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     raw_write_pics = sources["crates/perry-codegen/src/expr/proxy_reflect.rs"]
 
     for pattern, label in (
-        (r"descriptors\s*:\s*HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
+        # `PtrHashMap` since #8157 (SipHash on a bare u32 was 25% of self time in
+        # `shapes`). The fact this asserts is that a by-id table EXISTS, not which
+        # hasher backs it, so accept either spelling.
+        (r"descriptors\s*:\s*(?:[\w:]+::)?(?:Ptr)?HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
@@ -463,7 +466,17 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     ):
         for name in names:
             body = function_body(source, name)
-            if re.search(r"expected_keys|add\s*\([^\n]*\"(?:0|12|16)\"", body):
+            # Match BOTH emission forms. These four guards build their header
+            # address with `blk.gep(I8, &p, &[(I64, "N")])`, not `add(..)`, so
+            # an `add`-only pattern was vacuous for every function in this
+            # list -- planting `gep(I8, &elem_ptr, &[(I64, "16")])` in
+            # `emit_element_shape_field_load` left the census green.
+            if re.search(
+                r"expected_keys"
+                r"|add\s*\([^\n]*\"(?:0|12|16)\""
+                r"|gep\s*\([^\n]*\(\s*I64\s*,\s*\"(?:0|12|16)\"\s*\)",
+                body,
+            ):
                 raise CensusError(f"{name} emits a removed ObjectHeader fact")
 
     generic_body = function_body(raw_generic_pic, "lower_generic_property_get")

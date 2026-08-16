@@ -44,8 +44,10 @@ pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_n
         ("module", "flushCompileCache") => crate::process::js_module_flush_compile_cache(),
         ("module", "getCompileCacheDir") => crate::process::js_module_get_compile_cache_dir(),
         ("module", "getSourceMapsSupport") => crate::process::js_module_get_source_maps_support(),
+        ("module", "findSourceMap") => crate::process::js_module_find_source_map(arg(0)),
         ("module", "isBuiltin") => crate::process::js_module_is_builtin(arg(0)),
-        ("module", "Module") => crate::process::js_module_module_new(arg(0)),
+        ("module", "Module") => crate::process::js_module_module_new(arg(0), arg(1)),
+        ("module", "SourceMap") => crate::process::js_module_source_map_new(arg(0), arg(1)),
         ("module", "_findPath") => crate::process::js_module_find_path(arg(0), arg(1), arg(2)),
         ("module", "_initPaths") => crate::process::js_module_init_paths(),
         ("module", "_load") => crate::process::js_module_load(arg(0), arg(1), arg(2)),
@@ -59,12 +61,14 @@ pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_n
         }
         ("module", "register") => crate::process::js_module_register(arg(0), arg(1), arg(2)),
         ("module", "registerHooks") => crate::process::js_module_register_hooks(arg(0)),
+        ("module", "runMain") => crate::object::js_module_run_main(),
         ("module", "setSourceMapsSupport") => {
             crate::process::js_module_set_source_maps_support(arg(0), arg(1))
         }
         ("module", "stripTypeScriptTypes") => {
             crate::process::js_module_strip_typescript_types(arg(0), arg(1))
         }
+        ("module", "syncBuiltinESMExports") => crate::object::js_module_sync_builtin_esm_exports(),
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
 }

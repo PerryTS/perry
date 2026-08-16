@@ -636,13 +636,20 @@ pub(super) fn compile_module_entry(
             if !nextjs_path_inits.is_empty() {
                 blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             }
-            // Register Deferred runtime modules BEFORE eager module init. A
-            // production webpack runtime can execute a computed relative
-            // `require("./chunks/" + id)` from its own eager initializer; that
-            // chunk must already have an init address in the registry at that
-            // point. Registering after this loop made the same route work when
-            // loaded later by server.js but fail when its production handler
-            // bundle was the dylib's static entry dependency.
+            // #8040: record the path->init addresses BEFORE the eager init
+            // loop below. Recording is pure bookkeeping — "No init runs here,
+            // only the address is recorded" — but a module that performs a
+            // runtime path-require DURING its own eager init (Next's
+            // webpack-runtime loads chunk 2 while initializing) previously hit
+            // an empty init registry and died with MODULE_NOT_FOUND, even
+            // though the chunk was compiled and its init address was about to
+            // be recorded a few instructions later.
+            // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
+            // module's `__init` address under its absolute path so a runtime
+            // `require(absolutePath)` (turbopack page/chunk loading) can trigger
+            // its init lazily. No init runs here — only the address is recorded.
+            // The `<prefix>__init` symbols are already declared above for every
+            // non-entry prefix, so `ptrtoint` of the symbol resolves at link.
             for (const_name, byte_len, prefix) in &nextjs_path_inits {
                 let path_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();

@@ -28,6 +28,7 @@ use super::{
 
 mod binding_faithfulness;
 mod crypto_ns;
+mod discovery;
 mod dynamic_glob;
 mod eval_worker;
 mod feature_detect;
@@ -41,6 +42,8 @@ mod tests;
 mod wasm_asset;
 
 use binding_faithfulness::audit_native_binding_choice;
+pub(super) use discovery::is_nextjs_runtime_module;
+use discovery::{aot_promotion_is_authorized, collect_js_files_recursive};
 use dynamic_glob::expand_dynamic_import_glob;
 use eval_worker::materialize_eval_worker_source;
 pub(super) use import_helpers::known_node_submodule_key;
@@ -53,40 +56,6 @@ use static_require_transform::transform_static_literal_requires;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
-
-/// Next.js wall 54 (part 2): recursively gather every `*.js` file under `dir`
-/// (page/route loaders + turbopack chunks). Symlinks are not followed; errors
-/// reading a subdirectory are skipped silently (best-effort discovery).
-fn collect_js_files_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            collect_js_files_recursive(&path, out);
-        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("js") {
-            out.push(path);
-        }
-    }
-}
-
-/// Next.js wall 54 (part 2): true for a module discovered under a standalone
-/// bundle's `.next/server/**` tree (page/route/chunk modules loaded by a
-/// runtime-computed path). Matched by the `.next` then `server` path-component
-/// sequence so it never false-matches a user file merely named `next` or a
-/// `node_modules/.next-*` package. Used by init classification (these modules
-/// must be eager so they self-register under their path at startup) and topo
-/// ordering (chunks before the page loaders that `R.c()` them).
-pub(super) fn is_nextjs_runtime_module(path: &std::path::Path) -> bool {
-    let comps: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
-    comps
-        .windows(2)
-        .any(|w| w[0] == std::ffi::OsStr::new(".next") && w[1] == std::ffi::OsStr::new("server"))
-}
 
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
@@ -249,7 +218,8 @@ fn collect_module_one(
         .components()
         .any(|c| c.as_os_str() == "node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
-    let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
+    let is_in_compiled_pkg = ctx.aot_discovered_modules.contains(&canonical)
+        || (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
         || ctx.compile_package_dirs.values().any(|dir| {
             if canonical.starts_with(dir) {
                 // Exclude nested node_modules/ inside the compiled package
@@ -434,7 +404,12 @@ fn collect_module_one(
                 e
             ));
         }
-        format!("export default {};\n", raw_source.trim())
+        let json_value = "__perry_json_default";
+        format!(
+            "function __perry_json_factory() {{ return {}; }}\nconst {json_value} = __perry_json_factory();\nconst __perry_json_module = {{ __perry_cjs_record: true, __perry_cjs_factory: __perry_json_factory, exports: {json_value}, loaded: false }};\n__perry_register_path_module({:?}, __perry_json_module);\nexport default {json_value};\n",
+            raw_source.trim(),
+            canonical.to_string_lossy(),
+        )
     } else if is_text_asset {
         // #5223: text-asset import. The file's contents are exposed verbatim as
         // the module's default export (a JS string). We never TS-parse the raw
@@ -1307,7 +1282,16 @@ fn collect_module_one(
         {
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
-            let kind = resolved.kind;
+            let kind = if resolved.kind == ModuleKind::Interpreted
+                && !is_in_perry_native_package(&resolved_path)
+                && !is_declaration_file(&resolved_path)
+                && aot_promotion_is_authorized(&resolved_path, ctx)
+            {
+                ctx.aot_discovered_modules.insert(resolved_path.clone());
+                ModuleKind::NativeCompiled
+            } else {
+                resolved.kind
+            };
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
             if let Some(sidecar) =
@@ -1607,7 +1591,7 @@ fn collect_module_one(
     // an over-eager classification is self-correcting at runtime. Limited to
     // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
     // have their own init paths.
-    if was_cjs_wrapped {
+    {
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
@@ -1627,11 +1611,11 @@ fn collect_module_one(
             if is_lazy {
                 import.is_deferred_require = true;
             }
-            // #5257: every import here was synthesized from a `require('S')`,
-            // which under CJS returns the exports object — so a no-`default`
-            // target must route through the namespace machinery (#4872), not
-            // trip the static-ESM default gate. Tag so the gate skips them.
-            import.is_adopted_require = true;
+            if was_cjs_wrapped {
+                // #5257: wrapped `require('S')` imports follow CommonJS
+                // default/namespace interop rather than the static-ESM gate.
+                import.is_adopted_require = true;
+            }
         }
     }
 
@@ -1664,7 +1648,16 @@ fn collect_module_one(
             {
                 let resolved_path = resolved.canonical_path;
                 let source_path = resolved.source_path;
-                let kind = resolved.kind;
+                let kind = if resolved.kind == ModuleKind::Interpreted
+                    && !is_in_perry_native_package(&resolved_path)
+                    && !is_declaration_file(&resolved_path)
+                    && aot_promotion_is_authorized(&resolved_path, ctx)
+                {
+                    ctx.aot_discovered_modules.insert(resolved_path.clone());
+                    ModuleKind::NativeCompiled
+                } else {
+                    resolved.kind
+                };
                 if let Some(sidecar) =
                     declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)
                 {

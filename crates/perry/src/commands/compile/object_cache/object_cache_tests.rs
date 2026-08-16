@@ -624,6 +624,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_LL_O0_THRESHOLD_BYTES",
         "PERRY_LL_SIZE_OPT",
         "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
+        "PERRY_LL_O0_MAX_FN_BYTES",
         "PERRY_ENTRY_SYMBOL",
         "PERRY_CODEGEN_UNITS",
         "PERRY_CODEGEN_UNIT_BYTES",

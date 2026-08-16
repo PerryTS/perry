@@ -124,7 +124,8 @@ pub use construct::{
 
 // ── gc_roots.rs ─────────────────────────────────────────────────────────────
 pub(crate) use gc_roots::{
-    new_class_side_table_root_scan_state, scan_class_side_table_roots_mut_step,
+    new_class_side_table_root_scan_state, prune_dead_function_class_id_keys,
+    scan_class_side_table_roots_mut_step,
 };
 pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut};
 #[cfg(test)]
@@ -132,9 +133,10 @@ pub(crate) use gc_roots::{
     test_class_dynamic_prop_root_bits, test_class_parent_closure_root_addr,
     test_class_prototype_method_root_bits, test_class_prototype_method_value_root_bits,
     test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
-    test_function_class_id_key_for_class, test_seed_class_dynamic_prop_root,
-    test_seed_class_prototype_method_root, test_seed_class_prototype_method_value_root,
-    test_seed_class_prototype_object_root, test_seed_function_class_id_key,
+    test_function_class_id_key_count, test_function_class_id_key_for_class,
+    test_seed_class_dynamic_prop_root, test_seed_class_prototype_method_root,
+    test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
+    test_seed_function_class_id_key,
 };
 
 // ── registration.rs ─────────────────────────────────────────────────────────

@@ -136,6 +136,19 @@ pub(super) fn try_imported_module_dispatch(
                     }));
                 }
                 if method_name == "call" {
+                    // A named native-module function is a real callable value.
+                    // Keep `.call(receiver, ...)` on the ordinary
+                    // Function.prototype.call path instead of treating it as a
+                    // nonexistent module-level `call` export.
+                    let imported_callable = imported_method
+                        .and_then(|name| perry_api_manifest::module_has_symbol(module_name, name))
+                        .is_some_and(|entry| {
+                            matches!(
+                                entry.kind,
+                                perry_api_manifest::ApiKind::Method { .. }
+                                    | perry_api_manifest::ApiKind::Class
+                            )
+                        });
                     if normalized_module == "stream"
                         && matches!(imported_method, None | Some("Stream"))
                     {
@@ -176,6 +189,9 @@ pub(super) fn try_imported_module_dispatch(
                             type_args: Vec::new(),
                             byte_offset: 0,
                         }));
+                    }
+                    if imported_callable {
+                        return Ok(Err(args));
                     }
                 }
                 // Unimplemented-API gate (#463 / #525) for the 2-deep

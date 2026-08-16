@@ -336,13 +336,15 @@ impl CjsPreamble {
             Stmt::Let { id, .. } => id == record,
             Stmt::Expr(expr) => match expr {
                 Expr::ObjectDefineProperty(..) => scaffolding.exempts_shape_barrier(expr),
-                Expr::PutValueSet { target, key, .. } => {
+                Expr::PutValueSet {
+                    target, key, value, ..
+                } => {
                     matches!(
                         (target.as_ref(), key.as_ref()),
                         (Expr::LocalGet(id), Expr::String(k))
                             if scaffolding.require.contains(id)
                                 && REQUIRE_LITERAL_KEYS.contains(&k.as_str())
-                    )
+                    ) && matches!(value.as_ref(), Expr::New { .. })
                 }
                 _ => false,
             },
@@ -484,18 +486,36 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
     if !class_name.starts_with(ANON_SHAPE_PREFIX) {
         return None;
     }
-    // Exactly one field, whose value is an argument-less object literal. A
-    // record with more fields, or a non-literal field value, is not the
-    // template's `{ exports: {} }` and keeps its candidacy.
-    let [Expr::New {
+    // The first field is the argument-less `exports` object literal. Lowering
+    // may fold the wrapper's seven subsequent fixed fields into the same
+    // anonymous constructor, but no other multi-field record is scaffolding.
+    let Some(Expr::New {
         class_name: inner,
         args: inner_args,
         ..
-    }] = args.as_slice()
+    }) = args.first()
     else {
         return None;
     };
-    (inner.starts_with(ANON_SHAPE_PREFIX) && inner_args.is_empty()).then_some(*id)
+    if !inner.starts_with(ANON_SHAPE_PREFIX) || !inner_args.is_empty() {
+        return None;
+    }
+    let folded_template = matches!(
+        args.as_slice(),
+        [
+            _,
+            Expr::Bool(true),
+            factory,
+            Expr::String(id_value),
+            Expr::String(_path),
+            Expr::String(filename),
+            Expr::Bool(false),
+            Expr::Array(children),
+        ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
+            && id_value == filename
+            && children.is_empty()
+    );
+    (args.len() == 1 || folded_template).then_some(*id)
 }
 
 /// R4: `var module = __cjs_module;` at the region's top level.

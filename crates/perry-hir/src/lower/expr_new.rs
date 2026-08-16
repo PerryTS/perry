@@ -73,14 +73,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     if let ast::Expr::Ident(callee_ident) = callee_expr {
-        let is_module_constructor = ctx
+        let module_constructor = ctx
             .lookup_native_module(callee_ident.sym.as_ref())
             .map(|(module_name, method)| {
-                module_name == "module"
-                    && matches!(method.as_deref(), Some("Module") | Some("default"))
+                (module_name == "module"
+                    && matches!(
+                        method.as_deref(),
+                        Some("Module") | Some("SourceMap") | Some("default")
+                    ))
+                .then(|| {
+                    if method.as_deref() == Some("SourceMap") {
+                        "SourceMap"
+                    } else {
+                        "Module"
+                    }
+                })
             })
-            .unwrap_or(false);
-        if is_module_constructor {
+            .flatten();
+        if let Some(method) = module_constructor {
             let args = new_expr
                 .args
                 .as_ref()
@@ -95,7 +105,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 module: "module".to_string(),
                 class_name: None,
                 object: None,
-                method: "Module".to_string(),
+                method: method.to_string(),
                 args,
             });
         }
@@ -271,12 +281,32 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // intrinsic — a lexical `class Set {}` / `const Set = …` must NOT
             // capture it. Suppress the local snapshot (and the shadow flag
             // below) so the built-in arms fire.
-            let callee_local_at_entry: Option<LocalId> =
-                if force_global_intrinsic || is_current_class_self {
-                    None
-                } else {
-                    ctx.lookup_local(&class_name)
-                };
+            // #8040: …but a `class <name>` declared NEARER the reference than
+            // the local wins over it, exactly as the bare-ident read arm
+            // already resolved it (`arm_ident.rs`). The two disagreed: inside a
+            // method body of `class A` declared in a nested factory, a
+            // module-scope `var A` was still visible to `lookup_local`, so
+            // `new A()` rerouted to `NewDynamic { LocalGet(<outer slot>) }` —
+            // and a method compiles to its own function, where that slot index
+            // names an unrelated (undefined) local, so the construct threw
+            // "undefined is not a constructor". Meanwhile a plain `A` read in
+            // the same body correctly resolved to the class. Next 16's webpack
+            // chunk hits this on the bundled `@opentelemetry/api`: the minified
+            // module IIFE declares `var …,i,…` and its inner factory declares
+            // `class i { static getInstance(){ return this._instance ||
+            // (this._instance = new i), this._instance } active(){…} }`, so
+            // `context.active()` was unreachable at request time (#8040).
+            // The depth rule keeps the mysql2 case working: a module-scope
+            // `class e` does NOT beat a factory-local `let e`.
+            let class_shadows_callee_local =
+                !force_global_intrinsic && ctx.forward_class_shadows_local(ident.sym.as_str());
+            let callee_local_at_entry: Option<LocalId> = if force_global_intrinsic {
+                None
+            } else if class_shadows_callee_local {
+                None
+            } else {
+                ctx.lookup_local(&class_name)
+            };
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in
@@ -538,13 +568,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
-                if matches!((module_name, method_name), ("module", Some("Module"))) {
+                if module_name == "module"
+                    && matches!(method_name, Some("Module") | Some("SourceMap"))
+                {
+                    let method = method_name.unwrap_or("Module").to_string();
                     let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                     return Ok(Expr::NativeMethodCall {
                         module: "module".to_string(),
                         class_name: None,
                         object: None,
-                        method: "Module".to_string(),
+                        method,
                         args,
                     });
                 }
@@ -1312,9 +1345,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if ctx.lookup_class(&class_name).is_none()
                 && ctx.resolve_class_alias(&class_name).is_none()
             {
-                if let Some(local_id) =
-                    callee_local_at_entry.or_else(|| ctx.lookup_local(&class_name))
-                {
+                if let Some(local_id) = callee_local_at_entry.or_else(|| {
+                    // #8040: the same nearer-class rule as the snapshot above —
+                    // a re-lookup here must not resurrect the outer local the
+                    // class shadows.
+                    if class_shadows_callee_local {
+                        None
+                    } else {
+                        ctx.lookup_local(&class_name)
+                    }
+                }) {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,

@@ -1550,6 +1550,39 @@ const SEA_DEFAULT_KEYS: &[&[u8]] = &[
     b"getAssetKeys",
 ];
 
+const MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Module",
+    b"SourceMap",
+    b"_cache",
+    b"_extensions",
+    b"_findPath",
+    b"_initPaths",
+    b"_load",
+    b"_nodeModulePaths",
+    b"_pathCache",
+    b"_preloadModules",
+    b"_resolveFilename",
+    b"_resolveLookupPaths",
+    b"builtinModules",
+    b"constants",
+    b"createRequire",
+    b"default",
+    b"enableCompileCache",
+    b"findPackageJSON",
+    b"findSourceMap",
+    b"flushCompileCache",
+    b"getCompileCacheDir",
+    b"getSourceMapsSupport",
+    b"globalPaths",
+    b"isBuiltin",
+    b"register",
+    b"registerHooks",
+    b"runMain",
+    b"setSourceMapsSupport",
+    b"stripTypeScriptTypes",
+    b"syncBuiltinESMExports",
+];
+
 pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
     let module_name = normalize_native_module_alias(module_name);
     match module_name {
@@ -1612,6 +1645,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         ]),
         "sea" => Some(SEA_NAMESPACE_KEYS),
         "sea.default" => Some(SEA_DEFAULT_KEYS),
+        "module" => Some(MODULE_NAMESPACE_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
         // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
