@@ -265,8 +265,11 @@ if [[ -s "$missing_symbols" ]]; then
     exit 1
 fi
 
+# The host is C, not Rust (#8205): a Rust executable would carry rustc's
+# System-allocator shim, and the stdlib provider's `__rust_dealloc` import must
+# reach the runtime image's mimalloc-backed shim instead. See provider-host.c.
 host="$scratch/provider-host"
-rustc --edition 2021 -O "$fixture/provider-host.rs" -o "$host"
+"$real_cc" -O2 -o "$host" "$fixture/provider-host.c" -ldl
 provider_abi=$(shasum -a 256 "$available_symbols" | awk '{print $1}')
 echo "Provider ABI hash: $provider_abi"
 
