@@ -15,19 +15,21 @@
 # throws inside a `.then()` after the response is already sent, so
 # `verify.mjs` still exits 0 when it fires (#8161).
 #
-# Known state (#8163): with the default 10 verifier passes per process this
-# fixture is intermittently RED on today's `main` — a default-mode copying
-# minor occasionally strands a stale closure, and ~2% of the batches that
-# follow one lose a response (`TypeError: value is not a function` in the host
-# log right after a `[gc-copy-minor] ran` line, then an empty body in
-# `verify.mjs`). Two passes per process finished before the first copying
-# minor (~pass 3), which is how the fixture read green while #8040's
-# 100-iteration bullet was red. Set `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2`
-# to recover the old coverage.
+# Known state (#8163, reopened): #8211 rooted the two holders behind the
+# forced-evacuation arm, but a default-GC residual remains — a default-mode
+# copying minor occasionally strands a stale closure, and ~1-2% of the batches
+# that follow one lose a response (`TypeError: value is not a function` in the
+# host log right after a `[gc-copy-minor] ran` line, then an empty body in
+# `verify.mjs`). With the default 10 verifier passes per process this fixture
+# is therefore intermittently RED until that residual lands. Two passes per
+# process finished before the first copying minor (~pass 3), which is how the
+# fixture read green while #8040's 100-iteration bullet was red; set
+# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2` to recover exactly the old
+# coverage.
 #
-# Odd cold starts run under FORCED evacuation with a seeded GC schedule and the
-# moving-GC liveness assert (#8163 — fixed; `PERRY_NEXT_ROUTE_FORCED_GC=0`
-# turns that arm off for a normal-only run).
+# Odd cold starts run under FORCED evacuation with a seeded GC schedule and
+# the moving-GC liveness assert (its two #8163 holders were fixed in #8211;
+# `PERRY_NEXT_ROUTE_FORCED_GC=0` turns that arm off for a normal-only run).
 set -euo pipefail
 cd "$(dirname "$0")"
 
