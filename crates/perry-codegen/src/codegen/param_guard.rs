@@ -325,7 +325,186 @@ impl<'a> GuardGraphBuilder<'a> {
     }
 }
 
-const MAGIC: u32 = 0x3154_4750; // `PGT1`, little-endian.
+const MAGIC: u32 = 0x3254_4750; // `PGT2`, little-endian.
+
+/// Set on a container node's op byte to tell `js_param_type_guard` that a
+/// visit to that node must be recorded in the traversal's visited set
+/// (`OP_TRACK_VISIT` in `perry-runtime`'s `param_type_guard`).
+///
+/// The validator kept the set unconditionally, which cost a linear scan of up
+/// to 64 entries — and past that a `HashSet` insert — for every container it
+/// touched. On the shapes that actually pay for guards that is per ARRAY
+/// ELEMENT: validating `p: { toks: Token[], pos: number }` on every `peek(p)`
+/// recorded one entry per token, none of which can ever be consulted. The set
+/// only earns its keep on a node that can be entered twice, and the compiler
+/// owns the graph, so it decides that here instead (#8202).
+const OP_TRACK_VISIT: u8 = 0x80;
+
+fn node_children(node: &GuardNode) -> Vec<u32> {
+    match node {
+        GuardNode::Array(elem) | GuardNode::Set(elem) | GuardNode::RecursiveRef(elem) => {
+            vec![*elem]
+        }
+        GuardNode::Tuple(elems) | GuardNode::Union(elems) => elems.clone(),
+        GuardNode::Object { fields, .. } => fields.iter().map(|field| field.ty).collect(),
+        GuardNode::Map { key, value } => vec![*key, *value],
+        _ => Vec::new(),
+    }
+}
+
+/// Only these ops consult the visited set at all; tagging anything else would
+/// change bytes the validator never reads.
+fn is_container(node: &GuardNode) -> bool {
+    matches!(
+        node,
+        GuardNode::Array(_)
+            | GuardNode::Tuple(_)
+            | GuardNode::Object { .. }
+            | GuardNode::Map { .. }
+            | GuardNode::Set(_)
+    )
+}
+
+/// Every node that lies on a directed cycle: its strongly-connected component
+/// has more than one member, or it points at itself. Iterative Tarjan, so a
+/// 4096-node descriptor cannot blow the compiler's stack.
+fn cycle_members(children: &[Vec<u32>]) -> Vec<bool> {
+    let count = children.len();
+    let mut index = vec![u32::MAX; count];
+    let mut low = vec![0u32; count];
+    let mut on_stack = vec![false; count];
+    let mut component: Vec<u32> = Vec::new();
+    let mut cycle = vec![false; count];
+    let mut next_index = 0u32;
+    // (node, next unvisited child slot)
+    let mut work: Vec<(u32, usize)> = Vec::new();
+
+    for root in 0..count {
+        if index[root] != u32::MAX {
+            continue;
+        }
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        component.push(root as u32);
+        on_stack[root] = true;
+        work.push((root as u32, 0));
+
+        while let Some((node, cursor)) = work.pop() {
+            let node_index = node as usize;
+            if let Some(child) = children[node_index].get(cursor).copied() {
+                work.push((node, cursor + 1));
+                let child_index = child as usize;
+                if child_index >= count {
+                    continue;
+                }
+                if child == node {
+                    cycle[node_index] = true;
+                } else if index[child_index] == u32::MAX {
+                    index[child_index] = next_index;
+                    low[child_index] = next_index;
+                    next_index += 1;
+                    component.push(child);
+                    on_stack[child_index] = true;
+                    work.push((child, 0));
+                } else if on_stack[child_index] {
+                    low[node_index] = low[node_index].min(index[child_index]);
+                }
+                continue;
+            }
+            if low[node_index] == index[node_index] {
+                let mut members: Vec<u32> = Vec::new();
+                while let Some(top) = component.pop() {
+                    on_stack[top as usize] = false;
+                    members.push(top);
+                    if top == node {
+                        break;
+                    }
+                }
+                if members.len() > 1 {
+                    for member in members {
+                        cycle[member as usize] = true;
+                    }
+                }
+            }
+            if let Some((parent, _)) = work.last().copied() {
+                let parent_index = parent as usize;
+                low[parent_index] = low[parent_index].min(low[node_index]);
+            }
+        }
+    }
+    cycle
+}
+
+/// One bit per node: does a visit to it have to go in the visited set?
+///
+/// Two facts make the set load-bearing, and both are properties of this
+/// immutable graph rather than of the value being validated:
+///
+/// * **termination** — a value cycle (`env.parent === env`) can only walk
+///   forever through a node that reaches itself, so every node on a descriptor
+///   cycle is recorded;
+/// * **no re-walk blowup** — a node the traversal can enter twice with the same
+///   address memoizes, which keeps total work linear in (address, node) pairs.
+///   `entries` answers that by propagating a saturating "how many ways in"
+///   count from the root, resetting at each node already known to memoize.
+///
+/// Everything else — the tree-shaped descriptors that dominate real guarded
+/// parameters — records nothing, because a second visit could never be
+/// consulted anyway.
+fn visit_tracking_bits(nodes: &[GuardNode], root: u32) -> Vec<bool> {
+    let count = nodes.len();
+    let children: Vec<Vec<u32>> = nodes.iter().map(node_children).collect();
+    let mut parents: Vec<Vec<u32>> = vec![Vec::new(); count];
+    for (id, edges) in children.iter().enumerate() {
+        for child in edges {
+            if let Some(slot) = parents.get_mut(*child as usize) {
+                slot.push(id as u32);
+            }
+        }
+    }
+
+    // Only a CONTAINER on a cycle actually memoizes — the validator consults
+    // the set nowhere else — so only those cut the propagation below. A union
+    // or recursive-reference cycle carrying no container is bounded by the
+    // validator's depth cap instead, exactly as it is today.
+    let cycles = cycle_members(&children);
+    let mut track: Vec<bool> = nodes
+        .iter()
+        .enumerate()
+        .map(|(id, node)| is_container(node) && cycles[id])
+        .collect();
+    // Saturating at 2: "can be entered more than once" is the whole question.
+    let mut entries = vec![0u8; count];
+    if let Some(slot) = entries.get_mut(root as usize) {
+        *slot = 1;
+    }
+    let mut work: Vec<u32> = (0..count as u32).collect();
+    while let Some(node) = work.pop() {
+        let node_index = node as usize;
+        let mut value = u8::from(node == root);
+        for parent in &parents[node_index] {
+            let parent_index = *parent as usize;
+            // A node that already memoizes hands its subtree exactly one entry,
+            // however many ways the walk reached the node itself.
+            let out = if track[parent_index] {
+                1
+            } else {
+                entries[parent_index]
+            };
+            value = value.saturating_add(out).min(2);
+        }
+        if value > entries[node_index] {
+            entries[node_index] = value;
+            work.extend_from_slice(&children[node_index]);
+        }
+    }
+
+    for (id, node) in nodes.iter().enumerate() {
+        track[id] = is_container(node) && (track[id] || entries[id] >= 2);
+    }
+    track
+}
 
 fn put_u16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
@@ -415,11 +594,21 @@ fn descriptor_for_type(
         class_ids,
     };
     let root = builder.build_type(ty, false)?;
-    let bodies = builder
+    let mut bodies = builder
         .nodes
         .iter()
         .map(encode_node)
         .collect::<Option<Vec<_>>>()?;
+    for (body, tracked) in bodies
+        .iter_mut()
+        .zip(visit_tracking_bits(&builder.nodes, root))
+    {
+        if tracked {
+            if let Some(op) = body.first_mut() {
+                *op |= OP_TRACK_VISIT;
+            }
+        }
+    }
     let node_count: u32 = bodies.len().try_into().ok()?;
     let header_len = 12usize.checked_add((bodies.len() + 1).checked_mul(4)?)?;
     let mut offset: u32 = header_len.try_into().ok()?;
@@ -589,7 +778,7 @@ pub(crate) fn scalar_descriptor_rep(descriptor: &[u8]) -> Option<super::typed_ab
     {
         return None;
     }
-    match descriptor[20] {
+    match descriptor[20] & !OP_TRACK_VISIT {
         1 => Some(TypedParamRep::F64),
         2 => Some(TypedParamRep::I32),
         3 => Some(TypedParamRep::I1),
@@ -657,6 +846,118 @@ mod tests {
         assert_eq!(scalar_descriptor_rep(&build(&Type::Null)), None);
         assert_eq!(scalar_descriptor_rep(&build(&Type::Number)[..20]), None);
         assert_eq!(scalar_descriptor_rep(b"PGT1"), None);
+    }
+
+    fn object_alias(name: &str, fields: &[(&str, Type)]) -> (String, Type) {
+        let mut properties = HashMap::new();
+        for (field, ty) in fields {
+            properties.insert(
+                (*field).to_string(),
+                perry_hir::types::PropertyInfo {
+                    ty: ty.clone(),
+                    optional: false,
+                    readonly: false,
+                },
+            );
+        }
+        (
+            name.to_string(),
+            Type::Object(perry_hir::types::ObjectType {
+                name: Some(name.to_string()),
+                properties,
+                property_order: Some(fields.iter().map(|(f, _)| (*f).to_string()).collect()),
+                index_signature: None,
+            }),
+        )
+    }
+
+    fn tracked_ops(descriptor: &[u8]) -> Vec<u8> {
+        let word = |at: usize| u32::from_le_bytes(descriptor[at..at + 4].try_into().unwrap());
+        let node_count = word(8) as usize;
+        (0..node_count)
+            .map(|id| descriptor[word(12 + id * 4) as usize])
+            .filter(|op| op & OP_TRACK_VISIT != 0)
+            .map(|op| op & !OP_TRACK_VISIT)
+            .collect()
+    }
+
+    /// (#8202) The shape that pays for guards in practice — `peek(p: Parser)`,
+    /// whose `toks: Token[]` walk touches every element on every call — is a
+    /// tree, so no visit is worth recording. Nothing may carry the bit.
+    #[test]
+    fn a_tree_shaped_descriptor_records_no_visits() {
+        let aliases = HashMap::from([
+            object_alias("Token", &[("kind", Type::String), ("text", Type::String)]),
+            object_alias(
+                "Parser",
+                &[
+                    (
+                        "toks",
+                        Type::Array(Box::new(Type::Named("Token".to_string()))),
+                    ),
+                    ("pos", Type::Number),
+                ],
+            ),
+        ]);
+        let descriptor = descriptor_for_type(
+            &Type::Named("Parser".to_string()),
+            &aliases,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(tracked_ops(&descriptor), Vec::<u8>::new());
+    }
+
+    /// A value cycle can only walk forever through a node that reaches itself,
+    /// so the container on the cycle MUST carry the bit — the validator's only
+    /// termination argument for `env.parent === env` rests on it.
+    #[test]
+    fn a_container_on_a_cycle_records_its_visits() {
+        let aliases = HashMap::from([object_alias(
+            "Env",
+            &[(
+                "parent",
+                Type::Union(vec![Type::Named("Env".to_string()), Type::Null]),
+            )],
+        )]);
+        let descriptor = descriptor_for_type(
+            &Type::Named("Env".to_string()),
+            &aliases,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(tracked_ops(&descriptor), vec![11]);
+    }
+
+    /// A node two fields share can be entered twice with the SAME address, so
+    /// it memoizes; dropping that would make a deep shared graph re-walk
+    /// exponentially. Its own children stay untracked — the memo at the
+    /// convergence point already holds their entry count at one.
+    #[test]
+    fn a_shared_container_records_its_visits() {
+        let aliases = HashMap::from([
+            object_alias("Leaf", &[("v", Type::Number)]),
+            object_alias(
+                "Pair",
+                &[
+                    ("a", Type::Named("Leaf".to_string())),
+                    ("b", Type::Named("Leaf".to_string())),
+                ],
+            ),
+        ]);
+        let descriptor = descriptor_for_type(
+            &Type::Named("Pair".to_string()),
+            &aliases,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(tracked_ops(&descriptor), vec![11]);
     }
 
     #[test]

@@ -10,8 +10,32 @@ use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
 use std::collections::HashSet;
+use std::mem::MaybeUninit;
 
-const MAGIC: u32 = 0x3154_4750; // `PGT1`, little-endian.
+const MAGIC: u32 = 0x3254_4750; // `PGT2`, little-endian.
+
+/// Set by the compiler on a container node's op byte when a visit to that
+/// node MUST be recorded in the traversal's visited set (#8202).
+///
+/// The set exists for two reasons, and only nodes that can hit either one
+/// need to pay for it:
+///
+/// * **termination** — a value cycle (`env.parent === env`) can only walk
+///   forever through a descriptor node that reaches itself, so a node off
+///   every descriptor cycle cannot loop;
+/// * **no re-walk blowup** — a node the traversal can enter twice with the
+///   same address memoizes, which keeps total work linear in (address, node)
+///   pairs. Below that, every node is entered once per address and the memo
+///   could never hit.
+///
+/// `visit_tracking_bits` in `perry-codegen`'s `codegen::param_guard` decides
+/// both from the immutable graph it just built, so the runtime reads the
+/// answer instead of recomputing it per call. A tree-shaped
+/// descriptor — `{ toks: Token[], pos: number }`, a union of object literals —
+/// now records nothing at all, where before every container visit paid a
+/// linear scan of up to 64 entries and then a `HashSet` insert per element.
+const OP_TRACK_VISIT: u8 = 0x80;
+const OP_MASK: u8 = 0x7F;
 const MAX_DESCRIPTOR_LEN: usize = 1 << 20;
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 256;
@@ -100,7 +124,11 @@ struct GuardState<'a> {
     /// Container/node pairs already proved during this traversal. The log
     /// makes speculative union arms reversible: a failed arm must not leave
     /// behind a fact that could make a later recursive visit succeed.
-    inline_visited: [(usize, u32); INLINE_VISITED],
+    ///
+    /// Deliberately uninitialised (#8202): only `[..inline_visited_len]` is
+    /// ever read, and most guarded calls insert nothing at all, so zeroing
+    /// 1 KB of stack on entry was pure fixed cost on every guarded call.
+    inline_visited: [MaybeUninit<(usize, u32)>; INLINE_VISITED],
     inline_visited_len: usize,
     spill_visited: Option<HashSet<(usize, u32)>>,
     spill_log: Vec<(usize, u32)>,
@@ -119,7 +147,13 @@ impl GuardState<'_> {
 
     fn seen_or_insert(&mut self, address: usize, node_id: u32) -> bool {
         let key = (address, node_id);
-        if self.inline_visited[..self.inline_visited_len].contains(&key)
+        // SAFETY: every slot below `inline_visited_len` was written by an
+        // earlier insert. `rollback` only lowers the length, so a slot can go
+        // back out of range but never becomes readable while uninitialised.
+        let seen_inline = self.inline_visited[..self.inline_visited_len]
+            .iter()
+            .any(|slot| unsafe { slot.assume_init() } == key);
+        if seen_inline
             || self
                 .spill_visited
                 .as_ref()
@@ -128,7 +162,7 @@ impl GuardState<'_> {
             return true;
         }
         if self.inline_visited_len < INLINE_VISITED {
-            self.inline_visited[self.inline_visited_len] = key;
+            self.inline_visited[self.inline_visited_len] = MaybeUninit::new(key);
             self.inline_visited_len += 1;
         } else {
             self.spill_visited
@@ -342,9 +376,13 @@ impl GuardState<'_> {
         let Some(node) = self.descriptor.node(node_id) else {
             return false;
         };
-        let Some(op) = node.first().copied() else {
+        let Some(tagged_op) = node.first().copied() else {
             return false;
         };
+        // The compiler folds the visit-tracking decision into the op byte's
+        // high bit; the low seven bits are the op itself (#8202).
+        let track = tagged_op & OP_TRACK_VISIT != 0;
+        let op = tagged_op & OP_MASK;
         match op {
             OP_ANY => node.len() == 1,
             OP_NUMBER => node.len() == 1 && (value.is_number() || value.is_int32()),
@@ -379,7 +417,7 @@ impl GuardState<'_> {
                 let Some((array, length)) = self.plain_array(value) else {
                     return false;
                 };
-                if self.seen_or_insert(array as usize, node_id) {
+                if track && self.seen_or_insert(array as usize, node_id) {
                     return true;
                 }
                 let elements =
@@ -405,7 +443,7 @@ impl GuardState<'_> {
                 if length != count {
                     return false;
                 }
-                if self.seen_or_insert(array as usize, node_id) {
+                if track && self.seen_or_insert(array as usize, node_id) {
                     return true;
                 }
                 let elements =
@@ -436,7 +474,7 @@ impl GuardState<'_> {
                 {
                     return false;
                 }
-                if self.seen_or_insert(address, node_id) {
+                if track && self.seen_or_insert(address, node_id) {
                     return true;
                 }
                 let mut cursor = 9usize;
@@ -509,7 +547,7 @@ impl GuardState<'_> {
                 let Some((map, size)) = self.plain_map(value) else {
                     return false;
                 };
-                if self.seen_or_insert(map as usize, node_id) {
+                if track && self.seen_or_insert(map as usize, node_id) {
                     return true;
                 }
                 let entries = (*map).entries as *const f64;
@@ -535,7 +573,7 @@ impl GuardState<'_> {
                 let Some((set, size)) = self.plain_set(value) else {
                     return false;
                 };
-                if self.seen_or_insert(set as usize, node_id) {
+                if track && self.seen_or_insert(set as usize, node_id) {
                     return true;
                 }
                 let elements = (*set).elements as *const f64;
@@ -570,7 +608,7 @@ pub extern "C" fn js_param_type_guard(value: f64, descriptor: *const u8, length:
     let root = descriptor.root;
     let mut state = GuardState {
         descriptor,
-        inline_visited: [(0, 0); INLINE_VISITED],
+        inline_visited: [const { MaybeUninit::uninit() }; INLINE_VISITED],
         inline_visited_len: 0,
         spill_visited: None,
         spill_log: Vec::new(),
@@ -634,6 +672,93 @@ mod tests {
         let mut descriptor = one_node(&[OP_NUMBER]);
         descriptor[0] = 0;
         assert_eq!(guard(JSValue::number(1.0), &descriptor), 0);
+    }
+
+    /// `{ <name>: <child> }`, optionally carrying the compiler's
+    /// visit-tracking bit, as one object node.
+    fn object_node(track: bool, name: &[u8], child: u32) -> Vec<u8> {
+        let mut body = vec![if track {
+            OP_OBJECT | OP_TRACK_VISIT
+        } else {
+            OP_OBJECT
+        }];
+        body.extend_from_slice(&0u32.to_le_bytes()); // class_id: structural
+        body.extend_from_slice(&1u32.to_le_bytes()); // one field
+        body.push(0); // required
+        body.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        body.extend_from_slice(name);
+        body.extend_from_slice(&child.to_le_bytes());
+        body
+    }
+
+    fn plain_object(fields: &[(&[u8], JSValue)]) -> (*mut ObjectHeader, JSValue) {
+        let object = crate::object::js_object_alloc(0, fields.len() as u32);
+        for (name, value) in fields {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(object, key, f64::from_bits(value.bits()));
+        }
+        let value = JSValue::from_bits(crate::value::js_nanbox_pointer(object as i64).to_bits());
+        (object, value)
+    }
+
+    /// (#8202) The bit is the validator's ONLY termination argument for a
+    /// value cycle: `node.next === node` against a self-referential
+    /// descriptor node must memoize on the second arrival and accept.
+    #[test]
+    fn a_tracked_node_terminates_on_a_cyclic_value() {
+        let (_, node) = plain_object(&[(b"next", JSValue::undefined())]);
+        let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(f64::from_bits(node.bits())) as *mut ObjectHeader,
+            key,
+            f64::from_bits(node.bits()),
+        );
+
+        assert_eq!(
+            guard(node, &descriptor(0, &[&object_node(true, b"next", 0)])),
+            1
+        );
+        // Without it the walk runs out of depth and the caller conservatively
+        // takes the generic function — never a hang, never a false accept.
+        assert_eq!(
+            guard(node, &descriptor(0, &[&object_node(false, b"next", 0)])),
+            0
+        );
+    }
+
+    /// An untracked node is a pure cost saving, not a semantic change: a
+    /// shared address reached twice re-walks and still decides the same way.
+    #[test]
+    fn an_untracked_shared_node_decides_the_same_way() {
+        let (_, leaf) = plain_object(&[(b"v", JSValue::number(1.0))]);
+        let (_, pair) = plain_object(&[(b"a", leaf), (b"b", leaf)]);
+
+        let mut pair_body = vec![OP_OBJECT];
+        pair_body.extend_from_slice(&0u32.to_le_bytes());
+        pair_body.extend_from_slice(&2u32.to_le_bytes());
+        for name in [b"a", b"b"] {
+            pair_body.push(0);
+            pair_body.extend_from_slice(&1u16.to_le_bytes());
+            pair_body.extend_from_slice(name);
+            pair_body.extend_from_slice(&1u32.to_le_bytes());
+        }
+        let leaf_body = object_node(false, b"v", 2);
+        let blob = descriptor(0, &[&pair_body, &leaf_body, &[OP_NUMBER]]);
+        assert_eq!(guard(pair, &blob), 1);
+
+        let mut mismatched = blob.clone();
+        *mismatched.last_mut().unwrap() = OP_STRING;
+        assert_eq!(guard(pair, &mismatched), 0);
+    }
+
+    /// The tracking bits changed what the op byte means, so a descriptor from
+    /// a compiler that predates them must not be read as one that opts out of
+    /// tracking everywhere — it fails closed on the magic instead.
+    #[test]
+    fn the_previous_descriptor_format_is_refused() {
+        let mut previous = one_node(&[OP_NUMBER]);
+        previous[0..4].copy_from_slice(&0x3154_4750u32.to_le_bytes());
+        assert_eq!(guard(JSValue::number(1.0), &previous), 0);
     }
 
     #[test]
