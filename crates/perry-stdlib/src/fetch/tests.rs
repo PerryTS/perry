@@ -451,6 +451,9 @@ fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
         ("fetch/headers.rs", "js_headers_entries"),
         ("fetch/headers.rs", "js_headers_get_set_cookie"),
         ("fetch/body_metadata.rs", "js_form_data_for_each"),
+        ("fetch/body_metadata.rs", "js_form_data_entries"),
+        // Backs `js_form_data_keys` / `js_form_data_values`.
+        ("fetch/body_metadata.rs", "form_data_string_array"),
     ];
     for (file, func) in MUST_OPEN_A_SCOPE {
         let text = SOURCES
