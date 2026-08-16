@@ -136,6 +136,12 @@ fn write_pic_ir(name: &str, value: Expr) -> String {
     ))
 }
 
+/// #8185: the census (`barrier_stem_census_tests`) runs its uniform floor on
+/// this file's pointer-possible probe — same fixture, distinct module name.
+pub(super) fn census_put_pic_ir() -> String {
+    write_pic_ir("census_put_pic", Expr::LocalGet(VALUE))
+}
+
 /// Emitted block labels carry a per-function numeric suffix
 /// (`put.pic.gc_bookkeeping.60`), so a label matches a stem when it IS the
 /// stem or the stem followed by `.` and digits only.

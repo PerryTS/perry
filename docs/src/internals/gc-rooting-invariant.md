@@ -525,15 +525,48 @@ The classes are `BARRIERED`, `EXTERNAL_BARRIERED`, `ROOT`, `INIT`,
 the first-party store sites and fails when one has no marker — so a **new**
 store site cannot land with the question unanswered.
 
-Be precise about what that buys, because the name oversells it: the script
-audits the **comment claim**, not the emitted IR. It proves somebody wrote down
-a verdict next to the store. It cannot prove the verdict is true, and it cannot
-notice when a later edit falsifies one — deleting a barrier while leaving its
-`GC_STORE_AUDIT(BARRIERED)` comment in place is a clean pass. Teaching it to
-check the claim against emitted IR would turn this section from a review
-convention into a gate; that is #8185's open long-term ask and is not a small
-change. Until then the marker is documentation and the `--lib` IR test is the
-gate.
+Since #8185 landed its second half, the script verifies the **claim**, not
+just the comment, for the two classes where a false claim strands objects:
+
+- **`BARRIERED` in `perry-codegen`** is bound to an IR witness. Every call to
+  the stem-taking barrier emitters (`emit_write_barrier_slot_generation_tested`,
+  `…_value_and_generation_tested`, `emit_jsvalue_slot_store_pointer_tested`)
+  must pass a string-literal stem, and the census in
+  `crates/perry-codegen/src/expr/barrier_stem_census_tests.rs`
+  (`VERIFIED_BARRIER_STEMS`) must list exactly that stem set — the lint script
+  fails on drift in either direction, on a stem it cannot resolve to a
+  literal, and on a `BARRIERED` marker in any codegen file not bound to a
+  census stem. The census test itself (a `--lib` test, so per-PR) compiles a
+  probe per stem and, for **every instance** of the stem's gate in the emitted
+  IR, asserts a `cond_br` into `<stem>.barrier.<n>`, the
+  `js_write_barrier_slot` call inside that block, and the branch predicate
+  walked by def-chain back to the `GC_FLAG_TENURED` load and the
+  incremental-count load — so `br i1 true` with the dead predicate left in
+  place fails, and so does a barrier bypassed in one specialized clone but
+  intact in another. Four IR-surgery sabotages (delete the call, hard-wire the
+  gate, move the call out of its block, bypass the gate) run in the suite
+  against every stem.
+- **`BARRIERED` / `EXTERNAL_BARRIERED` in `perry-runtime` / `perry-stdlib`**
+  are rustc-compiled, so there is no perry-emitted IR; the claim is verified
+  against source structure instead. From the marker to the end of its
+  enclosing function there must be a call to a barrier primitive (defined
+  under `crates/perry-runtime/src/gc/`) or to a registered discharge helper
+  (`RUNTIME_DISCHARGE_HELPERS` in the script), and every registered helper is
+  itself re-verified each run to reach a primitive through the call graph —
+  deleting the barrier *inside* `note_array_slot` turns every marker leaning
+  on it red. Granularity is the enclosing function (two barriered stores and
+  one barrier call in the same function still pass), and the script prints
+  that limit.
+
+What is still trusted: `ROOT`, `INIT`, `POINTER_FREE` and `STACK` verdicts are
+human-audited only, and the script says so in its summary on every run —
+`UNVERIFIED (human-audited only, by class): …`. A codegen caller that passes
+`write_barrier_needed: false` where `true` was meant is a parameterization bug
+neither layer catches. If the verifier's own inputs rot — the census file
+missing, the registry parsing to zero entries, a scan matching fewer sites
+than its floor — the script exits **2** rather than reading as a clean empty
+pass (the `gc_rekeyed_key_tables.py` discipline), and its `--self-test` plants
+fifteen shapes, each of which must be adjudicated.
 
 ## The corpus problem, and the two corpora (#7280)
 

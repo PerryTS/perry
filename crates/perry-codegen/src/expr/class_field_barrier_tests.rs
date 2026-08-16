@@ -227,7 +227,7 @@ fn probe_module() -> Module {
     m
 }
 
-fn ir() -> String {
+pub(super) fn ir() -> String {
     String::from_utf8(compile_module(&probe_module(), ir_opts()).expect("module compiles"))
         .expect("LLVM IR should be UTF-8")
 }
