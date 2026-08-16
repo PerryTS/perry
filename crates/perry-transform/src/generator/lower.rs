@@ -910,13 +910,13 @@ pub fn transform_generator_function_with_extra_captures(
             });
             match (&closure_visible_before, &post_visible) {
                 (Some(before), Some(after)) => {
-                    let machinery = [state_id, done_id, executing_id]
-                        .into_iter()
-                        .chain(if has_yielding_finally {
+                    let machinery = [state_id, done_id, executing_id].into_iter().chain(
+                        if has_yielding_finally {
                             vec![pending_type_id, pending_value_id]
                         } else {
                             Vec::new()
-                        });
+                        },
+                    );
                     let mut ids: Vec<LocalId> = hoisted
                         .iter()
                         .map(|(id, _, _)| *id)

@@ -611,7 +611,7 @@ fn collect_local_candidate_defs_from_frames<'a>(
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
                 | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => {}
+                | Stmt::ReleaseBoxes(_) => {}
             },
             LocalCandidateFrame::Expr(expr) => {
                 match expr {
@@ -816,7 +816,7 @@ fn collect_param_literal_sets_from_frames(
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
                 | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => {}
+                | Stmt::ReleaseBoxes(_) => {}
             },
             ParamFrame::Expr(expr) => {
                 if let Expr::Closure { params, body, .. } = expr {
@@ -961,7 +961,7 @@ fn collect_const_locals_from_frames<'a>(
                     | Stmt::LabeledContinue(_)
                     | Stmt::PreallocateBoxes(_)
                     | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => {}
+                    | Stmt::ReleaseBoxes(_) => {}
                 }
             }
             ConstFrame::Expr(expr) => {
@@ -1081,7 +1081,7 @@ fn scan_mutations_from_frames(
                     | Stmt::LabeledContinue(_)
                     | Stmt::PreallocateBoxes(_)
                     | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => {}
+                    | Stmt::ReleaseBoxes(_) => {}
                 }
             }
             MutationFrame::Expr(expr) => {

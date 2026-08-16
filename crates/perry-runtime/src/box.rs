@@ -430,7 +430,7 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
 #[no_mangle]
 pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     let addr = ptr as usize;
-    if addr < 0x1000 || (addr as u64) >= 0x0001_0000_0000_0000 || addr % 8 != 0 {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return;
     }
     let was_registered = I32_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
@@ -459,7 +459,7 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
 #[no_mangle]
 pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     let addr = ptr as usize;
-    if addr < 0x1000 || (addr as u64) >= 0x0001_0000_0000_0000 || addr % 8 != 0 {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return;
     }
     let was_registered = BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
@@ -1158,5 +1158,192 @@ mod tests {
 
         // Null / near-null slots.
         assert_eq!(box_slot_contents_bits(0), None);
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    /// A released cell must be INERT: de-registered (reads `undefined`,
+    /// writes dropped), evicted from the positive cache, and parked exactly
+    /// once no matter how many times the terminal arm re-runs (#7933
+    /// follow-up; the stray-duplicate-resume path re-runs the release list).
+    #[test]
+    fn released_cell_is_inert_and_release_is_idempotent() {
+        super::test_clear_box_registry();
+        let ptr = js_box_alloc_bits(crate::value::TAG_TRUE as i64);
+        assert!(is_registered_box_ptr(ptr));
+        js_box_release(ptr);
+        assert!(
+            !is_registered_box_ptr(ptr),
+            "released cell must be de-registered (and cache-evicted)"
+        );
+        assert_eq!(
+            js_box_get_bits(ptr) as u64,
+            crate::value::TAG_UNDEFINED,
+            "released cell must read undefined"
+        );
+        js_box_set_bits(ptr, crate::value::TAG_TRUE as i64);
+        assert_eq!(
+            unsafe { (*ptr).value },
+            crate::value::TAG_UNDEFINED,
+            "write to a released cell must be dropped"
+        );
+        // Idempotence: a second release must not double-park the address —
+        // a double-park would hand the same cell to two future activations.
+        js_box_release(ptr);
+        js_box_release(ptr);
+        let parked = BOX_RELEASE_QUARANTINE
+            .with(|q| q.borrow().iter().filter(|&&a| a == ptr as usize).count());
+        assert_eq!(parked, 1, "double release must park exactly once");
+    }
+
+    /// Reuse contract: a released cell becomes allocatable only AFTER the
+    /// quarantine flush (the outermost microtask-pump boundary in production),
+    /// and the reused cell is re-registered with the fresh initial value.
+    #[test]
+    fn released_cell_is_reused_only_after_flush() {
+        super::test_clear_box_registry();
+        let first = js_box_alloc_bits(1.0f64.to_bits() as i64);
+        js_box_release(first);
+        // Not flushed yet: allocation must NOT reuse the parked cell.
+        let second = js_box_alloc_bits(2.0f64.to_bits() as i64);
+        assert_ne!(
+            first as usize, second as usize,
+            "quarantined cell must not be reused before the flush boundary"
+        );
+        flush_released_boxes();
+        let third = js_box_alloc_bits(3.0f64.to_bits() as i64);
+        assert_eq!(
+            first as usize, third as usize,
+            "flushed cell must be reused by the next allocation"
+        );
+        assert!(is_registered_box_ptr(third), "reused cell re-registers");
+        assert_eq!(js_box_get_bits(third), 3.0f64.to_bits() as i64);
+    }
+
+    /// Generated async-step code reads the compiler-private control cells
+    /// with RAW loads (`load_async_i32_control_cell` /
+    /// `load_async_i1_control_cell`), never through the registry-checked
+    /// getters — so the PARKED VALUES are load-bearing: a stray duplicate
+    /// resume must observe `__gen_done == true` (the terminal short-circuit)
+    /// and, were it ever to read state, `-1` (no dispatch case matches).
+    #[test]
+    fn typed_control_cells_park_terminal_values() {
+        super::test_clear_box_registry();
+        let state = js_i32_box_alloc(7);
+        let done = js_bool_box_alloc(0);
+        js_i32_box_release(state);
+        js_bool_box_release(done);
+        assert_eq!(
+            unsafe { (*state).value },
+            -1,
+            "parked i32 control cell must raw-read as -1 (no state)"
+        );
+        assert!(
+            unsafe { (*done).value },
+            "parked i1 control cell must raw-read as true (done)"
+        );
+        // And the checked getters treat them as not-a-box.
+        assert_eq!(js_i32_box_get(state), 0);
+        assert_eq!(js_bool_box_get(done), 0);
+    }
+
+    /// perry#4898 discipline extends to release: a structurally-plausible
+    /// pointer that was never minted as a box must be a TOTAL no-op — no
+    /// deref, no park.
+    #[test]
+    fn foreign_pointer_release_is_a_total_noop() {
+        super::test_clear_box_registry();
+        static RODATA: [u64; 2] = [0xDEAD_BEEF, 0xFEED_FACE];
+        let fake = (&RODATA[0] as *const u64) as *mut Box;
+        js_box_release(fake);
+        assert_eq!(RODATA[0], 0xDEAD_BEEF, "rodata must be untouched");
+        let parked = BOX_RELEASE_QUARANTINE.with(|q| q.borrow().len());
+        assert_eq!(parked, 0, "foreign pointer must not be parked");
+    }
+
+    /// THE #7933-follow-up regression gate, as a counter assertion (the leak
+    /// is behaviorally invisible — a test that merely runs to completion
+    /// cannot fail on it). Simulate N async-activation lifecycles (alloc a
+    /// frame of cells, release it at terminal, hit the drain boundary every
+    /// "turn"): the malloc-side residue — cells that cost a real
+    /// `std::alloc` allocation, `allocs - pool_reuses` — must stay bounded
+    /// by one turn's working set instead of growing linearly with N. Before
+    /// the release/reuse machinery existed, residue == every cell ever
+    /// allocated (~500 B/activation of cells + registry, 119 MB on
+    /// asyncpipe_big).
+    #[test]
+    fn completed_activation_residue_is_bounded_not_linear() {
+        super::test_clear_box_registry();
+        const TURNS: usize = 100;
+        const ACTIVATIONS_PER_TURN: usize = 20;
+        // handle()-shaped frame: 3 JSValue cells + 1 i32 + 2 bool controls.
+        const CELLS_PER_ACTIVATION: usize = 6;
+        let (a0, r0, _) = box_release_stats();
+        let mut distinct = std::collections::HashSet::new();
+        for _ in 0..TURNS {
+            for _ in 0..ACTIVATIONS_PER_TURN {
+                let b1 = js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+                let b2 = js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+                let b3 = js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+                let state = js_i32_box_alloc(0);
+                let done = js_bool_box_alloc(0);
+                let exec = js_bool_box_alloc(0);
+                for b in [b1, b2, b3] {
+                    distinct.insert(b as usize);
+                }
+                distinct.insert(state as usize);
+                distinct.insert(done as usize);
+                distinct.insert(exec as usize);
+                // Terminal state: release the whole frame.
+                for b in [b1, b2, b3] {
+                    js_box_release(b);
+                }
+                js_i32_box_release(state);
+                js_bool_box_release(done);
+                js_bool_box_release(exec);
+            }
+            // Outermost microtask-pump boundary, task queue empty.
+            flush_released_boxes();
+        }
+        let (a1, r1, _) = box_release_stats();
+        // The counters are process-global; sibling tests on other threads
+        // also allocate boxes, so assert lower bounds and give the residue
+        // bound slack instead of demanding exact equality.
+        let total_allocs = (a1 - a0) as usize;
+        let residue = total_allocs - (r1 - r0) as usize;
+        let own_allocs = TURNS * ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
+        assert!(
+            total_allocs >= own_allocs,
+            "every lifecycle allocates its frame ({total_allocs} < {own_allocs})"
+        );
+        // One turn's working set (the first turn mints real cells; every
+        // later turn reuses them), plus generous slack for whatever the
+        // parallel sibling tests allocate (they use a handful of cells
+        // each). The pre-fix residue is TURNS * the per-turn bound, two
+        // orders of magnitude past this.
+        let bound = 4 * ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
+        assert!(
+            residue <= bound,
+            "malloc residue must be bounded by one turn's working set: \
+             residue={residue} bound={bound} (linear would be {total_allocs})"
+        );
+        assert!(
+            distinct.len() <= bound,
+            "distinct cell addresses must be bounded (got {})",
+            distinct.len()
+        );
+        // The registries hold only the (small) final turn's live set — the
+        // linear-growth signature is gone from the scan population too.
+        let reg_total = BOX_REGISTRY.with(|r| r.borrow().len())
+            + I32_BOX_REGISTRY.with(|r| r.borrow().len())
+            + BOOL_BOX_REGISTRY.with(|r| r.borrow().len());
+        assert!(
+            reg_total <= bound,
+            "registry population must not scale with completed activations \
+             (got {reg_total})"
+        );
     }
 }

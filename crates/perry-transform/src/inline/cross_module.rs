@@ -474,7 +474,9 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
                         .is_some_and(|f| f.iter().any(|s| check_stmt(s, set)))
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), set),
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => false,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {
+                false
+            }
         }
     }
     stmts.iter().any(|s| check_stmt(s, set))

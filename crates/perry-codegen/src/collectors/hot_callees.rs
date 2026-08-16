@@ -309,7 +309,7 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 

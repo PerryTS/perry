@@ -233,7 +233,9 @@ fn inline_functions_inner(
                     }
                 }
                 Stmt::Labeled { body, .. } => walk_stmt_exprs(body.as_ref(), f),
-                Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+                Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_)
+                | Stmt::ReleaseBoxes(_) => {}
             }
         }
 

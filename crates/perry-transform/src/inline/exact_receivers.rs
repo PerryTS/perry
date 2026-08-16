@@ -74,9 +74,7 @@ pub fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFa
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(ids)
-        | Stmt::PreallocateTdzBoxes(ids)
-        | Stmt::ReleaseBoxes(ids) => {
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
             for id in ids {
                 facts.remove(id);
             }

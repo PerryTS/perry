@@ -396,7 +396,7 @@ fn check_uses_in_stmt(
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 

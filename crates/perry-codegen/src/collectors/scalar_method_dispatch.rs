@@ -598,7 +598,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 

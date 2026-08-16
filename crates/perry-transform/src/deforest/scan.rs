@@ -435,7 +435,7 @@ impl StmtRefAllWalker<'_> {
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
             | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => {}
+            | Stmt::ReleaseBoxes(_) => {}
         }
     }
 

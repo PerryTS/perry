@@ -358,16 +358,15 @@ mod tests {
         crate::generator::transform_generators(m);
     }
 
-    /// Count `LocalSet(id, undefined)` statements anywhere in a body, including
-    /// inside closures (the release stores live in the step closure).
+    /// Count how many `Stmt::ReleaseBoxes` lists name `id`, anywhere in a
+    /// body, including inside closures (the releases live in the step
+    /// closure's terminal arms).
     fn count_release_stores(stmts: &[Stmt], id: LocalId) -> usize {
         let mut n = 0;
         fn walk_stmts(stmts: &[Stmt], id: LocalId, n: &mut usize) {
             for s in stmts {
                 match s {
-                    Stmt::Expr(Expr::LocalSet(sid, value))
-                        if *sid == id && matches!(**value, Expr::Undefined) =>
-                    {
+                    Stmt::ReleaseBoxes(ids) if ids.contains(&id) => {
                         *n += 1;
                     }
                     _ => {}
@@ -492,18 +491,18 @@ mod tests {
         );
     }
 
-    /// `__gen_sent` (the value the last `await` delivered) is released too, and
-    /// the control locals are not: an `undefined` `__gen_done` would drop a late
-    /// resume into the dispatch loop with no matching state.
+    /// The whole activation frame releases at the terminal states — the user
+    /// locals, `__gen_sent`, AND the state-machine control cells
+    /// (`__gen_state`/`__gen_done`/`__gen_executing`). The control cells are
+    /// safe to release because a stray duplicate resume observes the PARKED
+    /// values (`js_bool_box_release` parks `true` = the terminal
+    /// short-circuit, `js_i32_box_release` parks `-1` = no dispatch case),
+    /// which reproduces the pre-release terminal path exactly.
     #[test]
-    fn the_state_machine_control_locals_are_not_released() {
+    fn the_whole_activation_frame_is_released() {
         let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
         run_async_pipeline(&mut m);
         let body = &m.functions[0].body;
-        // `PreallocateBoxes` lists the activation's cells; ids 0..=3 of the
-        // transform's own allocation are state/done/sent/executing. Find the
-        // prealloc list and assert at most one of its transform-internal ids is
-        // released (that one is `__gen_sent`).
         let prealloc: Vec<LocalId> = body
             .iter()
             .find_map(|s| match s {
@@ -511,30 +510,33 @@ mod tests {
                 _ => None,
             })
             .expect("the activation preallocates its boxes");
-        let released: Vec<LocalId> = prealloc
+        let unreleased: Vec<LocalId> = prealloc
             .iter()
             .copied()
-            .filter(|id| count_release_stores(body, *id) > 0)
+            .filter(|id| count_release_stores(body, *id) == 0)
             .collect();
-        // Exactly the user local (50) and `__gen_sent`.
-        assert_eq!(
-            released.len(),
-            2,
-            "released set should be {{user local, __gen_sent}}, got {released:?} of {prealloc:?}"
+        assert!(
+            unreleased.is_empty(),
+            "every preallocated cell must be in the terminal release set; \
+             {unreleased:?} of {prealloc:?} are not:\n{body:#?}"
         );
-        assert!(released.contains(&50), "{released:?}");
+        assert!(
+            count_release_stores(body, 50) == 2,
+            "the user local releases on both terminal arms"
+        );
     }
 
     #[test]
-    fn release_stmts_are_undefined_stores() {
+    fn release_stmts_are_one_release_boxes_stmt() {
         let stmts = build_box_release_stmts(&[3, 5]);
-        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::LocalSet(id, value)) => {
-                assert_eq!(*id, 3);
-                assert!(matches!(**value, Expr::Undefined));
-            }
+            Stmt::ReleaseBoxes(ids) => assert_eq!(ids.as_slice(), &[3, 5]),
             other => panic!("unexpected release stmt: {other:?}"),
         }
+        assert!(
+            build_box_release_stmts(&[]).is_empty(),
+            "an empty release set emits nothing"
+        );
     }
 }

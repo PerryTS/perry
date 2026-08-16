@@ -523,7 +523,7 @@ pub fn collect_pointer_typed_locals(
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
                 | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+                | Stmt::ReleaseBoxes(_) => {}
                 Stmt::If {
                     condition,
                     then_branch,
@@ -750,7 +750,7 @@ pub fn collect_pointer_typed_locals(
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
                 | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+                | Stmt::ReleaseBoxes(_) => {}
                 Stmt::If {
                     condition,
                     then_branch,

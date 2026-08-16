@@ -521,7 +521,7 @@ fn additive_flow_stmt(
         | Stmt::Return(None)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
