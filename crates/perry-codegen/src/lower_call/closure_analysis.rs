@@ -190,7 +190,7 @@ pub fn find_outer_writes_stmt(
             }
         }
         Stmt::Labeled { body, .. } => find_outer_writes_stmt(body, inner_ids, out),
-        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -373,7 +373,8 @@ fn find_thread_hazard_stmt(
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => None,
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => None,
         Stmt::If {
             condition,
             then_branch,

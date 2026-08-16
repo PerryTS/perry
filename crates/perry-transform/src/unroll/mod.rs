@@ -615,6 +615,8 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
                 })
         }
         Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
+        // Conservative: never unroll across a box-release hint.
+        Stmt::ReleaseBoxes(_) => false,
     }
 }
 
@@ -753,7 +755,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
             substitute_localget_with_int_in_stmt(body, iv_id, value);
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -935,6 +937,15 @@ fn refresh_in_stmt(
         Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             for id in ids.iter_mut() {
                 alloc_fresh(remap, next_id, id);
+            }
+        }
+        Stmt::ReleaseBoxes(ids) => {
+            // A release REFERENCES its ids (like LocalSet), it does not
+            // declare them: remap ids the clone renamed, keep the rest.
+            for id in ids.iter_mut() {
+                if let Some(&existing) = remap.get(id) {
+                    *id = existing;
+                }
             }
         }
     }

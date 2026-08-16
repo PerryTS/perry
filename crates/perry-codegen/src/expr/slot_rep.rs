@@ -713,7 +713,8 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
-                | Stmt::PreallocateTdzBoxes(_) => {}
+                | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
             }
         }
     }
@@ -883,7 +884,8 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
                 | Stmt::PreallocateBoxes(_)
-                | Stmt::PreallocateTdzBoxes(_) => {}
+                | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
             }
         }
     }

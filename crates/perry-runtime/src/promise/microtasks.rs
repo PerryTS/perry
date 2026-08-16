@@ -973,6 +973,21 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         crate::gc::gc_safepoint_moving_minor();
     }
 
+    // #7933 follow-up: at the outermost pump exit with a fully drained task
+    // queue, no `Task::AsyncStep` referencing a released activation's cells
+    // can still exist (a duplicate resume can only live in TASK_QUEUE, and it
+    // has run — against inert, de-registered cells — by the time the queue is
+    // empty). That makes the released cells reusable: drain the release
+    // quarantines into the free pools. See the QUARANTINE doc in
+    // `crate::r#box`. Skipped when the drain exited early with tasks still
+    // queued — the quarantine just keeps accumulating until the next clean
+    // boundary.
+    if MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
+        && TASK_QUEUE.with(|q| q.borrow().is_empty())
+    {
+        crate::r#box::flush_released_boxes();
+    }
+
     MICROTASK_RUN_DEPTH.with(|depth| {
         depth.set(depth.get().saturating_sub(1));
     });

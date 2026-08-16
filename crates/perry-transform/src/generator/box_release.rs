@@ -162,7 +162,8 @@ fn scan_stmt(stmt: &Stmt, scan: &mut Scan) {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -201,9 +202,14 @@ fn scan_expr(expr: &Expr, scan: &mut Scan) {
 /// `js_box_set(cell, TAG_UNDEFINED)`: no allocation, no collection point, and
 /// the cell stays registered.
 pub(crate) fn build_box_release_stmts(ids: &[LocalId]) -> Vec<Stmt> {
-    ids.iter()
-        .map(|id| Stmt::Expr(Expr::LocalSet(*id, Box::new(Expr::Undefined))))
-        .collect()
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    // One `Stmt::ReleaseBoxes` instead of per-id `LocalSet(id, undefined)`
+    // stores: codegen lowers it to `js_box_release*` calls that clear the
+    // cell AND de-register + park it for reuse, so a completed activation
+    // stops costing malloc-side memory, not just GC retention.
+    vec![Stmt::ReleaseBoxes(ids.to_vec())]
 }
 
 #[cfg(test)]

@@ -910,6 +910,13 @@ pub fn transform_generator_function_with_extra_captures(
             });
             match (&closure_visible_before, &post_visible) {
                 (Some(before), Some(after)) => {
+                    let machinery = [state_id, done_id, executing_id]
+                        .into_iter()
+                        .chain(if has_yielding_finally {
+                            vec![pending_type_id, pending_value_id]
+                        } else {
+                            Vec::new()
+                        });
                     let mut ids: Vec<LocalId> = hoisted
                         .iter()
                         .map(|(id, _, _)| *id)
@@ -918,14 +925,21 @@ pub fn transform_generator_function_with_extra_captures(
                         // delivered — a first-class retainer, and re-entry
                         // overwrites it before any read.
                         .chain(std::iter::once(sent_id))
+                        // The state-machine control locals release too, now
+                        // that a release parks the cell instead of writing
+                        // `undefined` (#7933 follow-up). A stray duplicate
+                        // resume stays on today's exact path via the PARKED
+                        // VALUES: generated code reads the control cells with
+                        // raw loads, `js_bool_box_release` parks
+                        // `__gen_done`-shaped cells as `true` (the terminal
+                        // short-circuit), and `js_i32_box_release` parks
+                        // `__gen_state`-shaped cells as `-1` (matches no
+                        // dispatch case, no catch route, no completion-check
+                        // state). User closures cannot name these locals, so
+                        // the visibility filter below is pure defense.
+                        .chain(machinery)
                         .filter(|id| !before.contains(id) && !after.contains(id))
                         .collect();
-                    // The state-machine control locals (`__gen_state`,
-                    // `__gen_done`, `__gen_executing`, the pending-completion
-                    // record) are deliberately NOT released: a resume that
-                    // arrives after the terminal state reads `__gen_done` to
-                    // short-circuit, and an `undefined` there would drop it
-                    // into the dispatch loop with no matching state.
                     ids.sort();
                     ids.dedup();
                     ids

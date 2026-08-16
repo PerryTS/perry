@@ -160,7 +160,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_i32_box_set"
         | "js_bool_box_set"
         | "js_i32_box_get"
-        | "js_bool_box_get" => GcCallEffect::CannotCollect,
+        | "js_bool_box_get"
+        // The #7933 release entry points: registry remove + raw cell clear +
+        // TLS free-pool push. No GC-heap allocation, no user code, no
+        // collection trigger — the same audit as the accessors above.
+        | "js_box_release"
+        | "js_i32_box_release"
+        | "js_bool_box_release" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
         // and accessor dispatch — none present, and none takes a receiver
@@ -279,6 +285,9 @@ mod tests {
             "js_bool_box_set",
             "js_i32_box_get",
             "js_bool_box_get",
+            "js_box_release",
+            "js_i32_box_release",
+            "js_bool_box_release",
         ] {
             assert_eq!(
                 classify_direct_callee(name),

@@ -840,7 +840,8 @@ fn verify_block(
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
             // Return-proof facts are optional. Complex exceptional/fallthrough
             // joins remain generic until their proof can be modeled exactly.
             Stmt::Try { .. } | Stmt::Switch { .. } => return false,

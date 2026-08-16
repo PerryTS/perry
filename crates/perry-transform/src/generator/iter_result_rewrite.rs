@@ -72,7 +72,8 @@ pub fn rewrite_stmt(stmt: &mut Stmt) {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
         Stmt::Let { init, .. } => {
             if let Some(e) = init.as_mut() {
                 rewrite_expr(e);

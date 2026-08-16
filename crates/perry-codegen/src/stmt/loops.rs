@@ -4299,6 +4299,9 @@ fn stmt_is_packed_f64_loop_safe(
             stmt_is_packed_f64_loop_safe(ctx, body.as_ref(), arr_id, counter_id)
         }
         Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
+        // Conservative: a box release clears cells; keep it out of packed
+        // f64 loop bodies (it never appears in one today).
+        Stmt::ReleaseBoxes(_) => false,
         Stmt::Return(_)
         | Stmt::Throw(_)
         | Stmt::Break
@@ -5752,7 +5755,8 @@ fn collect_guarded_array_aliases_in_stmt(
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => false,
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => false,
         Stmt::If {
             condition,
             then_branch,
@@ -6306,7 +6310,8 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => false,
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => false,
         Stmt::If {
             condition,
             then_branch,
@@ -6631,7 +6636,7 @@ fn stmt_array_length_effect(
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {
             LoopArrayLengthEffect::Preserves
         }
-        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {
             LoopArrayLengthEffect::Preserves
         }
     }
@@ -7060,7 +7065,8 @@ pub(crate) fn stmt_preserves_array_length(
             aliases,
         ),
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
-        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
+        // Clearing box cells mutates no array.
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => true,
     }
 }
 
