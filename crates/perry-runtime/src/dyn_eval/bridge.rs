@@ -341,6 +341,28 @@ pub(crate) fn intrinsic_prototype(intrinsics: f64, name: &str) -> f64 {
 /// Link a freshly-created value to the actual prototype of its creation realm.
 /// The value is returned through a handle because creating object metadata may
 /// collect and move it.
+///
+/// **Recording the BASE realm's own default is skipped, and that is the point.**
+/// `object_set_static_prototype` is the loud variant: besides storing the
+/// prototype it bumps the prop-plan epoch, retires every outstanding
+/// element-shape proof, and — for a real array target — latches the
+/// process-wide `ARRAY_TARGET_PROTO_RECORDED` sticky flag that stands down
+/// `plain_array_index_guard` for the remaining life of the process
+/// (`object/prototype_chain.rs`). Most interpreted code is NOT a `node:vm`
+/// realm at all: a plain `new Function(…)` / `eval(…)` body runs with
+/// `intrinsics == globalThis`, so every `[…]` and `{…}` literal in it was
+/// asking to record the prototype the value already resolves to. That is a
+/// no-op on the observable chain and a permanent global de-optimisation
+/// otherwise — one array literal anywhere in generated source was enough to
+/// disarm the array-index fast path for the whole program.
+///
+/// So the record is made only when the creation realm's prototype actually
+/// DIFFERS from the base-realm default (a real `vm` context with its own
+/// populated realm), or when the value already carries a recorded prototype
+/// and this call is genuinely resetting it. `js_object_get_prototype_of`
+/// resolves an un-recorded object/array through exactly
+/// `builtin_prototype_value`, so "equal to the base-realm default" and
+/// "already the value's prototype" are the same statement here.
 pub(crate) fn attach_intrinsic_prototype(value: f64, intrinsics: f64, name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
@@ -352,9 +374,15 @@ pub(crate) fn attach_intrinsic_prototype(value: f64, intrinsics: f64, name: &str
     }
     let value = value_handle.get_nanbox_f64();
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    if raw != 0 {
-        crate::object::prototype_chain::object_set_static_prototype(raw, prototype.to_bits());
+    if raw == 0 {
+        return value_handle.get_nanbox_f64();
     }
+    if prototype.to_bits() == crate::object::builtin_prototype_value(name).to_bits()
+        && crate::object::prototype_chain::object_static_prototype(raw).is_none()
+    {
+        return value_handle.get_nanbox_f64();
+    }
+    crate::object::prototype_chain::object_set_static_prototype(raw, prototype.to_bits());
     value_handle.get_nanbox_f64()
 }
 

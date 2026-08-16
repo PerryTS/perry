@@ -541,6 +541,23 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     }
 }
 
+/// Test-only: swap the process-wide "a REAL array somewhere has a custom
+/// `[[Prototype]]`" latch, returning the previous value.
+///
+/// The latch is one-way in production and deliberately so. But a unit test
+/// that legitimately retargets a real array's prototype latches it for the
+/// whole binary and stands `plain_array_index_guard` down for every later
+/// typed-feedback / proxy guard test in the same process — the hazard
+/// `gc::tests::dead_owner_side_tables` documents inline. Once that test's
+/// array is unreachable the latch's claim is no longer TRUE, which is the
+/// same correction #7737 made for `OBJECT_PROTOTYPES_NONEMPTY`. Such a test
+/// restores what it found; see `ArrayPrototypeLatchGuard` in
+/// `dyn_eval/tests.rs`.
+#[cfg(test)]
+pub(crate) fn test_swap_array_static_proto_recorded(value: bool) -> bool {
+    ARRAY_TARGET_PROTO_RECORDED.swap(value, Ordering::Relaxed)
+}
+
 #[cfg(test)]
 pub(crate) fn test_prototype_registry_latch_armed() -> bool {
     OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)

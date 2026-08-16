@@ -163,6 +163,8 @@ pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_i
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
+#[cfg(test)]
+pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
 // #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.

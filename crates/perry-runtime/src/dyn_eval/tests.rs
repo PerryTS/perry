@@ -920,8 +920,51 @@ fn script_adapter_separates_global_this_from_intrinsic_lookup() {
     assert_eq!(as_str(result), "receiver:intrinsic");
 }
 
+/// Containment for the ONE unit test that gives a REAL array a non-default
+/// `[[Prototype]]`.
+///
+/// That record is correct — a cross-realm array literal genuinely has the
+/// other realm's `Array.prototype` — but `object_set_static_prototype` latches
+/// the process-wide `ARRAY_TARGET_PROTO_RECORDED` flag and the summary byte
+/// generated code reads, which stand `plain_array_index_guard` down for the
+/// REST OF THE BINARY. Every later `typed_feedback` / `proxy` guard test then
+/// fails, in a different module, for a reason invisible at its own site;
+/// `gc::tests::dead_owner_side_tables` documents the same hazard and dodges it
+/// by not using a real array.
+///
+/// So: take the guard-test mutex so no test that reads those flags can run in
+/// the window (`--test-threads` > 1 included), and put both process-globals
+/// back. Restoring is not a lie — once this test's array is unreachable the
+/// latch's claim is no longer true, exactly the correction #7737 made for the
+/// sibling `OBJECT_PROTOTYPES_NONEMPTY` latch.
+struct ArrayPrototypeLatchGuard {
+    _guard_tests: std::sync::MutexGuard<'static, ()>,
+    latch: bool,
+    invalidated: u8,
+}
+
+impl ArrayPrototypeLatchGuard {
+    fn new() -> Self {
+        let _guard_tests = crate::typed_feedback::typed_feedback_test_lock();
+        Self {
+            _guard_tests,
+            latch: crate::object::prototype_chain::array_static_proto_recorded(),
+            invalidated: crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for ArrayPrototypeLatchGuard {
+    fn drop(&mut self) {
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.latch);
+        crate::array::test_swap_array_index_fast_path_invalidated(self.invalidated);
+    }
+}
+
 #[test]
 fn script_literals_and_errors_retain_intrinsic_prototypes() {
+    let _latch = ArrayPrototypeLatchGuard::new();
     let global_this = object_with(&[]);
     let (intrinsics, object_prototype, array_prototype, type_error_prototype) = test_intrinsics();
     let lexical = script_environment(global_this, &[]);
@@ -1001,6 +1044,18 @@ fn script_literals_use_fresh_populated_realm_prototypes() {
     );
 }
 
+/// Base-realm variant: `intrinsics` IS `globalThis`, so `Promise.resolve`'s
+/// result must OBSERVABLY carry `Promise.prototype`.
+///
+/// Asserted through `js_object_get_prototype_of`, deliberately NOT through
+/// `recorded_prototype`. In the base realm the value already resolves to that
+/// prototype with no registry entry at all, and `attach_intrinsic_prototype`
+/// skips the record precisely so it does not pay
+/// `object_set_static_prototype`'s process-wide invalidation for a no-op (see
+/// its doc comment). Asserting the registry entry instead of the observable
+/// chain is what pinned that de-optimisation in place. The cross-realm case,
+/// where the record is real and required, is
+/// `script_literals_use_fresh_populated_realm_prototypes`.
 #[test]
 fn promise_static_result_retains_intrinsic_prototype() {
     let global_this = object_with(&[]);
@@ -1010,7 +1065,15 @@ fn promise_static_result_retains_intrinsic_prototype() {
 
     assert_ne!(crate::promise::js_value_is_promise(promise), 0);
     assert_eq!(
-        recorded_prototype(promise).to_bits(),
+        crate::object::js_object_get_prototype_of(promise).to_bits(),
         bridge::intrinsic_prototype(intrinsics, "Promise").to_bits()
+    );
+    assert!(
+        crate::object::prototype_chain::object_static_prototype(
+            crate::value::js_nanbox_get_pointer(promise) as usize
+        )
+        .is_none(),
+        "a base-realm intrinsic prototype is the value's default — recording it \
+         buys nothing and costs a process-wide fast-path invalidation"
     );
 }

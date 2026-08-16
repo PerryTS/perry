@@ -1313,12 +1313,26 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     method("wasi", "finalizeBindings", true, Some("WASI")),
     property("wasi", "wasiImport"),
     // --- node:vm ---
+    // `vm.createContext([contextObject[, options]])` — the dispatch row in
+    // `native_table/node_misc.rs` carries both, so the manifest must too or
+    // `manifest_param_counts_match_dispatch_table` reports arity drift.
     method_sig(
         "vm",
         "createContext",
         false,
         None,
-        &[p_any("p0")],
+        &[
+            ParamSpec::Named {
+                name: "contextObject",
+                ty: TypeSpec::Any,
+                optional: true,
+            },
+            ParamSpec::Named {
+                name: "options",
+                ty: TypeSpec::Any,
+                optional: true,
+            },
+        ],
         TypeSpec::Any,
     ),
     // --- node:repl ---
