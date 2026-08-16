@@ -210,6 +210,27 @@ run_cold_start() {
 #   PERRY_NEXT_ROUTE_WARM_PASSES=300   # 95% confident vs the measured ~1/100
 #   PERRY_NEXT_ROUTE_WARM_PASSES=460   # 99%
 #
+# Those percentages are a CONSERVATIVE FLOOR, not a model: they assume the ~1/100
+# failure is independent per pass, and it is not. The failures track COLLECTIONS,
+# and collections accelerate as the heap grows. Measured over one 100-pass run,
+# copying minors landed at passes
+#
+#   3 5 11 19 28 36 43 49 54 59 64 68 72 76 79 82 86 89 92 94 97 99
+#
+# — early gaps of 8-9 passes tightening to 2-3 by the end (22 minors in 100
+# passes; the growth is #8213's retention). So doubling N more than doubles the
+# collections it buys, and the printed confidence understates a long run.
+#
+# The same arithmetic says what a per-cold-start pass count buys, which is a
+# different thing and worth not confusing (`PERRY_NEXT_ROUTE_VERIFIERS_PER_START`,
+# if present, drives THAT): a FRESH process reaches its first minor around pass 3
+# and its second around pass 5, so ten passes per start is ~2 collections, and ten
+# such starts ~20 — genuinely sensitive to a per-collection bug (this residual was
+# caught at pass 6 of a 10-pass process, with 2 minors), but always in the
+# small-heap regime. One warm process is what reaches the grown-heap regime where
+# collections are frequent. Cold starts buy ABI/parity/bypass-guard coverage
+# across restarts; the warm soak buys collection depth. Neither substitutes.
+#
 # OFF by default (0) because a meaningful N is slow — it is the acceptance
 # instrument for closing #8163, not a per-run check. It deliberately runs the
 # server in NORMAL mode: forcing evacuation would measure the arm that is
