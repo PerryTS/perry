@@ -2085,7 +2085,10 @@ jobs:
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
-  # Gap-suite conformance smoke (every PR + main push)
+  # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
+  # tier -- 4 fast-mode shards on a PR, 2 in the sweep, 8 auto-optimize shards
+  # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
+  # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
   gap-suite:
     needs: plan
@@ -2110,13 +2113,14 @@ jobs:
     # in .node-version so it can't drift out from under the suite again; raise
     # it deliberately, and re-measure the delta when you do (see #6364).
     #
-    # Sharded across 8 parallel runners (--shard N/8) so the ~258-test suite
-    # runs in ~1/8 the wall-time — the 258 sequential Perry compiles dominate
-    # the cost and split evenly, taking the single-job ~57 min down to ~15 min
-    # per shard. The fan-in job `conformance-smoke-complete` below is the ONE
-    # status branch protection requires; a single shard's red bubbles up
-    # through it. Each shard's no-new-untriaged gate (run_gap_tests.sh) covers
-    # only its own slice, which is exactly the right per-shard semantics.
+    # Sharded (--shard N/M, M from the plan). Each shard's snapshot gate
+    # (run_gap_tests.sh) covers only its own slice, which is exactly the right
+    # per-shard semantics; the `gate` fan-in job is the one status branch
+    # protection requires. 2026-08-16: in the harness's default (auto-optimize)
+    # mode 96% of a shard's wall time was ~10 tests at ~200 s each -- the
+    # feature-stripped runtime rebuild per distinct feature set, redone in
+    # every shard. That mode is now the full tier's 8-shard arm; PR and sweep
+    # tiers use `fast` mode against one prebuilt release build (~1.5 s/test).
     strategy:
       fail-fast: false
       matrix:
@@ -2127,8 +2131,8 @@ jobs:
     # shards 2-8 and shard 1 (its slice is the heaviest) hit 55:18 — the exact
     # 55-min cap — and CANCELLED on every run, incl. `gh run rerun --failed`.
     # On slow-runner days a second shard (observed: shard 3) also grazed 55.
-    # Because `conformance-smoke-complete` is a required context, that
-    # deterministic timeout flaky-red-blocked every PR (#6456). Bump to 75 for
+    # Because the fan-in was a required context, that deterministic timeout
+    # flaky-red-blocked every PR (#6456). Bump to 75 for
     # comfortable headroom (~35 min over the normal-day slowest, ~20 over the
     # heavy shard) while still bounding a genuine hang. Durable fix — raising
     # the shard count 8->12 so no single slice approaches the cap — tracked as
