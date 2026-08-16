@@ -312,6 +312,8 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
 }
 
 pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {
+    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC
+    // root; the root-barrier call below covers incremental marking.
     blk.store(DOUBLE, value, root_slot);
     let value_bits = blk.bitcast_double_to_i64(value);
     blk.call_void("js_write_barrier_root_nanbox", &[(I64, &value_bits)]);
@@ -322,6 +324,7 @@ pub(crate) fn emit_root_heap_word_store_on_block(
     value_bits: &str,
     root_slot: &str,
 ) {
+    // GC_STORE_AUDIT(ROOT): registered mutable GC root slot; root barrier below.
     blk.store(I64, value_bits, root_slot);
     blk.call_void("js_write_barrier_root_heap_word", &[(I64, value_bits)]);
 }

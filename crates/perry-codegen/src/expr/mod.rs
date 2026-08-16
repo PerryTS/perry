@@ -138,6 +138,8 @@ pub(crate) use write_barrier::{
 #[cfg(test)]
 mod array_push_guard_tests;
 #[cfg(test)]
+mod barrier_stem_census_tests;
+#[cfg(test)]
 mod class_field_barrier_tests;
 mod dispatch;
 #[cfg(test)]
