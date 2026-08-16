@@ -50,7 +50,7 @@ pub(crate) enum Flow {
 
 // ── nested-function registration cache ────────────────────────────────────
 
-thread_local! {
+crate::perry_thread_local! {
     /// AST-node address → registered fn id. Nested function/arrow expressions
     /// evaluate many times (ajv validators run per request); registering the
     /// node once keeps the registry bounded by the number of syntactic
@@ -266,7 +266,7 @@ pub(crate) fn alloc_interp_closure(
 }
 
 fn ensure_thunk_registered() {
-    thread_local! {
+    crate::perry_thread_local! {
         static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     REGISTERED.with(|registered| {

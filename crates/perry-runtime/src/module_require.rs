@@ -802,7 +802,7 @@ mod path_registry;
 
 use path_registry::{PathModuleRequireError, MODULE_PATH_REGISTRY};
 
-thread_local! {
+crate::perry_thread_local! {
     static PENDING_REQUIRE_PARENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
