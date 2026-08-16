@@ -249,6 +249,11 @@ def plan(
                 on = scope["deps"]
             else:
                 on = on and scope["core"]
+        if job == "e2e_scoped":
+            # Reads the PR's file list via `gh pr view`; there is no PR on a
+            # `workflow_dispatch --tier pr`, so the job would fail on a
+            # missing PR number rather than skip.
+            on = on and event == "pull_request"
         jobs[job] = on
 
     gap = dict(GAP_SUITE[tier])
@@ -370,6 +375,7 @@ def _self_test() -> int:
 
     snap = plan("workflow_dispatch", "refs/heads/x", tier_input="pr", update_gap_snapshot=True)
     check("snapshot update: one fast shard", snap["gap"] == {"mode": "fast", "total": 1, "shards": [1], "update_snapshot": True})
+    check("dispatch --tier pr has no PR to scope e2e against", not snap["jobs"]["e2e_scoped"])
 
     # 4. The gc_gate_wiring_check contract: `gc-stress` is a registered
     #    moving-GC gate and MUST be main-line reachable (push:main or
