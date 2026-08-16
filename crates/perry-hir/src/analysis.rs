@@ -692,6 +692,20 @@ fn remap_local_ids_in_stmt_propagating(
         }
         Stmt::Throw(e) => remap_with_propagation(e, map, fp),
         Stmt::Labeled { body, .. } => remap_local_ids_in_stmt_propagating(body, map, fp),
+        // #8208: the three statement variants that carry BARE LocalId lists
+        // (no sub-expression) must be remapped here too. Missing them was
+        // invisible: this `match` has a `_ => {}` tail, so `rustc` said
+        // nothing. An unremapped `PreallocateBoxes` merely allocates a cell
+        // nobody reads, but an unremapped `ReleaseBoxes` releases a STILL-LIVE
+        // local's cell and hands it to the next allocation. See
+        // `Stmt::ReleaseBoxes`' doc: an id-substituting pass must remap or drop.
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
+            for id in ids.iter_mut() {
+                if let Some(new_id) = map.get(id) {
+                    *id = *new_id;
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -805,6 +819,20 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
         }
         Stmt::Throw(e) => remap_local_ids_in_expr(e, map),
         Stmt::Labeled { body, .. } => remap_local_ids_in_stmt(body, map),
+        // #8208: the three statement variants that carry BARE LocalId lists
+        // (no sub-expression) must be remapped here too. Missing them was
+        // invisible: this `match` has a `_ => {}` tail, so `rustc` said
+        // nothing. An unremapped `PreallocateBoxes` merely allocates a cell
+        // nobody reads, but an unremapped `ReleaseBoxes` releases a STILL-LIVE
+        // local's cell and hands it to the next allocation. See
+        // `Stmt::ReleaseBoxes`' doc: an id-substituting pass must remap or drop.
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
+            for id in ids.iter_mut() {
+                if let Some(new_id) = map.get(id) {
+                    *id = *new_id;
+                }
+            }
+        }
         _ => {}
     }
 }

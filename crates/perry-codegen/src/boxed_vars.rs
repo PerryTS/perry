@@ -97,6 +97,20 @@ fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSe
                     out.insert(*id);
                 }
             }
+            // #8208: deliberately NOT collected. This set seeds `boxed_vars`,
+            // i.e. it DECIDES which locals get a box; a release is a statement
+            // ABOUT already-boxed locals, so letting it vote here would let a
+            // reclamation hint change a local's representation. The generator
+            // only ever releases ids it also preallocated
+            // (`generator/box_release.rs`, asserted both directions by
+            // `every_released_id_is_also_preallocated` and
+            // `the_whole_activation_frame_is_released`), so nothing is lost.
+            //
+            // The fail-safe direction is the right one: if a released id were
+            // somehow absent from `boxed_vars`, `emit_release_boxes` skips it
+            // and the cell simply stays live — the pre-#8208 behaviour — rather
+            // than releasing a cell codegen never boxed.
+            Stmt::ReleaseBoxes(_) => {}
             Stmt::If {
                 then_branch,
                 else_branch,

@@ -916,10 +916,13 @@ pub(crate) fn test_clear_box_registry() {
     BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
-    // Clearing the registry is the ONE operation that breaks the monotonicity
-    // the positive cache rests on, and it exists only for tests. Drop the
-    // caches with it, or a later test would see a stale "yes" for an address
-    // this call just un-registered.
+    // Registry membership is not monotonic any more (#8208: `js_*box_release`
+    // de-registers a completed activation's cells), so the positive cache is
+    // kept coherent by an eviction on every un-registration rather than by
+    // never un-registering. This wholesale clear is the bulk case — it exists
+    // only for tests — and it must drop the caches for the same reason a single
+    // release evicts one slot: otherwise a later test would see a stale "yes"
+    // for an address this call just un-registered.
     for cache in [&BOX_PTR_CACHE, &I32_BOX_PTR_CACHE, &BOOL_BOX_PTR_CACHE] {
         cache.with(|slots| {
             for slot in slots {

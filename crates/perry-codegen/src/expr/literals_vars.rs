@@ -714,12 +714,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 //
                 // `box_ptr` deliberately survives the `coerce_old`/`step_new`
                 // calls below even though those can collect: a box is
-                // `std::alloc::alloc`'d by `js_box_alloc_bits`, is never freed
-                // and is never relocated (`scan_box_roots_mut` rewrites the
-                // JSValue *inside* the box, not the box's address), so an
-                // address read before a collection still names the same live
-                // cell after it. The closure pointer has no such guarantee,
-                // which is why the non-boxed arm below re-reads it.
+                // `std::alloc::alloc`'d by `js_box_alloc_bits`, its memory is
+                // never handed back to the allocator, and it is never relocated
+                // (`scan_box_roots_mut` rewrites the JSValue *inside* the box,
+                // not the box's address), so an address read before a
+                // collection still names the same live cell after it. The
+                // closure pointer has no such guarantee, which is why the
+                // non-boxed arm below re-reads it.
+                //
+                // #8208 added a release/reuse path for completed async
+                // activations, so "never freed" is no longer literally true and
+                // the argument is now stated on the two properties that ARE:
+                // (1) cell memory is never returned to the allocator, so the
+                // address never stops naming 8 bytes of box cell; (2) a
+                // released cell is only PARKED, and becomes reusable solely at
+                // the outermost microtask-pump exit with an empty task queue —
+                // a boundary that is by construction unreachable from inside
+                // the nested user frame `coerce_old`/`step_new` may enter. And
+                // this id belongs to the *currently executing* activation,
+                // whose own release is emitted only at a terminal state, after
+                // which no body code runs at all.
                 if ctx.boxed_vars.contains(id) {
                     let blk = ctx.block();
                     let box_ptr = blk.call(

@@ -218,6 +218,146 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
 mod tests {
     use super::*;
 
+    /// The subset relation this table documents everywhere is now CHECKED.
+    ///
+    /// Several comments above say this `CannotCollect` set "must stay a subset
+    /// of" `NONCOLLECTING` in `scripts/gc_root_dominance_check.py`, which is
+    /// named as the audit authority. Nothing enforced it. #7510 is what
+    /// one-sided drift costs: the two lists disagreed, and once the corpus
+    /// widened the checker printed 358 spurious violations. #8208 drifted them
+    /// again — it added the three `js_*box_release` entries here and not
+    /// there — and that was caught by a human reading the diff, which is not a
+    /// gate. So: extract both lists from source and require containment.
+    ///
+    /// A name may legitimately be in NONCOLLECTING and absent here (this table
+    /// "does not inherit" entries, per the `js_throw_reference_error_tdz`
+    /// note). The forbidden direction is the unsafe one: a callee this table
+    /// calls non-collecting that the audit authority does not.
+    #[test]
+    fn cannot_collect_stays_a_subset_of_the_checker_authority() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let rust_src = std::fs::read_to_string(format!("{manifest}/src/gc_call_effects.rs"))
+            .expect("read gc_call_effects.rs");
+        let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
+        let py_src = std::fs::read_to_string(&py_path).expect("read gc_root_dominance_check.py");
+
+        let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
+        assert!(
+            noncollecting.len() > 50,
+            "parsed only {} NONCOLLECTING names — the extraction broke, and a \
+             vacuous subset check is worse than none",
+            noncollecting.len()
+        );
+
+        let cannot_collect = extract_cannot_collect_arms(&rust_src);
+        assert!(
+            cannot_collect.len() > 30,
+            "parsed only {} CannotCollect names — extraction broke",
+            cannot_collect.len()
+        );
+        // The subject must be live: the names this PR added have to be in the
+        // parsed set, or the test could pass by not looking at them.
+        for probe in [
+            "js_box_release",
+            "js_i32_box_release",
+            "js_bool_box_release",
+        ] {
+            assert!(
+                cannot_collect.contains(probe),
+                "{probe} missing from the parsed CannotCollect set"
+            );
+        }
+
+        let missing: Vec<&str> = cannot_collect
+            .iter()
+            .filter(|n| !noncollecting.contains(**n))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these callees are CannotCollect here but absent from \
+             NONCOLLECTING in scripts/gc_root_dominance_check.py, which this \
+             table documents as the audit authority it must be a subset of: \
+             {missing:?}"
+        );
+    }
+
+    /// Collect the string literals of a top-level `NAME = {...}` python set.
+    fn extract_python_set<'a>(src: &'a str, name: &str) -> std::collections::HashSet<&'a str> {
+        let mut out = std::collections::HashSet::new();
+        let mut inside = false;
+        for line in src.lines() {
+            if !inside {
+                if line.starts_with(&format!("{name} = {{")) {
+                    inside = true;
+                }
+                continue;
+            }
+            if line == "}" {
+                break;
+            }
+            let code = line.split('#').next().unwrap_or("");
+            out.extend(quoted_literals(code));
+        }
+        out
+    }
+
+    /// Collect the callee names of every match arm resolving to
+    /// `GcCallEffect::CannotCollect`. Arms are `| "name"` chains, freely
+    /// interleaved with `//` comments, terminated by the `=>`.
+    fn extract_cannot_collect_arms(src: &str) -> std::collections::HashSet<&str> {
+        let mut out = std::collections::HashSet::new();
+        let mut pending: Vec<&str> = Vec::new();
+        for line in src.lines() {
+            let t = line.trim();
+            if t.starts_with("//") || t.is_empty() {
+                continue;
+            }
+            // Only accumulate from pure pattern lines: `| "a"` / `"a" | "b"`.
+            let is_pattern = (t.starts_with('|') || t.starts_with('"'))
+                && !t.contains("=>")
+                && !t.contains("assert");
+            if is_pattern {
+                pending.extend(quoted_literals(t));
+                continue;
+            }
+            if let Some(head) = t.split("=>").next() {
+                if t.contains("=>") {
+                    let mut names = pending.clone();
+                    names.extend(quoted_literals(head));
+                    if t.contains("GcCallEffect::CannotCollect") {
+                        out.extend(names);
+                    }
+                    pending.clear();
+                    continue;
+                }
+            }
+            pending.clear();
+        }
+        out
+    }
+
+    fn quoted_literals(s: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'"' {
+                if let Some(end) = s[i + 1..].find('"') {
+                    let lit = &s[i + 1..i + 1 + end];
+                    if lit.starts_with("js_") || lit.starts_with("llvm.") {
+                        out.push(lit);
+                    }
+                    i = i + 1 + end + 1;
+                    continue;
+                }
+                break;
+            }
+            i += 1;
+        }
+        out
+    }
+
     /// `js_gc_register_global_root` is `js_write_barrier_root_heap_word` plus
     /// a TLS `Vec::push`, so the two must never be classified differently —
     /// if a future audit demotes the barrier, this catches the sibling that
