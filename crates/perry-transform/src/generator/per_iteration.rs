@@ -644,21 +644,22 @@ fn rename_in_expr(e: &mut Expr, map: &HashMap<LocalId, LocalId>) {
 }
 
 fn rename_in_stmt(stmt: &mut Stmt, map: &HashMap<LocalId, LocalId>) {
-    // #8208: `each_expr_mut` only reaches LocalIds that live inside an Expr.
-    // Three statement variants carry BARE LocalId lists with no sub-expression,
-    // so the renamer used to walk straight past them. For `ReleaseBoxes` that
-    // is not cosmetic: a stale id here would release a still-live local's cell
-    // and hand it to the next allocation. Rename them like a `LocalSet` target,
-    // which is what `Stmt::ReleaseBoxes`' doc requires of any renaming pass.
-    match stmt {
-        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
-            for id in ids.iter_mut() {
-                if let Some(new_id) = map.get(id) {
-                    *id = *new_id;
-                }
+    // #8208: `each_expr_mut` only reaches LocalIds that live inside an Expr, so
+    // `ReleaseBoxes` — a bare LocalId list with no sub-expression — used to be
+    // walked straight past. That is not cosmetic: a stale id here would release
+    // a still-live local's cell and hand it to the next allocation. Rename it
+    // like a `LocalSet` target, which is what `Stmt::ReleaseBoxes`' doc
+    // requires of any renaming pass.
+    //
+    // Scoped to `ReleaseBoxes`: the two `Prealloc*` variants carry the same
+    // shape and are also unreached here, but that gap is pre-existing and
+    // benign, and closing it would change codegen for existing programs.
+    if let Stmt::ReleaseBoxes(ids) = stmt {
+        for id in ids.iter_mut() {
+            if let Some(new_id) = map.get(id) {
+                *id = *new_id;
             }
         }
-        _ => {}
     }
     each_expr_mut(stmt, &mut |e| rename_in_expr(e, map));
     each_child_stmt_list_mut(stmt, &mut |list| {
