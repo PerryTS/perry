@@ -660,7 +660,15 @@ ALLOC_RE = re.compile(
 # Deleting a dead alternative changes NOTHING about what the checker matches --
 # that is what "matches no symbol" means -- so this is not a narrowing.
 
-_EXTERN_C_FN_RE = re.compile(r'extern\s+"C"\s+fn\s+(js_\w+)')
+# `"C-unwind"` counts too. It is a distinct ABI string but the SAME exported
+# C symbol, and the runtime uses it for every entry point a JS exception may
+# unwind through -- `js_throw`, the whole `js_native_call_method*` dispatch
+# family, `js_closure_call2`. Matching only `"C"` made those 18 symbols
+# invisible to every consumer of `runtime_symbols`: `--audit-poll-capable`
+# reported `js_closure_call2` as naming nothing (it names a real, exported
+# symbol), and the alloc/poll classifications silently under-counted the
+# calls most likely to allocate. The name was never wrong; the scanner was.
+_EXTERN_C_FN_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(js_\w+)')
 
 # The runtime crates that export the C-ABI surface perry-codegen calls.
 SYMBOL_ROOTS = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
