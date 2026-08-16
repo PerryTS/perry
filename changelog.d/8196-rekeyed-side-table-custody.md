@@ -134,3 +134,40 @@ entry is still present with its `GC_TYPE_CLOSURE` narrowing.
 0x86` carries bit 2, but nothing is being pinned — the address is payload
 interior of a live allocation with no object at it, and rewriting the byte as
 named flags would misreport what #8040 actually observed.
+
+**Evidence the six were real, not theoretical.** With only the two forwarding
+discriminators above and none of the prunes, the production Next App Route
+forced-evacuation workload (`tests/release/packages/next-app-route`, arm
+`PERRY_NEXT_ROUTE_FORCED_GC=1`) logged **988** `[gc-forwarding] refused_sources`
+events — stale forwarding headers reaching a rewrite walk, which before #8174
+would have been followed silently. With the six prunes in, the same workload
+logs **0**, across 458 copying minors and 182,977 copied objects. (Not a
+controlled A/B — the two runs did different amounts of GC work — but the
+refusals began on the first minors of the earlier run and are absent
+throughout the later one.)
+
+**End-to-end validation.** A churn fixture exercising every rekeyed surface
+(varied shapes, symbol properties, accessor descriptors, `Map`/`Set` +
+iterators, synthetic classes via plain-function prototypes, closure dynamic
+props, proxies with a `get` trap, `Reflect.get`, promises), 60 rounds × 120
+objects with a 3-round liveness window, under
+`PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED={8174,8040,1}
+PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_DIAG=1`: 3,605–5,060 copying minors and
+296k–411k copied objects per seed (`gc_evacuation_liveness_assert.py` green, so
+the subject was live), a `[gc-fromspace-protect] retired_set=#N` line on every
+cycle, zero verify-evacuation panics, output byte-identical to the Node oracle,
+and **zero** `[gc-forwarding]` refusals — i.e. on a healthy workload the new
+discriminators refuse nothing, which is the evidence that no legitimate rewrite
+was lost.
+
+`cargo test -p perry-runtime --lib` 2514/0/4; `cargo test -p perry --bin perry`
+987/0; `cargo test -p perry-codegen --no-fail-fast` 1483/9, the same 9 by name
+as `main`.
+
+**Not fixed here**: #8163 is unaffected and stays open. Retested on
+`53e8a21e3`, the production App Route fixture's forced-evacuation arm still
+fails with `TypeError: value is not a function` (243 copying minors, 117,579
+objects copied, zero verify panics, normal arm green). This narrows what a
+stale key can be *followed* into; the holder losing that closure is a different
+defect.
