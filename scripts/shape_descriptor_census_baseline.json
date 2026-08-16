@@ -10,8 +10,8 @@
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(": 3,
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
-    "crates/perry-codegen/src/expr/proxy_reflect.rs|(crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();": 1,
     "crates/perry-codegen/src/expr/proxy_reflect.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
+    "crates/perry-codegen/src/expr/proxy_reflect.rs|let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
     "crates/perry-codegen/src/lower_call/new.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/new_alloc.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
     "crates/perry-codegen/src/lower_call/scalar_method.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
@@ -274,9 +274,15 @@
     "crates/perry-runtime/src/object/spill.rs|field_count|access|std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);": 1,
     "crates/perry-runtime/src/object/spill.rs|field_count|declaration|pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {": 1,
     "crates/perry-runtime/src/os.rs|field_count|declaration|let field_count: u32 = 14;": 1,
+    "crates/perry-runtime/src/param_type_guard.rs|field_count|access|for _ in 0..field_count {": 1,
+    "crates/perry-runtime/src/param_type_guard.rs|field_count|access|let inline_fields = ((*object).field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);": 1,
+    "crates/perry-runtime/src/param_type_guard.rs|field_count|access||| (*object).field_count as usize > MAX_CONTAINER_LEN": 1,
+    "crates/perry-runtime/src/param_type_guard.rs|keys_array|access|let keys = (*object).keys_array;": 1,
+    "crates/perry-runtime/src/param_type_guard.rs|object_type|access|if (*object).object_type != crate::error::OBJECT_TYPE_REGULAR": 1,
     "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|let keys_ptr = (*obj).keys_array as usize;": 1,
     "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|recorded != 0 && (*obj).keys_array as usize == recorded": 1,
     "crates/perry-runtime/src/pointer_event.rs|field_count|declaration|let field_count: u32 = 4;": 1,
+    "crates/perry-runtime/src/process/node_module/source_map.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 1,
     "crates/perry-runtime/src/promise/then_probe.rs|keys_array|access|let keys = (*obj).keys_array;": 2,
     "crates/perry-runtime/src/proxy.rs|object_type|access|&& (*(addr as *const crate::ObjectHeader)).object_type": 1,
     "crates/perry-runtime/src/proxy/put_value.rs|field_count|access|object_array_numeric_write_slots(array, &keys[..field_count as usize], receiver_count)": 1,
@@ -290,9 +296,9 @@
     "crates/perry-runtime/src/typed_feedback/tests.rs|field_count|access|(*obj).field_count = 0;": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|field_count|access|(*obj).field_count = original_field_count;": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|field_count|access|let original_field_count = unsafe { (*obj).field_count };": 1,
+    "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|&(*obj).keys_array as *const _ as usize,": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|(*obj).keys_array = original_keys;": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 1,
-    "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|&(*obj).keys_array as *const _ as usize,": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|assert_ne!(unsafe { (*obj).keys_array }, original_keys);": 1,
     "crates/perry-runtime/src/typed_feedback/tests.rs|keys_array|access|let keys = unsafe { (*obj).keys_array };": 1,
     "crates/perry-runtime/src/url/search_params.rs|keys_array|access|let keys_arr = (*obj).keys_array;": 2,
@@ -328,11 +334,11 @@
   },
   "summary": {
     "codegen_object_header_size_sites": 32,
-    "raw_member_files": 99,
+    "raw_member_files": 101,
     "raw_member_sites": {
-      "field_count": 159,
-      "keys_array": 181,
-      "object_type": 31
+      "field_count": 162,
+      "keys_array": 183,
+      "object_type": 32
     }
   }
 }

@@ -279,7 +279,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     raw_write_pics = sources["crates/perry-codegen/src/expr/proxy_reflect.rs"]
 
     for pattern, label in (
-        (r"descriptors\s*:\s*HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
+        # `PtrHashMap` since #8157 (SipHash on a bare u32 was 25% of self time in
+        # `shapes`). The fact this asserts is that a by-id table EXISTS, not which
+        # hasher backs it, so accept either spelling.
+        (r"descriptors\s*:\s*(?:[\w:]+::)?(?:Ptr)?HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
