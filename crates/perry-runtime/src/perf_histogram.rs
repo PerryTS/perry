@@ -352,7 +352,7 @@ impl Histogram {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Per-thread histogram registry. A `perf_histogram` namespace object holds
     /// only its index here, so `first !== second` and their state is disjoint.
     static HISTOGRAMS: RefCell<Vec<Histogram>> = const { RefCell::new(Vec::new()) };

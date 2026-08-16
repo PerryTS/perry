@@ -21,7 +21,7 @@ pub extern "C" fn js_perf_clear_resource_timings() -> f64 {
 /// (`performance.setResourceTimingBufferSize` unset).
 const RESOURCE_TIMING_BUFFER_DEFAULT: usize = 250;
 
-thread_local! {
+crate::perry_thread_local! {
     /// 2026-07-09 GC audit wave 2: the setter used to be a no-op and the
     /// timeline had NO cap, so per-request `markResourceTiming` leaked
     /// entries (plus their materialized entry objects, GC-rooted via

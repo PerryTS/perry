@@ -14,3 +14,15 @@ Also fixed, each pinned by a case in `test-parity/node-suite/perf_hooks/`:
 - `PerformanceObserver.supportedEntryTypes` returns Node's full list, frozen, as the same array on every read.
 - `mark()`/`clearMarks()` reject Node's reserved bootstrap-milestone names, `measure()` resolves those names against `nodeTiming`, an unset positional mark endpoint raises `SyntaxError`, and the `getEntriesBy*` queries take Node's missing-argument and Symbol guards.
 - `eventLoopUtilization` was marked internal in the API manifest, so `import { eventLoopUtilization } from "node:perf_hooks"` — valid in Node — was rejected at compile time.
+
+Gate follow-up: the two new thread-locals (`HISTOGRAMS` in `perf_histogram.rs`,
+`RESOURCE_TIMING_BUFFER_SIZE` in `perf_hooks/resource_timing.rs`) now use
+`crate::perry_thread_local!` rather than a raw `thread_local!`, so neither
+needs a cold-allowlist exemption and both skip the Darwin `_tlv_get_addr`
+call (#7469). The cold ratchet drops from 91 recorded files back to 90.
+
+The four new raw `keys_array` reads are recorded in the shape-descriptor
+census baseline. They are identity indices, not owners: all three cells
+(`PERF_ENTRY_KEYS_ARRAY`, `RESOURCE_ENTRY_KEYS_ARRAY`, `NODE_TIMING_KEYS_ARRAY`)
+are visited by the registered root scanner via `visit_metadata_usize_slot`,
+which follows a forwarding address without keeping the keys array alive.
