@@ -187,12 +187,17 @@ impl GuardState<'_> {
             return None;
         }
         let object = address as *const ObjectHeader;
-        if (*object).object_type != crate::error::OBJECT_TYPE_REGULAR
-            || (*object).field_count as usize > MAX_CONTAINER_LEN
-        {
+        // #8113: the header no longer carries `object_type` / `field_count`;
+        // the receiver kind comes from the ShapeId descriptor and the live
+        // inline-slot bound from `object_live_slot_count`.
+        if !crate::object::object_is_regular(object) {
             return None;
         }
-        let inline_fields = ((*object).field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
+        let live_slots = crate::object::object_live_slot_count(object) as usize;
+        if live_slots > MAX_CONTAINER_LEN {
+            return None;
+        }
+        let inline_fields = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
         let required = crate::gc::GC_HEADER_SIZE
             .checked_add(std::mem::size_of::<ObjectHeader>())?
             .checked_add(inline_fields.checked_mul(std::mem::size_of::<JSValue>())?)?;
