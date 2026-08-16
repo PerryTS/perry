@@ -276,9 +276,15 @@ echo "Provider ABI hash: $provider_abi"
 for cold_start in $(seq 1 "$cold_starts"); do
     host_log="$scratch/host-$cold_start.log"
     (
-        # Next's generated webpack runtime resolves `./chunks/*.js` from the
-        # production server root when it loads an on-demand route chunk.
-        cd "$fixture/.next/server"
+        # Run from the fixture root, the release-tier layout with production
+        # evidence (tests/release/packages/next-app-route/fixture.sh): Next
+        # resolves `.next/routes-manifest.json` against the working directory
+        # on every request, so serving from `.next/server` 500s each request
+        # with ENOENT. The old reason to sit in `.next/server` — the webpack
+        # runtime resolving `./chunks/*.js` from the server root — is gone:
+        # computed relative chunk requires resolve against the route bundle
+        # since #8146.
+        cd "$fixture"
         if [[ "$host_os" == Darwin ]]; then
             PORT="$port" HOSTNAME=127.0.0.1 DYLD_LIBRARY_PATH="$providers" \
                 "$host" "$runtime_library" "$stdlib_library" "$app"
