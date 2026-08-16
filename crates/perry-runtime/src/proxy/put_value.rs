@@ -5,6 +5,36 @@
 
 use super::*;
 
+/// Receiver-kind test shared by every object-write fast path (#8098).
+///
+/// A class instance qualifies, and so does a plain object the runtime
+/// birth-marked `OBJ_FLAG_PLAIN_ORDINARY` — today that is `JSON.parse` output
+/// (`json/parser.rs`, `json_tape.rs`), which carries an authoritative ShapeId
+/// since #8067/#8086 but no class.
+///
+/// This replaces a blanket `class_id != 0`. That clause was standing in for
+/// three per-object exclusions the generic path still applies verbatim
+/// (`object/field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`):
+/// `NATIVE_MODULE_CLASS_ID`, `Object.prototype`, and a `URL` instance, whose
+/// `pathname`/`search`/… own slots are live views whose setters rebuild `href`
+/// (`field_set_by_name/tail.rs`). None of those is derivable from the ShapeId —
+/// two objects share one iff they share a keys-array ALLOCATION, and the
+/// shape-transition cache deliberately converges distinct objects onto one
+/// shared array — so the discriminator has to be per-object and re-tested on
+/// every generated cache hit. An opt-in mark is exactly that, and it fails
+/// safe: an unmarked class-less receiver keeps the full `[[Set]]` walk.
+#[inline]
+unsafe fn write_fast_path_receiver_kind_ok(
+    obj: *const crate::ObjectHeader,
+    obj_flags: u16,
+) -> bool {
+    let class_id = (*obj).class_id;
+    if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        return false;
+    }
+    class_id != 0 || obj_flags & crate::gc::OBJ_FLAG_PLAIN_ORDINARY != 0
+}
+
 /// `proxy[key] = value` — if handler.set exists, call it with
 /// (target, key, value) and return TAG_TRUE (the trap's return value is
 /// ignored by the default test semantics since we echo `value`). Otherwise
@@ -243,6 +273,14 @@ pub extern "C" fn js_put_value_set(
     let ok = if lookup(target).is_some() {
         js_proxy_set(target, property_key, value).to_bits() == TAG_TRUE
     } else {
+        // #8082: `ordinary_set_with_receiver` can run user setters (and
+        // allocates), so it is a collection point — the raw `receiver` and
+        // `property_key` locals go stale across it. The forced-moving gate
+        // faulted on exactly this pair inside the subclass-length note's
+        // header read. Root both and re-read after the set.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_h = scope.root_nanbox_f64(receiver);
+        let key_h = scope.root_nanbox_f64(property_key);
         let stored = ordinary_set_with_receiver(target, property_key, value, receiver);
         // #7574: `sub[3] = v` on a `class X extends Array` instance is an
         // Array-exotic `[[DefineOwnProperty]]` and must leave `length == 4`.
@@ -253,7 +291,10 @@ pub extern "C" fn js_put_value_set(
         // through `js_put_value_set_ic_miss`). Cheap no-op for every other
         // receiver: an object literal short-circuits on `class_id == 0`.
         if stored {
-            crate::array::note_array_subclass_index_write(receiver, property_key);
+            crate::array::note_array_subclass_index_write(
+                receiver_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+            );
         }
         stored
     };
@@ -334,10 +375,8 @@ pub extern "C" fn js_put_value_set_ic_miss(
         }
 
         let obj = obj_addr as *mut crate::ObjectHeader;
-        let class_id = (*obj).class_id;
         if !crate::object::object_is_regular(obj)
-            || class_id == 0
-            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+            || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
         {
             return result;
         }
@@ -530,10 +569,8 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         return None;
     }
     let obj = obj_addr as *mut crate::ObjectHeader;
-    let class_id = (*obj).class_id;
     if !crate::object::object_is_regular(obj)
-        || class_id == 0
-        || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
     {
         return None;
     }
@@ -607,10 +644,8 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             return result;
         }
         let obj = obj_addr as *mut crate::ObjectHeader;
-        let class_id = (*obj).class_id;
         if !crate::object::object_is_regular(obj)
-            || class_id == 0
-            || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+            || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
             || crate::array::object_prototype_addr_matches(obj_addr)
         {
             return result;
@@ -819,7 +854,7 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
             return None;
         }
         let obj = addr as *mut crate::ObjectHeader;
-        if (*obj).class_id == 0 || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        if !write_fast_path_receiver_kind_ok(obj, gc._reserved) {
             return None;
         }
         let shape = crate::object::shapes::object_shape_descriptor(obj)?;

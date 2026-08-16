@@ -197,6 +197,148 @@ fn math_result_multiply_stays_inline_fmul() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// #8105 — a REASSIGNED numeric accumulator must reach the inline fast path.
+//
+// Every other `LocalGet` numeric proof needs the local to be write-once
+// (`stable_local_type_proof` answers `None` once it is reassigned) or is an
+// integer-range fact, so `15_mandelbrot`'s `let x = 0.0; … x = xtemp;` had no
+// numeric proof at all and every `x * x` bailed to `js_dynamic_mul` — 1.71 G
+// instructions for the benchmark, against 0.21 G once the proof lands.
+//
+// These assert on emitted IR rather than on the predicate, and they come in a
+// PAIR: the positive case alone would pass against an analysis that admits
+// every local, so the negative case pins the discriminating quantity.
+// ---------------------------------------------------------------------------
+
+/// Build the `15_mandelbrot` inner-loop shape over two reassigned locals.
+///
+/// `let x = 0.0; let y = 0.0; while (i < n) { const t = x * x - y * y; y = 2.0
+/// * x * y; x = t; i++; } return x;`
+fn mandelbrot_shaped_body(seed_x: Expr, seed_y: Expr) -> Vec<Stmt> {
+    vec![
+        number_let(10, "x", true, seed_x),
+        number_let(11, "y", true, seed_y),
+        number_let(12, "i", true, Expr::Integer(0)),
+        number_let(13, "n", false, Expr::Integer(64)),
+        Stmt::While {
+            condition: Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(12)),
+                right: Box::new(Expr::LocalGet(13)),
+            },
+            body: vec![
+                number_let(
+                    14,
+                    "t",
+                    false,
+                    Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(mul(Expr::LocalGet(10), Expr::LocalGet(10))),
+                        right: Box::new(mul(Expr::LocalGet(11), Expr::LocalGet(11))),
+                    },
+                ),
+                Stmt::Expr(Expr::LocalSet(
+                    11,
+                    Box::new(mul(
+                        mul(Expr::Number(2.0), Expr::LocalGet(10)),
+                        Expr::LocalGet(11),
+                    )),
+                )),
+                Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::LocalGet(14)))),
+                Stmt::Expr(Expr::Update {
+                    id: 12,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+            ],
+        },
+        Stmt::Return(Some(Expr::LocalGet(10))),
+    ]
+}
+
+#[test]
+fn reassigned_number_accumulator_multiply_is_an_inline_fmul() {
+    // Both accumulators are seeded from a Number literal and every later write
+    // is arithmetic over the same set, so the number-by-construction fixpoint
+    // admits them and the multiplies stay inline.
+    let ir = emitted_ir(probe_module(
+        "reassigned_numeric_accumulator_unit.ts",
+        Vec::new(),
+        mandelbrot_shaped_body(Expr::Number(0.0), Expr::Number(0.0)),
+    ));
+    assert!(
+        ir.contains("fmul double"),
+        "a multiply of reassigned number-by-construction locals must emit an \
+         inline fmul:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_dynamic_mul"),
+        "a reassigned local whose every write is number-producing must not \
+         route through the BigInt-aware dynamic multiply:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_number_coerce"),
+        "the proof is a canonical double at rest, so no residual coercion is \
+         needed:\n{ir}"
+    );
+}
+
+#[test]
+fn a_reassigned_local_seeded_from_a_parameter_keeps_the_dynamic_helper() {
+    // The SABOTAGE arm. Identical body, but `x` is seeded from an `Any`
+    // parameter — an unconstrained incoming value that could be a boxed
+    // BigInt. The fixpoint must drop it (a parameter is never a candidate and
+    // cannot be chased), and the multiply must keep #5970's routing.
+    //
+    // Without this, the positive test above would also pass against an
+    // analysis that admits every reassigned local, which is precisely the
+    // wrong-code shape #7773 shipped.
+    let ir = emitted_ir(probe_module(
+        "reassigned_from_param_unit.ts",
+        vec![Param {
+            id: 2,
+            name: "seed".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        mandelbrot_shaped_body(Expr::LocalGet(2), Expr::Number(0.0)),
+    ));
+    assert!(
+        ir.contains("call double @js_dynamic_mul"),
+        "a local seeded from an unconstrained parameter must keep the \
+         BigInt-aware dynamic multiply:\n{ir}"
+    );
+}
+
+#[test]
+fn a_reassigned_local_written_from_a_string_keeps_the_dynamic_helper() {
+    // Second sabotage arm: the seed is a Number, but a later write stores a
+    // string. `+` on a string operand concatenates, so the local is NOT a
+    // Number by construction and the fixpoint must drop it.
+    let mut body = mandelbrot_shaped_body(Expr::Number(0.0), Expr::Number(0.0));
+    // Insert `x = "oops";` between the declarations and the loop.
+    body.insert(
+        4,
+        Stmt::Expr(Expr::LocalSet(
+            10,
+            Box::new(Expr::String("oops".to_string())),
+        )),
+    );
+    let ir = emitted_ir(probe_module(
+        "reassigned_with_string_write_unit.ts",
+        Vec::new(),
+        body,
+    ));
+    assert!(
+        ir.contains("call double @js_dynamic_mul"),
+        "one non-Number write must drop the whole local from the fact:\n{ir}"
+    );
+}
+
 #[test]
 fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
     // #5970's correctness routing must survive: an operand that may be an

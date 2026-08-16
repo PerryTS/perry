@@ -72,9 +72,103 @@
 //! `Atomics.waitAsync`, and the AppKit text reads. Programs that use them get
 //! today's behaviour; compute- and JSON-shaped programs get the walk removed.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED};
+
+crate::perry_thread_local! {
+    static COPYING_WALK_PHASE: Cell<Option<&'static str>> =
+        const { Cell::new(None) };
+}
+
+/// RAII label for the walk that is about to call into `move_young`.
+///
+/// The pin-latch abort used to print only the garbage header. On #7803/#7990
+/// that header is *incoherent* (INTERNED on a Map, a 2 GiB nursery size), so
+/// the interesting fact is which walk followed the stale slot. Set around
+/// each mark/rewrite walk in `copying.rs`; read by
+/// [`pinned_young_move_report`].
+pub(super) struct CopyingWalkPhaseGuard {
+    prev: Option<&'static str>,
+}
+
+impl CopyingWalkPhaseGuard {
+    pub(super) fn enter(name: &'static str) -> Self {
+        let prev = COPYING_WALK_PHASE.with(|c| c.replace(Some(name)));
+        Self { prev }
+    }
+}
+
+impl Drop for CopyingWalkPhaseGuard {
+    fn drop(&mut self) {
+        COPYING_WALK_PHASE.with(|c| c.set(self.prev));
+    }
+}
+
+fn copying_walk_phase() -> Option<&'static str> {
+    COPYING_WALK_PHASE.with(|c| c.get())
+}
+
+/// The native stack-map slot the walker is currently visiting, so the
+/// pin-latch abort can name the OWNING FRAME — the compiled function, its
+/// statepoint record and the slot address — instead of only the walk phase.
+///
+/// §35's cut left exactly this gap: `mutable_root_slots/native_stack` says a
+/// statepoint live bundle held the stale pointer, and the mutator backtrace
+/// lists every candidate frame without saying which one. The walker resolves
+/// all of it (`ResolvedRoot` in roots/stack_maps.rs) and then threw it away
+/// one call before the latch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeRootSlotContext {
+    /// The frame's return address the record was matched on.
+    pub(crate) ip: usize,
+    /// Start of the compiled function owning the matched record.
+    pub(crate) function_address: usize,
+    /// The record's base register (29 = FP, 31 = SP on aarch64).
+    pub(crate) dwarf_reg: u16,
+    /// The record's frame offset from that base.
+    pub(crate) offset: i32,
+    /// Resolved slot address (base register + offset).
+    pub(crate) slot_addr: usize,
+}
+
+crate::perry_thread_local! {
+    static NATIVE_ROOT_SLOT: Cell<Option<NativeRootSlotContext>> =
+        const { Cell::new(None) };
+}
+
+/// Set around each native stack-map slot visit; cleared after. Two `Cell`
+/// stores per slot, no allocation — the walk body already does strictly more
+/// per slot than this.
+#[inline]
+pub(crate) fn set_native_root_slot_context(context: Option<NativeRootSlotContext>) {
+    NATIVE_ROOT_SLOT.with(|c| c.set(context));
+}
+
+pub(crate) fn native_root_slot_context() -> Option<NativeRootSlotContext> {
+    NATIVE_ROOT_SLOT.with(|c| c.get())
+}
+
+/// Best-effort symbol name for an address, via `dladdr` — same approach as
+/// `eh_walker.rs`. `PERRY_KEEP_SYMBOLS=1` binaries resolve their own
+/// `perry_closure_*` symbols; stripped ones print only the address.
+#[cfg(unix)]
+fn symbol_near(addr: usize) -> Option<String> {
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } == 0
+        || info.dli_sname.is_null()
+    {
+        return None;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) };
+    Some(name.to_string_lossy().into_owned())
+}
+
+#[cfg(not(unix))]
+fn symbol_near(_addr: usize) -> Option<String> {
+    None
+}
 
 /// Has any object in a space the copying minor relocates ever been pinned?
 ///
@@ -335,6 +429,121 @@ pub(super) fn pinned_young_move_report(
             );
         }
     }
+    out.push_str(&format!(
+        "  copying walk phase: {}\n",
+        copying_walk_phase().unwrap_or("(unset — not inside a named walk)")
+    ));
+    // #7803: name the owning frame. Only the native stack-map walk sets this;
+    // for every other phase it prints as absent rather than as a stale value.
+    match native_root_slot_context() {
+        Some(context) => {
+            let function = symbol_near(context.function_address)
+                .unwrap_or_else(|| "<no symbol — stripped binary>".to_string());
+            out.push_str(&format!(
+                "  native root slot: owner={function} fn={:#x} ip={:#x} \
+                 reg={} offset={} slot_addr={:#x} raw_bits={:#018x}\n",
+                context.function_address,
+                context.ip,
+                context.dwarf_reg,
+                context.offset,
+                context.slot_addr,
+                // Re-read the slot: the raw word says whether the value was
+                // NaN-boxed (and with which tag) or bare — the deref above
+                // only saw the masked address.
+                // Same hazard as the neighborhood dump below: a native
+                // root-slot context can name an unmapped address, and this
+                // report is printed on the way to an abort.
+                if matches!(
+                    crate::arena::classify_heap_space(context.slot_addr),
+                    crate::arena::HeapSpace::Unknown
+                ) {
+                    0
+                } else {
+                    unsafe { *(context.slot_addr as *const u64) }
+                },
+            ));
+        }
+        None => out.push_str("  native root slot: (not visiting a native stack-map slot)\n"),
+    }
+    // #7803 target identification: the garbage "header" values this abort
+    // has printed were NaN-boxed VALUE words, which is what the memory looks
+    // like when the followed address points INTO live data rather than at an
+    // object start. Dump the neighborhood and, decisively, the live object
+    // that ENCLOSES the target (census + floor lookup — expensive, but this
+    // path is about to abort the process).
+    out.push_str("  target neighborhood (target-64 .. target+88):\n");
+    let target_user = header_addr + super::types::GC_HEADER_SIZE;
+    for delta in (-64i64..=88).step_by(8) {
+        let addr = (header_addr as i64 + delta) as usize;
+        // This path is about to abort the process, so a diagnostic that
+        // SIGSEGVs destroys the very report it exists to print. `header_addr`
+        // is a SUSPECT address by construction — that is why we are here — and
+        // the neighborhood walks 64 bytes below it, so neither the address nor
+        // its neighborhood is known to be mapped. Classify against the arena's
+        // page metadata (a real mapping check, not a magnitude guess) and print
+        // a placeholder rather than dereferencing. A stale from-space address —
+        // the #7803 case this dump is FOR — still classifies into a live space,
+        // so the diagnostic keeps working where it matters.
+        let readable = !matches!(
+            crate::arena::classify_heap_space(addr),
+            crate::arena::HeapSpace::Unknown
+        );
+        if !readable {
+            out.push_str(&format!(
+                "    {}{:<4} (unmapped — not in any arena space){}\n",
+                if delta < 0 { "-" } else { "+" },
+                delta.abs(),
+                if delta == 0 {
+                    "   <-- reported header"
+                } else {
+                    ""
+                }
+            ));
+            continue;
+        }
+        let bits = unsafe { *(addr as *const u64) };
+        out.push_str(&format!(
+            "    {}{:<4} {:#018x}{}\n",
+            if delta < 0 { "-" } else { "+" },
+            delta.abs(),
+            bits,
+            if delta == 0 {
+                "   <-- reported header"
+            } else {
+                ""
+            },
+        ));
+    }
+    let valid = super::trace::build_valid_pointer_set();
+    match valid.enclosing_object(target_user) {
+        Some(enclosing) if enclosing != target_user => {
+            let eh = (enclosing - super::types::GC_HEADER_SIZE) as *const super::types::GcHeader;
+            out.push_str(&format!(
+                "  ENCLOSING live object: user={enclosing:#x} obj_type={} ({}) size={} — the \
+                 followed address is +{} INTO it (an interior pointer, not a stale one)\n",
+                unsafe { (*eh).obj_type },
+                gc_type_label(unsafe { (*eh).obj_type }),
+                unsafe { (*eh).size },
+                target_user - enclosing,
+            ));
+        }
+        Some(_) => out.push_str(
+            "  enclosing-object check: target IS an object start (interior-pointer \
+             hypothesis rejected for this abort)\n",
+        ),
+        None => out.push_str(
+            "  enclosing-object check: target is inside no censused live object \
+             (dead/recycled memory — consistent with a genuinely stale slot)\n",
+        ),
+    }
+    // The collection is at a safepoint in the mutator. The frames below the
+    // copier name the compiled function whose statepoint live bundle (or
+    // shadow slot) held the stale pointer — #7803's missing owner.
+    out.push_str("  --- mutator backtrace at the latch ---\n");
+    out.push_str(&format!(
+        "{}\n  --- end mutator backtrace ---\n",
+        std::backtrace::Backtrace::force_capture()
+    ));
     if flags & super::types::GC_FLAG_TENURED != 0 {
         out.push_str(
             "  note: GC_FLAG_TENURED next to a young space is NOT an anomaly. The \

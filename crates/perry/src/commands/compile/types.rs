@@ -614,6 +614,11 @@ pub struct CompilationContext {
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
+    /// JavaScript package entry files reached through a statically resolved
+    /// import edge. Perry has no runtime JavaScript engine, so these exact
+    /// graph members must re-enter the native AOT collector even when their
+    /// containing package was not opted into wholesale via `compilePackages`.
+    pub aot_discovered_modules: HashSet<PathBuf>,
     /// #5731 — assets to embed into the standalone executable, as
     /// `(embed-relative name, absolute source path)` pairs. Populated by
     /// merging the `--embed` flag with `perry.embed` / `[compile] embed` and
@@ -1105,6 +1110,7 @@ impl CompilationContext {
             native_libraries: Vec::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
+            aot_discovered_modules: HashSet::new(),
             embedded_assets: Vec::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),

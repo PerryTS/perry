@@ -15,6 +15,11 @@ mod copy_write;
 mod dataview;
 mod detach;
 mod encode;
+mod exotic_view;
+/// #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
+/// buffers with no integer-indexed own properties.
+#[cfg(test)]
+mod exotic_view_tests;
 mod from;
 mod header;
 mod iter;
@@ -62,10 +67,18 @@ pub(crate) use header::{test_data_view_registry_len, test_shared_array_buffer_re
 // part of the public surface.
 pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
+#[cfg(test)]
+pub(crate) use own_props::test_buffer_own_props_owner_count;
 pub use own_props::{
-    buffer_get_own_prop, buffer_has_own_prop, buffer_own_props_possible, buffer_set_own_prop,
-    clear_buffer_own_props, scan_buffer_own_props_roots_mut,
+    buffer_get_own_prop, buffer_has_own_prop, buffer_own_prop_names, buffer_own_props_possible,
+    buffer_set_own_prop, clear_buffer_own_props, scan_buffer_own_props_roots_mut,
 };
+
+// ---- Re-exports: #8149 integer-indexed-exotic discrimination ----
+// `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share `BufferHeader` and the
+// buffer registry with `Buffer` / `Uint8Array` but have NO integer-indexed own
+// properties. See `exotic_view`.
+pub use exotic_view::{canonical_index_key, is_byte_indexed_buffer, is_non_indexed_buffer_view};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

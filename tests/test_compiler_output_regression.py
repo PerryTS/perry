@@ -1130,6 +1130,33 @@ idxset.bounded_numeric_merge.5:
             ):
                 HARNESS.verify_existing(args)
 
+    def test_in_process_clang_placeholder_falls_back_to_a_real_driver(self):
+        # #8087: the compile plan records "(in-process)" where a driver path
+        # would go when no clang subprocess ran. The analysis re-compile still
+        # needs a real executable, and the placeholder is a truthy string, so
+        # an `or`-style fallback silently kept it and `subprocess.run` raised
+        # FileNotFoundError — every workload failed there once the in-process
+        # backend became the default.
+        self.assertEqual(
+            CAPTURE_MODULE._executable_clang(CAPTURE_MODULE.IN_PROCESS_CLANG, "/usr/bin/clang"),
+            "/usr/bin/clang",
+        )
+
+    def test_recorded_clang_path_is_preferred_when_it_is_a_real_driver(self):
+        # The fallback must not override a genuine recorded driver: the analysis
+        # is supposed to re-run the compile's own clang when there was one.
+        self.assertEqual(
+            CAPTURE_MODULE._executable_clang("/opt/llvm/bin/clang", "/usr/bin/clang"),
+            "/opt/llvm/bin/clang",
+        )
+
+    def test_missing_clang_path_falls_back(self):
+        for recorded in (None, ""):
+            self.assertEqual(
+                CAPTURE_MODULE._executable_clang(recorded, "/usr/bin/clang"),
+                "/usr/bin/clang",
+            )
+
     def test_explicit_perry_path_is_repo_relative(self):
         resolved = HARNESS.resolve_perry("target/debug/perry")
         self.assertEqual(resolved, [str(REPO_ROOT / "target/debug/perry")])

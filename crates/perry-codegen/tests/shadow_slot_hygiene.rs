@@ -1044,9 +1044,28 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
         fn_ir.contains("call ptr @js_shadow_frame_enter(i32 2)"),
         "captured Any local written to a pointer inside a closure must keep its outer slot"
     );
+    // The analysis half of the contract, stated positively: the captured
+    // write IS visible, so `value` is boxed and its writes route through the
+    // box cell.
     assert!(
-        fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
-        "boxed captured local should bind its outer shadow slot to the box slot"
+        fn_ir.contains("call i64 @js_box_alloc_bits"),
+        "a captured-and-mutated local must be boxed:\n{fn_ir}"
+    );
+    // #8132: the box-pointer slot itself is deliberately NOT bound. The slot
+    // only ever holds a `js_box_alloc_bits` result — a `std::alloc` cell
+    // outside the GC heap that no collector phase moves or frees, whose
+    // contents the box-registry scanner traces — so binding it rooted
+    // nothing and (under RS4GC) cost a relocation of the box pointer at
+    // every statepoint it stayed live across. Slot 0 is `value`'s.
+    assert!(
+        !fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
+        "#8132: a boxed local's box-pointer slot must not be bound as a GC root:\n{fn_ir}"
+    );
+    // The discriminating control: `writer` (slot 1) holds a movable closure
+    // and must still bind — if binds were skipped wholesale this fails.
+    assert!(
+        fn_ir.contains("call void @js_shadow_slot_bind(i32 1, ptr %"),
+        "the unboxed closure local must still bind its shadow slot:\n{fn_ir}"
     );
 }
 

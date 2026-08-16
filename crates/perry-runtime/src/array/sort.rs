@@ -549,21 +549,25 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
             crate::array::object_sort(recv, std::ptr::null());
             return arr;
         }
+        // Issue #654: route typed-array receivers (compiler statically typed
+        // `arr` as `Float64Array | Int32Array | …` and emitted the ArraySort
+        // lowering) through the typed-array sorter, so element bytes are read
+        // by the right per-kind accessor instead of as raw f64 AND the default
+        // comparison is the numeric one %TypedArray%.prototype.sort specifies
+        // (§23.2.3.29), not `Array.prototype.sort`'s ToString order.
+        //
+        // #8096: asked BEFORE `clean_arr_ptr` for the reason
+        // `typed_array_receiver` documents. Written after the clean this was
+        // unreachable — since #7574 the funnel returns null for every tracked
+        // non-`GC_TYPE_ARRAY` object, and every typed array is a tracked
+        // `GC_TYPE_TYPED_ARRAY` one — so `ta.sort()` returned the null'd
+        // pointer having sorted nothing, with no error and no diagnostic.
+        if let Some(ta) = crate::array::typed_array_receiver(arr) {
+            return crate::typedarray::js_typed_array_sort_default(ta) as *mut ArrayHeader;
+        }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {
             return arr;
-        }
-        // Issue #654: route typed-array receivers (compiler statically
-        // typed `arr` as `Float64Array | Int32Array | …` and emitted the
-        // ArraySort lowering) through the typed-array sorter so element
-        // bytes are read by the right per-kind accessor instead of as
-        // raw f64. Without this, `Int8Array.sort()` produced 4 i8 cells
-        // re-interpreted as 8-byte f64s — garbage values + occasional
-        // OOB reads.
-        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-            return crate::typedarray::js_typed_array_sort_default(
-                arr as *mut crate::typedarray::TypedArrayHeader,
-            ) as *mut ArrayHeader;
         }
         sort_array_receiver(arr, None)
     }
@@ -648,19 +652,16 @@ pub extern "C" fn js_array_sort_with_comparator(
             crate::array::object_sort(recv, comparator);
             return arr;
         }
+        // Issue #654 / #8096: same routing as `js_array_sort_default`, and
+        // asked at the same point — before `clean_arr_ptr` rejects the
+        // receiver — for the same reason.
+        if let Some(ta) = crate::array::typed_array_receiver(arr) {
+            return crate::typedarray::js_typed_array_sort_with_comparator(ta, comparator)
+                as *mut ArrayHeader;
+        }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {
             return arr;
-        }
-        // Issue #654: same routing as `js_array_sort_default` — when
-        // codegen statically typed the receiver as a typed array but
-        // chose the generic ArraySort HIR lowering, dispatch through
-        // the typed-array helper instead of treating the buffer as f64s.
-        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-            return crate::typedarray::js_typed_array_sort_with_comparator(
-                arr as *mut crate::typedarray::TypedArrayHeader,
-                comparator,
-            ) as *mut ArrayHeader;
         }
         sort_array_receiver(arr, Some(ComparatorCall::new(comparator)))
     }

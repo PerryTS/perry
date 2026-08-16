@@ -1,5 +1,6 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
+mod buffer_receiver;
 mod concat_reverse;
 mod element_shape;
 mod fill_extend;
@@ -45,6 +46,9 @@ pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
     js_array_from_arraylike_holey_value, js_array_from_f64,
+};
+pub(crate) use self::buffer_receiver::{
+    buffer_receiver_dispatch, callback_arg, dispatch_result_as_array,
 };
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_generic,
@@ -206,13 +210,13 @@ pub(crate) use self::header::{
     array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
     array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
     array_object_flags_from_tag, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
-    canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
-    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
-    note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, transfer_array_numeric_layout, typed_array_receiver, value_bits_to_number,
-    NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value, clean_arr_ptr,
+    clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
+    gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
+    normalize_array_receiver, note_array_slot, note_array_slot_layout_only, rebuild_array_layout,
+    rebuild_array_layout_exact, refresh_array_numeric_layout, replay_array_growth_write_barriers,
+    set_array_numeric_layout, store_array_slot, transfer_array_numeric_layout,
+    typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

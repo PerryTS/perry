@@ -73,6 +73,32 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
+/// #8098: mark `obj` as an ORDINARY plain object — class-less, but with no
+/// per-object `[[Set]]` semantics of its own, so the object-write fast paths
+/// may treat it exactly like a class instance.
+///
+/// The mark is deliberately OPT-IN and set at BIRTH. `class_id == 0` is not a
+/// sufficient condition: a `URL` instance, `Object.prototype`, a module
+/// namespace, and a native-module receiver are all class-less, and the write
+/// guards used to exclude the whole class-less population wholesale rather than
+/// reason about them (`proxy/put_value.rs`, and the same three exclusions in
+/// `field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`). Only a
+/// birth site that has established its receiver is ordinary calls this; every
+/// other class-less receiver keeps taking the full `[[Set]]` walk.
+///
+/// The bit lives in `GcHeader::_reserved`, which survives evacuation
+/// (`gc/copying.rs` and `gc/oldgen.rs` carry the word across), is preserved by
+/// the survival-age (`0x0038`) and layout-state (`0xC000`) updates, and is
+/// already loaded by the generated write PIC for its blocking-flag test.
+#[inline]
+pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
+    if obj.is_null() {
+        return;
+    }
+    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*gc)._reserved |= crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+}
+
 /// `Object(value)` plain-call coercion (#3149, ECMAScript §20.1.1.1 / ToObject).
 ///
 /// Takes and returns a NaN-boxed JSValue (`f64`):
@@ -1478,6 +1504,42 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         || crate::symbol::is_registered_symbol(src_raw)
     {
         return target_f64;
+    }
+
+    // #8149: a registered BUFFER source — a node `Buffer` / `Uint8Array` (whose
+    // own enumerable properties ARE its byte indices, so
+    // `{...Buffer.from([1,2,3])}` is `{"0":1,"1":2,"2":3}` in node), or an
+    // `ArrayBuffer` / `DataView` (which own only whatever the user assigned).
+    // A `BufferHeader` is not an `ObjectHeader`; the walk below reached the
+    // `try_read_gc_header` triage and answered `{}` for an arena-backed buffer,
+    // and an EXTERNAL one has no `GcHeader` at all, so the byte it reads there
+    // is allocator bookkeeping that can classify as anything. Enumerate through
+    // the shared buffer own-key helper instead.
+    if let Some(keys) =
+        crate::object::field_get_set::enumeration::registered_buffer_own_keys(src_raw)
+    {
+        // The key string and the write funnel both allocate, so the target can
+        // move on every iteration: read it through the handle AT the call
+        // (`with_mut_ptr`) rather than binding a pre-loop copy.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        for name in keys {
+            let value = crate::object::field_get_set::enumeration::registered_buffer_own_value(
+                src_raw, &name,
+            );
+            let value_h = scope.root_nanbox_f64(value);
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
+                object_assign_set_string_key(
+                    tgt,
+                    target_is_array,
+                    key_ptr,
+                    value_h.get_nanbox_f64(),
+                )
+            });
+        }
+        return tgt_h
+            .with_mut_ptr::<ObjectHeader, _>(|tgt| crate::value::js_nanbox_pointer(tgt as i64));
     }
 
     // A function/closure source is NOT an `ObjectHeader`: reading `keys_array`

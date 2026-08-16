@@ -43,6 +43,7 @@ test_gap_specabi_polymorphic_coexist
 test_gap_specabi_reassign
 test_gap_specabi_recursion_escape
 test_gap_specabi_view_detach
+test_gap_specabi_ordinary_param_guards
 test_gap_ta_param_numeric_read
 test_gap_typedarray_param_read
 

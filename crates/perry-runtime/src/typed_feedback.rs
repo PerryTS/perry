@@ -2085,6 +2085,17 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         );
     }
 
+    // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
+    // buffers with NO integer-indexed own properties — node answers `undefined`
+    // for `dv[0]`. Asked ABOVE the byte arm, which answers unconditionally.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_addr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            return crate::buffer::buffer_get_own_prop(raw_addr, &key)
+                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+        }
+    }
     if crate::buffer::is_registered_buffer(raw_addr) {
         let Some(index) = finite_nonnegative_i32_index(index) else {
             return f64::from_bits(TAG_UNDEFINED);
@@ -2413,6 +2424,16 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
+    // #8149: an index store on an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` creates an ordinary own property, it does not write a byte.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::is_non_indexed_buffer_view(raw_addr)
+    {
+        if let Some(key) = crate::buffer::canonical_index_key(index) {
+            crate::buffer::buffer_set_own_prop(raw_addr, &key, value);
+            return receiver;
+        }
+    }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if let Some(index) = finite_nonnegative_i32_index(index) {
             crate::buffer::js_buffer_set(

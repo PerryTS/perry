@@ -11,6 +11,15 @@ crate-type = ["cdylib"]
 [dependencies]
 perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = ["full"] }
 
+# The gate builds this provider with `--profile provider` below, but a bare
+# `cargo build --release` here must not silently produce an unwind runtime:
+# cargo's default is `panic = "unwind"`, and under it rustc plants RFC-2945
+# abort-on-unwind guards in every `extern "C"` helper with an interior Rust
+# call, so a JS throw crossing one aborts the process instead of reaching its
+# handler. See crates/perry/src/panic_profile_contract.rs.
+[profile.release]
+panic = "abort"
+
 [profile.provider]
 inherits = "release"
 opt-level = 2

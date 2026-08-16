@@ -84,10 +84,27 @@ fi
 if [[ -n "$original_version_script" ]]; then
   if [[ "$saw_runtime_rlib" == true ]]; then
     custom_version_script=$(mktemp "${TMPDIR:-/tmp}/perry-8075-version.XXXXXX")
+    # `global:` WITHOUT a `local: *`.
+    #
+    # The provider statically links the runtime rlib as well as loading the
+    # runtime .so, so it carries its own `js_gc_init` and friends. `local: *`
+    # binds those internally, and a local symbol is not preemptible — the
+    # stdlib then resolves stateful runtime calls to its OWN copy instead of
+    # the image the host loaded first, which is exactly what this fixture
+    # exists to detect ("stdlib provider is bound to a different runtime
+    # image"). Before this shim parsed `--version-script` at all, the
+    # rustc-generated script was passed through and the gate passed; the
+    # regression came with the hiding, not with the export list.
+    #
+    # Listing the runtime's symbols explicitly is NOT the fix: rustc also
+    # passes `--no-undefined-version`, so naming a symbol the output does not
+    # define is a hard lld error. Omitting `local: *` leaves every other
+    # symbol at its default (global, preemptible) binding and names only what
+    # must be added.
     {
       echo '{ global:'
       printf '  %s;\n' "${stdlib_provider_exports[@]}"
-      echo 'local: *; };'
+      echo '};'
     } > "$custom_version_script"
     arguments+=("-Wl,--version-script=$custom_version_script")
   else

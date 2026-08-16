@@ -199,6 +199,17 @@ pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
 /// the deliberate semantic for throws escaping a frame with no enclosing
 /// `try`; the C++ personality would `terminate` here instead).
 ///
+/// `PERRY_EH_TRACE=1` prints one line per personality invocation (phase,
+/// owning function, ip offset, decoded pad). Diagnostic only: it changes no
+/// verdict, and the env probe is a cached `OnceLock` so the throw path pays
+/// one branch. This is the instrument a "transport failed / no landing pad"
+/// hunt needs — it names the frame the walk gave up on, which no other
+/// output does.
+fn eh_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_EH_TRACE").is_some())
+}
+
 /// # Safety
 /// Called by the system unwinder with a live unwind context.
 #[no_mangle]
@@ -214,8 +225,39 @@ pub unsafe extern "C" fn perry_eh_personality(
     }
     let lpad = match find_landing_pad(context) {
         Ok(l) => l,
-        Err(()) => return _URC_FATAL_PHASE1_ERROR,
+        Err(()) => {
+            if eh_trace_enabled() {
+                eprintln!(
+                    "[perry-eh] personality actions={:#x} region={:#x}: LSDA parse FAILED",
+                    actions,
+                    _Unwind_GetRegionStart(context),
+                );
+            }
+            return _URC_FATAL_PHASE1_ERROR;
+        }
     };
+    if eh_trace_enabled() {
+        let mut before: c_int = 0;
+        let ip = _Unwind_GetIPInfo(context, &mut before);
+        let region = _Unwind_GetRegionStart(context);
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        let name = if libc::dladdr(region as *const libc::c_void, &mut info) != 0
+            && !info.dli_sname.is_null()
+        {
+            std::ffi::CStr::from_ptr(info.dli_sname)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::from("?")
+        };
+        eprintln!(
+            "[perry-eh] personality actions={:#x} region={:#x} ({name}) ip=+{:#x} lpad={:?}",
+            actions,
+            region,
+            ip.wrapping_sub(region),
+            lpad,
+        );
+    }
     if actions & _UA_SEARCH_PHASE != 0 {
         match lpad {
             Some(_) => _URC_HANDLER_FOUND,
@@ -497,6 +539,31 @@ mod tests {
         let base = 0x2000usize;
         let got = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), base + 0x12, base) };
         assert_eq!(got.unwrap(), None);
+    }
+
+    /// A NON-ZERO landing-pad offset with a ZERO call-site ACTION is still
+    /// Perry's catch, and the walk must claim it.
+    ///
+    /// This is the shape every JS `try` has under the default native-roots
+    /// build: `retype_landing_pads_for_statepoints` (#7982) rewrites each
+    /// catch-all pad whose `{ptr, i32}` payload is unused — which is all of
+    /// them — into `landingpad token cleanup`, and LLVM emits a zero action
+    /// for a cleanup clause. Reading the action as "handler vs cleanup" here
+    /// therefore skips every statepoint-built catch, and a plain
+    /// `try { throw } catch` aborts with a FATAL "no landing pad" instead of
+    /// running its handler. That regression was written, reviewed and only
+    /// caught end-to-end (#8082) because nothing pinned this invariant; the
+    /// zero action in the fixture below is the whole point of the test.
+    #[test]
+    fn action_zero_pad_is_still_a_handler() {
+        let lsda = synth_lsda(&[(0x10, 0x8, 0x40, 0)]);
+        let base = 0x2000usize;
+        let got = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), base + 0x12, base) };
+        assert_eq!(
+            got.unwrap(),
+            Some(base + 0x40),
+            "an action-zero pad is #7982's statepoint-retyped catch, not a skip"
+        );
     }
 
     #[test]

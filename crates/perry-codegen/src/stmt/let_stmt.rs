@@ -110,6 +110,18 @@ pub(crate) fn lower_let(
     }
     if let Some(init_expr) = init {
         crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
+        ctx.guarded_discriminant_aliases.remove(&id);
+        if !mutable && !ctx.reassigned_locals.contains(&id) {
+            if let perry_hir::Expr::PropertyGet {
+                object, property, ..
+            } = init_expr
+            {
+                if let perry_hir::Expr::LocalGet(owner_id) = object.as_ref() {
+                    ctx.guarded_discriminant_aliases
+                        .insert(id, (*owner_id, property.clone()));
+                }
+            }
+        }
         if let Some(source_id) = native_i32_alias_source(init_expr) {
             ctx.native_i32_aliases.insert(id, source_id);
         }
@@ -118,6 +130,7 @@ pub(crate) fn lower_let(
         }
     } else {
         ctx.local_value_aliases.remove(&id);
+        ctx.guarded_discriminant_aliases.remove(&id);
     }
     crate::expr::record_int_facts_for_let(ctx, id, init, mutable);
     // Class alias detection. Two shapes:
@@ -295,9 +308,11 @@ pub(crate) fn lower_let(
     // rejects every id written anywhere in this region, so this initializer
     // fact cannot survive a non-dominating assignment (#7846).
     ctx.proven_local_types.remove(&id);
-    if let Some(proven) =
-        init.and_then(|expr| crate::type_analysis::proven_type_from_init(ctx, expr))
-    {
+    if let Some(proven) = init.and_then(|expr| {
+        crate::lower_call::guarded_call_return_proof(ctx, expr)
+            .or_else(|| crate::lower_call::guarded_expr_proof(ctx, expr, ty))
+            .or_else(|| crate::type_analysis::proven_type_from_init(ctx, expr))
+    }) {
         ctx.proven_local_types.insert(id, proven);
     }
 

@@ -1,0 +1,46 @@
+[package]
+name = "next-app-route-provider"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "next_app_route_provider"
+crate-type = ["cdylib"]
+
+[dependencies]
+perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = [
+  "async-runtime",
+  "bundled-events",
+  "bundled-streams",
+  "compression",
+  "crypto",
+  "external-http-client-pump",
+  "external-http-server-pump",
+  "external-net-pump",
+  "external-ws-pump",
+  "http-client",
+  "http-server",
+  "ids",
+] }
+perry-ext-http = { path = "../../../../crates/perry-ext-http" }
+
+# #7302's bug class: Perry's invoke/landingpad exception transport requires any
+# workspace that builds a runtime archive to be `panic = "abort"`. Under
+# `unwind`, rustc plants RFC-2945 abort-on-unwind guards in every `extern "C"`
+# fn with an interior Rust call — `js_throw` included — so a JS throw aborts the
+# process below `_js_throw` with a handler already armed. `[profile.provider]`
+# alone is not enough: `release` would still take cargo's default here, and an
+# explicit override beats `inherits`.
+[profile.release]
+panic = "abort"
+
+[profile.provider]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = false
+
+[workspace]

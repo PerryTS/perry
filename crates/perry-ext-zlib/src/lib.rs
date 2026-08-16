@@ -6,7 +6,9 @@
 //! aren't valid UTF-8, so the wrapper can't go through the standard
 //! `read_string` / `alloc_string` path.
 
-use flate2::read::{GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder};
+use flate2::read::{
+    DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
+};
 use flate2::Compression;
 use perry_ffi::{alloc_buffer, BufferHeader, ErrorKind};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read};
@@ -64,6 +66,24 @@ fn deflate_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8
 
 fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut decoder = ZlibDecoder::new(data);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed)?;
+    Ok(decompressed)
+}
+
+// Raw deflate (RFC 1951 — no zlib header, no adler32 trailer), which is what
+// `deflateRawSync`/`inflateRawSync` speak. Distinct from the zlib-format pair
+// above; the comment there already drew the line, but the entry points were
+// never added on this side (#8005).
+fn deflate_raw_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
+    let mut encoder = DeflateEncoder::new(data, level);
+    let mut compressed = Vec::new();
+    encoder.read_to_end(&mut compressed)?;
+    Ok(compressed)
+}
+
+fn inflate_raw_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut decoder = DeflateDecoder::new(data);
     let mut decompressed = Vec::new();
     decoder.read_to_end(&mut decompressed)?;
     Ok(decompressed)
@@ -135,6 +155,46 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHead
         Some(Ok(out)) => alloc_buffer(&out),
         Some(Err(err)) => throw_deflate_decode_error(err),
         _ => std::ptr::null_mut(),
+    }
+}
+
+/// `zlib.deflateRawSync(data, opts)` — raw deflate, no zlib wrapper.
+///
+/// # Safety
+///
+/// NOTE THE ABI: codegen declares this pair as `(DOUBLE, DOUBLE)` and
+/// `(DOUBLE)` (`runtime_decls/stdlib_ffi/third_party.rs`), unlike the
+/// zlib-format one-shots beside it which take the data as `I64`. The parameter
+/// types must match the DECLARATION, not this crate's local convention — the
+/// bits are the same NaN-boxed value either way, so a mismatch would link
+/// cleanly and misread the argument.
+///
+/// #4917: honor `options.level`.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_deflate_raw_sync(data_value: f64, opts: f64) -> *mut BufferHeader {
+    stream::js_zlib_validate_options(opts, 8);
+    let data_bits = data_value.to_bits() as i64;
+    stream::js_zlib_validate_buffer_arg(data_bits);
+    let level = stream::compression_from_opts(opts);
+    match stream::read_input_from_bits(data_bits).map(|d| deflate_raw_bytes_with(&d, level)) {
+        Some(Ok(out)) => alloc_buffer(&out),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// `zlib.inflateRawSync(data)` — raw inflate, no zlib wrapper.
+///
+/// # Safety
+///
+/// See `js_zlib_deflate_raw_sync` on the `DOUBLE` ABI.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_inflate_raw_sync(data_value: f64) -> *mut BufferHeader {
+    let data_bits = data_value.to_bits() as i64;
+    stream::js_zlib_validate_buffer_arg(data_bits);
+    match stream::read_input_from_bits(data_bits).map(|d| inflate_raw_bytes(&d)) {
+        Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(err)) => throw_deflate_decode_error(err),
+        None => std::ptr::null_mut(),
     }
 }
 

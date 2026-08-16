@@ -277,7 +277,14 @@ impl LlInst {
                 out.push(')');
             }
             LlInst::AsmBarrier => {
-                out.push_str("  call void asm sideeffect \"\", \"\"()");
+                // `"gc-leaf-function"` exempts the barrier from
+                // rewrite-statepoints-for-gc: RS4GC otherwise wraps the call
+                // into a `gc.statepoint` whose callee is the inline asm —
+                // invalid IR ("Cannot take the address of an inline asm!")
+                // that SIGBUSes in ISel because the in-process pipeline does
+                // not re-verify (#8082). An empty asm can never reach a
+                // safepoint, so the exemption is sound by construction.
+                out.push_str("  call void asm sideeffect \"\", \"\"() \"gc-leaf-function\"");
             }
             LlInst::Br { label } => {
                 let _ = write!(out, "  br label %{label}");

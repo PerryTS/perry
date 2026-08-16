@@ -24,6 +24,7 @@ pub(crate) struct InlineConstructorScope {
     locals: std::collections::HashMap<u32, String>,
     local_types: std::collections::HashMap<u32, HirType>,
     proven_local_types: std::collections::HashMap<u32, HirType>,
+    guarded_discriminant_aliases: std::collections::HashMap<u32, (u32, String)>,
     boxed_vars: std::collections::HashSet<u32>,
 }
 
@@ -31,6 +32,7 @@ pub(crate) fn restore_inline_constructor_scope(ctx: &mut FnCtx<'_>, saved: Inlin
     ctx.locals = saved.locals;
     ctx.local_types = saved.local_types;
     ctx.proven_local_types = saved.proven_local_types;
+    ctx.guarded_discriminant_aliases = saved.guarded_discriminant_aliases;
     ctx.boxed_vars = saved.boxed_vars;
 }
 
@@ -45,6 +47,7 @@ pub(crate) fn bind_inline_constructor_params(
         locals: ctx.locals.clone(),
         local_types: ctx.local_types.clone(),
         proven_local_types: ctx.proven_local_types.clone(),
+        guarded_discriminant_aliases: ctx.guarded_discriminant_aliases.clone(),
         boxed_vars: ctx.boxed_vars.clone(),
     };
 

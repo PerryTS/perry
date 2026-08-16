@@ -73,6 +73,47 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 key_str,
             );
         }
+        // Buffer / ArrayBuffer / DataView NEXT, and for the same reason
+        // (#8117). These receivers are `BufferHeader`s, not `ObjectHeader`s:
+        // they have no `class_id` and no `keys_array`. Nothing below rejected
+        // them, so the ordinary arm read `(*obj).keys_array` out of the bytes
+        // that follow a buffer header, and handed that to `js_array_length` —
+        // which dereferences `addr - 8` for its lazy-array probe. The only
+        // thing between the two was a `< 0x10000` magnitude floor, which
+        // arbitrary payload bytes clear routinely:
+        //
+        //     const b: any = Buffer.alloc(8);
+        //     b.readUInt8 = function () { return "shadowed"; };
+        //     const k = "readUInt8";
+        //     b[k](0);                       // SIGSEGV, 10/10 on Linux
+        //
+        // reached through `js_put_value_set_dyn_ic_miss` ->
+        // `proxy::ordinary_set_with_receiver` -> `proxy::own_set_descriptor`.
+        // It is the same "ask the receiver question before the generic walk
+        // claims it" shape as #8090/#8109/#8119/#8120, on the has-own-key path.
+        //
+        // A buffer's OWN string keys are exactly its expando table (#6406).
+        // Prototype methods (`readUInt8`, `subarray`, …) are inherited, not
+        // own, so they must answer false — that is what lets `b.readUInt8 = fn`
+        // install a shadowing own property instead of being treated as a
+        // redefinition. Canonical integer indices are deliberately NOT folded
+        // in: the byte-index `[[Set]]` is routed upstream of this call, and
+        // answering "own" for one would divert it into the ordinary
+        // data-property store.
+        if crate::buffer::is_registered_buffer(obj_addr) {
+            // `key_to_rust_string` runs `js_string_coerce`, which allocates and
+            // can therefore evacuate. The buffer's address is the side-table
+            // KEY, so carry it across the call on a handle rather than binding
+            // the pre-call value (#6943).
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (key_name, obj) =
+                obj_handle.across_mut::<super::ObjectHeader, _>(|| key_to_rust_string(key));
+            let Some(key_name) = key_name else {
+                return false;
+            };
+            return crate::buffer::buffer_has_own_prop(obj as usize, &key_name);
+        }
         if obj_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc = gc_header_for(obj);
             if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
@@ -146,7 +187,14 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         let keys_handle = scope.root_raw_mut_ptr((*obj).keys_array);
         let key_handle = scope.root_string_ptr(key_str);
         let ((), mut keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
-        if keys.is_null() || (keys as usize) < 0x10000 {
+        // Defence in depth for the class the buffer arm above closes by
+        // routing: `keys_array` is only an `ArrayHeader` when `obj` really is
+        // an `ObjectHeader`, and a receiver kind with no arm here reaches this
+        // line holding payload bytes. A bare magnitude floor does not catch
+        // that — use the canonical predicate, which rejects the handle band and
+        // anything outside the heap before `js_array_length` dereferences
+        // `keys - 8`. A missing arm should be a wrong answer, not a SIGSEGV.
+        if keys.is_null() || !crate::value::addr_class::is_plausible_heap_addr(keys as usize) {
             return false;
         }
         let key_count = crate::array::js_array_length(keys) as usize;

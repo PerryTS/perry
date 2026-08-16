@@ -468,15 +468,12 @@ NONCOLLECTING = {
     # cannot -- side-table metadata writes through the system allocator, which
     # arms no Perry GC trigger.
     "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
-    "js_gc_layout_note_slot",
     "js_write_barrier_root_nanbox", "js_write_barrier_slot",
-    "js_runtime_write_barrier_slot", "js_gc_register_global_root",
+    "js_gc_register_global_root",
     # pure value predicates / bit twiddling
-    "js_is_truthy", "js_nanbox_get_pointer", "js_value_is_object",
-    "js_value_is_string", "js_typeof_tag",
+    "js_is_truthy", "js_nanbox_get_pointer",
     # inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
-    "js_typed_feedback_shape_guard", "js_typed_feedback_note",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
@@ -486,6 +483,16 @@ NONCOLLECTING = {
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
     "js_box_set_bits", "js_box_get_bits",           # box.rs:317 raw cell write
     "js_i32_box_set", "js_bool_box_set",
+    "js_i32_box_get", "js_bool_box_get",            # registry check + raw read, no TDZ
+    # Box allocators (#8132): `std::alloc::alloc` + a TLS registry insert.
+    # A raw Rust allocation arms no Perry GC trigger (the malloc-count
+    # trigger counts MALLOC_STATE GC objects), so the call cannot enter the
+    # collector. The premise is machine-checked: IMMOVABLE_SOURCES' "box"
+    # probes below fail if box.rs ever arena-allocates or grows a free path,
+    # and these entries must be removed with them. Required here for the
+    # one-way containment `gc_call_effects.rs` documents (its CannotCollect
+    # set must stay a subset of this one).
+    "js_box_alloc_bits", "js_i32_box_alloc", "js_bool_box_alloc",
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
@@ -505,7 +512,15 @@ NONCOLLECTING = {
     "js_closure_unbox_callee_checked",
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
-    "js_gc_note_slot_layout", "js_string_addref_if_heap_string",
+    # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
+    # (:833). `_aware` is the same body behind an early return taken when
+    # neither the new nor the old bits are pointer-bearing, so it does strictly
+    # LESS than the entry point beside it -- the same "differ only by doing
+    # less" argument this file already accepts for `declare` vs `init` above.
+    # A phantom third spelling, `js_gc_layout_note_slot`, sat in this set (and
+    # in `root_reload.rs`) and matched no symbol in the tree.
+    "js_gc_note_slot_layout", "js_gc_note_slot_layout_aware",
+    "js_string_addref_if_heap_string",
     # `js_get_string_pointer_unified` is deliberately NOT here. Its SSO branch
     # calls `js_string_materialize_to_heap`, which allocates (value/nanbox.rs:268),
     # so it is a collection point by this file's one-sided rule even though the
@@ -1198,6 +1213,25 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
     "js_array_reduce", "js_json_stringify",
+    # Buffer / typed-array construction FROM another collection. Each of these
+    # is matched by ALLOC_RE (its result is a heap value the checker tracks)
+    # AND reaches an element read that is already poll-capable, so `--audit-
+    # poll-reach` reported the pair and refused to let a window whose only
+    # collection point is one of them classify `MOVING: no`:
+    #
+    #   js_uint8array_new            -> js_typed_array_get, js_uint8array_from_array
+    #   js_typed_array_new_from_array-> js_array_get_f64
+    #   js_buffer_from_array         -> js_array_get_f64
+    #   js_buffer_from_value         -> js_buffer_from_array
+    #   js_buffer_alloc_fill_value   -> js_buffer_from_value
+    #
+    # The reads are the reach proof: a source element can be an accessor or a
+    # Proxy `get` trap, i.e. user JS, and the per-element loop allocates the
+    # destination as it goes. `Buffer.from(arr)` / `new Uint8Array(arr)` are
+    # therefore collection points like any other element-reading builtin.
+    "js_uint8array_new", "js_typed_array_new_from_array",
+    "js_buffer_from_array", "js_buffer_from_value",
+    "js_buffer_alloc_fill_value",
     "js_string_replace_regex_fn", "js_string_replace_string_fn",
     "js_string_replace_all_regex_fn", "js_string_replace_all_string_fn",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",

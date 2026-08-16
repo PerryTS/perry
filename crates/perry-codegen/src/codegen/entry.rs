@@ -630,12 +630,14 @@ pub(super) fn compile_module_entry(
             if !nextjs_path_inits.is_empty() {
                 blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             }
-            for prefix in non_entry_module_prefixes {
-                if cross_module.deferred_module_prefixes.contains(prefix) {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", prefix), &[]);
-            }
+            // #8040: record the path->init addresses BEFORE the eager init
+            // loop below. Recording is pure bookkeeping — "No init runs here,
+            // only the address is recorded" — but a module that performs a
+            // runtime path-require DURING its own eager init (Next's
+            // webpack-runtime loads chunk 2 while initializing) previously hit
+            // an empty init registry and died with MODULE_NOT_FOUND, even
+            // though the chunk was compiled and its init address was about to
+            // be recorded a few instructions later.
             // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
             // module's `__init` address under its absolute path so a runtime
             // `require(absolutePath)` (turbopack page/chunk loading) can trigger
@@ -654,6 +656,12 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
+            }
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                blk.call_void(&format!("{}__init", prefix), &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
@@ -730,6 +738,7 @@ pub(super) fn compile_module_entry(
             locals: HashMap::new(),
             local_types: init_local_types,
             proven_local_types: HashMap::new(),
+            guarded_discriminant_aliases: HashMap::new(),
             module_global_proven_types: &cross_module.module_global_proven_types,
             reassigned_locals: crate::collectors::reassigned_locals(&hir.init),
             const_string_locals: HashMap::new(),
@@ -809,6 +818,7 @@ pub(super) fn compile_module_entry(
             integer_locals: main_native_facts.integer_locals(),
             int_valued_i64_locals: main_native_facts.int_valued_i64_locals(),
             not_bigint_locals: main_native_facts.not_bigint_locals(),
+            number_by_construction_locals: main_native_facts.number_by_construction_locals(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),
@@ -848,8 +858,10 @@ pub(super) fn compile_module_entry(
             repsel_context_allows_canonical_str: repsel_str_allows,
             repsel_str_ineligible_locals: repsel_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
+            spec_return_proofs: &cross_module.spec_return_proofs,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),
+            spec_i32_params: std::collections::HashSet::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),
@@ -1413,6 +1425,7 @@ pub(super) fn compile_module_entry(
             locals: HashMap::new(),
             local_types: HashMap::new(),
             proven_local_types: HashMap::new(),
+            guarded_discriminant_aliases: HashMap::new(),
             module_global_proven_types: &cross_module.module_global_proven_types,
             reassigned_locals: crate::collectors::reassigned_locals(&hir.init),
             const_string_locals: HashMap::new(),
@@ -1492,6 +1505,7 @@ pub(super) fn compile_module_entry(
             integer_locals: init_native_facts.integer_locals(),
             int_valued_i64_locals: init_native_facts.int_valued_i64_locals(),
             not_bigint_locals: init_native_facts.not_bigint_locals(),
+            number_by_construction_locals: init_native_facts.number_by_construction_locals(),
             unsigned_i32_locals: init_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: init_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),
@@ -1531,8 +1545,10 @@ pub(super) fn compile_module_entry(
             repsel_context_allows_canonical_str: repsel_str_allows,
             repsel_str_ineligible_locals: repsel_str_ineligible,
             spec_abi_functions: &cross_module.spec_abi_functions,
+            spec_return_proofs: &cross_module.spec_return_proofs,
             spec_ta_bindings: &cross_module.spec_ta_bindings,
             spec_ta_ready: std::collections::HashSet::new(),
+            spec_i32_params: std::collections::HashSet::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: init_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: init_native_facts.strictly_i32_bounded_locals(),

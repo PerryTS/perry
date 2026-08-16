@@ -150,11 +150,14 @@ fn index_for(frame: Frame, return_address: usize, offset: i32) -> StackMapIndex 
             stack_size: frame.stack_size,
             roots_start: 0,
             roots_len: 1,
+            derived_start: 0,
+            derived_len: 0,
         }],
         vec![StackMapLocation {
             dwarf_reg: DWARF_REG_SP_AARCH64,
             offset,
         }],
+        Vec::new(),
     )
 }
 

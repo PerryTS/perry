@@ -636,19 +636,52 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 /// "Bind must be called on a function"). Methods reify as bound methods —
 /// the dynamic-call arm in `native_call_method.rs` executes them on call —
 /// and accessors return their values directly.
+/// A `TextDecoder.prototype` method key, as a `'static` byte string.
+///
+/// #8133 — the bind below used to hand `js_class_method_bind` the caller's
+/// `key_ptr`, which every caller derives as
+/// `key_string + size_of::<StringHeader>()`: the interior of a movable GC heap
+/// string, unreachable the moment the read returns. The closure captures that
+/// pointer and `dispatch_bound_method` re-reads it at CALL time, so a copying
+/// minor could relocate or reclaim the bytes the closure names. #7747 fixed the
+/// same defect on the Buffer path.
+///
+/// `text_handle_property` no longer TAKES the caller's pointer at all, so the
+/// bug is not merely fixed here, it is unwritable.
+pub(crate) fn text_decoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"decode" => Some(b"decode"),
+        _ => None,
+    }
+}
+
+/// A `TextEncoder.prototype` method key, as a `'static` byte string. See
+/// [`text_decoder_method_name_static`].
+pub(crate) fn text_encoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"encode" => Some(b"encode"),
+        b"encodeInto" => Some(b"encodeInto"),
+        _ => None,
+    }
+}
+
+/// Bind `method` — always a `'static` literal from the two lookups above — as a
+/// bound-method value on `this_f64`.
+fn bind_static_method(this_f64: f64, method: &'static [u8]) -> crate::value::JSValue {
+    let result = crate::object::js_class_method_bind(this_f64, method.as_ptr(), method.len());
+    crate::value::JSValue::from_bits(result.to_bits())
+}
+
 pub(crate) unsafe fn text_handle_property(
     raw: usize,
     key_bytes: &[u8],
-    key_ptr: *const u8,
-    key_len: usize,
 ) -> Option<crate::value::JSValue> {
     let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
     if is_known_text_decoder_id(raw as i64) {
+        if let Some(method) = text_decoder_method_name_static(key_bytes) {
+            return Some(bind_static_method(this_f64, method));
+        }
         match key_bytes {
-            b"decode" => {
-                let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
-                return Some(crate::value::JSValue::from_bits(result.to_bits()));
-            }
             b"encoding" => {
                 let s = js_text_decoder_encoding(this_f64);
                 return Some(crate::value::JSValue::string_ptr(s));
@@ -666,9 +699,10 @@ pub(crate) unsafe fn text_handle_property(
             _ => {}
         }
     }
-    if raw as i64 == TEXT_ENCODER_SENTINEL_ID && matches!(key_bytes, b"encode" | b"encodeInto") {
-        let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
-        return Some(crate::value::JSValue::from_bits(result.to_bits()));
+    if raw as i64 == TEXT_ENCODER_SENTINEL_ID {
+        if let Some(method) = text_encoder_method_name_static(key_bytes) {
+            return Some(bind_static_method(this_f64, method));
+        }
     }
     None
 }

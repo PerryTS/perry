@@ -72,7 +72,7 @@ mod delete_rest;
 mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
-mod field_get_set;
+pub(crate) mod field_get_set;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;
@@ -119,6 +119,10 @@ mod object_ops;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;
 mod polymorphic_index;
+#[cfg(test)]
+mod polymorphic_index_sso_tests;
+#[cfg(test)]
+mod polymorphic_index_symbol_tests;
 mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
@@ -144,7 +148,7 @@ mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
 mod typed_array_define;
-mod typed_array_proto_thunks;
+pub(crate) mod typed_array_proto_thunks;
 mod util_types;
 mod weakref_proto_thunks;
 mod websocket_global;
@@ -1691,8 +1695,15 @@ pub struct ObjectHeader {
     pub parent_class_id: u32,
     /// Number of fields in this object
     pub field_count: u32,
-    /// Pointer to array of key strings (for Object.keys() support)
-    /// NULL for class instances (keys are defined by the class)
+    /// Pointer to array of key strings (for Object.keys() support).
+    ///
+    /// A class instance HAS one: `object_alloc_class_inline_keys_impl` installs
+    /// the per-class array that codegen builds once at module init
+    /// (`js_build_class_keys_array`). The note that used to sit here claiming
+    /// the opposite outlived the compact-instance layout it described, and cost
+    /// #8099 a wrong premise — the guard descriptor refused every class-typed
+    /// parameter on the strength of it. Null means genuinely keyless, not
+    /// "class instance".
     pub keys_array: *mut ArrayHeader,
     /// #6759 Phase B: per-object metadata record — null for ordinary
     /// objects (the common case). MUST stay the LAST field: codegen reads

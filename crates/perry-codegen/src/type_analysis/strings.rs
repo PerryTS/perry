@@ -513,6 +513,10 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::PropertyGet {
             object, property, ..
         } if is_process_namespace_version_property(object, property) => true,
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => matches!(
+            crate::lower_call::guarded_path_type(ctx, e),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ),
         _ => false,
     }
 }

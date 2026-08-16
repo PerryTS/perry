@@ -415,6 +415,71 @@ fn emit_i18n_row_value(
     Ok(ctx.block().load(DOUBLE, &result_slot))
 }
 
+/// Materialize a compiled-module namespace through the same runtime constructor
+/// used by dynamic import. Namespace locals may also have a default-export
+/// prefix for direct-call compatibility, so whole-value reads must take this
+/// path before generic imported function/variable lowering.
+fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Option<String>> {
+    let mut members: Vec<String> = ctx
+        .namespace_member_prefixes
+        .keys()
+        .filter(|(namespace, _)| namespace == name)
+        .map(|(_, member)| member.clone())
+        .collect();
+    if members.is_empty() {
+        return Ok(None);
+    }
+    members.sort();
+    members.dedup();
+    let count = (members.len() as u32).to_string();
+    let zero = "0".to_string();
+    let object = ctx
+        .block()
+        .call(I64, "js_object_alloc", &[(I32, &zero), (I32, &count)]);
+    with_rooted_accumulator(
+        ctx,
+        Repr::Ptr,
+        &object,
+        true,
+        |ctx, accumulator| {
+            for member in &members {
+                let member_get = Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::ExternFuncRef {
+                        name: name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: HirType::Any,
+                    }),
+                    property: member.clone(),
+                };
+                let value = lower_expr(ctx, &member_get)?;
+                let key_index = ctx.strings.intern(member);
+                let key_global = format!("@{}", ctx.strings.entry(key_index).handle_global);
+                let key = {
+                    let block = ctx.block();
+                    let key = block.load(DOUBLE, &key_global);
+                    let key_bits = block.bitcast_double_to_i64(&key);
+                    block.and(I64, &key_bits, POINTER_MASK_I64)
+                };
+                accumulator.call_void(
+                    ctx,
+                    "js_object_set_field_by_name",
+                    &[Arg::Plain(I64, &key), Arg::Plain(DOUBLE, &value)],
+                );
+            }
+            Ok(())
+        },
+        |ctx, object| {
+            let value = nanbox_pointer_inline(ctx.block(), object);
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_finalize_namespace",
+                &[(DOUBLE, &value)],
+            )))
+        },
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::WorkerNew {
@@ -754,6 +819,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 ));
             }
+            if ctx.namespace_imports.contains(name) {
+                if let Some(namespace) = materialize_compiled_namespace(ctx, name)? {
+                    return Ok(namespace);
+                }
+            }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                 // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
                 // shim's handle to a FUNCTION-LOCAL `require('S')`. S is
@@ -881,116 +951,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dedicated arms above; this catch-all only fires for
             // names with no resolution at all.
             if ctx.namespace_imports.contains(name) {
-                // A namespace import used as a whole VALUE (passed to a
-                // function, iterated by `Object.keys`/`for…in`/`Object.entries`,
-                // spread, …) must be a real object whose OWN ENUMERABLE
-                // properties are the source module's exports — not the empty
-                // `js_unresolved_namespace_stub`. Drizzle's
-                // `drizzle(pool, { schema })` (with `import * as schema`) and
-                // Stripe's `_prepResources` (`for (const name in resources)`
-                // over `import * as resources`) both enumerate the namespace and
-                // silently saw zero members otherwise. Materialize the object by
-                // resolving each exported member through the SAME per-member
-                // `ns.member` PropertyGet lowering (functions → closure
-                // singletons, consts → getters, classes → class refs).
-                let mut members: Vec<String> = ctx
-                    .namespace_member_prefixes
-                    .keys()
-                    .filter(|(ns, _)| ns == name)
-                    .map(|(_, m)| m.clone())
-                    .collect();
-                if !members.is_empty() {
-                    members.sort();
-                    members.dedup();
-                    let n_str = (members.len() as u32).to_string();
-                    let zero_str = "0".to_string();
-                    let handle = ctx.block().call(
-                        I64,
-                        "js_object_alloc",
-                        &[(I32, &zero_str), (I32, &n_str)],
-                    );
-                    // #7280: root the half-built namespace object.
-                    //
-                    // Every other lowering that allocates an object and then
-                    // fills it in carries this contract — `Expr::Object` since
-                    // #6951, `Expr::ObjectSpread`, the class-object lowering
-                    // since #7211. This one was added for a different reason
-                    // (#629, Drizzle/Stripe namespace enumeration) and never
-                    // got it, and it builds by far the LARGEST object in a
-                    // dependency-scale program: one property per export of the
-                    // imported module, materialized at every use site.
-                    //
-                    // Both halves of the loop are collection points, on every
-                    // iteration:
-                    //
-                    //   * `lower_expr(member_get)` is a full `ns.member`
-                    //     PropertyGet. For a const export that is a CALL into
-                    //     the exporting module's accessor — arbitrary user
-                    //     code; for a function it allocates a closure
-                    //     singleton; for a class it resolves a class ref.
-                    //   * `js_object_set_field_by_name` performs the keys-array
-                    //     transition, which allocates.
-                    //
-                    // With `handle` in a bare SSA register the object is
-                    // reachable from NO root for the whole build, so a minor
-                    // does not merely relocate it — it reclaims it, and the
-                    // remaining stores land in recycled memory. The caller then
-                    // receives a namespace whose members read back as garbage,
-                    // which surfaces as `TypeError: <x> is not a function` at
-                    // the first member call, arbitrarily far away.
-                    //
-                    // Measured on #7280's stock-zod reproducer: `import * as
-                    // core` materializes 269 members here, and the emitted IR
-                    // carried ZERO `js_gc_temp_root_*` calls beside its 269
-                    // allocating stores.
-                    //
-                    // #7615 slice 8: this is `with_rooted_accumulator`'s shape
-                    // exactly — a half-built container written once per member
-                    // with arbitrary user code lowered between the writes — so
-                    // the re-read is fused to the emission that consumes it
-                    // (`RootedAcc::call_void` materialises argument 0 from the
-                    // slot immediately before the call) instead of being a
-                    // register the loop holds. `protect` is unconditionally
-                    // `true` because both halves of the loop body collect on
-                    // every iteration, which is what the paragraph above
-                    // establishes.
-                    return with_rooted_accumulator(
-                        ctx,
-                        Repr::Ptr,
-                        &handle,
-                        true,
-                        |ctx, acc| {
-                            for member in &members {
-                                let member_get = Expr::PropertyGet {
-                                    byte_offset: 0,
-                                    object: Box::new(Expr::ExternFuncRef {
-                                        name: name.clone(),
-                                        param_types: Vec::new(),
-                                        return_type: HirType::Any,
-                                    }),
-                                    property: member.clone(),
-                                };
-                                let v_box = lower_expr(ctx, &member_get)?;
-                                let key_idx = ctx.strings.intern(member);
-                                let key_handle_global =
-                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                let key_raw = {
-                                    let blk = ctx.block();
-                                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                    blk.and(I64, &key_bits, POINTER_MASK_I64)
-                                };
-                                acc.call_void(
-                                    ctx,
-                                    "js_object_set_field_by_name",
-                                    &[Arg::Plain(I64, &key_raw), Arg::Plain(DOUBLE, &v_box)],
-                                );
-                            }
-                            Ok(())
-                        },
-                        |ctx, handle| Ok(nanbox_pointer_inline(ctx.block(), handle)),
-                    );
-                }
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_unresolved_namespace_stub", &[]));

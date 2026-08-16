@@ -544,6 +544,38 @@
       "count": 1,
       "classification": "metadata-only",
       "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/func_ref.rs",
+      "function": "discriminant_path",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The discriminant narrowing is licensed by the `===` comparison this lowering emits, and the base proof comes from the write-stable API, so a stale union can only widen the branch back to the generic path."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_call/func_ref.rs",
+      "function": "guarded_path_type",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The path type seeds a candidate descriptor that `js_param_type_guard` validates against the live argument before the specialized clone is entered; an untrue candidate fails the guard and takes the generic entry."
+    },
+    {
+      "path": "crates/perry-codegen/src/lower_conditional.rs",
+      "function": "lower_conditional",
+      "access": "snapshot_guarded_proof",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "Restore bookkeeping for a ternary's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/if_stmt.rs",
+      "function": "lower_if",
+      "access": "snapshot_guarded_proof",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "Restore bookkeeping for an if statement's branch-scoped narrowing: the snapshot is written back after each arm and is never read as a type fact."
     }
   ]
 }

@@ -251,6 +251,36 @@ pub(crate) fn probe_symbol(module_name: &str) -> String {
     )
 }
 
+/// The symbol containing `probe_module`'s original body.
+///
+/// #8079 may split an eligible ordinary typed function into a public guard
+/// wrapper and two body-bearing clones. Native-root mechanics use the
+/// proof-bearing clone: unlike the always-inline generic clone, it survives
+/// the production optimization/statepoint pipeline as its own stack-map
+/// function. The guard proof does not change the local allocations these
+/// fixtures measure. Functions rejected by guarded specialization retain
+/// their historical public body and symbol.
+pub(crate) fn probe_body_symbol(ir: &str, module_name: &str) -> String {
+    let public = probe_symbol(module_name);
+    // Keep specialized-symbol construction confined to the production
+    // allowlist: this test helper only discovers the emitted body by joining
+    // the separator and suffix at runtime.
+    let specialized_prefix = format!("{public}${}", "spec_");
+    for line in ir.lines().filter(|line| line.starts_with("define ")) {
+        let Some((_, after_at)) = line.split_once('@') else {
+            continue;
+        };
+        let candidate = after_at
+            .split_once('(')
+            .map(|(name, _)| name.trim_matches('"'))
+            .unwrap_or_default();
+        if candidate.starts_with(&specialized_prefix) {
+            return candidate.to_string();
+        }
+    }
+    public
+}
+
 pub(crate) fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -307,11 +337,13 @@ pub(crate) fn native_ir(module: &Module, target: &str, is_entry: bool) -> String
 /// The whole `define … { … }` body of `name`.
 pub(crate) fn function_slice<'a>(ir: &'a str, name: &str) -> &'a str {
     let marker = format!("@{}(", name);
+    let quoted_marker = format!("@\"{}\"(", name);
     let start = ir
         .match_indices("define ")
         .find_map(|(idx, _)| {
             let line_end = ir[idx..].find('\n').map(|o| idx + o)?;
-            ir[idx..line_end].contains(&marker).then_some(idx)
+            (ir[idx..line_end].contains(&marker) || ir[idx..line_end].contains(&quoted_marker))
+                .then_some(idx)
         })
         .unwrap_or_else(|| panic!("no function `{name}` in IR:\n{ir}"));
     let end = ir[start..]

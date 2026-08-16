@@ -81,6 +81,10 @@ pub(crate) fn lower_conditional(
     then_expr: &Expr,
     else_expr: &Expr,
 ) -> Result<String> {
+    let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
+    let saved_guarded_proof = branch_proofs
+        .as_ref()
+        .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
     let cond = lower_expr(ctx, condition)?;
     let cond_bool = lower_truthy(ctx, &cond, condition);
 
@@ -95,17 +99,39 @@ pub(crate) fn lower_conditional(
     ctx.block().cond_br(&cond_bool, &then_label, &else_label);
 
     ctx.current_block = then_idx;
+    if let Some((id, Some(proof), _)) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     let then_val = lower_expr(ctx, then_expr)?;
     let then_after_label = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
 
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = saved_guarded_proof.as_ref() {
+            ctx.proven_local_types.insert(*id, proof.clone());
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
+    }
+
     ctx.current_block = else_idx;
+    if let Some((id, _, Some(proof))) = branch_proofs.as_ref() {
+        ctx.proven_local_types.insert(*id, proof.clone());
+    }
     let else_val = lower_expr(ctx, else_expr)?;
     let else_after_label = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
+    }
+
+    if let Some((id, _, _)) = branch_proofs.as_ref() {
+        if let Some(proof) = saved_guarded_proof {
+            ctx.proven_local_types.insert(*id, proof);
+        } else {
+            ctx.proven_local_types.remove(id);
+        }
     }
 
     ctx.current_block = merge_idx;

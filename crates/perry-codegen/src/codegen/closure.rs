@@ -905,6 +905,7 @@ pub(super) fn compile_closure(
         locals,
         local_types,
         proven_local_types: std::collections::HashMap::new(),
+        guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
@@ -991,6 +992,7 @@ pub(super) fn compile_closure(
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
+        number_by_construction_locals: native_facts.number_by_construction_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -1025,8 +1027,10 @@ pub(super) fn compile_closure(
         repsel_context_allows_canonical_str: repsel_str_allows,
         repsel_str_ineligible_locals: repsel_str_ineligible,
         spec_abi_functions: &cross_module.spec_abi_functions,
+        spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
+        spec_i32_params: std::collections::HashSet::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

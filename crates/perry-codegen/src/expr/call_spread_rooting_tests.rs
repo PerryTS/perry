@@ -178,6 +178,77 @@ fn a_multi_spread_bundle_rereads_its_accumulator_below_the_array_conversion() {
     assert_every_fold_rereads_the_accumulator(&ir, "multi-spread bundle");
 }
 
+/// #7803 — `new F(...args, src)`, the zod `Doc.compile` shape that corrupted
+/// the heap. `NewDynamicSpread` carried a private copy of the bundling loop
+/// with the accumulator in a bare register; `js_array_push_f64` through its
+/// pre-move address wrote a NaN-boxed string over recycled from-space bytes,
+/// which is where every 0x7FFF-high-half garbage header in the #7803 latch
+/// reports came from. The arm now routes through `bundle_args_rooted`; this
+/// pins the ordering that IS the fix.
+#[test]
+fn a_spread_new_bundle_rereads_its_accumulator_below_the_array_conversion() {
+    let ir = compile_body(
+        "spread_new",
+        vec![Stmt::Expr(Expr::NewDynamicSpread {
+            callee: Box::new(allocating("f")),
+            args: vec![
+                CallArg::Spread(allocating("xs")),
+                CallArg::Expr(allocating("s")),
+            ],
+            byte_offset: 0,
+        })],
+    );
+    // Liveness first: the arm under test must have lowered at all.
+    assert_eq!(
+        call_lines(&ir, "js_new_function_construct_apply").len(),
+        1,
+        "spread-new did not dispatch through js_new_function_construct_apply, so \
+         nothing below tests the NewDynamicSpread arm.\n{ir}"
+    );
+    assert_every_fold_rereads_the_accumulator(&ir, "spread-new bundle");
+}
+
+/// #7803's second half in the same arm: the CALLEE outlives the bundle. Same
+/// defect `8842a0be4` fixed in this file's two non-spread construct arms —
+/// this arm was not among the three. The callee register the apply dispatch
+/// reads must be defined BELOW the last collection point of the bundling,
+/// which can only happen if it was rooted above the window and re-read below.
+#[test]
+fn a_spread_new_rereads_its_callee_below_the_bundle() {
+    let ir = compile_body(
+        "spread_new_callee",
+        vec![Stmt::Expr(Expr::NewDynamicSpread {
+            callee: Box::new(allocating("f")),
+            args: vec![
+                CallArg::Spread(allocating("xs")),
+                CallArg::Expr(allocating("s")),
+            ],
+            byte_offset: 0,
+        })],
+    );
+    let dispatches = call_lines(&ir, "js_new_function_construct_apply");
+    assert_eq!(dispatches.len(), 1, "no spread-new dispatch in:\n{ir}");
+    let dispatch = dispatches[0];
+    let callee = first_operand(&ir, dispatch);
+    let def = definition_line(&ir, &callee)
+        .unwrap_or_else(|| panic!("no definition for the callee {callee} in:\n{ir}"));
+    let last_window = call_lines(&ir, "js_array_like_to_array")
+        .into_iter()
+        .chain(call_lines(&ir, "js_array_concat"))
+        .chain(call_lines(&ir, "js_array_push_f64"))
+        .filter(|&l| l < dispatch)
+        .max()
+        .unwrap_or_else(|| panic!("no bundling window above the dispatch in:\n{ir}"));
+    assert!(
+        def > last_window,
+        "spread-new reads callee {callee}, defined at line {def}, ABOVE the last \
+         bundling collection point at line {last_window}. An evacuating minor \
+         anywhere in the bundle relocates the callee and the construct dispatches \
+         a from-space address. The callee must be rooted above the window and \
+         re-read below it.\n{ir}"
+    );
+}
+
 /// ★ The operands are INERT — `[1, 2]` and `3` cannot run user code — and the
 /// accumulator still has to be rooted, because `js_array_like_to_array` itself
 /// allocates.

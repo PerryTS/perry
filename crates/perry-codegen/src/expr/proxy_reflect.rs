@@ -50,6 +50,15 @@ use super::{
 /// encoded by the authoritative ShapeId and therefore owns no header flag.
 const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1907;
 
+/// #8098: `GcHeader::_reserved` bit 9 — the runtime birth-marked this
+/// class-less receiver an ORDINARY plain object (`JSON.parse` output), so it is
+/// eligible for the write PIC exactly like a class instance. MUST equal
+/// `perry_runtime::gc::OBJ_FLAG_PLAIN_ORDINARY`; the runtime pins the value in
+/// `proxy::tests::plain_ordinary_object_flag_matches_the_emitted_write_pic_literal`.
+/// It is deliberately NOT in `WRITE_PIC_BLOCKING_FLAGS` — this bit ADMITS a
+/// receiver, the blocking mask REJECTS one.
+const PLAIN_ORDINARY_OBJ_FLAG: u16 = 0x200;
+
 /// The NaN-boxed `undefined` literal, for an absent optional operand.
 fn undefined_literal() -> String {
     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
@@ -550,8 +559,17 @@ fn lower_put_value_static_write_ic(
     let class_addr = ctx.block().add(I64, &safe_target, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
-    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+    // #8098: a class-less receiver qualifies when the runtime birth-marked it
+    // an ordinary plain object. `reserved` is already loaded above for the
+    // blocking-flag test, so this costs one `and` + `icmp` + `or`, computed
+    // once here and reused by all four ways (this block dominates them).
+    let plain_ordinary_bits = ctx
+        .block()
+        .and(I16, &reserved, &PLAIN_ORDINARY_OBJ_FLAG.to_string());
+    let plain_ordinary = ctx.block().icmp_ne(I16, &plain_ordinary_bits, "0");
+    let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
 
     // The write PIC uses the same single ShapeId token domain as the read PIC.
     let shape_id_addr = ctx.block().add(I64, &safe_target, "8");
@@ -574,7 +592,7 @@ fn lower_put_value_static_write_ic(
     let mut hit = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit = ctx.block().and(I1, &hit, &not_forwarded);
     hit = ctx.block().and(I1, &hit, &flags_clear);
-    hit = ctx.block().and(I1, &hit, &class_nonzero);
+    hit = ctx.block().and(I1, &hit, &receiver_kind_ok);
     hit = ctx.block().and(I1, &hit, &not_native_module);
     hit = ctx.block().and(I1, &hit, &token_match);
     hit = ctx.block().and(I1, &hit, &token_nonzero);
@@ -598,7 +616,7 @@ fn lower_put_value_static_write_ic(
     let mut hit2 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit2 = ctx.block().and(I1, &hit2, &not_forwarded);
     hit2 = ctx.block().and(I1, &hit2, &flags_clear);
-    hit2 = ctx.block().and(I1, &hit2, &class_nonzero);
+    hit2 = ctx.block().and(I1, &hit2, &receiver_kind_ok);
     hit2 = ctx.block().and(I1, &hit2, &not_native_module);
     hit2 = ctx.block().and(I1, &hit2, &token2_match);
     hit2 = ctx.block().and(I1, &hit2, &token_nonzero);
@@ -618,7 +636,7 @@ fn lower_put_value_static_write_ic(
     let mut hit3 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit3 = ctx.block().and(I1, &hit3, &not_forwarded);
     hit3 = ctx.block().and(I1, &hit3, &flags_clear);
-    hit3 = ctx.block().and(I1, &hit3, &class_nonzero);
+    hit3 = ctx.block().and(I1, &hit3, &receiver_kind_ok);
     hit3 = ctx.block().and(I1, &hit3, &not_native_module);
     hit3 = ctx.block().and(I1, &hit3, &token3_match);
     hit3 = ctx.block().and(I1, &hit3, &token_nonzero);
@@ -638,7 +656,7 @@ fn lower_put_value_static_write_ic(
     let mut hit4 = ctx.block().and(I1, &heap_candidate, &gc_object);
     hit4 = ctx.block().and(I1, &hit4, &not_forwarded);
     hit4 = ctx.block().and(I1, &hit4, &flags_clear);
-    hit4 = ctx.block().and(I1, &hit4, &class_nonzero);
+    hit4 = ctx.block().and(I1, &hit4, &receiver_kind_ok);
     hit4 = ctx.block().and(I1, &hit4, &not_native_module);
     hit4 = ctx.block().and(I1, &hit4, &token4_match);
     hit4 = ctx.block().and(I1, &hit4, &token_nonzero);
@@ -817,18 +835,22 @@ fn lower_put_value_dyn_ic_inline(
     let is_ptr = ctx.block().icmp_eq(I64, &t_tag, "32765");
     let above = ctx.block().icmp_ugt(I64, &t_handle, "1048575");
     // Value tag: reference-creating stores (pointer 0x7FFD, string 0x7FFF,
-    // bigint 0x7FFA) leave the inline path before any store.
+    // bigint 0x7FFA) need the layout note / string-alias / write-barrier
+    // bookkeeping, so they SELECT the barriered store arm below rather than
+    // gating entry. #8108: they used to leave the inline path here, which sent
+    // every `o.k = <reference>` through the outlined helper — one cross-crate
+    // call per write that re-validated, in Rust, exactly the guards this block
+    // has already proved.
     let v_tag = ctx.block().lshr(I64, &v_bits, "48");
     let v_not_obj = ctx.block().icmp_ne(I64, &v_tag, "32765");
     let v_not_str = ctx.block().icmp_ne(I64, &v_tag, "32767");
     let v_not_big = ctx.block().icmp_ne(I64, &v_tag, "32762");
+    let mut v_scalar = ctx.block().and(I1, &v_not_obj, &v_not_str);
+    v_scalar = ctx.block().and(I1, &v_scalar, &v_not_big);
     // Zero key bits are the empty-way sentinel (and the JS number 0):
     // they must never reach the way compares.
     let k_nonzero = ctx.block().icmp_ne(I64, &k_bits, "0");
     let mut entry_ok = ctx.block().and(I1, &is_ptr, &above);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_obj);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_str);
-    entry_ok = ctx.block().and(I1, &entry_ok, &v_not_big);
     entry_ok = ctx.block().and(I1, &entry_ok, &k_nonzero);
 
     let guard_idx = ctx.new_block("put.dynic.guard");
@@ -836,6 +858,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_idx = ctx.new_block("put.dynic.way1");
     let way2_idx = ctx.new_block("put.dynic.way2");
     let store_idx = ctx.new_block("put.dynic.store");
+    let store_scalar_idx = ctx.new_block("put.dynic.store.scalar");
+    let store_ref_idx = ctx.new_block("put.dynic.store.ref");
     let slow_idx = ctx.new_block("put.dynic.slow");
     let merge_idx = ctx.new_block("put.dynic.merge");
     let guard_label = ctx.block_label(guard_idx);
@@ -843,6 +867,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_label = ctx.block_label(way1_idx);
     let way2_label = ctx.block_label(way2_idx);
     let store_label = ctx.block_label(store_idx);
+    let store_scalar_label = ctx.block_label(store_scalar_idx);
+    let store_ref_label = ctx.block_label(store_ref_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&entry_ok, &guard_label, &slow_label);
@@ -867,8 +893,14 @@ fn lower_put_value_dyn_ic_inline(
     let class_addr = ctx.block().add(I64, &t_handle, "4");
     let class_ptr = ctx.block().inttoptr(I64, &class_addr);
     let class_id = ctx.block().load(I32, &class_ptr);
-    let class_nonzero = ctx.block().icmp_ne(I32, &class_id, "0");
+    let has_class = ctx.block().icmp_ne(I32, &class_id, "0");
     let not_native_module = ctx.block().icmp_ne(I32, &class_id, "-2");
+    // #8098: see the static-key PIC above.
+    let plain_ordinary_bits = ctx
+        .block()
+        .and(I16, &reserved, &PLAIN_ORDINARY_OBJ_FLAG.to_string());
+    let plain_ordinary = ctx.block().icmp_ne(I16, &plain_ordinary_bits, "0");
+    let receiver_kind_ok = ctx.block().or(I1, &has_class, &plain_ordinary);
     let shape_id_addr = ctx.block().add(I64, &t_handle, "8");
     let shape_id_ptr = ctx.block().inttoptr(I64, &shape_id_addr);
     let raw_shape_id = ctx.block().load(I32, &shape_id_ptr);
@@ -885,7 +917,7 @@ fn lower_put_value_dyn_ic_inline(
     let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
     let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
     ok = ctx.block().and(I1, &ok, &flags_clear);
-    ok = ctx.block().and(I1, &ok, &class_nonzero);
+    ok = ctx.block().and(I1, &ok, &receiver_kind_ok);
     ok = ctx.block().and(I1, &ok, &not_native_module);
     ok = ctx.block().and(I1, &ok, &token_match);
     ok = ctx.block().and(I1, &ok, &token_nonzero);
@@ -918,17 +950,44 @@ fn lower_put_value_dyn_ic_inline(
         I64,
         &[(&s0, &ways_label), (&s1, &way1_label), (&s2, &way2_label)],
     );
-    let header_words =
-        (crate::target_layout::object_header_size_bytes(ctx.target_triple) / 8).to_string();
+    let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header_words = (header_bytes / 8).to_string();
     let slot_word = ctx.block().add(I64, &slot, &header_words);
     let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
     let slot_ptr = ctx
         .block()
         .gep_inbounds(I64, &obj_ptr, &[(I64, &slot_word)]);
-    // GC_STORE_AUDIT(POINTER_FREE): the entry tag test proved the value is
+    ctx.block()
+        .cond_br(&v_scalar, &store_scalar_label, &store_ref_label);
+
+    ctx.current_block = store_scalar_idx;
+    // GC_STORE_AUDIT(POINTER_FREE): the tag test above proved the value is
     // not pointer/string/bigint — non-reference bits need no barrier.
     ctx.block().store(DOUBLE, v, &slot_ptr);
     ctx.block().br(&merge_label);
+
+    // #8108: the reference arm. Byte-for-byte the static write PIC's
+    // pointer-capable store (`lower_put_value_static_write_ic`'s hit block),
+    // reached under STRICTLY STRONGER conditions: the guards above are that
+    // PIC's guards, and this block additionally knows the value carries a
+    // reference tag, which the PIC only knows statically or not at all.
+    //
+    // No new rooting obligation. `t` is materialised BELOW every operand that
+    // can collect (see the call site's evaluation-order note), and the three
+    // bookkeeping helpers are `gc-leaf-function`, so nothing between the
+    // re-read and the store is a collection point.
+    ctx.current_block = store_ref_idx;
+    {
+        let slot_i32 = ctx.block().trunc(I64, &slot, I32);
+        let slot_offset = ctx.block().shl(I64, &slot, "3");
+        let fields_base = ctx.block().add(I64, &t_handle, &header_bytes.to_string());
+        let slot_addr = ctx.block().add(I64, &fields_base, &slot_offset);
+        let blk = ctx.block();
+        emit_jsvalue_slot_store_scalar_aware_on_block(
+            blk, &slot_ptr, v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        );
+        blk.br(&merge_label);
+    }
 
     ctx.current_block = slow_idx;
     let slow_result = ctx.block().call(
@@ -945,9 +1004,14 @@ fn lower_put_value_dyn_ic_inline(
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    let result = ctx
-        .block()
-        .phi(DOUBLE, &[(v, &store_label), (&slow_result, &slow_label)]);
+    let result = ctx.block().phi(
+        DOUBLE,
+        &[
+            (v, &store_scalar_label),
+            (v, &store_ref_label),
+            (&slow_result, &slow_label),
+        ],
+    );
     Ok(result)
 }
 

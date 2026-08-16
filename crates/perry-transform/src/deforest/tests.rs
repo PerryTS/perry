@@ -112,7 +112,15 @@ fn synthetic_out_params_are_assigned_by_function_id() {
     second.name = "first".to_string();
 
     let mut module = Module::new("m");
-    module.functions = vec![first, second];
+    // #8104: both producers need a fuse site to clear the profitability gate.
+    // The subject is the ID ASSIGNMENT ORDER, which is `max_local_id + 1`
+    // bumped in ascending FuncId order.
+    module.functions = vec![
+        first,
+        second,
+        fuse_consumer(3, 1, 100),
+        fuse_consumer(4, 2, 200),
+    ];
 
     run(&mut module);
 
@@ -126,8 +134,15 @@ fn synthetic_out_params_are_assigned_by_function_id() {
         .iter()
         .find(|func| func.id == 2)
         .expect("function must exist");
-    assert_eq!(func1.params.last().unwrap().id, 21);
-    assert_eq!(func2.params.last().unwrap().id, 22);
+    // Ids come from `max_local_id(module) + 1`, bumped in ascending FuncId
+    // order. The highest local in the module is `fuse_consumer(4, 2, 200)`'s
+    // `j` = 202, so the producers get 203 (FuncId 1) and 204 (FuncId 2). The
+    // SUBJECT is the ORDER, so assert that explicitly too.
+    let p1 = func1.params.last().unwrap().id;
+    let p2 = func2.params.last().unwrap().id;
+    assert_eq!(p1, 203);
+    assert_eq!(p2, 204);
+    assert_eq!(p2, p1 + 1, "ids are assigned in ascending FuncId order");
 }
 
 #[test]
@@ -264,7 +279,9 @@ fn still_deforests_when_caller_is_not_a_closure() {
     };
 
     let mut module = Module::new("m");
-    module.functions = vec![helper, caller];
+    // #8104: the profitability gate needs one fuse site somewhere in the
+    // module; the SUBJECT here is the plain caller's rewrite, not the fuse.
+    module.functions = vec![helper, caller, fuse_consumer(3, 1, 100)];
 
     assert!(
         !detect_producers(&module).is_empty(),
@@ -358,7 +375,9 @@ fn deforests_producer_called_from_class_method() {
     };
 
     let mut module = Module::new("m");
-    module.functions = vec![helper];
+    // #8104: one fuse site so the producer clears the profitability gate —
+    // the SUBJECT here is the class-member call site's rewrite.
+    module.functions = vec![helper, fuse_consumer(3, 1, 100)];
     module.classes = vec![class];
 
     assert!(
@@ -463,7 +482,9 @@ fn producer_and_plain_caller() -> Module {
         was_unrolled: false,
     };
     let mut module = Module::new("m");
-    module.functions = vec![make_simple_producer(), caller];
+    // #8104: one fuse site so the producer clears the profitability gate —
+    // these fixtures are about the PLAIN call site's rewrite (#7661).
+    module.functions = vec![make_simple_producer(), caller, fuse_consumer(3, 1, 100)];
     module
 }
 
@@ -705,7 +726,9 @@ fn still_deforests_when_method_has_no_super() {
     };
 
     let mut module = Module::new("m");
-    module.functions = vec![helper];
+    // #8104: one fuse site so the producer clears the profitability gate —
+    // the SUBJECT here is the class-member call site's rewrite.
+    module.functions = vec![helper, fuse_consumer(3, 1, 100)];
     module.classes = vec![class];
 
     assert!(
@@ -720,6 +743,232 @@ fn still_deforests_when_method_has_no_super() {
         1,
         "producer should gain the synthetic accumulator param"
     );
+}
+
+// ── #8104: profitability ───────────────────────────────────────────────────
+
+#[test]
+fn a_producer_with_no_fuse_site_is_left_alone() {
+    // `const arr = build();` with no consume loop anywhere. The value-binding
+    // rewrite would turn it into `let arr = []; arr = build(arr);` — the same
+    // one array, but now behind a REASSIGNED binding, which costs every
+    // representation fact keyed on a write-once local. On
+    // `benchmarks/suite/bench_numeric_array_numeric.ts` that is +2926%
+    // instructions and +103% peak RSS for a transform that removed nothing.
+    let mut module = producer_and_plain_caller();
+    // Drop the fuse site `producer_and_plain_caller` adds for the OTHER tests.
+    module.functions.retain(|f| f.id != 3);
+
+    assert!(
+        !detect_producers(&module).is_empty(),
+        "the shape still DETECTS as a producer — the refusal is profitability, \
+         not detection, and this test is vacuous if detection already declines"
+    );
+
+    run(&mut module);
+
+    let producer = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert!(
+        producer.params.is_empty(),
+        "a producer with no consumer-fuse call site must keep its signature"
+    );
+    let caller = module.functions.iter().find(|f| f.id == 2).unwrap();
+    assert!(
+        matches!(
+            &caller.body[0],
+            Stmt::Let {
+                mutable: false,
+                init: Some(Expr::Call { .. }),
+                ..
+            }
+        ),
+        "the caller's binding must stay write-once and keep its direct call, \
+         got {:?}",
+        caller.body[0]
+    );
+}
+
+#[test]
+fn one_fuse_site_admits_the_producer_at_every_call_site() {
+    // The discriminating half: the SAME module, plus one fuse site, and the
+    // producer is transformed — including its non-fuse call site, which must
+    // move in lock-step because the signature gained a parameter.
+    let mut module = producer_and_plain_caller();
+    run(&mut module);
+
+    let producer = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert_eq!(
+        producer.params.len(),
+        1,
+        "one fuse site anywhere in the module admits the producer"
+    );
+    let caller = module.functions.iter().find(|f| f.id == 2).unwrap();
+    assert!(
+        matches!(&caller.body[1], Stmt::Expr(Expr::LocalSet(30, _))),
+        "the non-fuse call site must be rewritten too, or its arity no longer \
+         matches the producer's signature (#5136's SIGSEGV shape)"
+    );
+}
+
+#[test]
+fn the_recursive_fuse_inside_a_producer_body_counts() {
+    // ABC451D — the shape the transform was built for. `f` consumes its OWN
+    // recursive result into `out`, and that fuse lives inside the producer
+    // body, not at an external call site. The gate must see it, or the one
+    // workload deforestation demonstrably wins on stops being deforested.
+    let mut producer = make_simple_producer();
+    // function f() {
+    //   const out = [];
+    //   out.push(1);
+    //   const child = f();
+    //   for (let j = 0; j < child.length; j++) out.push(child[j]);
+    //   return out;
+    // }
+    producer.body.insert(
+        2,
+        Stmt::Let {
+            id: 40,
+            name: "child".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        },
+    );
+    producer.body.insert(
+        3,
+        Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: 41,
+                name: "j".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            })),
+            condition: Some(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(41)),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(40)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+            }),
+            update: Some(Expr::Update {
+                id: 41,
+                op: perry_hir::UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Expr(Expr::ArrayPush {
+                array_id: 10,
+                value: Box::new(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(40)),
+                    index: Box::new(Expr::LocalGet(41)),
+                }),
+            })],
+        },
+    );
+
+    let mut module = Module::new("m");
+    module.functions = vec![producer];
+    run(&mut module);
+
+    let after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert_eq!(
+        after.params.len(),
+        1,
+        "a recursive fuse inside the producer's own body must admit it"
+    );
+}
+
+/// #8104: a function containing ONE consumer-fuse call site for `producer`.
+///
+/// `run` now refuses producers with no fuse site, because the fuse is the only
+/// call-site shape that removes work (the value-binding rewrite reallocates
+/// nothing and costs the caller's binding its write-once proof — measured at
+/// +2926% instructions and +103% peak RSS on
+/// `benchmarks/suite/bench_numeric_array_numeric.ts`). Fixtures whose SUBJECT
+/// is a different call-site shape therefore need one of these in the module so
+/// the producer still qualifies.
+///
+/// Deliberately does NOT end in `return outer` — that would make the consumer
+/// a producer too, and shift the synthetic-parameter numbering the callers of
+/// this helper assert on.
+fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
+    let outer = base;
+    let child = base + 1;
+    let j = base + 2;
+    Function {
+        id,
+        name: format!("fuse_consumer_{id}"),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: outer,
+                name: "outer".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: false,
+                init: Some(Expr::Array(vec![])),
+            },
+            Stmt::Let {
+                id: child,
+                name: "child".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(producer)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: j,
+                    name: "j".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(j)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(child)),
+                        property: "length".to_string(),
+                        byte_offset: 0,
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: j,
+                    op: perry_hir::UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::ArrayPush {
+                    array_id: outer,
+                    value: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(child)),
+                        index: Box::new(Expr::LocalGet(j)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::Integer(0))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    }
 }
 
 fn make_simple_producer() -> Function {

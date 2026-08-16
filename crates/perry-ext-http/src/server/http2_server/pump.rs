@@ -123,7 +123,6 @@ pub(crate) async fn handle_h2_request(
         h2_stream_headers,
         request_listeners,
         handler,
-        check_continue_listeners: Vec::new(),
         is_check_continue: false,
     };
     if request_tx.send(pending).await.is_err() {

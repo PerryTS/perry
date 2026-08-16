@@ -36,12 +36,27 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
-const GC_MAP_VERSION: u8 = 3;
+/// v4 (#7803): records carry DERIVED (interior) pointer slots paired with
+/// their base roots — the for-of element cursors the RS4GC prelude hoists
+/// across polls. v3 collapsed those pairs, so this walker chased
+/// `&elements[i]` as an object start and never rewrote it as `base' + delta`
+/// after a move. Version mismatch still fails closed (the parser returns
+/// None and `stack_maps()` panics), so a v3 binary cannot run on this
+/// runtime half-understood.
+const GC_MAP_VERSION: u8 = 4;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StackMapLocation {
     dwarf_reg: u16,
     offset: i32,
+}
+
+/// One derived (interior) pointer slot: `slot` holds `base + delta` for the
+/// base root at `base_index` within the same record's roots range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StackMapDerived {
+    base_index: u32,
+    slot: StackMapLocation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +84,9 @@ struct StackMapRecord {
     /// repeats at one copy instead of duplicating 154k entries.
     roots_start: u32,
     roots_len: u32,
+    /// Half-open range into `StackMapIndex::derived`, same sharing scheme.
+    derived_start: u32,
+    derived_len: u32,
 }
 
 /// Parsed section plus the facts the fast walker's preconditions need.
@@ -84,6 +102,8 @@ struct StackMapIndex {
     /// Every root slot, referenced by `StackMapRecord`'s range. Shared between
     /// records whose live sets are identical.
     roots: Vec<StackMapLocation>,
+    /// Every derived slot, referenced by `StackMapRecord`'s derived range.
+    derived: Vec<StackMapDerived>,
     /// Sorted, deduplicated start address of every function that has records.
     /// Used to confirm a matched record belongs to the function `ip` is in.
     function_starts: Vec<usize>,
@@ -99,6 +119,12 @@ impl StackMapIndex {
         let start = record.roots_start as usize;
         let end = start + record.roots_len as usize;
         self.roots.get(start..end).unwrap_or(&[])
+    }
+
+    fn derived_locations(&self, record: &StackMapRecord) -> &[StackMapDerived] {
+        let start = record.derived_start as usize;
+        let end = start + record.derived_len as usize;
+        self.derived.get(start..end).unwrap_or(&[])
     }
 }
 
@@ -179,6 +205,238 @@ impl StackMapIndexStore {
 }
 
 static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
+
+// #7803 creation-cycle verifier (diagnostic, `PERRY_GC_NATIVE_SLOT_VERIFY=1`).
+//
+// Runs a SECOND, non-rewriting native-slot walk after the rewrite passes of
+// a copying minor, while from-space is still classifiable, and aborts on the
+// FIRST slot still naming a from-space address. A stale native slot whose
+// target later becomes unclassifiable is skipped silently by every ordinary
+// walk (`mark_addr` returns `None`), so the cycle that CREATED the staleness
+// never printed anything — this names it, with the owning frame from the
+// pin-latch context.
+//
+// `//` not `///`: rustdoc discards a doc comment on a macro invocation, and
+// `rustc-warnings` runs with `-D warnings`, so `///` here is a hard error in
+// that job (#8176). The text is worth keeping, so keep it as a plain comment.
+crate::perry_thread_local! {
+    /// The rewrite walk's stats for the CURRENT cycle, published so the
+    /// #7803 native-slot verifier can compare its own traversal against the
+    /// one that was supposed to rewrite (a rewrite walk that stopped early
+    /// and a verify walk that did not is the difference between "slot
+    /// skipped" and "slot unrewritable").
+    static LAST_REWRITE_WALK: std::cell::Cell<(usize, usize, usize)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+pub(in crate::gc) fn publish_rewrite_walk_stats(stats: &NativeStackWalkStats) {
+    LAST_REWRITE_WALK.with(|c| {
+        c.set((
+            stats.frames_visited,
+            stats.records_matched,
+            stats.locations_visited,
+        ))
+    });
+}
+
+pub(in crate::gc) fn verify_native_slots_post_walk(
+    untraced: bool,
+    classify: &dyn Fn(usize) -> String,
+) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_NATIVE_SLOT_VERIFY").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    }) {
+        return;
+    }
+    let _phase = super::super::pin::CopyingWalkPhaseGuard::enter("native_slot_verify");
+    let rewrite_stats = LAST_REWRITE_WALK.with(|c| c.get());
+    let mut verify_frames = 0usize;
+    let verify_stats = visit_stack_map_root_slots(&mut |slot| unsafe {
+        verify_frames += 1;
+        let bits = *slot.ptr;
+        let Some(word) = super::super::root_words::decode_root_word(bits) else {
+            return;
+        };
+        let target = word.addr();
+        if !super::super::fromspace_scan::is_from_space(crate::arena::classify_heap_space(target)) {
+            return;
+        }
+        let context = super::super::pin::native_root_slot_context();
+        // Break the §40 contradiction: dump EVERY record `match_records`
+        // returns for this ip (the ±16 window can match several) and every
+        // slot value of each, resolving SP-relative addresses from the known
+        // victim slot (base = slot_addr - offset). A double-matched frame or
+        // a mis-attributed neighbor slot is visible here in one abort.
+        if let Some(ctx) = context {
+            // main's #8081 made the published index a guard; the walk reads
+            // through its `index` field.
+            let published = stack_maps();
+            let index = &published.index;
+            let base = ctx.slot_addr.wrapping_sub(ctx.offset as usize);
+            for record in index.match_records(ctx.ip) {
+                eprintln!(
+                    "[gc-native-slot-verify]   record pc={:#x} (fn+{:#x}):",
+                    record.pc,
+                    record.pc.wrapping_sub(record.function_address),
+                );
+                for location in index.locations(record) {
+                    let addr = if location.offset < 0 {
+                        base.wrapping_sub(location.offset.unsigned_abs() as usize)
+                    } else {
+                        base.wrapping_add(location.offset as usize)
+                    };
+                    let word = if location.dwarf_reg == ctx.dwarf_reg && addr % 8 == 0 {
+                        format!("{:#018x}", *(addr as *const u64))
+                    } else {
+                        "<other base reg>".to_string()
+                    };
+                    eprintln!(
+                        "[gc-native-slot-verify]     reg={} offset={} addr={addr:#x} word={word}",
+                        location.dwarf_reg, location.offset,
+                    );
+                }
+                for entry in index.derived_locations(record) {
+                    eprintln!(
+                        "[gc-native-slot-verify]     DERIVED base_index={} reg={} offset={}",
+                        entry.base_index, entry.slot.dwarf_reg, entry.slot.offset,
+                    );
+                }
+            }
+        }
+        panic!(
+            "[gc-native-slot-verify] a native stack-map slot still names a from-space \
+             address AFTER this cycle's rewrite passes: slot={:#x} word={bits:#018x} \
+             target={target:#x} target_space={:?} untraced_cycle={untraced} \
+             rewrite_walk(frames,records,locations)={rewrite_stats:?} \
+             collector_classify={} raw_header={:#018x} payload0={:#018x} \
+             context={context:?} — this is the CREATION cycle of the stale slot the \
+             pin-latch only catches many cycles later (#7803)",
+            slot.ptr as usize,
+            crate::arena::classify_heap_space(target),
+            classify(target),
+            *((target - 8) as *const u64),
+            *(target as *const u64),
+        );
+    });
+    let _ = (verify_frames, verify_stats);
+}
+
+/// Upper bound on how far a derived pointer may sit from its base before the
+/// rewrite refuses to touch it. LLVM only pairs a derived pointer with the
+/// base it was actually derived from, so a delta beyond any plausible object
+/// means the map and this frame disagree — leave the slot alone rather than
+/// manufacture an address. 64 MiB is far above the largest movable object
+/// (`MAX_YOUNG_MOVE_BYTES` is 1 MiB) without being "any bits at all".
+const MAX_DERIVED_DELTA: usize = 64 << 20;
+
+/// Visit one record's base roots, then rewrite its DERIVED (interior) slots
+/// as `new_base + (old_derived - old_base)` (#7803).
+///
+/// The order inside is the contract: old base words are captured BEFORE the
+/// visitor runs (the visitor rewrites base slots in place), and the derived
+/// slots are never handed to the visitor at all — a derived pointer is not an
+/// object start, and treating it as one is exactly the defect the v4 map
+/// exists to end (the collector chased `&elements[i]`, latched on element
+/// bytes as a "header", and left the cursor pointing into from-space after a
+/// move).
+///
+/// `resolve` maps a location to `(slot_address, base_register_value)` for
+/// THIS frame; both walkers pass their own base math in. A visitor that does
+/// not rewrite (the verify walker's collection passes) leaves base words
+/// unchanged, which makes every derived rewrite a no-op by construction.
+unsafe fn visit_record_slots(
+    index: &StackMapIndex,
+    record: &StackMapRecord,
+    ip: usize,
+    resolve: &mut dyn FnMut(&StackMapLocation) -> Option<(usize, usize)>,
+    stats: &mut NativeStackWalkStats,
+    visit: &mut dyn FnMut(ResolvedRoot),
+) {
+    let locations = index.locations(record);
+    let deriveds = index.derived_locations(record);
+
+    let slot_ok = |address: usize| address != 0 && address & (align_of::<u64>() - 1) == 0;
+
+    // Old base words, captured before the visitor rewrites anything. Only
+    // needed when the record has derived slots — the common record pays
+    // nothing.
+    let mut old_base: Vec<Option<(usize, u64)>> = Vec::new();
+    if !deriveds.is_empty() {
+        old_base.reserve(locations.len());
+        for location in locations {
+            old_base.push(resolve(location).and_then(|(address, _)| {
+                slot_ok(address).then(|| (address, *(address as *const u64)))
+            }));
+        }
+    }
+
+    for location in locations {
+        stats.locations_visited = stats.locations_visited.saturating_add(1);
+        let Some((address, base)) = resolve(location) else {
+            continue;
+        };
+        if !slot_ok(address) {
+            continue;
+        }
+        visit(ResolvedRoot {
+            address,
+            ip,
+            function_address: record.function_address,
+            dwarf_reg: location.dwarf_reg,
+            offset: location.offset,
+            base,
+        });
+    }
+
+    for entry in deriveds {
+        stats.locations_visited = stats.locations_visited.saturating_add(1);
+        let Some((derived_addr, _)) = resolve(&entry.slot) else {
+            continue;
+        };
+        if !slot_ok(derived_addr) {
+            continue;
+        }
+        let Some(Some((base_addr, old_base_word))) =
+            old_base.get(entry.base_index as usize).copied()
+        else {
+            continue;
+        };
+        rewrite_derived_slot(derived_addr, base_addr, old_base_word);
+    }
+}
+
+/// The derived-slot rewrite itself. Decodes through `root_words` so a slot
+/// keeps its stored form (NaN-boxed tag or bare) across the rewrite, exactly
+/// like a base root does.
+unsafe fn rewrite_derived_slot(derived_addr: usize, base_addr: usize, old_base_word: u64) {
+    use super::super::root_words::decode_root_word;
+    let new_base_word = *(base_addr as *const u64);
+    if new_base_word == old_base_word {
+        // The base did not move this cycle, so the derived offset from it is
+        // still current.
+        return;
+    }
+    let Some(old_base) = decode_root_word(old_base_word) else {
+        return;
+    };
+    let Some(new_base) = decode_root_word(new_base_word) else {
+        return;
+    };
+    let old_derived_word = *(derived_addr as *const u64);
+    let Some(old_derived) = decode_root_word(old_derived_word) else {
+        return;
+    };
+    let delta = old_derived.addr().wrapping_sub(old_base.addr());
+    if delta > MAX_DERIVED_DELTA {
+        return;
+    }
+    *(derived_addr as *mut u64) = old_derived.encode(new_base.addr().wrapping_add(delta));
+}
 
 // The two register numbers the compact format's short base tags stand for.
 // These are aarch64's by definition of the FORMAT, on every architecture — see
@@ -285,6 +543,25 @@ pub(super) struct ResolvedRoot {
 }
 
 impl ResolvedRoot {
+    /// Visit this slot with its provenance published for the pin-latch abort:
+    /// the walker resolved the owning function, record and address, and until
+    /// #7803 threw all of it away one call before the latch printed
+    /// `mutable_root_slots/native_stack` with no owner. Two `Cell` stores per
+    /// slot; the clear keeps a later phase from being blamed on this frame.
+    fn visit_with_context(self, visit: &mut impl FnMut(MutableRootSlot)) {
+        super::super::pin::set_native_root_slot_context(Some(
+            super::super::pin::NativeRootSlotContext {
+                ip: self.ip,
+                function_address: self.function_address,
+                dwarf_reg: self.dwarf_reg,
+                offset: self.offset,
+                slot_addr: self.address,
+            },
+        ));
+        visit(self.slot());
+        super::super::pin::set_native_root_slot_context(None);
+    }
+
     fn slot(self) -> MutableRootSlot {
         MutableRootSlot {
             kind: MutableRootSlotKind::NativeStack,
@@ -358,8 +635,9 @@ fn build_stack_map_index() -> StackMapIndex {
     // compiler and runtime disagree about the map format.
     let mut records = Vec::new();
     let mut roots = Vec::new();
+    let mut derived = Vec::new();
     for section in sections {
-        if append_gc_map_section(&mut records, &mut roots, section).is_none() {
+        if append_gc_map_section(&mut records, &mut roots, &mut derived, section).is_none() {
             panic!(
                 "perry: a GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
                  present but could not be decoded — expected format {:?} v{}. This binary's \
@@ -372,25 +650,33 @@ fn build_stack_map_index() -> StackMapIndex {
         }
     }
     records.sort_unstable_by_key(|record| record.pc);
-    index_records(records, roots)
+    index_records(records, roots, derived)
 }
 
 fn append_gc_map_section(
     records: &mut Vec<StackMapRecord>,
     roots: &mut Vec<StackMapLocation>,
+    derived: &mut Vec<StackMapDerived>,
     section: &[u8],
 ) -> Option<()> {
-    let (mut section_records, section_roots) = parse_gc_map(section)?;
+    let (mut section_records, section_roots, section_derived) = parse_gc_map(section)?;
     let root_base = u32::try_from(roots.len()).ok()?;
+    let derived_base = u32::try_from(derived.len()).ok()?;
     for record in &mut section_records {
         record.roots_start = record.roots_start.checked_add(root_base)?;
+        record.derived_start = record.derived_start.checked_add(derived_base)?;
     }
     records.append(&mut section_records);
     roots.extend(section_roots);
+    derived.extend(section_derived);
     Some(())
 }
 
-fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> StackMapIndex {
+fn index_records(
+    records: Vec<StackMapRecord>,
+    roots: Vec<StackMapLocation>,
+    derived: Vec<StackMapDerived>,
+) -> StackMapIndex {
     // SP-relative locations are admitted here and resolved per FRAME in the
     // walker, which decodes the owning function's `add x29, sp, #imm`
     // prologue to get the body SP (#7173). Deciding it here would mean
@@ -401,12 +687,15 @@ fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> 
     // is what decides the fast walker is usable at all, and a format change
     // that introduced a third base must disable the chain walk, not be
     // trusted by it.
-    let chain_walkable = roots.iter().all(|location| {
-        matches!(
-            location.dwarf_reg,
-            DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64
-        )
-    });
+    let chain_walkable = roots
+        .iter()
+        .chain(derived.iter().map(|entry| &entry.slot))
+        .all(|location| {
+            matches!(
+                location.dwarf_reg,
+                DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64
+            )
+        });
     #[cfg(any(target_arch = "aarch64", test))]
     let min_pc = records.first().map_or(usize::MAX, |record| record.pc);
     #[cfg(any(target_arch = "aarch64", test))]
@@ -420,6 +709,7 @@ fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> 
     StackMapIndex {
         records,
         roots,
+        derived,
         function_starts,
         chain_walkable,
         #[cfg(any(target_arch = "aarch64", test))]
@@ -756,16 +1046,20 @@ pub(super) fn visit_stack_map_root_slots(
         return NativeStackWalkStats::default();
     }
     match walker_mode() {
-        WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| visit(root.slot())),
+        WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| {
+            root.visit_with_context(visit)
+        }),
         WalkerMode::Fast => {
             if index.chain_walkable {
-                if let Some(stats) =
-                    fp_chain::visit(index, &mut |root: ResolvedRoot| visit(root.slot()))
-                {
+                if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
+                    root.visit_with_context(visit)
+                }) {
                     return stats;
                 }
             }
-            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| visit(root.slot()));
+            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
+                root.visit_with_context(visit)
+            });
             stats.fallback_walks = 1;
             stats
         }
@@ -773,568 +1067,8 @@ pub(super) fn visit_stack_map_root_slots(
     }
 }
 
-/// Decode every concatenated compact map in the section.
-///
-/// The linker concatenates one blob per object file, so this walks blob by
-/// blob using each header's `total_len` rather than assuming a single map —
-/// a decoder that reads only the first header silently drops every other
-/// object's roots, which is invisible until a collection frees a live object.
-fn parse_gc_map(bytes: &[u8]) -> Option<(Vec<StackMapRecord>, Vec<StackMapLocation>)> {
-    let mut records = Vec::new();
-    let mut roots: Vec<StackMapLocation> = Vec::new();
-    let mut base = 0usize;
-
-    while base + 16 <= bytes.len() {
-        if bytes.get(base..base + 4)? != GC_MAP_MAGIC {
-            // Linkers pad between input sections; a zero tail is the end.
-            if bytes[base..].iter().all(|byte| *byte == 0) {
-                break;
-            }
-            base += 1;
-            continue;
-        }
-        if read_u8(bytes, base + 4)? != GC_MAP_VERSION {
-            return None;
-        }
-        let function_count = read_u32(bytes, base + 8)? as usize;
-        let total_len = read_u32(bytes, base + 12)? as usize;
-        // Header flags, bit 0: the function-address field is 8 bytes wide. The
-        // emitter writes the TARGET's pointer width (watchOS `arm64_32` is
-        // ILP32), and compile target and run target are the same machine — so
-        // a mismatch here means the binary's map was produced for a different
-        // width and every function address would be misread. Fail closed.
-        let flags = read_u16(bytes, base + 6)?;
-        if (flags & 1 == 1) != (std::mem::size_of::<usize>() == 8) {
-            return None;
-        }
-        let entry = if flags & 1 == 1 { 16 } else { 12 };
-        // A blob must at least cover its header and function table. Without
-        // this, a `total_len` of 0 leaves `base` unchanged — and because the
-        // magic still matches at that offset the resynchronisation path below
-        // is never reached, so the loop spins forever. This runs inside
-        // `OnceLock::get_or_init`, so that is a process hang at the first
-        // collection rather than the fail-closed panic in `stack_maps`.
-        if total_len < 16 + function_count.checked_mul(entry)? {
-            return None;
-        }
-        let table = base.checked_add(16)?;
-        let stream_start = table.checked_add(function_count.checked_mul(entry)?)?;
-        let blob_end = base.checked_add(total_len)?;
-        if blob_end > bytes.len() || stream_start > blob_end {
-            return None;
-        }
-
-        // Instruction offsets are a fixed-width array ahead of the varint
-        // stream: at -O3 the compiler emits them as label differences the
-        // assembler evaluates, so their values cannot be varint-encoded at
-        // rewrite time.
-        // Not `unwrap_or(0)`: a failed read here means the function table is
-        // truncated, and treating that function as having zero records starts
-        // `cursor` at the wrong offset so every later varint decodes from
-        // misaligned bytes. A wrong live set is worse than no map.
-        let mut record_total: usize = 0;
-        for index in 0..function_count {
-            record_total =
-                record_total.checked_add(read_u32(bytes, table + index * 16 + 12)? as usize)?;
-        }
-        let offsets = stream_start;
-        let mut cursor = offsets.checked_add(record_total.checked_mul(4)?)?;
-        if cursor > blob_end {
-            return None;
-        }
-        let mut record_index = 0usize;
-
-        for index in 0..function_count {
-            // Address width follows the header flag checked above, so the
-            // stack-size and record-count offsets move with it.
-            let base_off = table + index * entry;
-            let addr_bytes = entry - 8;
-            let function_address = if addr_bytes == 8 {
-                read_u64(bytes, base_off)? as usize
-            } else {
-                read_u32(bytes, base_off)? as usize
-            };
-            let stack_size = u64::from(read_u32(bytes, base_off + addr_bytes)?);
-            let record_count = read_u32(bytes, base_off + addr_bytes + 4)? as usize;
-
-            let mut previous: Option<(u32, u32)> = None;
-            for _ in 0..record_count {
-                let instruction_offset = read_u32(bytes, offsets + record_index * 4)?;
-                record_index += 1;
-
-                let (header, next) = read_varint(bytes, cursor, blob_end)?;
-                cursor = next;
-                let range = if header & 1 == 1 {
-                    // Repeat: this safepoint's live set is the previous one's.
-                    previous?
-                } else {
-                    let count = (header >> 1) as usize;
-                    let start = u32::try_from(roots.len()).ok()?;
-                    let mut last: Option<i32> = None;
-                    for _ in 0..count {
-                        let (value, next) = read_varint(bytes, cursor, blob_end)?;
-                        cursor = next;
-                        // 2-bit base tag: 0 = FP, 1 = SP, 2 = explicit DWARF
-                        // register in a following varint (LLVM uses x19 as a
-                        // frame base in functions with dynamic allocation).
-                        let dwarf_reg = match value & 3 {
-                            0 => DWARF_REG_FP_AARCH64,
-                            1 => DWARF_REG_SP_AARCH64,
-                            2 => {
-                                let (reg, next) = read_varint(bytes, cursor, blob_end)?;
-                                cursor = next;
-                                u16::try_from(reg).ok()?
-                            }
-                            _ => return None,
-                        };
-                        let delta = unzigzag((value >> 2) as u32);
-                        let offset = match last {
-                            None => delta,
-                            Some(previous_offset) => previous_offset.wrapping_add(delta),
-                        };
-                        last = Some(offset);
-                        roots.push(StackMapLocation { dwarf_reg, offset });
-                    }
-                    (start, u32::try_from(count).ok()?)
-                };
-                previous = Some(range);
-
-                records.push(StackMapRecord {
-                    pc: function_address.checked_add(instruction_offset as usize)?,
-                    function_address,
-                    stack_size,
-                    roots_start: range.0,
-                    roots_len: range.1,
-                });
-            }
-        }
-
-        let next = align_up(blob_end, 8)?;
-        if next <= base {
-            return None;
-        }
-        base = next;
-    }
-
-    Some((records, roots))
-}
-
-/// LEB128 read bounded by the blob it belongs to, so a corrupt length cannot
-/// walk into the next blob or off the section.
-fn read_varint(bytes: &[u8], mut at: usize, end: usize) -> Option<(u64, usize)> {
-    let mut value = 0u64;
-    let mut shift = 0u32;
-    loop {
-        if at >= end || shift > 63 {
-            return None;
-        }
-        let byte = *bytes.get(at)?;
-        at += 1;
-        value |= u64::from(byte & 0x7F) << shift;
-        if byte & 0x80 == 0 {
-            return Some((value, at));
-        }
-        shift += 7;
-    }
-}
-
-fn unzigzag(value: u32) -> i32 {
-    ((value >> 1) as i32) ^ -((value & 1) as i32)
-}
-
-fn align_up(value: usize, alignment: usize) -> Option<usize> {
-    value
-        .checked_add(alignment.checked_sub(1)?)
-        .map(|value| value & !(alignment - 1))
-}
-
-fn read_u8(bytes: &[u8], offset: usize) -> Option<u8> {
-    bytes.get(offset).copied()
-}
-
-/// Used by the map header's flags field and by ELF section headers. It was
-/// briefly Linux-gated, which broke the Linux build the moment the map itself
-/// needed a 16-bit read — keep it unconditional.
-fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        bytes.get(offset..offset + 2)?.try_into().ok()?,
-    ))
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        bytes.get(offset..offset + 4)?.try_into().ok()?,
-    ))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(
-        bytes.get(offset..offset + 8)?.try_into().ok()?,
-    ))
-}
-
-/// Every 64-bit Apple platform, not only macOS. iOS, iPadOS (which reports as
-/// iOS), tvOS and visionOS are all aarch64 + Mach-O and share this loader
-/// verbatim; gating it to `target_os = "macos"` sent them to the stub below,
-/// where the section is never found and the index is empty — a collector with
-/// no native roots, silently, on exactly the platforms that cannot be debugged
-/// easily.
-///
-/// 64-bit only: watchOS's `arm64_32` has 32-bit pointers, while the map stores
-/// function addresses as `u64` and this code does `usize` arithmetic on them.
-/// The compiler refuses that target for the same reason.
-#[cfg(target_vendor = "apple")]
-fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
-    use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide, _dyld_image_count};
-
-    const LC_SEGMENT_64: u32 = 0x19;
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct MachHeader64 {
-        magic: u32,
-        cpu_type: i32,
-        cpu_subtype: i32,
-        file_type: u32,
-        command_count: u32,
-        commands_size: u32,
-        flags: u32,
-        reserved: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct LoadCommand {
-        command: u32,
-        size: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct SegmentCommand64 {
-        command: u32,
-        size: u32,
-        segment_name: [u8; 16],
-        vm_address: u64,
-        vm_size: u64,
-        file_offset: u64,
-        file_size: u64,
-        max_protection: i32,
-        initial_protection: i32,
-        section_count: u32,
-        flags: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Section64 {
-        section_name: [u8; 16],
-        segment_name: [u8; 16],
-        address: u64,
-        size: u64,
-        offset: u32,
-        alignment: u32,
-        relocation_offset: u32,
-        relocation_count: u32,
-        flags: u32,
-        reserved1: u32,
-        reserved2: u32,
-        reserved3: u32,
-    }
-
-    fn fixed_name_matches(actual: &[u8; 16], expected: &[u8]) -> bool {
-        actual.get(..expected.len()) == Some(expected)
-            && actual.get(expected.len()).copied().unwrap_or(0) == 0
-    }
-
-    let mut sections = Vec::new();
-    unsafe {
-        for image_index in 0.._dyld_image_count() {
-            let raw_header = _dyld_get_image_header(image_index);
-            if raw_header.is_null() {
-                continue;
-            }
-            let header = &*(raw_header.cast::<MachHeader64>());
-            let slide = _dyld_get_image_vmaddr_slide(image_index);
-            let mut command_ptr = raw_header
-                .cast::<u8>()
-                .add(std::mem::size_of::<MachHeader64>());
-            for _ in 0..header.command_count {
-                let load = std::ptr::read_unaligned(command_ptr.cast::<LoadCommand>());
-                if load.size < std::mem::size_of::<LoadCommand>() as u32 {
-                    break;
-                }
-                if load.command == LC_SEGMENT_64 {
-                    let segment = std::ptr::read_unaligned(command_ptr.cast::<SegmentCommand64>());
-                    let mut section_ptr = command_ptr.add(std::mem::size_of::<SegmentCommand64>());
-                    for _ in 0..segment.section_count {
-                        let section = std::ptr::read_unaligned(section_ptr.cast::<Section64>());
-                        if fixed_name_matches(&section.segment_name, b"__PERRY_GCMAP")
-                            && fixed_name_matches(&section.section_name, b"__perry_gcmap")
-                        {
-                            if let (Some(address), Ok(size)) = (
-                                (section.address as isize).checked_add(slide),
-                                usize::try_from(section.size),
-                            ) {
-                                if address > 0 && size != 0 {
-                                    sections.push(std::slice::from_raw_parts(
-                                        address as usize as *const u8,
-                                        size,
-                                    ));
-                                }
-                            }
-                            break;
-                        }
-                        section_ptr = section_ptr.add(std::mem::size_of::<Section64>());
-                    }
-                }
-                command_ptr = command_ptr.add(load.size as usize);
-            }
-        }
-    }
-    Ok(sections)
-}
-
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
-    Ok(loaded_stack_map_section().into_iter().collect())
-}
-
-/// ELF (#7173, #8075): the `.perry_gcmap` sections of every loaded image.
-///
-/// Linker-provided `__start_`/`__stop_` symbols would need weak linkage
-/// (unstable in Rust) or `-rdynamic` (not guaranteed), so instead: read
-/// each `dl_iterate_phdr` image's ELF section headers for `.perry_gcmap`
-/// (`sh_addr`, `sh_size`) and add that image's `dlpi_addr` load bias. The
-/// executable has an empty `dlpi_name`, for which `/proc/self/exe` is the
-/// stable path. Reading only that first image is unsound when the runtime is
-/// a provider and generated code lives in an app dylib: its live native roots
-/// disappear from the collector exactly when a full collection evacuates.
-#[cfg(target_os = "linux")]
-fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
-    use std::ffi::CStr;
-    use std::os::unix::ffi::OsStrExt;
-    use std::path::Path;
-
-    #[repr(C)]
-    struct DlPhdrInfo {
-        dlpi_addr: usize,
-        dlpi_name: *const std::os::raw::c_char,
-        dlpi_phdr: *const ElfProgramHeader,
-        dlpi_phnum: u16,
-    }
-    #[repr(C)]
-    struct ElfProgramHeader {
-        p_type: u32,
-        _p_flags: u32,
-        _p_offset: u64,
-        p_vaddr: u64,
-        _p_paddr: u64,
-        _p_filesz: u64,
-        p_memsz: u64,
-        _p_align: u64,
-    }
-    struct SectionScan {
-        sections: Vec<&'static [u8]>,
-        unreadable_images: Vec<String>,
-    }
-    #[allow(clashing_extern_declarations)]
-    unsafe extern "C" {
-        fn dl_iterate_phdr(
-            callback: unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) -> i32,
-            data: *mut c_void,
-        ) -> i32;
-    }
-    unsafe extern "C" fn collect(info: *mut DlPhdrInfo, _size: usize, data: *mut c_void) -> i32 {
-        let Some(info) = info.as_ref() else {
-            return 0;
-        };
-        let image_name = if info.dlpi_name.is_null() {
-            &[][..]
-        } else {
-            CStr::from_ptr(info.dlpi_name).to_bytes()
-        };
-        // The kernel-provided vDSO has no backing file. It cannot contain
-        // Perry-generated code, so it is the sole unreadable-image exception.
-        if image_name == b"linux-vdso.so.1" || image_name == b"linux-gate.so.1" {
-            return 0;
-        }
-        let path = if image_name.is_empty() {
-            Path::new("/proc/self/exe")
-        } else {
-            Path::new(std::ffi::OsStr::from_bytes(image_name))
-        };
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                let scan = &mut *data.cast::<SectionScan>();
-                scan.unreadable_images
-                    .push(format!("{} ({error})", path.display()));
-                return 0;
-            }
-        };
-        let Some((addr, size)) = elf_section_vaddr(&bytes, b".perry_gcmap") else {
-            return 0;
-        };
-        let Some(start) = info.dlpi_addr.checked_add(addr) else {
-            return 0;
-        };
-        let Some(section_end) = addr.checked_add(size) else {
-            return 0;
-        };
-        const PT_LOAD: u32 = 1;
-        let mapped = !info.dlpi_phdr.is_null()
-            && std::slice::from_raw_parts(info.dlpi_phdr, usize::from(info.dlpi_phnum))
-                .iter()
-                .filter(|header| header.p_type == PT_LOAD)
-                .any(|header| {
-                    let Ok(segment_start) = usize::try_from(header.p_vaddr) else {
-                        return false;
-                    };
-                    let Some(segment_end) = usize::try_from(header.p_memsz)
-                        .ok()
-                        .and_then(|size| segment_start.checked_add(size))
-                    else {
-                        return false;
-                    };
-                    addr >= segment_start && section_end <= segment_end
-                });
-        // The on-disk path can be replaced after dlopen. Validate its claimed
-        // address against the loader's actual PT_LOAD ranges before turning
-        // it into a slice, so a stale or hostile section table cannot make GC
-        // initialization read outside the mapped image.
-        if mapped && start != 0 && size != 0 {
-            let scan = &mut *data.cast::<SectionScan>();
-            scan.sections
-                .push(std::slice::from_raw_parts(start as *const u8, size));
-        }
-        0
-    }
-
-    let mut scan = SectionScan {
-        sections: Vec::new(),
-        unreadable_images: Vec::new(),
-    };
-    unsafe {
-        dl_iterate_phdr(collect, (&mut scan as *mut SectionScan).cast::<c_void>());
-    }
-    if scan.unreadable_images.is_empty() {
-        Ok(scan.sections)
-    } else {
-        Err(format!(
-            "unreadable loaded ELF image(s): {}",
-            scan.unreadable_images.join(", ")
-        ))
-    }
-}
-
-/// Minimal ELF64 section-header walk: returns (sh_addr, sh_size) for the
-/// named section. Same defensive read style as the stack-map parser.
-#[cfg(target_os = "linux")]
-fn elf_section_vaddr(bytes: &[u8], name: &[u8]) -> Option<(usize, usize)> {
-    if bytes.get(..4)? != b"\x7fELF" || *bytes.get(4)? != 2 {
-        return None; // not ELF64
-    }
-    let shoff = read_u64(bytes, 0x28)? as usize;
-    let shentsize = read_u16(bytes, 0x3A)? as usize;
-    let shnum = read_u16(bytes, 0x3C)? as usize;
-    let shstrndx = read_u16(bytes, 0x3E)? as usize;
-    let strtab_hdr = shoff.checked_add(shstrndx.checked_mul(shentsize)?)?;
-    let strtab_off = read_u64(bytes, strtab_hdr.checked_add(0x18)?)? as usize;
-    for i in 0..shnum {
-        let hdr = shoff.checked_add(i.checked_mul(shentsize)?)?;
-        let name_off = read_u32(bytes, hdr)? as usize;
-        let name_pos = strtab_off.checked_add(name_off)?;
-        let candidate = bytes.get(name_pos..name_pos.checked_add(name.len())?)?;
-        let terminator = bytes.get(name_pos + name.len()).copied().unwrap_or(1);
-        if candidate == name && terminator == 0 {
-            // Only an SHF_ALLOC section has a runtime virtual address. Refuse
-            // a file-only namesake before constructing a slice from sh_addr.
-            const SHF_ALLOC: u64 = 0x2;
-            if read_u64(bytes, hdr.checked_add(0x08)?)? & SHF_ALLOC == 0 {
-                return None;
-            }
-            let addr = read_u64(bytes, hdr.checked_add(0x10)?)? as usize;
-            let size = read_u64(bytes, hdr.checked_add(0x20)?)? as usize;
-            return Some((addr, size));
-        }
-    }
-    None
-}
-
-/// Windows/PE: the `.pgcmap` section of the running image.
-///
-/// The name is seven bytes because a PE image section header has an 8-byte name
-/// field — `.perry_gcmap` would be truncated on the way into the image and the
-/// lookup below could never match it. `gc_map::COFF_SECTION_NAME` is the
-/// compiler-side half of that agreement.
-///
-/// `GetModuleHandleW(NULL)` returns the image base, which is also a valid
-/// `IMAGE_DOS_HEADER`; the section table follows the optional header, whose
-/// size the file header records rather than being fixed.
-#[cfg(target_os = "windows")]
-fn loaded_stack_map_section() -> Option<&'static [u8]> {
-    const IMAGE_DOS_SIGNATURE: u16 = 0x5A4D; // "MZ"
-    const IMAGE_NT_SIGNATURE: u32 = 0x0000_4550; // "PE\0\0"
-    const SECTION_HEADER_SIZE: usize = 40;
-    const SECTION_NAME: &[u8] = b".pgcmap";
-
-    unsafe extern "system" {
-        fn GetModuleHandleW(name: *const u16) -> *mut core::ffi::c_void;
-    }
-
-    unsafe {
-        let base = GetModuleHandleW(std::ptr::null()) as *const u8;
-        if base.is_null() {
-            return None;
-        }
-        if std::ptr::read_unaligned(base as *const u16) != IMAGE_DOS_SIGNATURE {
-            return None;
-        }
-        // e_lfanew sits at offset 0x3C of the DOS header.
-        let nt_offset = std::ptr::read_unaligned(base.add(0x3C) as *const u32) as usize;
-        let nt = base.add(nt_offset);
-        if std::ptr::read_unaligned(nt as *const u32) != IMAGE_NT_SIGNATURE {
-            return None;
-        }
-        // IMAGE_FILE_HEADER follows the 4-byte signature: NumberOfSections at
-        // +2, SizeOfOptionalHeader at +16.
-        let file_header = nt.add(4);
-        let section_count = std::ptr::read_unaligned(file_header.add(2) as *const u16) as usize;
-        let optional_size = std::ptr::read_unaligned(file_header.add(16) as *const u16) as usize;
-        let sections = file_header.add(20).add(optional_size);
-
-        for index in 0..section_count {
-            let header = sections.add(index * SECTION_HEADER_SIZE);
-            let name = std::slice::from_raw_parts(header, 8);
-            // Names shorter than eight bytes are NUL-padded.
-            let trimmed = match name.iter().position(|b| *b == 0) {
-                Some(end) => &name[..end],
-                None => name,
-            };
-            if trimmed != SECTION_NAME {
-                continue;
-            }
-            let virtual_size = std::ptr::read_unaligned(header.add(8) as *const u32) as usize;
-            let virtual_address = std::ptr::read_unaligned(header.add(12) as *const u32) as usize;
-            if virtual_size == 0 || virtual_address == 0 {
-                return None;
-            }
-            return Some(std::slice::from_raw_parts(
-                base.add(virtual_address),
-                virtual_size,
-            ));
-        }
-    }
-    None
-}
-
-#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "windows")))]
-fn loaded_stack_map_section() -> Option<&'static [u8]> {
-    None
-}
-
-// Same platform set as the loader above: the Itanium unwinder personality and
+// Same platform set as the section loader (`stack_maps_sections.rs`): the
+// Itanium unwinder personality and
 // `_Unwind_*` API are present on every Apple platform, not just macOS.
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 mod unwind {
@@ -1382,6 +1116,15 @@ mod unwind {
         state.stats
     }
 
+    fn walk_trace_enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        // `env_flag_enabled`, not `var_os(..).is_some()`: presence-testing makes
+        // `PERRY_GC_STACKMAP_TRACE=0` ENABLE the trace, which is the opposite of
+        // what every other GC knob does and what anyone typing `=0` means. The
+        // shared parser fails toward the knob's documented default (OFF here).
+        *ON.get_or_init(|| crate::gc::env_flag_enabled("PERRY_GC_STACKMAP_TRACE"))
+    }
+
     unsafe extern "C" fn walk_frame<F: FnMut(ResolvedRoot)>(
         context: *mut UnwindContext,
         argument: *mut c_void,
@@ -1389,14 +1132,28 @@ mod unwind {
         let state = &mut *argument.cast::<WalkState<'_, F>>();
         state.stats.frames_visited = state.stats.frames_visited.saturating_add(1);
         let ip = _Unwind_GetIP(context);
+        if walk_trace_enabled() {
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            let name =
+                if libc::dladdr(ip as *const c_void, &mut info) != 0 && !info.dli_sname.is_null() {
+                    std::ffi::CStr::from_ptr(info.dli_sname)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    String::from("?")
+                };
+            eprintln!(
+                "[gc-stackmap-walk] frame {} ip={ip:#x} ({name})",
+                state.stats.frames_visited
+            );
+        }
         let matched = state.index.match_records(ip);
         if matched.is_empty() {
             return 0;
         }
         state.stats.records_matched = state.stats.records_matched.saturating_add(matched.len());
         for record in matched {
-            for location in state.index.locations(record) {
-                state.stats.locations_visited = state.stats.locations_visited.saturating_add(1);
+            let mut resolve = |location: &StackMapLocation| {
                 // SP-relative roots take the CFA as their base VERBATIM.
                 //
                 // Not `CFA - stack_size`, which is what the DWARF definition of
@@ -1430,21 +1187,16 @@ mod unwind {
                 } else {
                     base.checked_add(location.offset as usize)
                 };
-                let Some(address) = address else {
-                    continue;
-                };
-                if address == 0 || address & (std::mem::align_of::<u64>() - 1) != 0 {
-                    continue;
-                }
-                (state.visit)(ResolvedRoot {
-                    address,
-                    ip,
-                    function_address: record.function_address,
-                    dwarf_reg: location.dwarf_reg,
-                    offset: location.offset,
-                    base,
-                });
-            }
+                address.map(|address| (address, base))
+            };
+            visit_record_slots(
+                state.index,
+                record,
+                ip,
+                &mut resolve,
+                &mut state.stats,
+                &mut state.visit,
+            );
         }
         0
     }
@@ -1594,8 +1346,18 @@ mod unwind {
             if !matched.is_empty() {
                 stats.records_matched = stats.records_matched.saturating_add(matched.len());
                 for record in matched {
-                    for location in index.locations(record) {
-                        stats.locations_visited = stats.locations_visited.saturating_add(1);
+                    // This walker's contract is abandon-on-anomaly — return
+                    // before visiting ANY slot the moment one location cannot
+                    // be resolved and bounds-checked. Pre-validate every base
+                    // and derived location, then hand the record to the
+                    // shared visitor with a resolve that can no longer fail.
+                    let all_locations = || {
+                        index
+                            .locations(record)
+                            .iter()
+                            .chain(index.derived_locations(record).iter().map(|d| &d.slot))
+                    };
+                    for location in all_locations() {
                         let Some(base) = frame_base(&context, location.dwarf_reg) else {
                             return stats;
                         };
@@ -1613,14 +1375,25 @@ mod unwind {
                         {
                             return stats;
                         }
-                        visit(ResolvedRoot {
-                            address,
-                            ip: context.rip as usize,
-                            function_address: record.function_address,
-                            dwarf_reg: location.dwarf_reg,
-                            offset: location.offset,
-                            base,
-                        });
+                    }
+                    let mut resolve = |location: &StackMapLocation| {
+                        let base = frame_base(&context, location.dwarf_reg)?;
+                        let address = if location.offset < 0 {
+                            base.checked_sub(location.offset.unsigned_abs() as usize)
+                        } else {
+                            base.checked_add(location.offset as usize)
+                        };
+                        address.map(|address| (address, base))
+                    };
+                    unsafe {
+                        visit_record_slots(
+                            index,
+                            record,
+                            context.rip as usize,
+                            &mut resolve,
+                            &mut stats,
+                            visit,
+                        );
                     }
                 }
             }
@@ -1821,36 +1594,41 @@ mod fp_chain {
                             // SP-relative record in the image (#7173).
                             let sp = fp_to_sp_offset(record.function_address)
                                 .and_then(|off| caller_fp.checked_sub(off));
-                            for location in index.locations(record) {
-                                stats.locations_visited = stats.locations_visited.saturating_add(1);
+                            // An SP-relative location with no decodable
+                            // prologue used to abandon the walk from inside
+                            // the location loop; keep that fail-closed
+                            // answer, decided before any slot is visited.
+                            if sp.is_none()
+                                && index
+                                    .locations(record)
+                                    .iter()
+                                    .chain(index.derived_locations(record).iter().map(|d| &d.slot))
+                                    .any(|l| l.dwarf_reg != DWARF_REG_FP_AARCH64)
+                            {
+                                return None;
+                            }
+                            let mut resolve = |location: &StackMapLocation| {
                                 let base = if location.dwarf_reg == DWARF_REG_FP_AARCH64 {
-                                    Some(caller_fp)
+                                    caller_fp
                                 } else {
-                                    sp
-                                };
-                                let Some(base) = base else {
-                                    return None;
+                                    sp?
                                 };
                                 let address = if location.offset < 0 {
                                     base.checked_sub(location.offset.unsigned_abs() as usize)
                                 } else {
                                     base.checked_add(location.offset as usize)
                                 };
-                                let Some(address) = address else {
-                                    continue;
-                                };
-                                if address == 0 || address & (std::mem::align_of::<u64>() - 1) != 0
-                                {
-                                    continue;
-                                }
-                                visit(ResolvedRoot {
-                                    address,
-                                    ip: return_address,
-                                    function_address: record.function_address,
-                                    dwarf_reg: location.dwarf_reg,
-                                    offset: location.offset,
-                                    base,
-                                });
+                                address.map(|address| (address, base))
+                            };
+                            unsafe {
+                                visit_record_slots(
+                                    index,
+                                    record,
+                                    return_address,
+                                    &mut resolve,
+                                    &mut stats,
+                                    visit,
+                                );
                             }
                         }
                     }
@@ -1879,6 +1657,19 @@ mod fp_chain {
         None
     }
 }
+
+// The compact-map decoder. Its own file because this one is close to the
+// 2000-line cap; the re-export is named rather than a glob because a glob does
+// not propagate through the transitive re-exports this module sits behind.
+#[path = "stack_maps_decode.rs"]
+mod decode;
+use decode::parse_gc_map;
+
+// Finding the map section in the running image, per object file format. Its own
+// file for the same reason, and re-exported by name for the same reason.
+#[path = "stack_maps_sections.rs"]
+mod sections;
+use sections::loaded_stack_map_sections;
 
 // `verify` mode, and the report it prints when the two walkers disagree. Its
 // own file because this one is close to the 2000-line cap.

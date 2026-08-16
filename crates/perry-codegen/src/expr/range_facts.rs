@@ -512,6 +512,7 @@ pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value
 }
 
 pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
+    ctx.guarded_discriminant_aliases.remove(&id);
     // Drop the forward link AND any alias whose chain passes through `id` —
     // a stale `other -> id` link would otherwise resolve `other` to the
     // REASSIGNED `id`'s fresh facts (same chain hygiene as the

@@ -23,6 +23,23 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
         buf.push_str("null");
         return;
     }
+    // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
+    // registered buffer, but it is NOT a `Buffer` and NOT a `Uint8Array`.
+    // Neither `Buffer.prototype.toJSON` nor the integer-indexed own-property
+    // shape applies: node serializes both as `{}` because they have no own
+    // enumerable properties at all. Perry answered
+    // `{"type":"Buffer","data":[…]}` — a shape node never produces for these,
+    // and one that leaks the backing bytes. Asked ABOVE the
+    // Buffer/`Uint8Array` split, which claims every registered buffer.
+    //
+    // Own expandos (`dv.foo = 1`, which node WOULD serialize) are not emitted:
+    // that needs the generic object serializer, and this arm exists to stop the
+    // byte leak. `{}` is node's answer for every `DataView`/`ArrayBuffer` that
+    // carries none, which is all of them in practice.
+    if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
+        buf.push_str("{}");
+        return;
+    }
     let len = (*buf_ptr).length as usize;
     let data = (buf_ptr as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
     let bytes = std::slice::from_raw_parts(data, len);
@@ -133,6 +150,13 @@ pub(crate) unsafe fn stringify_buffer_pretty(
     let buf_ptr = ptr as *const crate::buffer::BufferHeader;
     if buf_ptr.is_null() {
         buf.push_str("null");
+        return;
+    }
+    // #8149: see `stringify_buffer` — an `ArrayBuffer` / `SharedArrayBuffer` /
+    // `DataView` is neither a `Buffer` nor a `Uint8Array`, and node serializes
+    // all three as `{}`.
+    if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
+        buf.push_str("{}");
         return;
     }
     let len = (*buf_ptr).length as usize;

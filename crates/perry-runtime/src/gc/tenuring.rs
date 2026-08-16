@@ -178,7 +178,48 @@ thread_local! {
 /// original fixed policy, 1 promotes every live nursery object on first
 /// copy.
 pub(super) fn tenuring_survivals() -> u8 {
+    if let Some(forced) = tenuring_survivals_override() {
+        return forced;
+    }
     TENURING_SURVIVALS.with(Cell::get)
+}
+
+/// `PERRY_GC_TENURING_SURVIVALS=<u8>` pins the promotion age, overriding the
+/// adaptive threshold (#7432). Diagnostic only; unset means adaptive.
+///
+/// # Why (#7803)
+///
+/// Three independent measurements say this bug gets LESS likely as collections
+/// get denser — paced ~30-50%, interpreter safepoints on 2/8 vs 6/8, unpaced
+/// (9.4x the cycles) passing. That is backwards for a value held unrooted
+/// across a collection point, and it is what four separate rooting fixes
+/// failing to move the rate looks like.
+///
+/// `moved_objects` explains it: 892k unpaced against 862k paced, despite 9.4x
+/// the cycles. The extra collections are not relocating MORE, they are
+/// promoting the same objects SOONER — and an old-gen object is not moved by a
+/// minor. So denser collections mean fewer relocations per object.
+///
+/// If the defect needs an object RELOCATED while a stale reference to it
+/// exists, this knob tests it directly instead of through the schedule:
+///
+///   `=1`   promote on the first minor  -> fewest relocations -> predicts the
+///          failure disappears;
+///   `=255` never promote by age        -> every survivor re-evacuated every
+///          cycle -> predicts the failure becomes reliable, which would be the
+///          deterministic reproducer this bug has never had.
+///
+/// Pair it with `PERRY_GC_SCHEDULE_ALLOC_KB=0`, which pins the schedule
+/// exactly (63,941 safepoints, reproduced to the digit), so a change in
+/// outcome at a fixed seed is attributable to this knob and nothing else.
+fn tenuring_survivals_override() -> Option<u8> {
+    use std::sync::OnceLock;
+    static OVERRIDE: OnceLock<Option<u8>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        std::env::var("PERRY_GC_TENURING_SURVIVALS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+    })
 }
 
 /// The effective scavenge nursery cap: the configured base

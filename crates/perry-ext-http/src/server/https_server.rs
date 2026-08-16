@@ -405,7 +405,6 @@ async fn handle_https_request(
         h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
-        check_continue_listeners,
         is_check_continue,
     };
     if request_tx.send(pending).await.is_err() {
@@ -459,15 +458,38 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
+    // #8082 (same as the HTTP path): the channel-parked snapshot's closure
+    // addresses are copies no scanner rewrites — re-read them from the
+    // scanner-maintained server handle at dispatch, then root the refreshed
+    // values across the callbacks (each can run a moving collection). The
+    // routing decision keeps the arrival-time `is_check_continue` snapshot.
+    let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
+        match get_handle::<HttpsServer>(pending.server_handle) {
+            Some(s) => (
+                s.base.listeners.get("request").cloned().unwrap_or_default(),
+                s.base
+                    .listeners
+                    .get("checkContinue")
+                    .cloned()
+                    .unwrap_or_default(),
+                s.base.handler,
+            ),
+            None => (Vec::new(), Vec::new(), 0),
+        };
+    let scope = perry_ffi::TransientRootScope::enter();
+    let check_continue_rooted = scope.root_addrs(&fresh_check_continue_listeners);
+    let request_rooted = scope.root_addrs(&fresh_request_listeners);
+    let handler_rooted = scope.root_addr(fresh_handler);
     // #5080 — an `Expect: 100-continue` request with a `'checkContinue'`
     // listener fires that listener instead of the `'request'` path.
     if pending.is_check_continue {
-        for cb in &pending.check_continue_listeners {
-            if *cb == 0 {
+        for cb in &check_continue_rooted {
+            let addr = cb.get();
+            if addr == 0 {
                 continue;
             }
             unsafe {
-                let raw = *cb as *const RawClosureHeader;
+                let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
                     with_implicit_this(server_this, || {
@@ -480,12 +502,13 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
         crate::server::server::finalize_or_park_request(&pending);
         return;
     }
-    for cb in &pending.request_listeners {
-        if *cb == 0 {
+    for cb in &request_rooted {
+        let addr = cb.get();
+        if addr == 0 {
             continue;
         }
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -495,9 +518,9 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             js_promise_run_microtasks();
         }
     }
-    if pending.handler != 0 {
+    if handler_rooted.get() != 0 {
         unsafe {
-            let raw = pending.handler as *const RawClosureHeader;
+            let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {

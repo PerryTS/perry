@@ -328,3 +328,129 @@ fn every_registered_collection_address_carries_its_own_type_tag() {
         assert!(crate::set::is_registered_set(set as usize));
     }
 }
+
+// ---------------------------------------------------------------------------
+// #8117: the fused ARRAY `forEach` entry point must still reach a Map/Set.
+//
+// Codegen fuses a 1-argument `<expr>.forEach(cb)` to `js_array_forEach`
+// whenever it cannot prove the receiver is a collection (`obj.someSet` is the
+// ordinary shape). #5989 put a Set/Map reroute inside that helper, but AFTER
+// `normalize_array_receiver`. #8041 then widened `clean_arr_ptr` from "reject
+// GC_TYPE_OBJECT / GC_TYPE_CLOSURE" to "reject every tracked non-array", which
+// nulls a Set/Map receiver — so the reroute became unreachable and the fused
+// call silently iterated nothing.
+//
+// These assert THE SUBJECT the way this file's #7765 tests do: the Set/Map case
+// asserts the visited VALUES (an empty visit list is exactly the bug), and the
+// plain-array case asserts the registry probe counters do not move, so deleting
+// the tag gate fails even though the answer would stay correct.
+// ---------------------------------------------------------------------------
+
+use crate::closure::{js_closure_alloc, ClosureHeader};
+use std::cell::RefCell;
+
+thread_local! {
+    static FOREACH_VISITS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+extern "C" fn record_first_arg(
+    _closure: *const ClosureHeader,
+    value: f64,
+    _index: f64,
+    _receiver: f64,
+) -> f64 {
+    FOREACH_VISITS.with(|v| v.borrow_mut().push(value.to_bits()));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn take_visits() -> Vec<f64> {
+    FOREACH_VISITS.with(|v| {
+        v.borrow_mut()
+            .drain(..)
+            .map(f64::from_bits)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn recording_callback() -> *const ClosureHeader {
+    take_visits();
+    js_closure_alloc(record_first_arg as *const u8, 0)
+}
+
+#[test]
+fn the_fused_array_foreach_still_visits_a_set_receiver() {
+    let (_map, _set) = arm_both_registries();
+    let set = js_set_alloc(4);
+    js_set_add(set, 10.0);
+    js_set_add(set, 20.0);
+    assert_eq!(js_set_size(set), 2);
+
+    // The precondition that made this a regression rather than a latent gap:
+    // the array-only funnel refuses this receiver, so any reroute placed after
+    // it is dead code.
+    assert!(
+        normalize_array_receiver(set as *const ArrayHeader).is_null(),
+        "#8041's array-only funnel must still refuse a Set receiver — if this \
+         starts passing the reroute is no longer the thing under test"
+    );
+
+    let cb = recording_callback();
+    js_array_forEach(set as *const ArrayHeader, cb);
+    assert_eq!(
+        take_visits(),
+        vec![10.0, 20.0],
+        "a Set reaching the fused array forEach must run Set.prototype.forEach; \
+         an EMPTY list is #8117 — the reroute ran after clean_arr_ptr nulled it"
+    );
+}
+
+#[test]
+fn the_fused_array_foreach_still_visits_a_map_receiver() {
+    let (_map, _set) = arm_both_registries();
+    let map = js_map_alloc(4);
+    js_map_set(map, 1.0, 100.0);
+    js_map_set(map, 2.0, 200.0);
+    assert_eq!(js_map_size(map), 2);
+
+    assert!(
+        normalize_array_receiver(map as *const ArrayHeader).is_null(),
+        "#8041's array-only funnel must still refuse a Map receiver"
+    );
+
+    let cb = recording_callback();
+    js_array_forEach(map as *const ArrayHeader, cb);
+    // Map.prototype.forEach passes (value, key, map) — the first argument is
+    // the VALUE.
+    assert_eq!(
+        take_visits(),
+        vec![100.0, 200.0],
+        "a Map reaching the fused array forEach must run Map.prototype.forEach"
+    );
+}
+
+#[test]
+fn a_plain_array_foreach_iterates_without_probing_the_collection_registries() {
+    let (_map, _set) = arm_both_registries();
+    let arr = dense(&[1.0, 2.0, 3.0]);
+    let cb = recording_callback();
+
+    // Prime anything lazily built on first touch, then measure.
+    js_array_forEach(arr, cb);
+    let _ = take_visits();
+
+    let before = probes();
+    js_array_forEach(arr, cb);
+    let after = probes();
+
+    assert_eq!(
+        take_visits(),
+        vec![1.0, 2.0, 3.0],
+        "the control receiver must keep iterating its own elements"
+    );
+    assert_eq!(
+        after, before,
+        "a GC_TYPE_ARRAY receiver must never reach is_registered_map / \
+         is_registered_set — delete the receiver-tag gate in \
+         collection_foreach_reroute and this is what fails"
+    );
+}

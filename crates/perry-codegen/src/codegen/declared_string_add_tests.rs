@@ -98,7 +98,32 @@ fn module_with(function: Function) -> Module {
 
 fn ir(params: Vec<Param>, body: Expr) -> String {
     let module = module_with(probe_fn(params, body));
-    String::from_utf8(compile_module(&module, ir_opts()).unwrap()).expect("LLVM IR is UTF-8")
+    let ir =
+        String::from_utf8(compile_module(&module, ir_opts()).unwrap()).expect("LLVM IR is UTF-8");
+    // An ordinary typed parameter may now produce a public guard wrapper plus
+    // proof-bearing and generic clones (#8079). This suite's subject remains
+    // the annotation-distrusting body, so inspect the generic clone when one
+    // exists instead of letting the validated clone satisfy a negative check.
+    let generic = "perry_fn_declared_string_add_ts__probe$generic";
+    let public = "perry_fn_declared_string_add_ts__probe";
+    let symbol = if ir.contains(&format!("@{generic}(")) {
+        generic
+    } else {
+        public
+    };
+    let marker = format!("@{symbol}(");
+    let start = ir
+        .match_indices("define ")
+        .find_map(|(index, _)| {
+            let line_end = ir[index..].find('\n').map(|offset| index + offset)?;
+            ir[index..line_end].contains(&marker).then_some(index)
+        })
+        .expect("probe body");
+    let end = ir[start..]
+        .find("\n}\n")
+        .map(|offset| start + offset + 3)
+        .unwrap_or(ir.len());
+    ir[start..end].to_string()
 }
 
 fn add(left: Expr, right: Expr) -> Expr {

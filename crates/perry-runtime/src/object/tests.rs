@@ -1586,3 +1586,55 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
          the instance `lex`"
     );
 }
+
+/// #8117: a `Buffer` / `DataView` receiver must not reach the ordinary
+/// `ObjectHeader` walk in `obj_value_has_own_key`.
+///
+/// A buffer is a `BufferHeader` — no `class_id`, no `keys_array`. With no arm
+/// of its own it fell through to the ordinary arm, which read
+/// `(*obj).keys_array` out of the bytes that follow a buffer header and handed
+/// that to `js_array_length`, whose lazy-array probe dereferences `addr - 8`.
+///
+/// The two platforms fail differently, which is why this test asserts the
+/// ANSWER rather than merely "did not crash":
+///
+/// * Linux: the payload bytes clear the old `< 0x10000` magnitude floor and the
+///   dereference is a SIGSEGV. `b.readUInt8 = fn` reached through the dynamic
+///   `[[Set]]` (`js_put_value_set_dyn_ic_miss` -> `proxy::ordinary_set_with_
+///   receiver` -> `proxy::own_set_descriptor`) crashed 10/10.
+/// * macOS: the heap floor is high enough that the garbage usually reads as
+///   null, so it silently answered "no own key" for a property the buffer
+///   really owns.
+///
+/// The first assertion below fails on BOTH.
+#[test]
+fn buffer_own_key_comes_from_the_expando_table_not_the_object_walk() {
+    let addr = crate::buffer::buffer_alloc(8) as usize;
+    crate::buffer::buffer_set_own_prop(addr, "myFlag", 42.0);
+    let receiver = crate::value::js_nanbox_pointer(addr as i64);
+
+    let present = crate::string::js_string_from_bytes(b"myFlag".as_ptr(), 6);
+    let present_key = crate::value::js_nanbox_string(present as i64);
+    assert!(
+        obj_value_has_own_key(receiver, present_key),
+        "a buffer's own expando property must be reported as an own key"
+    );
+
+    // A `Buffer.prototype` method is INHERITED, not own. That is what lets
+    // `buf.readUInt8 = fn` install a shadowing own property instead of
+    // being treated as the redefinition of an existing one.
+    let inherited = crate::string::js_string_from_bytes(b"readUInt8".as_ptr(), 9);
+    let inherited_key = crate::value::js_nanbox_string(inherited as i64);
+    assert!(
+        !obj_value_has_own_key(receiver, inherited_key),
+        "a Buffer.prototype method is inherited, not an own key"
+    );
+
+    // And a key the buffer has never seen.
+    let absent = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
+    let absent_key = crate::value::js_nanbox_string(absent as i64);
+    assert!(
+        !obj_value_has_own_key(receiver, absent_key),
+        "an unknown key is not an own key"
+    );
+}

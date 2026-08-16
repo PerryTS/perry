@@ -641,6 +641,15 @@ impl Drop for ThisGuard {
 // ---------------------------------------------------------------------------
 // Callback iteration methods. The callback receives `(value, index, O)` with
 // `O` the *original* receiver value; `this_arg` binds the callback's `this`.
+//
+// GC discipline (#8082): every `js_closure_call*` — and `al_has`/`al_get`,
+// whose getter/proxy paths run arbitrary JS — is a collection point that can
+// MOVE the receiver, the callback, and any result under construction. The
+// forced-moving Next production gate caught `js_arraylike_map` writing
+// through a pre-collection element pointer into retired from-space. Each
+// loop therefore roots those values in a `RuntimeHandleScope` and re-reads
+// them from their handles at every use; nothing heap-derived may be held in
+// a local across an iteration.
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
@@ -652,92 +661,143 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
     if super::generic_mutators::arraylike_collection_foreach(recv, cb, this_arg) {
         return undef();
     }
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     for k in 0..len {
-        if !al_has(recv, k) {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
-        let v = al_get(recv, k);
-        js_closure_call3(cb, v, k as f64, recv);
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
     }
     undef()
 }
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     // ArraySpeciesCreate → ArrayCreate throws RangeError for len ≥ 2^32
     // (test262 map/create-non-array-invalid-len) — BEFORE any callback runs.
     if len > u32::MAX as i64 {
         crate::array::array_length_range_error();
     }
-    let result = js_array_alloc_with_length(len.max(0) as u32);
-    let elems = unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
-    let _g = ThisGuard::new(this_arg);
+    let result_h = scope.root_raw_mut_ptr(js_array_alloc_with_length(len.max(0) as u32));
     for k in 0..len {
-        if !al_has(recv, k) {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
             continue; // preserve holes
         }
-        let v = al_get(recv, k);
-        let mapped = js_closure_call3(cb, v, k as f64, recv);
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        // `across_mut` runs the callback and hands back the result array's
+        // POST-collection address: the callback can allocate, and #8082 caught
+        // this exact write landing in mprotect-poisoned from-space when the
+        // element pointer was derived before it. The pre-call address is never
+        // bound, so there is nothing stale to reach for.
+        let (mapped, result) = result_h.across_mut::<ArrayHeader, _>(|| {
+            js_closure_call3(
+                callable(cb_h.get_nanbox_f64()),
+                v,
+                k as f64,
+                recv_h.get_nanbox_f64(),
+            )
+        });
+        let elems =
+            unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
         unsafe {
             // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             ptr::write(elems.add(k as usize), mapped);
             note_array_slot(result, k as usize, mapped.to_bits());
         }
     }
-    nanbox_arr(result)
+    // Scoped argument to a non-allocating operation: `nanbox_arr` only tags the
+    // pointer, so the address cannot go stale inside the call.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let mut result = js_array_alloc(0);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
+    let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
+    // One reusable handle keeps `v` (read BEFORE the callback, pushed AFTER
+    // it — the spec's value, not a re-read) alive across the call without
+    // growing the handle stack per element.
+    let v_h = scope.root_nanbox_f64(undef());
     for k in 0..len {
-        if !al_has(recv, k) {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
-        let v = al_get(recv, k);
-        let keep = js_closure_call3(cb, v, k as f64, recv);
+        v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
+        let keep = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v_h.get_nanbox_f64(),
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
         if crate::value::js_is_truthy(keep) != 0 {
-            result = js_array_push_f64(result, v);
+            // `js_array_push_f64` is self-rooting for the array it is handed
+            // (its grow path roots and re-reads it) and returns the current
+            // address, so a scoped argument is the right shape here. The value
+            // is read from its handle first, exactly as before.
+            let value = v_h.get_nanbox_f64();
+            let grown =
+                result_h.with_mut_ptr::<ArrayHeader, _>(|arr| js_array_push_f64(arr, value));
+            result_h.set_raw_mut_ptr(grown);
         }
     }
-    nanbox_arr(result)
+    // Scoped argument to a non-allocating operation — see `js_arraylike_map`.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     for k in 0..len {
-        if !al_has(recv, k) {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) != 0 {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) != 0 {
             return boxed_bool(true);
         }
     }
@@ -746,19 +806,27 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     for k in 0..len {
-        if !al_has(recv, k) {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) == 0 {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) == 0 {
             return boxed_bool(false);
         }
     }
@@ -770,17 +838,27 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
+    // `v` is read before the callback and returned after it — root it.
+    let v_h = scope.root_nanbox_f64(undef());
     for k in 0..len {
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) != 0 {
-            return v;
+        v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v_h.get_nanbox_f64(),
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) != 0 {
+            return v_h.get_nanbox_f64();
         }
     }
     undef()
@@ -788,16 +866,24 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     for k in 0..len {
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) != 0 {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) != 0 {
             return k as f64;
         }
     }
@@ -806,18 +892,28 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
+    // `v` is read before the callback and returned after it — root it.
+    let v_h = scope.root_nanbox_f64(undef());
     let mut k = len - 1;
     while k >= 0 {
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) != 0 {
-            return v;
+        v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v_h.get_nanbox_f64(),
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) != 0 {
+            return v_h.get_nanbox_f64();
         }
         k -= 1;
     }
@@ -826,17 +922,25 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _g = ThisGuard::new(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let _g = ThisGuard::new(this_arg);
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
     let mut k = len - 1;
     while k >= 0 {
-        let v = al_get(recv, k);
-        if crate::value::js_is_truthy(js_closure_call3(cb, v, k as f64, recv)) != 0 {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        let hit = js_closure_call3(
+            callable(cb_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        if crate::value::js_is_truthy(hit) != 0 {
             return k as f64;
         }
         k -= 1;
@@ -850,13 +954,16 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let mut acc = init;
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
+    // The accumulator crosses every callback — keep it in a rooted handle.
+    let acc_h = scope.root_nanbox_f64(init);
     let mut k = 0i64;
     if has_init == 0 {
         // Seed from the first present element.
@@ -864,8 +971,8 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
             if k >= len {
                 super::generic_mutators::throw_reduce_empty();
             }
-            if al_has(recv, k) {
-                acc = al_get(recv, k);
+            if al_has(recv_h.get_nanbox_f64(), k) {
+                acc_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
                 k += 1;
                 break;
             }
@@ -873,32 +980,41 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
         }
     }
     while k < len {
-        if al_has(recv, k) {
-            let v = al_get(recv, k);
-            acc = crate::closure::js_closure_call4(cb, acc, v, k as f64, recv);
+        if al_has(recv_h.get_nanbox_f64(), k) {
+            let v = al_get(recv_h.get_nanbox_f64(), k);
+            acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
+                callable(cb_h.get_nanbox_f64()),
+                acc_h.get_nanbox_f64(),
+                v,
+                k as f64,
+                recv_h.get_nanbox_f64(),
+            ));
         }
         k += 1;
     }
-    acc
+    acc_h.get_nanbox_f64()
 }
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
-    let recv = to_object(recv);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
-    let len = al_length(recv);
-    let cb = callable(cb);
-    let mut acc = init;
+    let len = al_length(recv_h.get_nanbox_f64());
+    callable(cb_h.get_nanbox_f64());
+    // The accumulator crosses every callback — keep it in a rooted handle.
+    let acc_h = scope.root_nanbox_f64(init);
     let mut k = len - 1;
     if has_init == 0 {
         loop {
             if k < 0 {
                 super::generic_mutators::throw_reduce_empty();
             }
-            if al_has(recv, k) {
-                acc = al_get(recv, k);
+            if al_has(recv_h.get_nanbox_f64(), k) {
+                acc_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
                 k -= 1;
                 break;
             }
@@ -906,13 +1022,19 @@ pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, in
         }
     }
     while k >= 0 {
-        if al_has(recv, k) {
-            let v = al_get(recv, k);
-            acc = crate::closure::js_closure_call4(cb, acc, v, k as f64, recv);
+        if al_has(recv_h.get_nanbox_f64(), k) {
+            let v = al_get(recv_h.get_nanbox_f64(), k);
+            acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
+                callable(cb_h.get_nanbox_f64()),
+                acc_h.get_nanbox_f64(),
+                v,
+                k as f64,
+                recv_h.get_nanbox_f64(),
+            ));
         }
         k -= 1;
     }
-    acc
+    acc_h.get_nanbox_f64()
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ use std::ffi::CString;
 use std::sync::Once;
 
 use anyhow::{anyhow, Result};
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::passes::PassBuilderOptions;
@@ -327,6 +328,72 @@ pub(crate) fn optimize_and_emit_module(
     )
 }
 
+/// Instruction-count cap above which a single post-RS4GC function is stamped
+/// `optnone`+`noinline` rather than entering the `-O1+` pipeline.
+///
+/// Calibrated on the #8036 Next 16.3.0 production bundle: the largest
+/// known-fine post-rewrite function is ~413k lines (its `-Os` unit finished
+/// in ~40s), the pathological one is ~2.1M (its unit ran >65 CPU-minutes
+/// without finishing). 512k sits between them, biased low because the false
+/// positive costs only code size in one already-degenerate function while the
+/// false negative costs an unbounded compile. Tunable via
+/// `PERRY_LL_RS4GC_OPTNONE_INSTRS`; `0` disables the demotion.
+const DEFAULT_RS4GC_OPTNONE_INSTRS: usize = 512 * 1024;
+
+fn rs4gc_optnone_instr_cap() -> usize {
+    std::env::var("PERRY_LL_RS4GC_OPTNONE_INSTRS")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_RS4GC_OPTNONE_INSTRS)
+}
+
+/// Stamp `optnone`+`noinline` on every function whose post-RS4GC body exceeds
+/// `cap` instructions, so the optimization pipeline skips exactly the
+/// relocation-fan-out monsters and still optimizes their siblings. `optnone`
+/// only gates the middle-end: the function keeps its `gc "statepoint-example"`
+/// lowering, so the compact stack map it emits is unchanged in kind.
+fn demote_relocation_bloated_functions(module: &inkwell::module::Module<'_>, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    let context = module.get_context();
+    let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+    let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        let mut instrs = 0usize;
+        'body: for bb in f.get_basic_blocks() {
+            let mut inst = bb.get_first_instruction();
+            while let Some(i) = inst {
+                instrs += 1;
+                if instrs > cap {
+                    break 'body;
+                }
+                inst = i.get_next_instruction();
+            }
+        }
+        if instrs > cap {
+            f.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(optnone_kind, 0),
+            );
+            f.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(noinline_kind, 0),
+            );
+            eprintln!(
+                "perry: rewrite-statepoints-for-gc grew `{}` past {} \
+                 instructions; compiling it unoptimized (optnone) so the \
+                 -O1+ pipeline doesn't go super-linear on relocation fan-out \
+                 (#8082). Override with PERRY_LL_RS4GC_OPTNONE_INSTRS.",
+                f.get_name().to_string_lossy(),
+                cap,
+            );
+        }
+        function = f.get_next_function();
+    }
+}
+
 fn optimize_and_emit(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -412,6 +479,31 @@ fn optimize_and_emit(
                     e.to_string()
                 )
             })?;
+        // Verify the rewritten module before it reaches the backend. RS4GC
+        // has produced verifier-invalid IR in the wild (#8082: it wrapped an
+        // inline-asm barrier into a gc.statepoint), and unlike the external
+        // `opt` path — whose verifier aborts with the broken instruction —
+        // the in-process pipeline would feed the broken module straight to
+        // ISel, where it dies as a bare SIGBUS with no diagnostic.
+        module.verify().map_err(|e| {
+            anyhow!(
+                "in-process rewrite-statepoints-for-gc produced a module the \
+                 verifier rejects (this is a Perry codegen bug — the input \
+                 shape must be exempted or fixed):\n{}",
+                e.to_string()
+            )
+        })?;
+        // The #4880 opt-tier decision (`native_plan_args`) was made from
+        // PRE-rewrite sizes, but RS4GC's relocation fan-out is quadratic-ish
+        // in (live gc values x statepoints): one 51k-line minified-bundle
+        // closure grew 40x to 2.1M instructions, and a single `-Os` function
+        // pass then ran for over an hour on it (#8082). Re-check here, where
+        // the grown sizes exist, and opt out just the exploded functions.
+        // The external text path needs no twin: it re-parses the REWRITTEN
+        // text, so its plan already sees post-RS4GC sizes.
+        if opt != '0' {
+            demote_relocation_bloated_functions(module, rs4gc_optnone_instr_cap());
+        }
     }
 
     let pipeline = match opt {
@@ -440,6 +532,110 @@ fn optimize_and_emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn asm_barrier_fixture(leaf_attr: &str) -> String {
+        format!(
+            "declare i64 @may_collect()\n\n\
+             define i64 @f(i64 %a) gc \"statepoint-example\" {{\n\
+             entry:\n\
+             \x20 %slot = alloca ptr addrspace(1)\n\
+             \x20 %p = inttoptr i64 %a to ptr addrspace(1)\n\
+             \x20 store ptr addrspace(1) %p, ptr %slot\n\
+             \x20 call void asm sideeffect \"\", \"\"(){leaf_attr}\n\
+             \x20 %t = call i64 @may_collect()\n\
+             \x20 %after = load ptr addrspace(1), ptr %slot\n\
+             \x20 %bits = ptrtoint ptr addrspace(1) %after to i64\n\
+             \x20 %r = add i64 %t, %bits\n\
+             \x20 ret i64 %r\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn gc_leaf_asm_barrier_survives_rs4gc_unwrapped() {
+        // The shipped emitters stamp the loop-preservation barrier
+        // `"gc-leaf-function"`; RS4GC must leave it as a plain inline-asm
+        // call while still statepointing the real call next to it.
+        let rewritten = statepoint_rewritten_ir(
+            &asm_barrier_fixture(" \"gc-leaf-function\""),
+            "arm64-apple-darwin",
+            "asm_barrier_leaf",
+        )
+        .expect("attributed barrier must survive the rewrite");
+        assert!(
+            rewritten.contains("call void asm sideeffect"),
+            "barrier must remain a plain inline-asm call:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("elementtype(void ()) asm"),
+            "barrier must not be statepoint-wrapped:\n{rewritten}"
+        );
+        assert!(
+            rewritten.contains("@llvm.experimental.gc.statepoint"),
+            "the genuine call must still be statepointed:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn unattributed_asm_barrier_is_rejected_not_miscompiled() {
+        // Sabotage arm: without the attribute RS4GC wraps the asm into a
+        // gc.statepoint whose callee is inline asm — invalid IR. The
+        // pipeline must fail verification loudly (#8082's SIGBUS shape),
+        // proving the leaf test above can actually fail.
+        let result = statepoint_rewritten_ir(
+            &asm_barrier_fixture(""),
+            "arm64-apple-darwin",
+            "asm_barrier_broken",
+        );
+        assert!(
+            result.is_err(),
+            "an unattributed barrier must be rejected by the verifier"
+        );
+    }
+
+    #[test]
+    fn relocation_bloated_function_is_demoted_to_optnone_and_its_sibling_is_not() {
+        global_init(&[]);
+        let context = Context::create();
+        // `big` carries 6 instructions, `small` 2; a cap of 4 separates them.
+        let ir = "define i64 @big(i64 %a) gc \"statepoint-example\" {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 %x2 = add i64 %x1, 1\n\
+                  \x20 %x3 = add i64 %x2, 1\n\
+                  \x20 %x4 = add i64 %x3, 1\n\
+                  \x20 %x5 = add i64 %x4, 1\n\
+                  \x20 ret i64 %x5\n\
+                  }\n\
+                  define i64 @small(i64 %a) gc \"statepoint-example\" {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 ret i64 %x1\n\
+                  }\n";
+        let module = parse_ir_text(&context, ir, "optnone_demotion").expect("fixture parses");
+        demote_relocation_bloated_functions(&module, 4);
+
+        let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+        let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
+        let big = module.get_function("big").expect("big exists");
+        let small = module.get_function("small").expect("small exists");
+        assert!(
+            big.get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_some(),
+            "a function past the cap must be stamped optnone"
+        );
+        assert!(
+            big.get_enum_attribute(AttributeLoc::Function, noinline_kind)
+                .is_some(),
+            "optnone requires noinline or the verifier rejects the function"
+        );
+        assert!(
+            small
+                .get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_none(),
+            "a sibling under the cap must keep the ordinary pipeline"
+        );
+    }
 
     fn constant_fold_order_fixture(folded: bool) -> String {
         let mut ir = String::from(
@@ -519,8 +715,14 @@ mod tests {
             optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], true)
                 .expect("fixture emits assembly")
         };
-        let text = emit(&text_ir, "constant_fold_text");
-        let folded = emit(&folded_ir, "constant_fold_native");
+        // Both arms must be emitted under the SAME module name. The name
+        // becomes the module id, and on ELF the assembler writes it into the
+        // object as a `.file` directive — so two differently-named arms differ
+        // by that one line no matter how perfectly the code itself converged.
+        // Mach-O records no such directive, which is why naming them apart only
+        // ever failed on Linux (#8087).
+        let text = emit(&text_ir, "constant_fold_order");
+        let folded = emit(&folded_ir, "constant_fold_order");
         assert_eq!(
             text, folded,
             "construction-time constant folding must converge before RS4GC assigns root liveness"

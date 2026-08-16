@@ -169,20 +169,38 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
     }
 }
 
-pub(crate) fn is_timer_handle_method_key(key: &[u8]) -> bool {
-    matches!(
-        key,
-        b"ref"
-            | b"unref"
-            | b"hasRef"
-            | b"refresh"
-            | b"close"
-            | b"__perry_dispose__"
-            // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the
-            // well-known dispose symbol lowers to this key. (#1213)
-            | b"@@__perry_wk_dispose"
-            | b"@@__perry_wk_toPrimitive"
-    )
+/// A `Timeout` / `Immediate` handle method key, as a `'static` byte string:
+/// the literal out of this list, never a borrow of `key`.
+///
+/// #8133 — this replaced the `is_timer_handle_method_key` PREDICATE it used to
+/// be, and the replacement is the fix, not a refactor. Every caller derives
+/// `key` as `key_string + size_of::<StringHeader>()` — the interior of a
+/// movable GC heap string that is unreachable the moment the read returns —
+/// and then handed that same pointer to `js_class_method_bind`, which captures
+/// it into the bound closure for `dispatch_bound_method` to re-read at CALL
+/// time. #7747 fixed exactly this on the Buffer path and its commit message
+/// names the consequence: "whether the stale bytes still spell the method is an
+/// allocator property, not a program property", which is why it passed locally
+/// and took a SIGSEGV on conformance-smoke.
+///
+/// Returning the literal rather than answering `bool` is deliberate: with no
+/// predicate left, a caller has nothing to pair with its own pointer, so the
+/// bug cannot be reintroduced by writing the obvious code. Same shape as
+/// `set_method_value_name` above and `buffer_method_name_static` (#7747).
+pub(crate) fn timer_handle_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"ref" => Some(b"ref"),
+        b"unref" => Some(b"unref"),
+        b"hasRef" => Some(b"hasRef"),
+        b"refresh" => Some(b"refresh"),
+        b"close" => Some(b"close"),
+        b"__perry_dispose__" => Some(b"__perry_dispose__"),
+        // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the well-known
+        // dispose symbol lowers to this key. (#1213)
+        b"@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
+        b"@@__perry_wk_toPrimitive" => Some(b"@@__perry_wk_toPrimitive"),
+        _ => None,
+    }
 }
 
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
@@ -526,19 +544,24 @@ pub extern "C" fn js_object_get_field_ic_miss(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if is_timer_handle_method_key(key_bytes) && crate::timer::is_known_timer_id(obj as i64)
-            {
-                let this_f64 =
-                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                return super::super::js_class_method_bind(this_f64, key_ptr, key_len);
+            if let Some(method) = timer_handle_method_name_static(key_bytes) {
+                if crate::timer::is_known_timer_id(obj as i64) {
+                    let this_f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    // #8133: the `'static` literal, NOT `key_ptr` — that is the
+                    // interior of a movable heap string this read does not own.
+                    return super::super::js_class_method_bind(
+                        this_f64,
+                        method.as_ptr(),
+                        method.len(),
+                    );
+                }
             }
             // TextDecoder/TextEncoder registry handles — IC-miss mirror of
             // the arms in `js_object_get_field_by_name` /
             // `get_field_by_name_object_tail`; static-name reads (`td.decode`,
             // `td.encoding`) funnel here. See `text_handle_property`.
-            if let Some(v) =
-                crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
-            {
+            if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
                 return f64::from_bits(v.bits());
             }
         }

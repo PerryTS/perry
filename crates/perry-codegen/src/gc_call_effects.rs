@@ -38,6 +38,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_i1_arg_to_raw"
         | "js_typed_i32_arg_to_raw"
         | "js_typed_string_arg_guard"
+        // `param_type_guard.rs`: read-only descriptor/heap traversal. It may
+        // use Rust Vec/TLS registries, but never allocates in Perry's heap or
+        // invokes JavaScript getters, proxies, coercions, or callbacks.
+        | "js_param_type_guard"
         | "js_is_truthy"
         | "js_typed_feedback_plain_array_index_get_guard"
         | "js_typed_feedback_numeric_array_index_get_guard"
@@ -114,7 +118,49 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // TLS dynamic-call context only.
         | "js_implicit_this_set"
         | "js_new_target_get"
-        | "js_new_target_set" => GcCallEffect::CannotCollect,
+        | "js_new_target_set"
+        // Closure capture-slot accessors (#8132). `closure/alloc.rs`:
+        // `get` is a null check, a bounds check, and a raw slot read;
+        // `set` is the raw slot write plus `note_closure_capture_slot`, whose
+        // whole body is `layout_note_slot` + `runtime_write_barrier_gc_slot` —
+        // the same side-table/barrier bodies already admitted above as
+        // `js_gc_note_slot_layout` / `js_write_barrier_slot`. The `_ptr`
+        // spellings are one-line wrappers over the `_bits` pair. All four are
+        // in `gc_root_dominance_check.py`'s NONCOLLECTING (the audit
+        // authority this table must stay a subset of). On #8132's bundled
+        // module factory these were 1,495 of 5,537 statepoints.
+        | "js_closure_get_capture_bits"
+        | "js_closure_set_capture_bits"
+        | "js_closure_get_capture_ptr"
+        | "js_closure_set_capture_ptr"
+        // Variable-box accessors and allocators (#8132), `box.rs`. Boxes are
+        // `std::alloc::alloc` allocations OUTSIDE the GC heap — allocating
+        // one arms no Perry GC trigger (the malloc-count trigger counts
+        // `MALLOC_STATE` GC objects, not raw Rust allocations), and the
+        // registry insert is a TLS set. `gc_root_dominance_check.py`'s
+        // IMMOVABLE_SOURCES "box" probes pin exactly this: std::alloc, no
+        // arena allocation, no dealloc — if boxes ever become GC objects the
+        // lint fails and these entries must be demoted with it. The setters
+        // are a registry membership check, the raw cell write, and (for the
+        // JSValue box) `runtime_write_barrier_root_nanbox`, admitted above.
+        // The i32/bool getters are registry check + raw read; they have no
+        // TDZ path.
+        //
+        // `js_box_get_bits` is deliberately ABSENT: its TDZ arm calls
+        // `js_throw_reference_error_tdz`, which allocates the ReferenceError
+        // (string + error object) before unwinding — a genuine route into
+        // collection, per the `js_throw*` audit note below. The checker's
+        // NONCOLLECTING currently lists it anyway; this table does not
+        // inherit that entry, it only requires containment in the safe
+        // direction.
+        | "js_box_alloc_bits"
+        | "js_i32_box_alloc"
+        | "js_bool_box_alloc"
+        | "js_box_set_bits"
+        | "js_i32_box_set"
+        | "js_bool_box_set"
+        | "js_i32_box_get"
+        | "js_bool_box_get" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
         // and accessor dispatch — none present, and none takes a receiver
@@ -213,6 +259,49 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// #8132: capture-slot and variable-box accessors are leaf calls. On the
+    /// bundled-module-factory shape these were ~45% of all statepoints, each
+    /// paying a relocation for every live GC value.
+    #[test]
+    fn capture_and_box_accessors_cannot_collect() {
+        for name in [
+            "js_closure_get_capture_bits",
+            "js_closure_set_capture_bits",
+            "js_closure_get_capture_ptr",
+            "js_closure_set_capture_ptr",
+            "js_box_alloc_bits",
+            "js_i32_box_alloc",
+            "js_bool_box_alloc",
+            "js_box_set_bits",
+            "js_i32_box_set",
+            "js_bool_box_set",
+            "js_i32_box_get",
+            "js_bool_box_get",
+        ] {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::CannotCollect,
+                "{name}"
+            );
+        }
+    }
+
+    /// The discriminating negative for the family above: `js_box_get_bits`
+    /// reads a TDZ-seeded box's sentinel and calls
+    /// `js_throw_reference_error_tdz`, which ALLOCATES the ReferenceError
+    /// (string + error object) before unwinding. A leaf marking would leave
+    /// the catch handler's relocations unrecorded on the unwind edge. If a
+    /// future split gives the non-TDZ boxes their own entry point, THAT
+    /// symbol can be admitted; this one cannot.
+    #[test]
+    fn the_tdz_capable_box_getter_stays_a_safepoint() {
+        assert_eq!(
+            classify_direct_callee("js_box_get_bits"),
+            GcCallEffect::Unknown,
+            "js_box_get_bits can throw (and allocate) on the TDZ path"
+        );
     }
 
     #[test]

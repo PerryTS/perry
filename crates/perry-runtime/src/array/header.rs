@@ -73,10 +73,30 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
 /// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
 /// reads as "unknown" at every call site.
 ///
-/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
-/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
-/// are allocator bookkeeping and can read as any value. Use the answer only
-/// where a wrong tag is harmless:
+/// A non-zero tag is NOT proof that a real header exists — but the reason is
+/// narrower than this comment used to claim, and getting it wrong in either
+/// direction has cost this file a recurring bug family (#8137/#8138, swept in
+/// `gc-handoff/ARRAY-SWEEP-NOTES.md`).
+///
+/// `Buffer` and `TypedArray` receivers come in BOTH backings:
+///
+/// * **arena-backed** — `buffer/header.rs`'s `arena_alloc_gc_old(…,
+///   GC_TYPE_BUFFER)` and `typedarray/mod.rs`'s `GC_TYPE_TYPED_ARRAY` site.
+///   These carry a genuine `GcHeader` with a correct `obj_type`; they are
+///   pinned rather than movable, which is a different property from being
+///   untracked. This is the population #8041 started nulling.
+/// * **external** — `EXTERNAL_BUFFER_REGISTRY` /
+///   `EXTERNAL_UINT8ARRAY_REGISTRY` addresses, plus
+///   `shared_sab::alloc_shared_sab`'s `alloc_zeroed`. For these the eight
+///   bytes below the payload really are allocator bookkeeping and can read
+///   as any value.
+///
+/// So the tag is authoritative only once the address is known to be
+/// arena-backed. `typedarray::arena_payload_has_gc_type` is the predicate
+/// that does it properly: it range-checks, rejects `HeapSpace::Unknown` for
+/// the HEADER address specifically, and validates via `gc_type_info` before
+/// trusting the byte. Do not open-code a floor instead. Use a bare tag read
+/// only where a wrong tag is harmless:
 ///
 /// * to *skip* a registry probe whose answer for that receiver would have been
 ///   `false` anyway — the caller must already have routed real buffers and
@@ -716,6 +736,69 @@ pub(crate) fn typed_array_receiver(
     }
     crate::typedarray::lookup_typed_array_kind(addr)
         .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+}
+
+/// #8096: resolve a receiver that is a registered `Buffer` / `Uint8Array`
+/// into a fresh `KIND_UINT8` %TypedArray% COPY, so an `Array.prototype`
+/// helper can delegate to a `js_typed_array_*` twin that only accepts a
+/// `TypedArrayHeader`.
+///
+/// [`typed_array_receiver`] does not answer for the most common typed array
+/// in the language. Perry's `new Uint8Array([…])` returns a `BufferHeader`
+/// (`buffer::js_uint8array_new`), registered as a BUFFER and marked
+/// `mark_as_uint8array` — it is not in the typed-array registry at all. The
+/// receiver is still a tracked non-`GC_TYPE_ARRAY` allocation, so
+/// `clean_arr_ptr` rejects it exactly as it rejects a real
+/// `GC_TYPE_TYPED_ARRAY`, and the caller answers an EMPTY plain array.
+///
+/// Most `Array.prototype` entry points never see that: `sort` / `with` /
+/// `reverse` / `fill` on a Buffer-backed `Uint8Array` resolve through the
+/// dynamic method dispatcher, and `copyWithin` grew its own Buffer arm in
+/// #8090. `toReversed` and `toSorted` fold unconditionally in HIR
+/// (`lower/expr_call/local_array_methods.rs` — no receiver-type guard), and
+/// the dynamic tower's own `toReversed` / `toSorted` arms
+/// (`object/native_call_method/handle_methods.rs`) call straight back into
+/// these same helpers, so those two were wrong on EVERY dispatch path.
+///
+/// **Only sound for the IMMUTABLE methods.** The answer is a copy, so an
+/// in-place mutator delegating to it would sort/reverse the copy and leave
+/// the receiver untouched — a different wrong answer. `toReversed`,
+/// `toSorted` and `with` all return a new collection, which is why they can
+/// use it; `js_array_sort_*` deliberately does not.
+///
+/// `None` for an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` receiver:
+/// none of those has `%TypedArray%.prototype`, so node throws
+/// `TypeError: … is not a function` rather than answering elements.
+#[inline]
+pub(crate) fn buffer_receiver_as_uint8_typed_array(
+    arr: *mut ArrayHeader,
+) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+    let addr = array_receiver_addr(arr);
+    if addr == 0
+        || !crate::buffer::is_registered_buffer(addr)
+        || crate::buffer::is_any_array_buffer(addr)
+        || crate::buffer::is_data_view(addr)
+    {
+        return None;
+    }
+    // Copy the bytes out BEFORE allocating: `typed_array_alloc` can collect,
+    // and a raw payload pointer read across it is exactly the borrowed-heap-
+    // slice shape rooting cannot fix.
+    let buf = addr as *const crate::buffer::BufferHeader;
+    let bytes: Vec<u8> = unsafe {
+        let len = (*buf).length as usize;
+        if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), len).to_vec()
+        }
+    };
+    let ta =
+        crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
+    for (i, byte) in bytes.iter().enumerate() {
+        crate::typedarray::js_typed_array_set(ta, i as i32, f64::from(*byte));
+    }
+    Some(ta)
 }
 
 /// The de-NaN-boxed address of an `Array.prototype` receiver, for side-table
@@ -1536,11 +1619,29 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
 ///    read (`mark_field_into_worklist` re-validates every word), never a
 ///    stranded live child.
 ///
-/// Refused on a non-empty array: the claim covers `0..length`, and only on an
-/// empty array is it vacuously true of what is already stored. A refusal is
-/// silent and safe — the header keeps whatever layout it had, and the codegen
-/// header test then declines the elided store and routes the push through
-/// `js_array_push_f64`, which notes every slot as it always did.
+/// On a **non-empty** array the claim is not vacuous, so it is discharged
+/// rather than assumed: every slot in `0..length` must be pointer-bearing by
+/// `gc::layout_pointer_bearing_bits`, the same predicate the layout mask
+/// builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation use. The walk is
+/// O(literal size), runs once at the binding, and does not have to trust the
+/// caller's static proof.
+///
+/// #8102 is why that path exists. `emit_all_pointer_array_declaration` is
+/// emitted from the `Stmt::Let` tail, i.e. *after* an array literal's element
+/// stores have already installed a per-slot side mask. Refusing every
+/// non-empty array therefore made the declaration a **silent no-op** for
+/// `const a: C[] = [x, y]`, so every later `a.push(…)` failed the codegen
+/// header test and paid the per-store layout note #7469 exists to delete —
+/// measured at +33.9% instructions on a 4M-push loop, against the
+/// byte-for-byte equivalent array built empty and pushed into.
+/// `collectors/all_pointer_arrays.rs` already admits such a literal (see
+/// `literal_of_object_elements_is_admitted`), so the proof was being issued and
+/// then discarded.
+///
+/// A refusal is still silent and safe — the header keeps whatever layout it
+/// had, and the codegen header test then declines the elided store and routes
+/// the push through `js_array_push_f64`, which notes every slot as it always
+/// did.
 #[no_mangle]
 pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
     let arr = clean_arr_ptr_mut(arr);
@@ -1548,7 +1649,15 @@ pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
         return;
     }
     unsafe {
-        if (*arr).length != 0 {
+        let length = (*arr).length as usize;
+        let slots = if length == 0 {
+            std::ptr::null()
+        } else {
+            array_elements_ptr(arr) as *const u64
+        };
+        // Clear the raw-f64 claim FIRST only when the declaration will stick:
+        // a refused declaration must leave the header exactly as it found it.
+        if !crate::gc::layout_all_pointer_slots_would_hold(slots, length) {
             return;
         }
         clear_array_numeric_layout(arr);

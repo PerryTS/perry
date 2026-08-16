@@ -194,6 +194,16 @@ mod tests {
             let lock = GC_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Force evacuation for the guard's lifetime: these tests assert a
+            // root was REWRITTEN, which is only observable if the object
+            // actually moved, and whether a minor evacuates is a C4b policy
+            // decision that legitimately declines under unit-test conditions
+            // (at which point the assertions fail with nothing wrong in the
+            // code under test). See the twin guard in `crate::tests`.
+            //
+            // SAFETY: `GC_TEST_LOCK` is held for the guard's whole lifetime,
+            // so no other GC test in this binary observes the mutation window.
+            unsafe { std::env::set_var("PERRY_GC_FORCE_EVACUATE", "1") };
             perry_runtime::gc::js_gc_write_barriers_emitted(1);
             let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
             Self { frame, _lock: lock }
@@ -204,6 +214,8 @@ mod tests {
         fn drop(&mut self) {
             perry_runtime::gc::js_shadow_frame_pop(self.frame);
             perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            // SAFETY: still under `GC_TEST_LOCK` (dropped after this body).
+            unsafe { std::env::remove_var("PERRY_GC_FORCE_EVACUATE") };
         }
     }
 

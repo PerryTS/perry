@@ -4,6 +4,29 @@
 
 use super::*;
 
+pub(crate) const MODULE_NAMESPACE_CLASS_ID: u32 = 0xFFFF_4E53;
+
+/// Apply the host-defined invariants shared by static and dynamic module
+/// namespace objects.
+#[no_mangle]
+pub extern "C" fn js_finalize_namespace(value: f64) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return value;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if obj.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || !crate::object::is_valid_obj_ptr(obj as *const u8)
+    {
+        return value;
+    }
+    unsafe {
+        (*obj).class_id = MODULE_NAMESPACE_CLASS_ID;
+    }
+    crate::object::js_object_prevent_extensions(value)
+}
+
 /// Issue #100: build a module-namespace object (the value an `await
 /// import("./foo.ts")` resolves to) from parallel arrays of keys and
 /// values.
@@ -38,6 +61,17 @@ pub extern "C" fn js_create_namespace(
 ) -> f64 {
     let count = if n < 0 { 0 } else { n as usize };
     unsafe {
+        // Export values arrive in a caller stack buffer, which is not part of
+        // the runtime root set. Namespace construction allocates the object,
+        // keys array, and key strings; retain every value across those moving
+        // collections so CJS default/shared object identity is preserved.
+        let raw_values = if count == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(values, count).to_vec()
+        };
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_handles = scope.root_nanbox_f64_slice(&raw_values);
         // Allocate a plain object with `count` inline slots. class_id 0
         // is the generic-object class used by Object.create / {} / URL.
         let obj = js_object_alloc(0, count as u32);
@@ -45,7 +79,6 @@ pub extern "C" fn js_create_namespace(
             // Fallback to undefined — should never happen but defensive.
             return f64::from_bits(0x7FFC_0000_0000_0001);
         }
-        let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
 
         // Initialize an empty keys array so `js_object_set_field_by_name`
@@ -72,14 +105,14 @@ pub extern "C" fn js_create_namespace(
             // pointer. Pre-SSO-only would crash on >7-byte export names.
             let key_hdr = crate::string::js_string_from_bytes(key_data, key_len_u);
             obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-            let val = *values.add(i);
+            let val = value_handles[i].get_nanbox_f64();
             js_object_set_field_by_name(obj, key_hdr, val);
         }
 
         // NaN-box POINTER_TAG and return.
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
-        f64::from_bits(bits)
+        js_finalize_namespace(f64::from_bits(bits))
     }
 }
 

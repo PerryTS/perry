@@ -266,6 +266,40 @@ fn keep_ir_retains_the_whole_scratch_dir() {
 }
 
 #[test]
+fn keep_ir_retains_the_whole_scratch_dir_under_native_roots() {
+    // The `native_roots: false` case above exercises the byte-returning arm.
+    // Under statepoints the plan asks for `-S`, so a DIFFERENT arm handles the
+    // compile: it writes assembly, assembles to `plan.obj_path`, and keeps the
+    // scratch dir. That arm is the ordinary path on every statepoint target,
+    // and it was the untested one — which is how it came to retain the object
+    // without ever printing `kept object:` (#8087).
+    let Some(root) = temp_root_if_clang_available("keep-native-roots") else {
+        return;
+    };
+    let policy = TempFilePolicy {
+        keep: true,
+        debug_symbols: false,
+    };
+    if compile_ll_to_object_in(&root, &test_ir(11), None, policy, true).is_err() {
+        // A host whose assembler cannot serve the compact-map rewrite is not a
+        // failure of this contract; skip rather than assert on a missing tool.
+        let _ = fs::remove_dir_all(&root);
+        return;
+    }
+
+    let left = entries(&root);
+    assert_eq!(left.len(), 1, "expected one kept scratch dir: {left:?}");
+    let kept = entries(&root.join(&left[0]));
+    for want in [".ll", ".o"] {
+        assert!(
+            kept.iter().any(|n| n.ends_with(want)),
+            "PERRY_LLVM_KEEP_IR must retain the {want} under native roots: {kept:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn debug_symbols_do_not_change_the_temp_file_lifetime() {
     // #7144 question (b), answered by measurement rather than by inheriting the
     // premise. `PERRY_DEBUG_SYMBOLS` was believed to make the `.ll` part of the

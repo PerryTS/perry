@@ -84,6 +84,11 @@ pub(crate) struct FromSpaceRef {
 pub(crate) struct FromSpaceScanReport {
     pub(crate) objects_scanned: usize,
     pub(crate) words_scanned: usize,
+    /// Words inside an array's unused capacity, excluded from the scan: no
+    /// collector walk can ever rewrite them, so they can only manufacture
+    /// false MISSING-REWRITEs (see the bound in `scan_object`). Counted so
+    /// the exclusion is visible in the report, not a silent shrink.
+    pub(crate) array_slack_words_skipped: usize,
     /// Owners skipped because they are themselves FORWARDED (dead relocation
     /// stubs). Reported so the filter can never be mistaken for a fix.
     pub(crate) forwarded_owners_skipped: usize,
@@ -163,7 +168,7 @@ fn fromspace_scan_abort() -> bool {
 /// so is whichever survivor semispace was active going INTO the cycle (the
 /// flip happens later, inside `copying_reset_from_spaces_and_flip`).
 #[inline]
-fn is_from_space(space: crate::arena::HeapSpace) -> bool {
+pub(super) fn is_from_space(space: crate::arena::HeapSpace) -> bool {
     space == crate::arena::HeapSpace::NurseryEden || space == crate::arena::active_survivor_space()
 }
 
@@ -204,7 +209,29 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     }
     report.objects_scanned += 1;
 
-    let payload_words = (total - GC_HEADER_SIZE) / 8;
+    let mut payload_words = (total - GC_HEADER_SIZE) / 8;
+    // #7803 identification postmortem: an ARRAY's payload past
+    // `ArrayHeader + length*8` is unused capacity, and on an old-gen HOLE
+    // REUSE it still holds the previous occupant's bytes — the dump that
+    // settled this showed a dead StringHeader ("StringDecoder") and a stale
+    // survivor pointer sitting in the slack of a live 8-element array.
+    // Marking, rewriting and the dirty scan all stop at `length` (the
+    // element range is length-keyed), so a word past it is invisible to
+    // every collector walk BY DESIGN and can never be rewritten. Scanning
+    // it manufactures a deterministic MISSING-REWRITE that reads exactly
+    // like the defect this instrument hunts — it cost this hunt a full
+    // false root cause before the owner dump exposed it. Bound the scan by
+    // the same length the collector uses; the bound is counted so a
+    // shrinking scan cannot silently read as a cleaner heap.
+    if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        let arr = user as *const crate::array::ArrayHeader;
+        let live_words =
+            std::mem::size_of::<crate::array::ArrayHeader>() / 8 + (*arr).length as usize;
+        if live_words < payload_words {
+            report.array_slack_words_skipped += payload_words - live_words;
+            payload_words = live_words;
+        }
+    }
     let words = user as *const u64;
     for i in 0..payload_words {
         let bits = *words.add(i);
@@ -313,6 +340,38 @@ pub(crate) fn scan_heap_for_fromspace_refs() -> FromSpaceScanReport {
     report
 }
 
+/// Best-effort payload dump around the stale slot so the offending owner
+/// identifies ITSELF (which array/object shape, what tags surround the slot).
+/// The heap is intact when this runs (pre-abort, post-scan), so the read is
+/// safe; classification only, no dereference of the classified words.
+fn payload_preview(r: &FromSpaceRef) -> String {
+    let payload = (r.owner_header + GC_HEADER_SIZE) as *const u64;
+    let stale_word = r.slot_offset / 8;
+    let words = stale_word.saturating_add(3).min(24);
+    let mut out = String::from("\n    payload:");
+    for i in 0..words {
+        let w = unsafe { payload.add(i).read() };
+        let kind = match w >> 48 {
+            0x7ffc => "tag",
+            0x7ffd => "ptr",
+            0x7ffe => "i32",
+            0x7fff => "str",
+            0x7ffa => "big",
+            0 => {
+                if crate::value::addr_class::is_plausible_heap_addr(w as usize) {
+                    "BARE-ADDR"
+                } else {
+                    "small"
+                }
+            }
+            _ => "f64",
+        };
+        let marker = if i == stale_word { ">>" } else { "" };
+        out.push_str(&format!(" {marker}[{i}]{w:#x}({kind})"));
+    }
+    out
+}
+
 fn describe(r: &FromSpaceRef) -> String {
     format!(
         "  owner={:#x} type={} space={:?} +{} {} -> {:#x} (type={} {:?}) {} [slot dirty_now={} ever_dirty={} owner_flags={:#x} marked={}]",
@@ -333,11 +392,61 @@ fn describe(r: &FromSpaceRef) -> String {
         r.slot_ever_dirty,
         r.owner_flags,
         r.owner_flags & GC_FLAG_MARKED != 0
-    )
+    ) + payload_preview(r).as_str()
+}
+
+/// #7803 identification dump: the offender line names the owner's GC type
+/// and slot offset, which for an array does not say WHICH array. Dump its
+/// header words and the first payload words with a per-word classification
+/// so the abort identifies the structure semantically — one run instead of
+/// a watchpoint hunt (mmap ASLR defeats address-pinned watchpoints here).
+unsafe fn dump_owner(r: &FromSpaceRef) {
+    let header = r.owner_header as *const GcHeader;
+    let user = (r.owner_header as *const u8).add(GC_HEADER_SIZE);
+    let total = (*header).size as usize;
+    let payload_words = ((total - GC_HEADER_SIZE) / 8).min(24);
+    eprintln!(
+        "[gc-fromspace-scan abort] owner dump: obj_type={} size={} first_u32={} second_u32={}",
+        (*header).obj_type,
+        total,
+        *(user as *const u32),
+        *(user.add(4) as *const u32),
+    );
+    let words = user as *const u64;
+    for i in 0..payload_words {
+        let bits = *words.add(i);
+        let decoded = super::root_words::decode_root_word(bits);
+        let class = match decoded {
+            Some(w) => format!(
+                "heap({:?}{})",
+                crate::arena::classify_heap_space(w.addr()),
+                match w {
+                    super::root_words::RootWord::Nanboxed { .. } => ", boxed",
+                    super::root_words::RootWord::Bare { .. } => ", bare",
+                }
+            ),
+            None => "-".to_string(),
+        };
+        eprintln!(
+            "[gc-fromspace-scan abort]   +{:<4} {:#018x} f64={:<24} {}{}",
+            i * 8,
+            bits,
+            format!("{:e}", f64::from_bits(bits)),
+            class,
+            if i * 8 == r.slot_offset {
+                "   <-- OFFENDER"
+            } else {
+                ""
+            },
+        );
+    }
 }
 
 fn report_and_abort(report: &FromSpaceScanReport) -> ! {
     emit_report(report, "abort");
+    for sample in &report.samples {
+        unsafe { dump_owner(sample) };
+    }
     // The scan runs inside the collector, so this backtrace names the
     // COLLECTION, not the mutator store that created the stale slot — which is
     // exactly the limitation `PERRY_GC_PROTECT_FROMSPACE` exists to remove
@@ -356,10 +465,11 @@ fn report_and_abort(report: &FromSpaceScanReport) -> ! {
 
 pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
     eprintln!(
-        "[gc-fromspace-scan {}] objects={} words={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
+        "[gc-fromspace-scan {}] objects={} words={} array_slack_skipped={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
         phase,
         report.objects_scanned,
         report.words_scanned,
+        report.array_slack_words_skipped,
         report.forwarded_owners_skipped,
         report.missing_rewrites,
         report.dangling,

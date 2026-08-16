@@ -76,6 +76,31 @@ pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
         .map(f64::from_bits)
 }
 
+/// Every own dynamic prop key recorded for `addr`, in insertion-independent
+/// (sorted) order.
+///
+/// #8149: `Object.keys` / `getOwnPropertyNames` / `for…in` need these. Before,
+/// the enumeration paths had no registered-buffer arm at all and walked a
+/// `BufferHeader` as an `ObjectHeader` — reading payload bytes as the
+/// `keys_array` pointer, which returned `[]` when those bytes happened to be
+/// zero and SIGBUS'd in `js_array_length` when they did not.
+///
+/// Integer-index keys come back as the canonical decimal strings they were
+/// stored under (`buffer::canonical_index_key`); the caller is responsible for
+/// the ECMA-262 ordering rule that puts array indices first, ascending.
+pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
+    if addr == 0 || !buffer_own_props_possible() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = buffer_props()
+        .lock()
+        .ok()
+        .and_then(|props| props.get(&addr).map(|m| m.keys().cloned().collect()))
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 /// Whether the buffer carries any own dynamic prop under `prop`.
 pub fn buffer_has_own_prop(addr: usize, prop: &str) -> bool {
     buffer_get_own_prop(addr, prop).is_some()
@@ -110,8 +135,30 @@ pub fn scan_buffer_own_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     }
 }
 
-/// Drop every own prop recorded for `addr`. Called when a buffer is registered
-/// (freed storage is recycled, and the table is address-keyed).
+/// Live owner count. Test-only: the leak regression asserts the table DRAINS
+/// after the owning buffers are collected, which a per-address
+/// `buffer_get_own_prop` probe cannot show.
+#[cfg(test)]
+pub(crate) fn test_buffer_own_props_owner_count() -> usize {
+    buffer_props().lock().map(|props| props.len()).unwrap_or(0)
+}
+
+/// Drop every own prop recorded for `addr`.
+///
+/// Two callers, and they cover different halves of the address-keyed table's
+/// lifetime:
+///
+/// * `register_buffer` — a *recycled* address must not inherit the previous
+///   tenant's expandos.
+/// * `finalize_collected_dead_buffer` — the owning buffer DIED. Registration
+///   alone is not enough: it only fires if the address is re-issued to another
+///   *buffer*, so an entry whose address is never reused, or is reused by a
+///   plain object, used to survive for the life of the process. That leaked one
+///   entry per property-carrying Buffer/DataView ever created, and
+///   `scan_buffer_own_props_roots_mut` kept tracing the stored values in every
+///   GC phase — so a dead buffer's expando closure stayed reachable forever, and
+///   its dead owner key kept being re-resolved against whatever now occupies
+///   that address.
 pub fn clear_buffer_own_props(addr: usize) {
     if addr == 0 {
         return;

@@ -11,6 +11,9 @@ audit keeps that choice explicit:
   set conservatively invalidates runtime-derived evidence after any assignment;
 * exceptional consumers call ``local_type_hint`` and must explain the runtime
   guard or independent proof;
+* branch-scoped narrowings snapshot the prior proof with
+  ``snapshot_guarded_proof`` so the narrowing can be undone exactly; that value
+  is restore bookkeeping and is never consumed as a type fact;
 * every accessor group needs an allowlist classification and reason, including
   ``stable_local_type_proof`` groups; a missing entry fails as an unclassified
   local-type read;
@@ -55,7 +58,7 @@ SKIP_SUFFIXES = ("_tests.rs",)
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 ACCESS_RE = re.compile(
     r"\b(?P<receiver>[A-Za-z_][A-Za-z0-9_]*|self)\s*\.\s*"
-    r"(?P<api>stable_local_type_proof|local_type_hint)\s*\("
+    r"(?P<api>stable_local_type_proof|local_type_hint|snapshot_guarded_proof)\s*\("
 )
 RAW_RE = re.compile(
     r"\b(?P<receiver>(?:ctx|self)\s*\.\s*(?:local_types|proven_local_types)|self\s*\.\s*locals|module_local_types|"
@@ -204,7 +207,7 @@ def scan_text(path: Path, text: str) -> tuple[list[Site], list[str]]:
         if receiver == "self.proven_local_types" and (
             (
                 rel == "crates/perry-codegen/src/expr/mod.rs"
-                and current_fn == "stable_local_type_proof"
+                and current_fn in {"stable_local_type_proof", "snapshot_guarded_proof"}
             )
             or (
                 rel == "crates/perry-codegen/src/type_analysis_facts.rs"

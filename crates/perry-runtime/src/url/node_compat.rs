@@ -523,7 +523,13 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let path = get_string_content(path_f64);
     let windows = options_windows_flag(options_f64);
 
-    let href = if windows {
+    let href = path_to_file_url_string(&path, windows);
+    let obj = create_url_object(&href);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+pub(crate) fn path_to_file_url_string(path: &str, windows: bool) -> String {
+    if windows {
         // Win32 (#2975). UNC paths (`\\host\share\...`) become
         // `file://host/share/...`; everything else is a (drive-letter) path
         // with `\` separators rewritten to `/`.
@@ -562,9 +568,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
         } else {
             format!("file:///{}", encoded)
         }
-    };
-    let obj = create_url_object(&href);
-    crate::value::js_nanbox_pointer(obj as i64)
+    }
 }
 
 /// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument
