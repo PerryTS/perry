@@ -228,17 +228,31 @@ pub extern "C" fn js_typed_array_reduce(
             crate::array::throw_reduce_of_empty();
         }
         let recv = ta_receiver_value(ta);
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, 0)
         } else {
             (load_at(ta, 0), 1)
         };
+        // #8179: root the accumulator. It is the one value in these loops
+        // that is routinely a NURSERY object — a string/object/array seed, or
+        // a fresh one returned by every callback — and a bare Rust local
+        // holding a NaN-boxed pre-move address is a copy the collector cannot
+        // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
+        // accumulator since the 2026-07-02 audit; the TypedArray siblings and
+        // the Buffer-receiver dispatcher never did.
+        //
+        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
+        // places every TypedArray in the old arena as TENURED, documented
+        // there as non-movable because raw data pointers are handed out.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let acc = scope.root_nanbox_f64(accumulator);
         for i in start_idx..len {
             let v = load_at(ta, i);
-            accumulator =
-                crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+            let next =
+                crate::closure::js_closure_call4(callback, acc.get_nanbox_f64(), v, i as f64, recv);
+            acc.set_nanbox_f64(next);
         }
-        accumulator
+        acc.get_nanbox_f64()
     }
 }
 
@@ -267,18 +281,37 @@ pub extern "C" fn js_typed_array_reduce_right(
             crate::array::throw_reduce_of_empty();
         }
         let recv = ta_receiver_value(ta);
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, len)
         } else {
             (load_at(ta, len - 1), len - 1)
         };
+        // #8179: root the accumulator. It is the one value in these loops
+        // that is routinely a NURSERY object — a string/object/array seed, or
+        // a fresh one returned by every callback — and a bare Rust local
+        // holding a NaN-boxed pre-move address is a copy the collector cannot
+        // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
+        // accumulator since the 2026-07-02 audit; the TypedArray siblings and
+        // the Buffer-receiver dispatcher never did.
+        //
+        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
+        // places every TypedArray in the old arena as TENURED, documented
+        // there as non-movable because raw data pointers are handed out.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let acc = scope.root_nanbox_f64(accumulator);
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
                 let v = load_at(ta, i);
-                accumulator =
-                    crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+                let next = crate::closure::js_closure_call4(
+                    callback,
+                    acc.get_nanbox_f64(),
+                    v,
+                    i as f64,
+                    recv,
+                );
+                acc.set_nanbox_f64(next);
             }
         }
-        accumulator
+        acc.get_nanbox_f64()
     }
 }

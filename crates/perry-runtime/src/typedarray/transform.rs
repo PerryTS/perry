@@ -209,9 +209,23 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
         }
         // Non-BigInt kinds: `load_at` yields plain numeric f64s (no heap
         // pointers), so the owned buffer is GC-inert by construction.
+        // #8179: root the comparator. A comparator that allocates can trigger a
+        // moving minor that relocates its own closure header, and this raw
+        // parameter plus the native stack is its only reference — an
+        // evacuating minor does not scan the native stack. `sorted_bigint_lanes`
+        // above has rooted it since it was written ("the comparator closure
+        // itself is re-derived from a rooted handle per call"); the two
+        // non-BigInt arms were missed.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cmp_handle = scope.root_raw_const_ptr(comparator);
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta_clean, i)).collect();
         buf.sort_by(|a, b| {
-            let r = crate::closure::js_closure_call2(comparator, *a, *b);
+            // `with_const_ptr`: an argument-position read, which `across_*`
+            // cannot express. The handle is re-read per comparison, so a
+            // relocation during comparison `i` is reflected in `i + 1`.
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
+                crate::closure::js_closure_call2(cmp, *a, *b)
+            });
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
@@ -280,9 +294,23 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
             return out;
         }
         // Non-BigInt kinds: plain numeric f64s — the owned buffer is GC-inert.
+        // #8179: root the comparator. A comparator that allocates can trigger a
+        // moving minor that relocates its own closure header, and this raw
+        // parameter plus the native stack is its only reference — an
+        // evacuating minor does not scan the native stack. `sorted_bigint_lanes`
+        // above has rooted it since it was written ("the comparator closure
+        // itself is re-derived from a rooted handle per call"); the two
+        // non-BigInt arms were missed.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cmp_handle = scope.root_raw_const_ptr(comparator);
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta, i)).collect();
         buf.sort_by(|a, b| {
-            let r = crate::closure::js_closure_call2(comparator, *a, *b);
+            // `with_const_ptr`: an argument-position read, which `across_*`
+            // cannot express. The handle is re-read per comparison, so a
+            // relocation during comparison `i` is reflected in `i + 1`.
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
+                crate::closure::js_closure_call2(cmp, *a, *b)
+            });
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
