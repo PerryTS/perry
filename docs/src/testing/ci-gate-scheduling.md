@@ -161,6 +161,14 @@ on this slice**, which is what lets the remaining queue drain.
   reports *no* status rather than a passing one, which can wedge a required context.
   Not worth the risk here.
 
+> **Superseded for the PR arm (2026-08-16, CI tiers).** The PR arm of every gate
+> in the table above is now **opt-in via the `run-extended-tests` label** — an
+> unlabelled PR still gets a run, but every job in it is skipped at the job level
+> (`if:`), which costs no runner slot and cannot wedge anything because none of
+> these is a required context (the only required context is `test.yml`'s
+> `pr-gate`). The six-hourly `main` sweeps, the tag arms and `gate-freshness` are
+> unchanged. Rationale and the measured numbers: [CI tiers](ci-tiers.md).
+
 ### The cost, stated plainly
 
 **Attribution latency.** A regression that slips past the PR arm used to be pinned

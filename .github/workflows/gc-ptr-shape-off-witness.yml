@@ -74,6 +74,12 @@ name: GC Ptr<Shape> OFF-arm witness
 
 on:
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
   # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
   # `push: branches: [main]` starved this gate and nine others for two days
   # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
@@ -117,6 +123,8 @@ env:
 
 jobs:
   gc-ptr-shape-off-witness:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     # ubuntu-latest, matching gc-stress: the matrix already runs there, and
     # the cargo cache is shared with that job (same `shared-key`) so this
     # build is usually warm.
