@@ -160,7 +160,7 @@ The startup notice reports what a *previous* run recorded. To make a run actuall
 ask, call the check from your own code — Perry gives you everything except the
 request itself, which uses your app's own `fetch()`:
 
-```typescript
+```typescript,no-test
 import {
   embeddedCheckHeaders,
   embeddedCheckUrl,

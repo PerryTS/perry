@@ -2471,8 +2471,8 @@ pub fn gc_check_trigger() {
             // non-moving in-place minor runs and nothing relocates.
             //
             // ★ #7148 disposition: **keep as the bounded valve, now counted.**
-            // The deferral above is the primary path and is sound by
-            // construction; reaching here means the slack expired without the
+            // The deferral above is the primary path and makes the collection
+            // point precise; reaching here means the slack expired without the
             // program touching a single loop back-edge poll or microtask-pump
             // boundary — a mega-expression, or a synchronous recursion, that
             // allocated `gc_moving_defer_slack_dyn_bytes()` past the deferral

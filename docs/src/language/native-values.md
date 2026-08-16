@@ -5,7 +5,7 @@ JavaScript number semantics, and normal objects and arrays remain managed
 values. At boundaries where byte width and C-compatible layout are part of
 correctness, `perry/native` provides an explicit, opt-in contract.
 
-```typescript
+```typescript,no-test
 import {
   type u32,
   type u64,

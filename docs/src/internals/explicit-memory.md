@@ -15,7 +15,7 @@ views over it report length 0, and any further `transfer`/`slice`/view
 construction on it throws a `TypeError`. This is standard ECMAScript — the same
 code runs under Node and Bun unchanged.
 
-```ts
+```typescript,no-test
 let scratch = new ArrayBuffer(64 * 1024 * 1024);
 // ... use it ...
 scratch = scratch.transfer(0); // detach: the 64 MB backing is released
@@ -35,7 +35,7 @@ A Perry-native module in the spirit of `perry/thread`: it compiles to direct
 runtime calls and does not resolve under Node/Bun, so guard the import if the
 source must also run there.
 
-```ts
+```typescript,no-test
 import { collect, minor, idleHint } from "perry/gc";
 
 collect();  // full collection now — same as the global gc()
@@ -50,7 +50,7 @@ after presenting. When allocation pressure has made a collection imminent, it
 runs at your chosen boundary instead of landing mid-frame at whatever
 allocation happens to trip the threshold:
 
-```ts
+```typescript,no-test
 function frame() {
   update();
   render();

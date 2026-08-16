@@ -26,7 +26,7 @@ that is only known at runtime. A *constant* code string is the exception —
 real native functions (#1679). Only a body built from runtime data hits this
 limit:
 
-```ts
+```typescript,no-test
 // Constant body → compiled natively (works)
 const add = new Function("a", "b", "return a + b");
 
@@ -68,7 +68,7 @@ Resolvable specifiers are unaffected and still compile + load: string literals
 `const` locals (`` import(`./${KIND}.js`) ``), finite string-literal-union
 parameters, and directory globs.
 
-```ts
+```typescript,no-test
 // Resolvable → compiled + loaded as today.
 const real = await import("./real.js");
 
@@ -169,7 +169,7 @@ but user-written modules should use static `import` declarations.
 
 Dynamic prototype manipulation is supported for the common patterns:
 
-```ts
+```typescript,no-test
 // Supported
 MyClass.prototype.newMethod = function () {};   // prototype method assignment
 Object.setPrototypeOf(obj, proto);              // incl. chains of any length

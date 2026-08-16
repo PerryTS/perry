@@ -109,8 +109,9 @@ collection point** instead of caching the load.
 
 A thread-local or static cell holding a GC pointer that no registered scanner
 rewrites. Unlike the register-class bugs above (which go bad intermittently when a
-collection lands in a narrow window), a runtime cache goes bad at collection #0
-and stays bad.
+collection lands in a narrow window), an unregistered runtime cache becomes
+stale at the first moving collection after it is populated and stays stale
+until rewritten.
 
 Real instances: `js_value_typeof` interned its eight result strings in
 thread-local `Cell<*mut StringHeader>`s with no registered scanner (#7226);

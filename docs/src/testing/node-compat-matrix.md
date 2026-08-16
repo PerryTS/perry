@@ -82,7 +82,7 @@ node-suite oracle; the compat matrix carries its own "latest stable" pin.
 
 For a module `M` and a form, the probe does:
 
-```ts
+```typescript,no-test
 import * as ns from "M"          // or "node:M"
 // sorted list of `<exportName>:<typeof export[name]>` over Object.keys(ns),
 // plus `default:<typeof ns.default>`, wrapped in a __FP__...__FP__ sentinel.

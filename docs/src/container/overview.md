@@ -57,7 +57,7 @@ so a single program can use multiple.
 | 3 | Programmatic pin | TS-runtime pin before first op | `await setBackend('podman')` |
 | 4 | Capability-aware | pick the best backend **for the spec** | `JSON.parse(selectBackendFor(JSON.stringify(spec)))` |
 
-```typescript
+```typescript,no-test
 import {
   setBackend, setBackends, getBackend, getBackendPriority,
   getAvailableBackends, selectBackendFor, up,

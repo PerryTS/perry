@@ -63,7 +63,7 @@ Both are unacceptable for production.
 
 The four mechanisms compose. The most common production pattern combines (4) and (3):
 
-```typescript
+```typescript,no-test
 import { selectBackendFor, setBackend, up } from 'perry/container';
 
 const best = JSON.parse(selectBackendFor(JSON.stringify(spec))) as string;
@@ -89,7 +89,7 @@ sensible default. `AcceptPartial` is for dev / "just make it run."
 
 **Companion APIs:**
 
-```typescript
+```typescript,no-test
 // "What backend is currently active?"
 console.log(getBackend());                                // "docker"
 

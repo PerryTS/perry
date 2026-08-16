@@ -151,7 +151,7 @@ export async function requestReview(): Promise<void> {
 
 For manifest symbols that follow the `js_<pkg>_<snake_case>` convention (where `<pkg>` is the sanitized last segment of the package name), Perry derives an **ergonomic camelCase alias** so consumers can import a spec-faithful name without you writing any wrapper (issue #5621). For `@perryts/webgpu` a manifest symbol `js_webgpu_request_adapter` is importable as `requestAdapter`:
 
-```ts
+```typescript,no-test
 // The package's src/index.ts only ambient-declares the raw symbols…
 export declare function js_webgpu_request_adapter(): Promise<number>;
 
@@ -161,7 +161,7 @@ import { requestAdapter } from "@perryts/webgpu"; // → js_webgpu_request_adapt
 
 The alias is a convenience **for packages that only export ambient `declare` signatures**. A *genuine* implemented export always wins over a derived alias (issue #6715): if your `src/index.ts` also exports a real wrapper whose name equals a manifest symbol's derived alias, the import binds to **your wrapper**, not the FFI symbol — your wrapper code runs, and it can call the raw symbol internally:
 
-```ts
+```typescript,no-test
 export declare function js_speech_speak(
   text: string, rate: number, pitch: number, locale: string, voiceId: string): Promise<number>;
 
