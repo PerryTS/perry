@@ -28,6 +28,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 mod eh;
 mod types;
+mod vector;
 
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
@@ -529,6 +530,15 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     .build_select(cond.into_int_value(), a, bv, dst.trim_start_matches('%'))
                     .map_err(be)?
             }
+            // Vector forms (#8228). These MUST be dispatched by name: the
+            // fallthrough below is the binary-op arm, which sees a
+            // three-operand `insertelement` as a malformed `add` and reports
+            // "bad binary op `insertelement` operands" — the failure that
+            // blocked every multi-unit module once #8204 started emitting the
+            // header-image compose.
+            "insertelement" => self.insert_element(dst, rest)?,
+            "extractelement" => self.extract_element(dst, rest)?,
+            "shufflevector" => self.shuffle_vector(dst, rest)?,
             _ => self.binary_or_cast(dst, op, rest)?,
         };
         self.def(dst, v)?;
@@ -1018,6 +1028,14 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let a = self.val(ty, atok)?;
         let b2 = self.val(ty, parts[1].trim())?;
         let nm = name;
+        if let (BasicValueEnum::VectorValue(av), BasicValueEnum::VectorValue(bv)) = (a, b2) {
+            // `expr/channel.rs` emits `mul`/`add` over `<4 x i32>`. The scalar
+            // arms below reach their operands through `into_int_value()`,
+            // which panics on a vector instead of erroring, so split first.
+            let out = self.vector_binary(op_base, nm, av, bv)?;
+            apply_flags(out.as_instruction_value(), &flag_tokens);
+            return Ok(out);
+        }
         let out: BasicValueEnum = match op_base {
             "add" => self
                 .builder

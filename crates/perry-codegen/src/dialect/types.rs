@@ -9,7 +9,7 @@
 use anyhow::{anyhow, bail, Result};
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, VectorType};
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
@@ -257,12 +257,16 @@ pub(super) fn constant<'ctx>(
             BasicTypeEnum::FloatType(t) => t.get_undef().into(),
             BasicTypeEnum::IntType(t) => t.get_undef().into(),
             BasicTypeEnum::PointerType(t) => t.get_undef().into(),
+            BasicTypeEnum::VectorType(t) => t.get_undef().into(),
             other => bail!("undef of unsupported type {other:?}"),
         },
+        // `insertelement <4 x i32> poison, ...` seeds `expr/channel.rs`'s
+        // lane-0 splat, so a vector poison is an emitted form, not a corner.
         "poison" => match ty {
             BasicTypeEnum::FloatType(t) => t.get_poison().into(),
             BasicTypeEnum::IntType(t) => t.get_poison().into(),
             BasicTypeEnum::PointerType(t) => t.get_poison().into(),
+            BasicTypeEnum::VectorType(t) => t.get_poison().into(),
             other => bail!("poison of unsupported type {other:?}"),
         },
         "true" => ctx.bool_type().const_int(1, false).into(),
@@ -272,6 +276,8 @@ pub(super) fn constant<'ctx>(
             BasicTypeEnum::IntType(t) => t.const_zero().into(),
             BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
             BasicTypeEnum::PointerType(t) => t.const_null().into(),
+            // The all-zero `shufflevector` mask (`channel.rs`'s splat).
+            BasicTypeEnum::VectorType(t) => t.const_zero().into(),
             other => bail!("zeroinitializer of unsupported type {other:?}"),
         },
         _ => match ty {
@@ -294,7 +300,47 @@ pub(super) fn constant<'ctx>(
                 let v: i128 = tok.parse().map_err(|_| anyhow!("bad integer `{tok}`"))?;
                 t.const_int(v as u64, v < 0).into()
             }
+            BasicTypeEnum::VectorType(t) => return vector_constant(ctx, module, t, tok),
             other => bail!("cannot materialize `{tok}` as {other:?}"),
         },
     })
+}
+
+/// `<i64 207232172546, i64 0>` — an LLVM constant vector literal.
+///
+/// Perry emits one as the seed operand of the #8122/#8204 header-image
+/// `insertelement` (`function.rs`, `codegen/string_pool.rs`) and another as
+/// `channel.rs`'s all-zero `<4 x i32>` accumulator seed. Every element of a
+/// vector literal is itself a constant, so this recurses through `constant`
+/// with the vector's element type and cross-checks the per-element type token
+/// — a `<2 x i64>` whose elements claim `i32` is a codegen bug worth a loud
+/// error, not a silent truncation.
+fn vector_constant<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    ty: VectorType<'ctx>,
+    tok: &str,
+) -> Result<BasicValueEnum<'ctx>> {
+    let body = tok
+        .strip_prefix('<')
+        .and_then(|t| t.strip_suffix('>'))
+        .ok_or_else(|| anyhow!("cannot materialize `{tok}` as a vector constant"))?;
+    let elem_ty = ty.get_element_type();
+    let mut elems: Vec<BasicValueEnum<'ctx>> = Vec::new();
+    for part in split_top_level(body) {
+        let (part_ty_tok, val_tok) = ty_and_val(&part)?;
+        let part_ty = basic_type(ctx, part_ty_tok)?;
+        if part_ty != elem_ty {
+            bail!("vector constant `{tok}` element type `{part_ty_tok}` is not the element type");
+        }
+        elems.push(constant(ctx, module, part_ty, val_tok)?);
+    }
+    if elems.len() as u32 != ty.get_size() {
+        bail!(
+            "vector constant `{tok}` has {} elements, type has {}",
+            elems.len(),
+            ty.get_size()
+        );
+    }
+    Ok(VectorType::const_vector(&elems).into())
 }
