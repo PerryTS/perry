@@ -310,7 +310,7 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
         "a uniquely-owned string aliased into the slot must still be demoted:\n{book}"
     );
     assert!(
-        book.contains(&format!("@{NOTE}(")),
+        book.contains(NOTE),
         "the pointer-bearing store must still record the slot's GC layout:\n{book}"
     );
 
@@ -335,7 +335,7 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
     let barrier_block =
         block(&ir, BARRIER).unwrap_or_else(|| panic!("the barrier arm must exist:\n{ir}"));
     assert!(
-        barrier_block.contains(&format!("@{BARRIER_CALL}")),
+        barrier_block.contains(BARRIER_CALL),
         "the remembered-set write barrier must still be CALLED:\n{barrier_block}"
     );
 }

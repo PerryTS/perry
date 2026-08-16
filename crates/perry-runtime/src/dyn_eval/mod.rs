@@ -194,7 +194,8 @@ pub(crate) fn lookup_fn(id: u32) -> Option<Rc<InterpFn>> {
 /// minor ineligible. The consequence is not that the interpreter is safe; it
 /// is that the interpreter is **untestable**:
 ///
-///  * `PERRY_GC_ZEAL` forces collection at safepoints, and there are none here;
+///  * `PERRY_GC_SCHEDULE_RATE` forces collection at safepoints, and there are
+///    none here;
 ///  * `PERRY_GC_SCHEDULE_SEED` selects safepoints, and there are none here;
 ///  * `gc_root_dominance_check.py` reads emitted LLVM IR, and there is none
 ///    here.
