@@ -285,12 +285,17 @@ for cold_start in $(seq 1 "$cold_starts"); do
         # computed relative chunk requires resolve against the route bundle
         # since #8146.
         cd "$fixture"
+        # `exec` so `$host_pid` below is the host process itself, not this
+        # subshell. Killing the subshell leaves the host running (observed:
+        # an orphaned provider-host still serving port $port after the gate
+        # exited), and a survivor holds the port, so cold start 2 can never
+        # bind.
         if [[ "$host_os" == Darwin ]]; then
             PORT="$port" HOSTNAME=127.0.0.1 DYLD_LIBRARY_PATH="$providers" \
-                "$host" "$runtime_library" "$stdlib_library" "$app"
+                exec "$host" "$runtime_library" "$stdlib_library" "$app"
         else
             PORT="$port" HOSTNAME=127.0.0.1 LD_LIBRARY_PATH="$providers" \
-                "$host" "$runtime_library" "$stdlib_library" "$app"
+                exec "$host" "$runtime_library" "$stdlib_library" "$app"
         fi
     ) >"$host_log" 2>&1 &
     host_pid=$!
