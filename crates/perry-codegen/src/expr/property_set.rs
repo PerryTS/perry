@@ -515,6 +515,7 @@ fn try_lower_sloppy_class_field_boxed_store(
                 &field_addr,
                 barrier_needed,
                 class_field_store_layout_note_is_conforming(ctx, class_name, field_index),
+                "class_field_set",
             );
             ctx.block().br(&merge_label);
         }
@@ -1230,6 +1231,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                                 &class_name,
                                                 field_index,
                                             ),
+                                            "class_field_set",
                                         );
                                     }
                                     let (semantic, rep) = if requires_raw_f64 {
@@ -1512,6 +1514,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                                 &class_name,
                                                 field_index,
                                             ),
+                                            "class_field_set",
                                         );
                                         None
                                     };

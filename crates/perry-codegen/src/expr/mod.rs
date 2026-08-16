@@ -146,6 +146,8 @@ mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
+#[cfg(test)]
+mod write_pic_barrier_tests;
 // `pub(crate)` since #7615 slice 8: `rooting/temp_root.rs` binds a pooled
 // temp alloca through the same shadow-slot emission every named local uses,
 // and it now lives outside `crate::expr`.

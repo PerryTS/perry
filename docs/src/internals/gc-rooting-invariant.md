@@ -413,6 +413,128 @@ only copy is in a register, there is nothing at that moment for any runtime
 probe to notice. These instruments catch the *consequence*, later. The static
 checker catches the *cause*, now.
 
+## The mirror image: a missing write barrier (#8185)
+
+Everything above is about a value the collector cannot **find**. The write
+barrier is about an edge the collector is never **told about**. The two are
+duals, and — this is the part that keeps catching people — **their detectors
+are swapped**.
+
+| | rooting bug | missing/deleted write barrier |
+|---|---|---|
+| what goes wrong | a live value is invisible to the root scan | an old→young edge is absent from the remembered set |
+| when it goes wrong | at the collection, silently | not at the store at all; at some *later* minor |
+| the detector | the runtime instruments (`PERRY_GC_SCHEDULE_RATE`, `PERRY_GC_PROTECT_FROMSPACE`), plus the static checker for the IR-visible half | a **static IR assertion**, and nothing else |
+| the blind spot | the static checker cannot see a runtime-side cache of a heap pointer (see §5) | **every runtime probe we have** |
+
+### Why no runtime probe can see it
+
+A dropped barrier corrupts nothing at the moment of the store. The store still
+writes the right bits into the right slot; the object graph is correct. All
+that happens is that a remembered-set entry goes unwritten, so the set is
+merely *incomplete*. Turning that into an observable failure needs a
+conjunction the program has to supply on its own:
+
+1. the parent has to survive into old-gen (or be tenured) **before** the store;
+2. the child has to still be in the nursery **at the next minor**;
+3. a **minor** collection — not a full mark-sweep, which retraces everything
+   and papers over the whole class — has to land in that window; and
+4. that edge has to be the *only* path to the child, or some other root finds
+   it anyway and the collection is clean.
+
+Miss any one and the minor collects correctly, the program prints the right
+answer, and the probe reports success. Nothing was tried.
+
+The individual knobs are worse than merely insensitive — three of them are
+aimed at a different property entirely, and it is easy to read their green as
+evidence:
+
+- `PERRY_GC_FORCE_EVACUATE` / `PERRY_GC_VERIFY_EVACUATION` verify
+  **rewriting**: that every live slot pointing at a forwarded object was
+  updated. A slot the collector never traced is not a slot it failed to
+  rewrite. Remembering and rewriting are different properties, and the verifier
+  only asks about the second one.
+- `PERRY_GEN_GC=0` reverts to full mark-sweep, which **does not consult the
+  remembered set at all**. It does not make the bug visible; it makes the bug
+  unreachable. A green run here is the strongest-looking and emptiest evidence
+  of the three.
+- `PERRY_GC_SCHEDULE_RATE=1` + `PERRY_GC_PROTECT_FROMSPACE` catch a *stale read
+  of a moved object* — condition (4)'s aftermath, on the rooting side of the
+  duality. They fault on a dangling from-space pointer, not on a live object
+  that was never traced.
+
+  And check the knob you are about to cite is a knob. `scripts/check_gc_env_knobs.py`
+  is in `lint` precisely because this drifts: a matrix arm naming a variable
+  nothing parses runs the DEFAULT configuration and reports success — hazard 4
+  again, one level up. Every name in this document is one the gate has
+  confirmed a live parser owns.
+
+This is CLAUDE.md's hazard 4 ("the gate runs but its subject never did") with
+the subject inverted: **the absence of a barrier cannot be observed by running
+the program.** There is no execution in which "the barrier did not run" is a
+distinguishable event.
+
+**Recorded, because it is the whole reason the IR assertions exist (#8183):** a
+**release** build with the write barrier deleted from the dynamic-key write
+IC's reference arm passes the entire adversarial matrix — old→young edge
+fixtures, `PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1`,
+`PERRY_GEN_GC=0`, and forced collection with from-space protection at depth 400
+— **byte-identical output, exit 0**, on both a gap fixture and a larger
+adversarial one. The static IR test was the only thing that said no.
+
+### What a PR that adds or moves a store on a GC slot owes
+
+Its barrier evidence is a **static IR assertion**, not a behavioural test. Four
+things it has to pin, each because a sabotage that skipped it was *not* caught:
+
+1. **The bookkeeping is present** in the pointer-capable arm — the write
+   barrier, the layout note, and the string addref. Any one of the three going
+   missing is the #5094 / #7511 family of silent stranding.
+2. **The arm is REACHED.** Assert a `br i1` *into* the block, not merely that a
+   block with that label exists. #8183's third sabotage — routing reference
+   values back to the outlined helper — left the arm behind as **dead IR** that
+   every content assertion happily inspected, and initially passed. Presence of
+   code is not proof it runs.
+3. **The negative arm stays clean.** The pointer-free arm must *not* contain
+   the bookkeeping. A barrier leaking into it means the discriminator stopped
+   discriminating, and the "optimization" is measuring nothing.
+4. **Sabotage runs, reported.** Delete each element in turn and record that the
+   test goes red. A test that has never failed is a test whose failure mode is
+   unknown.
+
+And put it where it runs. `test.yml`'s per-PR `cargo-test` arm is `--lib
+--bins` only; `crates/*/tests/*.rs` is nightly/tag (`e2e-scoped` runs only the
+suites the diff happens to name). A barrier assertion parked in `tests/`
+gates its own PR and no future one — which is exactly the PR that will move the
+store. **In-crate `#[cfg(test)]` under `src/`, per #5960.**
+`crates/perry-codegen/src/expr/class_field_barrier_tests.rs`,
+`index_set_barrier_tests.rs` and `write_pic_barrier_tests.rs` are the shape.
+
+### The `GC_STORE_AUDIT` marker, and what it does and does not prove
+
+Every raw GC-relevant store site carries a nearby marker naming its verdict:
+
+```rust
+// GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the barrier
+// below is guarded only by a live test that the stored bits carry no heap
+// pointer, which is the barrier's own first test.
+```
+
+The classes are `BARRIERED`, `EXTERNAL_BARRIERED`, `ROOT`, `INIT`,
+`POINTER_FREE`, `STACK`. `scripts/gc_store_site_inventory.py` (in `lint`) scans
+the first-party store sites and fails when one has no marker — so a **new**
+store site cannot land with the question unanswered.
+
+Be precise about what that buys, because the name oversells it: the script
+audits the **comment claim**, not the emitted IR. It proves somebody wrote down
+a verdict next to the store. It cannot prove the verdict is true, and it cannot
+notice when a later edit falsifies one — deleting a barrier while leaving its
+`GC_STORE_AUDIT(BARRIERED)` comment in place is a clean pass. Teaching it to
+check the claim against emitted IR would turn this section from a review
+convention into a gate; that is #8185's open long-term ask and is not a small
+change. Until then the marker is documentation and the `--lib` IR test is the
+gate.
+
 ## The corpus problem, and the two corpora (#7280)
 
 **A hand-written corpus cannot express this class of bug at dependency scale,

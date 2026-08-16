@@ -619,6 +619,13 @@ pub(crate) fn emit_may_carry_heap_pointer_check(blk: &mut LlBlock, value_bits: &
 /// `false`; then no test and no blocks are emitted at all, and lever D's
 /// existing elision is unchanged.
 ///
+/// `stem` names the emitted blocks (`<stem>.gc_bookkeeping`,
+/// `<stem>.layout_note`, `<stem>.barrier`). It is not cosmetic: the IR census
+/// that is the ONLY detector for a deleted barrier (#8185) identifies the arm
+/// by its label, so two call sites sharing a stem would let one site's guard
+/// satisfy the other site's assertion. The class-field callers pass
+/// `"class_field_set"`; the static write PIC (#8184) passes `"put.pic"`.
+///
 /// ## The parent's half of the same question (#7871)
 ///
 /// The value test answers "does this store publish a heap pointer at all". It
@@ -658,6 +665,7 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     slot_addr: &str,
     write_barrier_needed: bool,
     layout_note_conforming: bool,
+    stem: &str,
 ) -> Option<String> {
     {
         let blk = ctx.block();
@@ -677,8 +685,8 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         return None;
     }
     let value_bits = ctx.block().bitcast_double_to_i64(value_double);
-    let bookkeeping_idx = ctx.new_block("class_field_set.gc_bookkeeping");
-    let done_idx = ctx.new_block("class_field_set.gc_bookkeeping.done");
+    let bookkeeping_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping"));
+    let done_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping.done"));
     let bookkeeping_label = ctx.block_label(bookkeeping_idx);
     let done_label = ctx.block_label(done_idx);
     {
@@ -701,8 +709,8 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     // are a proof, and why the fallback arm is kept rather than eliding
     // outright.
     if layout_note_needed && layout_note_conforming {
-        let note_idx = ctx.new_block("class_field_set.layout_note");
-        let after_idx = ctx.new_block("class_field_set.layout_note.done");
+        let note_idx = ctx.new_block(&format!("{stem}.layout_note"));
+        let after_idx = ctx.new_block(&format!("{stem}.layout_note.done"));
         let note_label = ctx.block_label(note_idx);
         let after_label = ctx.block_label(after_idx);
         {
@@ -738,9 +746,9 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         // `emit_parent_may_need_remembering_check` documents as its input.
         //
         // The barrier keeps its own block so an IR census can see whether the
-        // gate was reached at all: a `cond_br` INTO `class_field_set.barrier` is
-        // the difference between "guarded" and "silently deleted".
-        let barrier_idx = ctx.new_block("class_field_set.barrier");
+        // gate was reached at all: a `cond_br` INTO `<stem>.barrier` is the
+        // difference between "guarded" and "silently deleted".
+        let barrier_idx = ctx.new_block(&format!("{stem}.barrier"));
         let barrier_label = ctx.block_label(barrier_idx);
         {
             let blk = ctx.block();

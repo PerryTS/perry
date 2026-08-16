@@ -41,9 +41,9 @@ use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, recei
 use crate::types::{LlvmType, DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
-    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_scalar_aware_on_block,
-    expr_produces_non_pointer_bits_by_construction, lower_expr, nanbox_pointer_inline,
-    unbox_str_handle, unbox_to_i64, FnCtx,
+    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_pointer_tested,
+    emit_jsvalue_slot_store_scalar_aware_on_block, expr_produces_non_pointer_bits_by_construction,
+    lower_expr, nanbox_pointer_inline, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
 /// Runtime write-PIC flags that force the miss path. Class-vs-instance kind is
@@ -678,9 +678,23 @@ fn lower_put_value_static_write_ic(
         ],
     );
 
+    // `pointer_possible` is a COMPILE-TIME claim about the RHS, so it is true
+    // for every `o.x = v` whose RHS is an untyped local — which is most of
+    // them. Before #8184 that arm paid three unconditional `gc-leaf` calls
+    // (`js_string_addref_if_heap_string`, `js_gc_note_slot_layout_aware`,
+    // `js_write_barrier_slot`) on every write, even when the value was a plain
+    // double at every single execution: 118 instructions per write against the
+    // 22 the sibling dynamic-key IC pays for the identical store, and +21.4%
+    // instructions on `const v = f(); o.x = v` versus leaving the RHS inline
+    // (#8183 measured that as the reason NOT to widen #8108's gate).
+    //
+    // `emit_jsvalue_slot_store_pointer_tested` (#7511) asks the same question
+    // ONCE, inline, of the bits actually being stored — the question all three
+    // callees ask first anyway, one at a time, across three cross-crate calls
+    // — and branches over all three. The store itself stays unconditional.
     let pointer_possible = !(is_numeric_expr(ctx, value)
         || expr_produces_non_pointer_bits_by_construction(ctx, value));
-    {
+    let (field_ptr, field_addr) = {
         let header_size =
             crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
         let blk = ctx.block();
@@ -688,29 +702,74 @@ fn lower_put_value_static_write_ic(
         let fields_base = blk.add(I64, &target_handle, &header_size);
         let field_addr = blk.add(I64, &fields_base, &slot_offset);
         let field_ptr = blk.inttoptr(I64, &field_addr);
-        if pointer_possible {
-            let slot_i32 = blk.trunc(I64, &selected_slot, I32);
-            emit_jsvalue_slot_store_scalar_aware_on_block(
-                blk,
-                &field_ptr,
-                &stored_value,
-                &target_handle,
-                &slot_i32,
-                true,
-                &target_bits,
-                &field_addr,
-                true,
-            );
-        } else {
-            // A non-pointer overwrite cannot create a young edge or make a GC
-            // pointer layout less conservative. The per-object typed layout
-            // bit was already cleared on the miss that primed this cache.
-            // GC_STORE_AUDIT(POINTER_FREE): this branch only stores a value
-            // proven unable to contain GC pointer bits.
-            blk.store(DOUBLE, &stored_value, &field_ptr);
-        }
-        blk.br(&merge_label);
+        (field_ptr, field_addr)
+    };
+    if pointer_possible {
+        let slot_i32 = ctx.block().trunc(I64, &selected_slot, I32);
+        // The one behavioural difference from the `_aware` emitter this
+        // replaces: `pointer_tested` calls `js_gc_note_slot_layout`, not
+        // `js_gc_note_slot_layout_aware`, and skips it entirely when the
+        // stored bits carry no heap pointer. That drops the CLEARING half of
+        // the layout bookkeeping — an old pointer overwritten by a double no
+        // longer removes the slot's side-mask bit, so the slot stays
+        // conservatively scanned.
+        //
+        // Safe here, and for two independent reasons:
+        //
+        // * A stale-SET mask bit is strictly weaker than `GC_LAYOUT_UNKNOWN`,
+        //   which is the collector's DEFAULT for a generic object.
+        //   `heap_payload_slot_selection` turns `Masked` and `All` into the
+        //   same `HeapChildSlot::Child` items (only the telemetry `ReadKind`
+        //   differs), so the worst case is that the collector examines a slot
+        //   holding a double — exactly what it already does for every
+        //   unknown-layout object. It can never STRAND a child, which is the
+        //   only direction that is a bug.
+        // * `layout_note_slot`'s one arm that MUST fire — `SlotVerdict::
+        //   Downgrade`, where a pointer lands in a slot a typed descriptor
+        //   declared raw-f64 — is unreachable from a PIC hit twice over. It
+        //   is guarded by `claimed_intact`, and `GC_OBJ_TYPED_LAYOUT_INTACT`
+        //   (0x1000) is a member of `WRITE_PIC_BLOCKING_FLAGS` (0x1907),
+        //   which every one of the four `hit` conjunctions requires CLEAR; and
+        //   it needs a pointer value, which is the case `pointer_tested` does
+        //   NOT skip.
+        emit_jsvalue_slot_store_pointer_tested(
+            ctx,
+            &field_ptr,
+            &stored_value,
+            &target_handle,
+            &slot_i32,
+            true,
+            true,
+            &target_bits,
+            &field_addr,
+            true,
+            // `layout_note_conforming` skips the note when the header reads
+            // `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (0x9000). By
+            // the same blocking-flag argument above, INTACT is provably clear
+            // at a PIC hit, so that test can never be true — emitting it would
+            // be a load, a mask, a compare and two blocks that always take the
+            // same edge.
+            false,
+            "put.pic",
+        );
+    } else {
+        // A non-pointer overwrite cannot create a young edge or make a GC
+        // pointer layout less conservative. The per-object typed layout
+        // bit was already cleared on the miss that primed this cache.
+        // GC_STORE_AUDIT(POINTER_FREE): this branch only stores a value
+        // proven unable to contain GC pointer bits.
+        ctx.block().store(DOUBLE, &stored_value, &field_ptr);
     }
+    // BLOCK HAZARD: `emit_jsvalue_slot_store_pointer_tested` takes `ctx` and
+    // SPLITS BLOCKS — on return `ctx.current_block` is its
+    // `put.pic.gc_bookkeeping.done`, not the `put.pic.hit` this arm started
+    // in. So both the branch to the merge and `hit_end_label` must be taken
+    // from `ctx.block()` AFTER the call. Capturing the label before it names a
+    // block that no longer branches to the merge, and the merge phi then
+    // declares an incoming value from a predecessor that cannot reach it —
+    // which is invalid IR, not a wrong answer, so it fails loudly. Do not
+    // hoist either line back above the `if`.
+    ctx.block().br(&merge_label);
     let hit_end_label = ctx.block().label.clone();
 
     ctx.current_block = miss_idx;
