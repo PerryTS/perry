@@ -1367,7 +1367,10 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     internal_method("perf_hooks", "getEntriesByType", false, None),
     internal_method("perf_hooks", "clearMarks", false, None),
     internal_method("perf_hooks", "clearMeasures", false, None),
-    internal_method("perf_hooks", "eventLoopUtilization", false, None),
+    // Also a top-level named export of the module, not just a `performance`
+    // method — `import { eventLoopUtilization } from "node:perf_hooks"` is
+    // valid in Node, and gating it out rejected the import at compile time.
+    method("perf_hooks", "eventLoopUtilization", false, None),
     internal_method("perf_hooks", "toJSON", false, None),
     internal_method("perf_hooks", "clearResourceTimings", false, None),
     internal_method("perf_hooks", "setResourceTimingBufferSize", false, None),
@@ -1375,12 +1378,13 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     internal_method("perf_hooks", "markResourceTiming", false, None),
     // timerify returns a wrapper that emits observer-visible function entries.
     method("perf_hooks", "timerify", false, None),
-    // #1336: monitorEventLoopDelay() / createHistogram() return a
-    // Histogram-shaped object whose method/property reads route
-    // through the internal `perf_histogram` namespace (not listed in
-    // NATIVE_MODULES because users never import it — they receive the
-    // object as a return value, same pattern as `perf_observer`).
-    // Stub — every stat reads 0 and the mutators are no-ops.
+    // monitorEventLoopDelay() / createHistogram() return a Histogram-shaped
+    // object whose method/property reads route through the internal
+    // `perf_histogram` namespace (not listed in NATIVE_MODULES because users
+    // never import it — they receive the object as a return value, same
+    // pattern as `perf_observer`). Backed by a real HDR histogram
+    // (`perry-runtime/src/perf_histogram.rs`); the ELD handle's enable/disable
+    // lifecycle is real but Perry does not sample loop delay into it.
     method("perf_hooks", "monitorEventLoopDelay", false, None),
     method("perf_hooks", "createHistogram", false, None),
     internal_property("perf_hooks", "timeOrigin"),

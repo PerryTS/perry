@@ -895,6 +895,7 @@ pub fn gc_init() {
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
+    reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(crate::typed_feedback::scan_typed_feedback_roots_mut);
     reg_scanner!(crate::typedarray_props::scan_typed_array_own_props_roots_mut);

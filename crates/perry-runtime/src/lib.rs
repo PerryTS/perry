@@ -132,6 +132,7 @@ pub use node_submodules::{
 pub mod object;
 pub mod os;
 pub mod path;
+pub mod perf_histogram;
 pub mod perf_hooks;
 pub mod pointer_event;
 pub mod process;

@@ -61,6 +61,12 @@ name: GC Root Dominance
 
 on:
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
   # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
   # `push: branches: [main]` starved this gate and nine others for two days
   # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
@@ -109,6 +115,8 @@ env:
 
 jobs:
   gc-root-dominance:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     runs-on: macos-14
     timeout-minutes: 90
     steps:
@@ -435,6 +443,8 @@ jobs:
   # first, then promote. Promotion is an admin action and is tracked separately
   # from the PR that adds this.
   gc-root-dominance-statepoints:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     runs-on: macos-14
     timeout-minutes: 90
     steps:

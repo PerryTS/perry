@@ -1,2275 +1,2281 @@
 {
- "_README": [
-  "Verdicts for every runtime GC-pointer holder that scripts/gc_runtime_root_holders.py",
-  "enumerates and finds NOT reached by a registered root scanner in its own file (#7231).",
-  "",
-  "An entry that matches no such holder FAILS the gate. That is deliberate: it is what",
-  "makes a fix delete its own entry, and it is why 'covered_elsewhere' is a verdict rather",
-  "than a suppression — if the scanner that covers it is ever deleted, the holder stays",
-  "uncovered, the entry stays matched, and nothing tells you. Read the named scanner if you",
-  "touch it.",
-  "",
-  "Verdicts:",
-  "  covered_elsewhere  - a REGISTERED scanner visits it, but from a different file, so the",
-  "                       same-file rule cannot see it. `scanner` names it. These are the",
-  "                       gate's known false positives, recorded rather than silenced.",
-  "  not_a_gc_pointer   - the stored value is an id, a counter, an epoch, a code address, a",
-  "                       .rodata object, or Rust-owned state. Nothing for the collector.",
-  "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
-  "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked; this",
-  "                       verdict FAILS while old-page relocation ships enabled.",
-  "  unverified         - enumerated, verdict NOT established. This also FAILS: an unknown",
-  "                       movable-address contract cannot be a production exemption."
- ],
- "holders": [
-  {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "name": "ASYNC_RESOURCE_HANDLES",
-   "verdict": "not_a_gc_pointer",
-   "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
-  },
-  {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "name": "ASYNC_RESOURCE_HANDLE_COUNT",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
-  },
-  {
-   "file": "crates/perry-runtime/src/child_process/reactor.rs",
-   "name": "CP_NEXT_LIVE_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/blob.rs",
-   "name": "FILE_BLOB_STREAMS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by stream id; FileBlobStreamState is Rust-owned (byte buffers + offsets), no JS values."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/blob.rs",
-   "name": "NEXT_FILE_BLOB_STREAM_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic id counter."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-   "name": "DIAG_CHANNELS",
-   "verdict": "covered_elsewhere",
-   "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1505)",
-   "why": "Visited from the sibling module, so the same-file rule misses it."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-   "name": "ERROR_USER_PROPS",
-   "verdict": "covered_elsewhere",
-   "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
-   "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-   "name": "DIAG_NOOP_CLOSURE",
-   "verdict": "covered_elsewhere",
-   "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1499)",
-   "why": "Visited from the sibling module."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_vm.rs",
-   "name": "VM_INTRINSIC_GLOBAL",
-   "verdict": "covered_elsewhere",
-   "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
-   "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell — fresh_intrinsic_global, node_vm.rs:1080 — calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-   "name": "CLASS_OBJECT_VALUES",
-   "verdict": "covered_elsewhere",
-   "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
-   "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
-  },
-  {
-   "file": "crates/perry-runtime/src/process.rs",
-   "name": "MODULE_LOADER_NEXT_RESOLVE",
-   "verdict": "covered_elsewhere",
-   "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
-   "why": "Declared in process.rs, scanned from the process/node_module.rs submodule."
-  },
-  {
-   "file": "crates/perry-runtime/src/process.rs",
-   "name": "MODULE_LOADER_NEXT_LOAD",
-   "verdict": "covered_elsewhere",
-   "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
-   "why": "Same scanner, same file split."
-  },
-  {
-   "file": "crates/perry-runtime/src/pty/mod.rs",
-   "name": "EXIT_SINK",
-   "verdict": "test_only",
-   "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
-  },
-  {
-   "file": "crates/perry-runtime/src/string/format.rs",
-   "name": "POW10",
-   "verdict": "not_a_gc_pointer",
-   "why": "A [u64; 7] constant table of powers of ten."
-  },
-  {
-   "file": "crates/perry-runtime/src/string/mod.rs",
-   "name": "PERRY_EMPTY_STRING",
-   "verdict": "not_a_gc_pointer",
-   "why": "A StringHeader living in .rodata, not in the arena. It has no GcHeader, is never allocated and never moves; the collector's heap-attribution predicates reject its address."
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol/properties.rs",
-   "name": "CACHED",
-   "verdict": "not_a_gc_pointer",
-   "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be — see #7246."
-  },
-  {
-   "file": "crates/perry-runtime/src/thread.rs",
-   "name": "ACTIVE_THREAD_JOBS",
-   "verdict": "not_a_gc_pointer",
-   "why": "In-flight job counter for perry/thread."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams.rs",
-   "name": "N",
-   "verdict": "not_a_gc_pointer",
-   "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "name": "TRANSFORM_CALLS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/native_module.rs",
-   "name": "TEST_BOUND_METHOD_MOVE",
-   "verdict": "test_only",
-   "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/alloc.rs",
-   "name": "CAPTURED_MISS_STREAK",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by the closure's func_ptr — a CODE address, which the collector neither moves nor traces; the value is a miss-streak count."
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/alloc.rs",
-   "name": "CLOSURE_ALLOC_COUNT",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic allocation counter (telemetry). Holds no address."
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/alloc.rs",
-   "name": "CLOSURE_CAP_SINGLETON_HIT",
-   "verdict": "not_a_gc_pointer",
-   "why": "Cache hit counter (telemetry). Holds no address."
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/alloc.rs",
-   "name": "CLOSURE_CAP_SINGLETON_MISS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Cache miss counter (telemetry). Holds no address."
-  },
-  {
-   "file": "crates/perry-runtime/src/fs/filehandle.rs",
-   "name": "NEXT_READ_LINES_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
-  },
-  {
-   "file": "crates/perry-runtime/src/net.rs",
-   "name": "TCP_SERVERS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by handle id; TcpListenerWrapper is Rust-owned (tokio listener + SocketAddr), no JS values."
-  },
-  {
-   "file": "crates/perry-runtime/src/net.rs",
-   "name": "TCP_SOCKETS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-   "name": "DIAG_TRACES",
-   "verdict": "covered_elsewhere",
-   "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1528, visit_raw_mut_ptr_slot on DiagTracingState.obj)",
-   "why": "Visited from the sibling module, so the same-file rule misses it. The `events: [i64; 5]` are DIAG_CHANNELS ids, not addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
-   "name": "DIAG_STORE_SCOPES",
-   "verdict": "not_a_gc_pointer",
-   "why": "DiagStoreScopeState.handles are store KEYS produced by store_handle() (diagnostics_tail.rs:72), which admits only an INT32-tagged value, a POINTER_TAG value inside the handle band (raw < 0x10000), or a finite float — a real heap pointer returns None, so one cannot be stored here by construction. The store CONTEXT objects live in DIAG_CHANNELS[*].stores, which scan_node_submodule_singleton_roots_mut visits."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
-   "name": "THREAD_GLOBAL_THIS",
-   "verdict": "covered_elsewhere",
-   "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_get_global_this) and marked+rewritten as a mutable global root",
-   "why": "A raw-pointer cache slot registered as a global root at first population; the registration is a call, not a scanner body, so the walk cannot see it."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
-   "name": "THREAD_MODULE_TOP_THIS",
-   "verdict": "covered_elsewhere",
-   "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_module_top_this)",
-   "why": "Same shape as THREAD_GLOBAL_THIS: a NaN-boxed cache slot registered as a mutable global root at first population."
-  },
-  {
-   "file": "crates/perry-runtime/src/regex.rs",
-   "name": "REGEX_POINTERS",
-   "verdict": "covered_elsewhere",
-   "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs), the RegExp move/death hooks the copying minor and sweep invoke",
-   "why": "Address-KEYED owner set, not a root: the key is rekeyed when the RegExpHeader moves and removed when it dies; it never keeps the header alive. Reached from GC hooks, not from a registered scanner, so the walk misses it."
-  },
-  {
-   "file": "crates/perry-runtime/src/regex.rs",
-   "name": "REGEX_SOURCE_TABLE",
-   "verdict": "covered_elsewhere",
-   "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs)",
-   "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
-  },
-  {
-   "file": "crates/perry-runtime/src/text.rs",
-   "name": "DECODER_REGISTRY",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
-   "name": "FORM_DATA_REGISTRY",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by fetch handle id; FormDataStore is Rust-owned (Vec<(String, String)>). The bound-method closures for FormData live in FORM_DATA_METHOD_VALUE_CACHE, which fetch::gc::scan_fetch_roots_with visits."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "name": "BLOB_REGISTRY",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by fetch handle id; BlobData is Rust-owned (bytes, content type, file name, last-modified). No JS values."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "name": "FETCH_RESPONSES",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by fetch handle id; FetchResponse is Rust-owned (status, HeadersStore, body bytes, cached HANDLE IDS for headers/body stream). No JS values."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "name": "REQUEST_REGISTRY",
-   "verdict": "covered_elsewhere",
-   "scanner": "fetch::gc::scan_fetch_roots_with (fetch/gc.rs, visit_nanbox_f64_slot on RequestRecord.signal), registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:fetch\"",
-   "why": "RequestRecord.signal is the AbortSignal object behind request.signal (#8163). Visited from the child module, so the same-file rule misses it; everything else in the record is Rust-owned."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "name": "STREAM_HANDLES",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by stream id; StreamState is Rust-owned (status, buffered lines, error String)."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch_blob.rs",
-   "name": "NEXT_OBJECT_URL_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic id counter."
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch_blob.rs",
-   "name": "OBJECT_URL_REGISTRY",
-   "verdict": "not_a_gc_pointer",
-   "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams.rs",
-   "name": "READABLE_STREAMS",
-   "verdict": "covered_elsewhere",
-   "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
-   "why": "Chunks, callbacks, pending-read promises and error values are all visited from the child module, so the same-file rule misses it."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "name": "TEE_PULLING",
-   "verdict": "not_a_gc_pointer",
-   "why": "HashSet of tee SOURCE stream ids (READABLE_STREAMS keys), not addresses."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "name": "TEE_STARTED",
-   "verdict": "not_a_gc_pointer",
-   "why": "HashSet of tee source stream ids, not addresses."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "name": "TRANSFORM_BACKPRESSURED_JOBS",
-   "verdict": "covered_elsewhere",
-   "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
-   "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "name": "TRANSFORM_PAIRS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Transform readable id -> writable id: both are stream HANDLE IDS."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "name": "TRANSFORM_PENDING_WRITES",
-   "verdict": "not_a_gc_pointer",
-   "why": "Transform writable id -> COUNT of queued write jobs (#6607). No address."
-  },
-  {
-   "file": "crates/perry-stdlib/src/worker_threads.rs",
-   "name": "NEXT_PORT_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic MessagePort id counter."
-  },
-  {
-   "file": "crates/perry-stdlib/src/ws.rs",
-   "name": "NEXT_WS_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic ws id counter."
-  },
-  {
-   "file": "crates/perry-stdlib/src/ws.rs",
-   "name": "WS_CLIENT_PARENT_SERVER",
-   "verdict": "not_a_gc_pointer",
-   "why": "Client ws id -> parent server HANDLE id. No address."
-  },
-  {
-   "file": "crates/perry-stdlib/src/ws.rs",
-   "name": "WS_CONNECTIONS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
-  },
-  {
-   "file": "crates/perry-ext-http/src/lib.rs",
-   "name": "HTTP_PENDING_EVENTS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) — no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
-  },
-  {
-   "file": "crates/perry-ext-http/src/server/server.rs",
-   "name": "CONNECTIONS",
-   "verdict": "not_a_gc_pointer",
-   "why": "TrackedConnection = {server_handle: ffi registry id, close: Notify, busy/read_active: atomics}. No JS values; server closures live in the HttpServer handle, scanned by scan_http_server_roots."
-  },
-  {
-   "file": "crates/perry-ext-http/src/server/server.rs",
-   "name": "PENDING_CONNECTION_EVENTS",
-   "verdict": "not_a_gc_pointer",
-   "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
-  },
-  {
-   "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
-   "name": "IN_FLIGHT",
-   "verdict": "not_a_gc_pointer",
-   "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
-  },
-  {
-   "file": "crates/perry-ext-net/src/lib.rs",
-   "name": "P",
-   "verdict": "not_a_gc_pointer",
-   "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) — no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
-  },
-  {
-   "file": "crates/perry-ext-net/src/lib.rs",
-   "name": "SCRATCH",
-   "verdict": "not_a_gc_pointer",
-   "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
-  },
-  {
-   "file": "crates/perry-ext-net/src/server_state.rs",
-   "name": "STATE",
-   "verdict": "not_a_gc_pointer",
-   "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
-  },
-  {
-   "file": "crates/perry-ext-pdf/src/lib.rs",
-   "name": "WARNED",
-   "verdict": "not_a_gc_pointer",
-   "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/process.rs",
-   "name": "PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER",
-   "verdict": "covered_elsewhere",
-   "scanner": "process::scan_process_finalization_roots_mut (process/finalization.rs:171; visits the cell at :184-189 via visit_raw_const_ptr_slot; reg_scanner! at gc/mod.rs:1008)",
-   "why": "Declared in process.rs, scanned from the process/finalization.rs submodule — same file split as the MODULE_LOADER_* siblings."
-  },
-  {
-   "file": "crates/perry-runtime/src/promise/microtasks.rs",
-   "name": "CURRENT_MICROTASK_VALUE",
-   "verdict": "covered_elsewhere",
-   "scanner": "promise::scan_promise_roots_mut (promise/scanners.rs:66, visit_cell_f64_slot) plus its budgeted step twin scan_current_microtask_value_step (scanners.rs:420); registered via reg_budgeted_scanner! at gc/mod.rs:833-838",
-   "why": "Declared in promise/microtasks.rs, scanned from promise/scanners.rs. The scanners.rs:786/913 sites are the mutator-side save/clear the scanner exists to protect, not the coverage mechanism."
-  },
-  {
-   "file": "crates/perry-runtime/src/set.rs",
-   "name": "SET_INDEX",
-   "verdict": "not_a_gc_pointer",
-   "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners — the same three-hook design as MAP_INDEX."
-  },
-  {
-   "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
-   "name": "NEXT_ID",
-   "verdict": "not_a_gc_pointer",
-   "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
-  },
-  {
-   "file": "crates/perry-ext-fetch/src/lib.rs",
-   "name": "REQUEST_HANDLES",
-   "verdict": "covered_elsewhere",
-   "scanner": "gc::scan_fetch_roots (crates/perry-ext-fetch/src/gc.rs), registered via perry_ffi::gc_register_mutable_root_scanner_named from gc::ensure_gc_scanner_registered, armed at store_request before the first insert",
-   "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
-  }
- ],
- "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates (see the census docstring, 'The frontier tier'). Each entry is a static/thread_local that CAN hold a NaN-boxed JS callback and that no registered scanner reaches. These are not verdicts: most of these tables really do park user closures (BUTTON_CALLBACKS et al) and registering per-crate scanners is the fix. The list may only shrink: a new UI holder fails lint until pinned deliberately, and a fixed (covered) holder fails until its entry is deleted. Covered frontier holders must NOT be pinned.",
- "frontier": [
-  {
-   "file": "crates/perry-ui-android/src/app.rs",
-   "name": "ON_ACTIVATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-android/src/app.rs",
-   "name": "ON_TERMINATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-android/src/app.rs",
-   "name": "PENDING_CONFIG"
-  },
-  {
-   "file": "crates/perry-ui-android/src/callback.rs",
-   "name": "CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/callback.rs",
-   "name": "NEXT_KEY"
-  },
-  {
-   "file": "crates/perry-ui-android/src/drag_drop.rs",
-   "name": "DRAG_KEYS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/menu.rs",
-   "name": "CONTEXT_MENUS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/menu.rs",
-   "name": "MENUS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/pointer.rs",
-   "name": "KEYS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/sheet.rs",
-   "name": "SHEETS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "ON_CHANGE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/system.rs",
-   "name": "NOTIFICATION_REMOTE_TOKEN_KEY"
-  },
-  {
-   "file": "crates/perry-ui-android/src/system.rs",
-   "name": "NOTIFICATION_TAP_KEY"
-  },
-  {
-   "file": "crates/perry-ui-android/src/toolbar.rs",
-   "name": "TOOLBARS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/bloomview.rs",
-   "name": "BLOOM_WINDOWS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/bottom_nav.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGE_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-   "name": "CANVAS_STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/image_gallery.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/lazyvstack.rs",
-   "name": "LAZY_STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/navstack.rs",
-   "name": "NAV_STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/picker.rs",
-   "name": "PICKER_STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/scrollview.rs",
-   "name": "REFRESH_LAYOUTS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/tabbar.rs",
-   "name": "TABBAR_STATE"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
-   "name": "TREE_NODES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
-   "name": "TREE_VIEWS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/webview.rs",
-   "name": "EVAL_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-android/src/window.rs",
-   "name": "WINDOWS"
-  },
-  {
-   "file": "crates/perry-ui-android/src/ws.rs",
-   "name": "PENDING_RESOLVES"
-  },
-  {
-   "file": "crates/perry-ui-geisterhand/src/chaos.rs",
-   "name": "EVENTS_FIRED"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "APPS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "ON_ACTIVATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "ON_TERMINATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "PENDING_SHORTCUTS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "SHORTCUT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/app.rs",
-   "name": "TIMER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/audio.rs",
-   "name": "AUDIO_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/camera.rs",
-   "name": "CAMERA_VIEWS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-   "name": "DRAG_FILE"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-   "name": "DRAG_TEXT"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-   "name": "DRAG_URL"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-   "name": "DROP_CB"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/ffi/platform_audio_camera_toast.rs",
-   "name": "RESIZE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-   "name": "CMD_RX"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-   "name": "CMD_TX"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/menu.rs",
-   "name": "MENUBARS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/menu.rs",
-   "name": "MENUS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/menu.rs",
-   "name": "MENU_ITEM_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "ON_CHANGE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/toolbar.rs",
-   "name": "TOOLBAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/tray.rs",
-   "name": "TRAYS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/bottom_nav.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/button.rs",
-   "name": "BUTTON_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-   "name": "CANVAS_COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-   "name": "CANVAS_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/chart.rs",
-   "name": "CHARTS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/command_palette.rs",
-   "name": "STATE"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/image_gallery.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/lazyvstack.rs",
-   "name": "LAZY_VSTACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/mod.rs",
-   "name": "BORDER_STATE"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/picker.rs",
-   "name": "PICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs",
-   "name": "BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/scrollview.rs",
-   "name": "SCROLL_END_STATES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/securefield.rs",
-   "name": "SECUREFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/slider.rs",
-   "name": "SLIDER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/text_registry.rs",
-   "name": "TEXT_REGISTRY"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/textarea.rs",
-   "name": "TEXTAREA_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
-   "name": "REGISTERED_ENTRIES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/toggle.rs",
-   "name": "TOGGLE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/tree_view.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-gtk4/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/app.rs",
-   "name": "PENDING_CONFIG"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/app.rs",
-   "name": "TIMER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/audio_playback.rs",
-   "name": "BUSES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/audio_playback.rs",
-   "name": "FADES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/audio_playback.rs",
-   "name": "SOUNDS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/audio_playback.rs",
-   "name": "VOICES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/background.rs",
-   "name": "HANDLERS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/background.rs",
-   "name": "REGISTERED_BLOCKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/camera.rs",
-   "name": "TAP_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/deeplinks.rs",
-   "name": "HANDLER"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/drag_drop.rs",
-   "name": "DRAG_FILE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/drag_drop.rs",
-   "name": "DRAG_TEXT"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/drag_drop.rs",
-   "name": "DRAG_URL"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/drag_drop.rs",
-   "name": "DROP_CB"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/geolocation.rs",
-   "name": "PENDING_ONE_SHOTS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/geolocation.rs",
-   "name": "PERMISSION_REQUESTS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/geolocation.rs",
-   "name": "WATCHES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/location.rs",
-   "name": "LOCATION_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/menu.rs",
-   "name": "ACTION_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/menu.rs",
-   "name": "MENUBARS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/menu.rs",
-   "name": "MENUS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/network.rs",
-   "name": "LISTENERS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/network.rs",
-   "name": "MONITOR_BLOCK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "NEXT_COMPLETION_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "ON_BACKGROUND_RECEIVE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "ON_REMOTE_RECEIVE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "ON_REMOTE_TOKEN_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "ON_TAP_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/notifications.rs",
-   "name": "PENDING_COMPLETIONS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/pointer.rs",
-   "name": "INSTALLED"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/pointer.rs",
-   "name": "MOUSE_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/pointer.rs",
-   "name": "MOUSE_MOVE_CB"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/pointer.rs",
-   "name": "MOUSE_UP_CB"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/pointer.rs",
-   "name": "RECOG_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "DEFERRED_REBUILDS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "ON_CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
-   "name": "DELEGATE_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/button.rs",
-   "name": "BUTTON_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/button.rs",
-   "name": "TAP_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/calendar.rs",
-   "name": "CALENDAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-   "name": "CANVAS_COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-   "name": "CANVAS_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/chart.rs",
-   "name": "CHARTS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/combobox.rs",
-   "name": "COMBOBOX_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/date_picker.rs",
-   "name": "DATEPICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
-   "name": "DELEGATE_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/mod.rs",
-   "name": "DOUBLE_CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/navstack.rs",
-   "name": "NAV_STACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/picker.rs",
-   "name": "PICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/picker.rs",
-   "name": "PICKER_SELECTED"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/rich_text.rs",
-   "name": "CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/rich_tooltip.rs",
-   "name": "BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-   "name": "REFRESH_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-   "name": "SCROLL_DELEGATE_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-   "name": "SCROLL_END_STATES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/securefield.rs",
-   "name": "SECUREFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/slider.rs",
-   "name": "SLIDER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
-   "name": "DELEGATE_MAP"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
-   "name": "TABBAR_STATE"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/textarea.rs",
-   "name": "TEXTAREA_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
-   "name": "SUBMIT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/toggle.rs",
-   "name": "TOGGLE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
-   "name": "TREES"
-  },
-  {
-   "file": "crates/perry-ui-ios/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "APPS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "ON_ACTIVATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "ON_TERMINATE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "PENDING_SHORTCUTS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "SHORTCUT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "TIMER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/app.rs",
-   "name": "WINDOW_FOCUS_LOST_CBS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/audio_playback.rs",
-   "name": "BUSES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/audio_playback.rs",
-   "name": "FADES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/audio_playback.rs",
-   "name": "SOUNDS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/audio_playback.rs",
-   "name": "VOICES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/background.rs",
-   "name": "HANDLERS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/background.rs",
-   "name": "REGISTERED_BLOCKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/deeplinks.rs",
-   "name": "HANDLER"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/drag_drop.rs",
-   "name": "DRAG_FILE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/drag_drop.rs",
-   "name": "DRAG_TEXT"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/drag_drop.rs",
-   "name": "DRAG_URL"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/drag_drop.rs",
-   "name": "DROP_CB"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/geolocation.rs",
-   "name": "PENDING_ONE_SHOTS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/geolocation.rs",
-   "name": "PERMISSION_REQUESTS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/geolocation.rs",
-   "name": "WATCHES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/location.rs",
-   "name": "LOCATION_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/menu.rs",
-   "name": "MENU_ITEM_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/network.rs",
-   "name": "LISTENERS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/network.rs",
-   "name": "MONITOR_BLOCK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/notifications.rs",
-   "name": "ON_REMOTE_RECEIVE_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/notifications.rs",
-   "name": "ON_REMOTE_TOKEN_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/notifications.rs",
-   "name": "ON_TAP_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/pointer.rs",
-   "name": "HOVER_CB"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/pointer.rs",
-   "name": "MOUSE_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/pointer.rs",
-   "name": "MOUSE_MOVE_CB"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/pointer.rs",
-   "name": "MOUSE_UP_CB"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/pointer.rs",
-   "name": "MOVE_DEDUP"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "ON_CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "TEXTFIELD_TO_BINDING"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/tray.rs",
-   "name": "TRAY_CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
-   "name": "BOTTOM_NAVS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
-   "name": "TARGET_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/button.rs",
-   "name": "BUTTON_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/calendar.rs",
-   "name": "CALENDAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-   "name": "CANVAS_COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-   "name": "CANVAS_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/chart.rs",
-   "name": "CHARTS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/combobox.rs",
-   "name": "COMBOBOX_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/command_palette.rs",
-   "name": "COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/date_picker.rs",
-   "name": "DATEPICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
-   "name": "GALLERIES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
-   "name": "OBSERVER_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-   "name": "LAZY_VSTACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-   "name": "SCROLL_END_OBSERVER_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-   "name": "SCROLL_END_STATES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-   "name": "BG_COLOR_MAP"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-   "name": "CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-   "name": "DOUBLE_CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-   "name": "HOVER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-   "name": "PARENT_MAP"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/navstack.rs",
-   "name": "NAV_STACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/picker.rs",
-   "name": "PICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/rich_text.rs",
-   "name": "CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/rich_tooltip.rs",
-   "name": "BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
-   "name": "SCROLL_END_OBSERVER_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
-   "name": "SCROLL_END_STATES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/securefield.rs",
-   "name": "SECUREFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/slider.rs",
-   "name": "SLIDER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/table.rs",
-   "name": "TABLES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/textarea.rs",
-   "name": "TEXTAREA_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_FOCUS_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_SUBMIT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/toggle.rs",
-   "name": "TOGGLE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
-   "name": "TOOLBARS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
-   "name": "TOOLBAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
-   "name": "TREES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-macos/src/widgets/zstack.rs",
-   "name": "ZSTACK_HANDLES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/app.rs",
-   "name": "PENDING_CONFIG"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/app.rs",
-   "name": "TIMER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-   "name": "BUSES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-   "name": "FADES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-   "name": "SOUNDS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-   "name": "VOICES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/background.rs",
-   "name": "HANDLERS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/background.rs",
-   "name": "REGISTERED_BLOCKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/location.rs",
-   "name": "LOCATION_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/menu.rs",
-   "name": "ACTION_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/menu.rs",
-   "name": "MENUBARS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/menu.rs",
-   "name": "MENUS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/pointer.rs",
-   "name": "INSTALLED"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/pointer.rs",
-   "name": "MOUSE_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/pointer.rs",
-   "name": "MOUSE_MOVE_CB"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/pointer.rs",
-   "name": "MOUSE_UP_CB"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/pointer.rs",
-   "name": "RECOG_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "ON_CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
-   "name": "DELEGATE_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/button.rs",
-   "name": "BUTTON_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/button.rs",
-   "name": "TAP_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-   "name": "CANVAS_COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-   "name": "CANVAS_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/mod.rs",
-   "name": "DOUBLE_CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/navstack.rs",
-   "name": "NAV_STACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/picker.rs",
-   "name": "PICKER_SELECTED"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/scrollview.rs",
-   "name": "REFRESH_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/securefield.rs",
-   "name": "SECUREFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/slider.rs",
-   "name": "SLIDER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
-   "name": "DELEGATE_MAP"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
-   "name": "TABBAR_STATE"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/textarea.rs",
-   "name": "TEXTAREA_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
-   "name": "SUBMIT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-tvos/src/widgets/toggle.rs",
-   "name": "TOGGLE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/app.rs",
-   "name": "PENDING_CONFIG"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/app.rs",
-   "name": "TIMER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-   "name": "BUSES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-   "name": "FADES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-   "name": "SOUNDS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-   "name": "VOICES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/background.rs",
-   "name": "HANDLERS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/background.rs",
-   "name": "REGISTERED_BLOCKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/camera.rs",
-   "name": "TAP_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-   "name": "DRAG_FILE"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-   "name": "DRAG_TEXT"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-   "name": "DRAG_URL"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-   "name": "DROP_CB"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/location.rs",
-   "name": "LOCATION_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/menu.rs",
-   "name": "ACTION_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/menu.rs",
-   "name": "MENUBARS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/menu.rs",
-   "name": "MENUS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/pointer.rs",
-   "name": "INSTALLED"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/pointer.rs",
-   "name": "MOUSE_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/pointer.rs",
-   "name": "MOUSE_MOVE_CB"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/pointer.rs",
-   "name": "MOUSE_UP_CB"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/pointer.rs",
-   "name": "RECOG_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "ON_CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
-   "name": "DELEGATE_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/button.rs",
-   "name": "BUTTON_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/button.rs",
-   "name": "TAP_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/calendar.rs",
-   "name": "CALENDAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-   "name": "CANVAS_COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-   "name": "CANVAS_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-   "name": "IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/chart.rs",
-   "name": "CHARTS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/combobox.rs",
-   "name": "COMBOBOX_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/date_picker.rs",
-   "name": "DATEPICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/mod.rs",
-   "name": "DOUBLE_CLICK_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/navstack.rs",
-   "name": "NAV_STACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/picker.rs",
-   "name": "PICKER_SELECTED"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/rich_text.rs",
-   "name": "CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/rich_tooltip.rs",
-   "name": "BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/scrollview.rs",
-   "name": "REFRESH_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/securefield.rs",
-   "name": "SECUREFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/slider.rs",
-   "name": "SLIDER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
-   "name": "DELEGATE_MAP"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
-   "name": "TABBAR_STATE"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/textarea.rs",
-   "name": "TEXTAREA_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
-   "name": "SUBMIT_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
-   "name": "TEXTFIELD_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
-   "name": "TREES"
-  },
-  {
-   "file": "crates/perry-ui-visionos/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-   "name": "BUSES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-   "name": "FADES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-   "name": "SOUNDS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-   "name": "VOICES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/background.rs",
-   "name": "HANDLERS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/notifications.rs",
-   "name": "ON_TAP_CALLBACK"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "ON_CHANGE_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/tree.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-watchos/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/app.rs",
-   "name": "APPS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/app.rs",
-   "name": "PENDING_SHORTCUTS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/drag_drop.rs",
-   "name": "DRAG_FILE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/drag_drop.rs",
-   "name": "DRAG_TEXT"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/drag_drop.rs",
-   "name": "DRAG_URL"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/drag_drop.rs",
-   "name": "DROP_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/media_playback.rs",
-   "name": "PLAYERS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/media_playback.rs",
-   "name": "Q"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/menu.rs",
-   "name": "CONTEXT_MENU_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/pointer.rs",
-   "name": "CLICK_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/pointer.rs",
-   "name": "HOVER_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/pointer.rs",
-   "name": "MOUSE_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/pointer.rs",
-   "name": "MOUSE_MOVE_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/pointer.rs",
-   "name": "MOUSE_UP_CB"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "FOR_EACH_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "MULTI_TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "SLIDER_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "STATES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "TEXTFIELD_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "TEXT_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "TOGGLE_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/state.rs",
-   "name": "VISIBILITY_BINDINGS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/toolbar.rs",
-   "name": "TOOLBARS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/tray.rs",
-   "name": "TRAYS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
-   "name": "ITEM_LOOKUP"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
-   "name": "NAVS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/button.rs",
-   "name": "BTN_HWND_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/button.rs",
-   "name": "BUTTON_CONTENT"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/calendar.rs",
-   "name": "CALENDAR_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-   "name": "CANVAS_CMDS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGE_CACHE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-   "name": "CANVAS_IMAGE_SIZES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-   "name": "CANVAS_LAST_FRAME"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/chart.rs",
-   "name": "CHARTS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/combobox.rs",
-   "name": "CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/command_palette.rs",
-   "name": "COMMANDS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/date_picker.rs",
-   "name": "DATEPICKER_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/image_gallery.rs",
-   "name": "GALLERIES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/lazyvstack.rs",
-   "name": "LAZYVSTACK_STATES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
-   "name": "MAPS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "BORDER_STATE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "BORDER_SUBCLASSED"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "CORNER_RADII"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "HWND_MAP"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "OPACITY_VALUES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "PARENT_SHADOW_REGISTRY"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "SHADOW_PARAMS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-   "name": "WIDGETS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/navstack.rs",
-   "name": "NAV_STACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/pdf_view.rs",
-   "name": "PDFS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/rich_text.rs",
-   "name": "CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/rich_tooltip.rs",
-   "name": "TOOLTIPS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
-   "name": "SCROLL_END_STATES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
-   "name": "SCROLL_STATES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/slider.rs",
-   "name": "SLIDER_INFO"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/table.rs",
-   "name": "TABLES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/text.rs",
-   "name": "DECORATION_VALUES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/text.rs",
-   "name": "HWND_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/text_registry.rs",
-   "name": "TEXT_IDS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
-   "name": "CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
-   "name": "NODES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/webview.rs",
-   "name": "HWND_TO_HANDLE"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/widgets/webview.rs",
-   "name": "WEBVIEW_STATES"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/window.rs",
-   "name": "FOCUS_LOST_CALLBACKS"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/window.rs",
-   "name": "HWND_TO_WINDOW"
-  },
-  {
-   "file": "crates/perry-ui-windows/src/window.rs",
-   "name": "WINDOW_ROOTS"
-  },
-  {
-   "file": "crates/perry-ui/src/key_dispatch.rs",
-   "name": "KEY_DOWN_CB"
-  },
-  {
-   "file": "crates/perry-ui/src/key_dispatch.rs",
-   "name": "KEY_UP_CB"
-  }
- ]
+  "_README": [
+    "Verdicts for every runtime GC-pointer holder that scripts/gc_runtime_root_holders.py",
+    "enumerates and finds NOT reached by a registered root scanner in its own file (#7231).",
+    "",
+    "An entry that matches no such holder FAILS the gate. That is deliberate: it is what",
+    "makes a fix delete its own entry, and it is why 'covered_elsewhere' is a verdict rather",
+    "than a suppression — if the scanner that covers it is ever deleted, the holder stays",
+    "uncovered, the entry stays matched, and nothing tells you. Read the named scanner if you",
+    "touch it.",
+    "",
+    "Verdicts:",
+    "  covered_elsewhere  - a REGISTERED scanner visits it, but from a different file, so the",
+    "                       same-file rule cannot see it. `scanner` names it. These are the",
+    "                       gate's known false positives, recorded rather than silenced.",
+    "  not_a_gc_pointer   - the stored value is an id, a counter, an epoch, a code address, a",
+    "                       .rodata object, or Rust-owned state. Nothing for the collector.",
+    "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
+    "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked; this",
+    "                       verdict FAILS while old-page relocation ships enabled.",
+    "  unverified         - enumerated, verdict NOT established. This also FAILS: an unknown",
+    "                       movable-address contract cannot be a production exemption."
+  ],
+  "holders": [
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLE_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/reactor.rs",
+      "name": "CP_NEXT_LIVE_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOB_STREAMS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by stream id; FileBlobStreamState is Rust-owned (byte buffers + offsets), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "NEXT_FILE_BLOB_STREAM_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_CHANNELS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1505)",
+      "why": "Visited from the sibling module, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "ERROR_USER_PROPS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
+      "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_NOOP_CLOSURE",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1499)",
+      "why": "Visited from the sibling module."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_vm.rs",
+      "name": "VM_INTRINSIC_GLOBAL",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
+      "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell — fresh_intrinsic_global, node_vm.rs:1080 — calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_OBJECT_VALUES",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
+      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_RESOLVE",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Declared in process.rs, scanned from the process/node_module.rs submodule."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_LOAD",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Same scanner, same file split."
+    },
+    {
+      "file": "crates/perry-runtime/src/pty/mod.rs",
+      "name": "EXIT_SINK",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/format.rs",
+      "name": "POW10",
+      "verdict": "not_a_gc_pointer",
+      "why": "A [u64; 7] constant table of powers of ten."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/mod.rs",
+      "name": "PERRY_EMPTY_STRING",
+      "verdict": "not_a_gc_pointer",
+      "why": "A StringHeader living in .rodata, not in the arena. It has no GcHeader, is never allocated and never moves; the collector's heap-attribution predicates reject its address."
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol/properties.rs",
+      "name": "CACHED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be — see #7246."
+    },
+    {
+      "file": "crates/perry-runtime/src/thread.rs",
+      "name": "ACTIVE_THREAD_JOBS",
+      "verdict": "not_a_gc_pointer",
+      "why": "In-flight job counter for perry/thread."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams.rs",
+      "name": "N",
+      "verdict": "not_a_gc_pointer",
+      "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_CALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "TEST_BOUND_METHOD_MOVE",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CAPTURED_MISS_STREAK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by the closure's func_ptr — a CODE address, which the collector neither moves nor traces; the value is a miss-streak count."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_ALLOC_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic allocation counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_CAP_SINGLETON_HIT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cache hit counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_CAP_SINGLETON_MISS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cache miss counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/filehandle.rs",
+      "name": "NEXT_READ_LINES_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/net.rs",
+      "name": "TCP_SERVERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by handle id; TcpListenerWrapper is Rust-owned (tokio listener + SocketAddr), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/net.rs",
+      "name": "TCP_SOCKETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_TRACES",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1528, visit_raw_mut_ptr_slot on DiagTracingState.obj)",
+      "why": "Visited from the sibling module, so the same-file rule misses it. The `events: [i64; 5]` are DIAG_CHANNELS ids, not addresses."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
+      "name": "DIAG_STORE_SCOPES",
+      "verdict": "not_a_gc_pointer",
+      "why": "DiagStoreScopeState.handles are store KEYS produced by store_handle() (diagnostics_tail.rs:72), which admits only an INT32-tagged value, a POINTER_TAG value inside the handle band (raw < 0x10000), or a finite float — a real heap pointer returns None, so one cannot be stored here by construction. The store CONTEXT objects live in DIAG_CHANNELS[*].stores, which scan_node_submodule_singleton_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "THREAD_GLOBAL_THIS",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_get_global_this) and marked+rewritten as a mutable global root",
+      "why": "A raw-pointer cache slot registered as a global root at first population; the registration is a call, not a scanner body, so the walk cannot see it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "THREAD_MODULE_TOP_THIS",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_module_top_this)",
+      "why": "Same shape as THREAD_GLOBAL_THIS: a NaN-boxed cache slot registered as a mutable global root at first population."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REGEX_POINTERS",
+      "verdict": "covered_elsewhere",
+      "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs), the RegExp move/death hooks the copying minor and sweep invoke",
+      "why": "Address-KEYED owner set, not a root: the key is rekeyed when the RegExpHeader moves and removed when it dies; it never keeps the header alive. Reached from GC hooks, not from a registered scanner, so the walk misses it."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REGEX_SOURCE_TABLE",
+      "verdict": "covered_elsewhere",
+      "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs)",
+      "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
+    },
+    {
+      "file": "crates/perry-runtime/src/text.rs",
+      "name": "DECODER_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
+      "name": "FORM_DATA_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; FormDataStore is Rust-owned (Vec<(String, String)>). The bound-method closures for FormData live in FORM_DATA_METHOD_VALUE_CACHE, which fetch::gc::scan_fetch_roots_with visits."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "BLOB_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; BlobData is Rust-owned (bytes, content type, file name, last-modified). No JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "FETCH_RESPONSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; FetchResponse is Rust-owned (status, HeadersStore, body bytes, cached HANDLE IDS for headers/body stream). No JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "REQUEST_REGISTRY",
+      "verdict": "covered_elsewhere",
+      "scanner": "fetch::gc::scan_fetch_roots_with (fetch/gc.rs, visit_nanbox_f64_slot on RequestRecord.signal), registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:fetch\"",
+      "why": "RequestRecord.signal is the AbortSignal object behind request.signal (#8163). Visited from the child module, so the same-file rule misses it; everything else in the record is Rust-owned."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "STREAM_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by stream id; StreamState is Rust-owned (status, buffered lines, error String)."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch_blob.rs",
+      "name": "NEXT_OBJECT_URL_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch_blob.rs",
+      "name": "OBJECT_URL_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams.rs",
+      "name": "READABLE_STREAMS",
+      "verdict": "covered_elsewhere",
+      "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
+      "why": "Chunks, callbacks, pending-read promises and error values are all visited from the child module, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/tee.rs",
+      "name": "TEE_PULLING",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of tee SOURCE stream ids (READABLE_STREAMS keys), not addresses."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/tee.rs",
+      "name": "TEE_STARTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of tee source stream ids, not addresses."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_BACKPRESSURED_JOBS",
+      "verdict": "covered_elsewhere",
+      "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
+      "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_PAIRS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Transform readable id -> writable id: both are stream HANDLE IDS."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_PENDING_WRITES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Transform writable id -> COUNT of queued write jobs (#6607). No address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "NEXT_PORT_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic MessagePort id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "NEXT_WS_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic ws id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "WS_CLIENT_PARENT_SERVER",
+      "verdict": "not_a_gc_pointer",
+      "why": "Client ws id -> parent server HANDLE id. No address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "WS_CONNECTIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-ext-http/src/lib.rs",
+      "name": "HTTP_PENDING_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) — no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server.rs",
+      "name": "CONNECTIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TrackedConnection = {server_handle: ffi registry id, close: Notify, busy/read_active: atomics}. No JS values; server closures live in the HttpServer handle, scanned by scan_http_server_roots."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server.rs",
+      "name": "PENDING_CONNECTION_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
+      "name": "IN_FLIGHT",
+      "verdict": "not_a_gc_pointer",
+      "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
+    },
+    {
+      "file": "crates/perry-ext-net/src/lib.rs",
+      "name": "P",
+      "verdict": "not_a_gc_pointer",
+      "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) — no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
+    },
+    {
+      "file": "crates/perry-ext-net/src/lib.rs",
+      "name": "SCRATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
+    },
+    {
+      "file": "crates/perry-ext-net/src/server_state.rs",
+      "name": "STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
+    },
+    {
+      "file": "crates/perry-ext-pdf/src/lib.rs",
+      "name": "WARNED",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_finalization_roots_mut (process/finalization.rs:171; visits the cell at :184-189 via visit_raw_const_ptr_slot; reg_scanner! at gc/mod.rs:1008)",
+      "why": "Declared in process.rs, scanned from the process/finalization.rs submodule — same file split as the MODULE_LOADER_* siblings."
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "CURRENT_MICROTASK_VALUE",
+      "verdict": "covered_elsewhere",
+      "scanner": "promise::scan_promise_roots_mut (promise/scanners.rs:66, visit_cell_f64_slot) plus its budgeted step twin scan_current_microtask_value_step (scanners.rs:420); registered via reg_budgeted_scanner! at gc/mod.rs:833-838",
+      "why": "Declared in promise/microtasks.rs, scanned from promise/scanners.rs. The scanners.rs:786/913 sites are the mutator-side save/clear the scanner exists to protect, not the coverage mechanism."
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_INDEX",
+      "verdict": "not_a_gc_pointer",
+      "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners — the same three-hook design as MAP_INDEX."
+    },
+    {
+      "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
+      "name": "NEXT_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
+    },
+    {
+      "file": "crates/perry-ext-fetch/src/lib.rs",
+      "name": "REQUEST_HANDLES",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::scan_fetch_roots (crates/perry-ext-fetch/src/gc.rs), registered via perry_ffi::gc_register_mutable_root_scanner_named from gc::ensure_gc_scanner_registered, armed at store_request before the first insert",
+      "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks.rs",
+      "name": "LOOP_START_MS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A timeOrigin-relative millisecond timestamp (or the -1 'loop has not started' sentinel) reported as nodeTiming.loopStart, and the gate eventLoopUtilization() reads before reporting anything but zeros. An f64 time value, never an address."
+    }
+  ],
+  "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates (see the census docstring, 'The frontier tier'). Each entry is a static/thread_local that CAN hold a NaN-boxed JS callback and that no registered scanner reaches. These are not verdicts: most of these tables really do park user closures (BUTTON_CALLBACKS et al) and registering per-crate scanners is the fix. The list may only shrink: a new UI holder fails lint until pinned deliberately, and a fixed (covered) holder fails until its entry is deleted. Covered frontier holders must NOT be pinned.",
+  "frontier": [
+    {
+      "file": "crates/perry-ui-android/src/app.rs",
+      "name": "ON_ACTIVATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-android/src/app.rs",
+      "name": "ON_TERMINATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-android/src/app.rs",
+      "name": "PENDING_CONFIG"
+    },
+    {
+      "file": "crates/perry-ui-android/src/callback.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/callback.rs",
+      "name": "NEXT_KEY"
+    },
+    {
+      "file": "crates/perry-ui-android/src/drag_drop.rs",
+      "name": "DRAG_KEYS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/menu.rs",
+      "name": "CONTEXT_MENUS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/menu.rs",
+      "name": "MENUS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/pointer.rs",
+      "name": "KEYS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/sheet.rs",
+      "name": "SHEETS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "ON_CHANGE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/system.rs",
+      "name": "NOTIFICATION_REMOTE_TOKEN_KEY"
+    },
+    {
+      "file": "crates/perry-ui-android/src/system.rs",
+      "name": "NOTIFICATION_TAP_KEY"
+    },
+    {
+      "file": "crates/perry-ui-android/src/toolbar.rs",
+      "name": "TOOLBARS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/bloomview.rs",
+      "name": "BLOOM_WINDOWS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/bottom_nav.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "CANVAS_STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/image_gallery.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/lazyvstack.rs",
+      "name": "LAZY_STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/navstack.rs",
+      "name": "NAV_STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/picker.rs",
+      "name": "PICKER_STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/scrollview.rs",
+      "name": "REFRESH_LAYOUTS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tabbar.rs",
+      "name": "TABBAR_STATE"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
+      "name": "TREE_NODES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
+      "name": "TREE_VIEWS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/webview.rs",
+      "name": "EVAL_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-android/src/window.rs",
+      "name": "WINDOWS"
+    },
+    {
+      "file": "crates/perry-ui-android/src/ws.rs",
+      "name": "PENDING_RESOLVES"
+    },
+    {
+      "file": "crates/perry-ui-geisterhand/src/chaos.rs",
+      "name": "EVENTS_FIRED"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "APPS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "ON_ACTIVATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "ON_TERMINATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "PENDING_SHORTCUTS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "SHORTCUT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "TIMER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/audio.rs",
+      "name": "AUDIO_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/camera.rs",
+      "name": "CAMERA_VIEWS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
+      "name": "DRAG_FILE"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
+      "name": "DRAG_TEXT"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
+      "name": "DRAG_URL"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
+      "name": "DROP_CB"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/ffi/platform_audio_camera_toast.rs",
+      "name": "RESIZE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
+      "name": "CMD_RX"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
+      "name": "CMD_TX"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/menu.rs",
+      "name": "MENUBARS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/menu.rs",
+      "name": "MENUS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/menu.rs",
+      "name": "MENU_ITEM_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "ON_CHANGE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/toolbar.rs",
+      "name": "TOOLBAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/tray.rs",
+      "name": "TRAYS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/bottom_nav.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/button.rs",
+      "name": "BUTTON_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/chart.rs",
+      "name": "CHARTS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/command_palette.rs",
+      "name": "STATE"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/image_gallery.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/lazyvstack.rs",
+      "name": "LAZY_VSTACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/mod.rs",
+      "name": "BORDER_STATE"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/picker.rs",
+      "name": "PICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_STATES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/securefield.rs",
+      "name": "SECUREFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/slider.rs",
+      "name": "SLIDER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/text_registry.rs",
+      "name": "TEXT_REGISTRY"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/textarea.rs",
+      "name": "TEXTAREA_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
+      "name": "REGISTERED_ENTRIES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/toggle.rs",
+      "name": "TOGGLE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/tree_view.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/app.rs",
+      "name": "PENDING_CONFIG"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/app.rs",
+      "name": "TIMER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "BUSES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "FADES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "SOUNDS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "VOICES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/background.rs",
+      "name": "HANDLERS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/background.rs",
+      "name": "REGISTERED_BLOCKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/camera.rs",
+      "name": "TAP_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/deeplinks.rs",
+      "name": "HANDLER"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/drag_drop.rs",
+      "name": "DRAG_FILE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/drag_drop.rs",
+      "name": "DRAG_TEXT"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/drag_drop.rs",
+      "name": "DRAG_URL"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/drag_drop.rs",
+      "name": "DROP_CB"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/geolocation.rs",
+      "name": "PENDING_ONE_SHOTS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/geolocation.rs",
+      "name": "PERMISSION_REQUESTS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/geolocation.rs",
+      "name": "WATCHES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/location.rs",
+      "name": "LOCATION_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/menu.rs",
+      "name": "ACTION_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/menu.rs",
+      "name": "MENUBARS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/menu.rs",
+      "name": "MENUS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/network.rs",
+      "name": "LISTENERS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/network.rs",
+      "name": "MONITOR_BLOCK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "NEXT_COMPLETION_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "ON_BACKGROUND_RECEIVE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "ON_REMOTE_RECEIVE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "ON_REMOTE_TOKEN_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "ON_TAP_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "PENDING_COMPLETIONS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "INSTALLED"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "MOUSE_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "MOUSE_MOVE_CB"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "MOUSE_UP_CB"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "DEFERRED_REBUILDS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "ON_CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/button.rs",
+      "name": "BUTTON_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/button.rs",
+      "name": "TAP_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/calendar.rs",
+      "name": "CALENDAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/chart.rs",
+      "name": "CHARTS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/combobox.rs",
+      "name": "COMBOBOX_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/date_picker.rs",
+      "name": "DATEPICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
+      "name": "DELEGATE_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/mod.rs",
+      "name": "DOUBLE_CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/navstack.rs",
+      "name": "NAV_STACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/picker.rs",
+      "name": "PICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/rich_text.rs",
+      "name": "CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
+      "name": "REFRESH_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
+      "name": "SCROLL_DELEGATE_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_STATES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/securefield.rs",
+      "name": "SECUREFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/slider.rs",
+      "name": "SLIDER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
+      "name": "TABBAR_STATE"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/textarea.rs",
+      "name": "TEXTAREA_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
+      "name": "SUBMIT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/toggle.rs",
+      "name": "TOGGLE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
+      "name": "TREES"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "APPS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "ON_ACTIVATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "ON_TERMINATE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "PENDING_SHORTCUTS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "SHORTCUT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "TIMER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "WINDOW_FOCUS_LOST_CBS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "BUSES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "FADES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "SOUNDS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "VOICES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/background.rs",
+      "name": "HANDLERS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/background.rs",
+      "name": "REGISTERED_BLOCKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/deeplinks.rs",
+      "name": "HANDLER"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/drag_drop.rs",
+      "name": "DRAG_FILE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/drag_drop.rs",
+      "name": "DRAG_TEXT"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/drag_drop.rs",
+      "name": "DRAG_URL"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/drag_drop.rs",
+      "name": "DROP_CB"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/geolocation.rs",
+      "name": "PENDING_ONE_SHOTS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/geolocation.rs",
+      "name": "PERMISSION_REQUESTS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/geolocation.rs",
+      "name": "WATCHES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/location.rs",
+      "name": "LOCATION_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/menu.rs",
+      "name": "MENU_ITEM_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/network.rs",
+      "name": "LISTENERS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/network.rs",
+      "name": "MONITOR_BLOCK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/notifications.rs",
+      "name": "ON_REMOTE_RECEIVE_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/notifications.rs",
+      "name": "ON_REMOTE_TOKEN_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/notifications.rs",
+      "name": "ON_TAP_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "HOVER_CB"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "MOUSE_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "MOUSE_MOVE_CB"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "MOUSE_UP_CB"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "MOVE_DEDUP"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "ON_CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXTFIELD_TO_BINDING"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/tray.rs",
+      "name": "TRAY_CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
+      "name": "BOTTOM_NAVS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
+      "name": "TARGET_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/button.rs",
+      "name": "BUTTON_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/calendar.rs",
+      "name": "CALENDAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/chart.rs",
+      "name": "CHARTS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/combobox.rs",
+      "name": "COMBOBOX_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/command_palette.rs",
+      "name": "COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/date_picker.rs",
+      "name": "DATEPICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
+      "name": "GALLERIES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
+      "name": "OBSERVER_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
+      "name": "LAZY_VSTACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
+      "name": "SCROLL_END_OBSERVER_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
+      "name": "SCROLL_END_STATES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "BG_COLOR_MAP"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "DOUBLE_CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "HOVER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "PARENT_MAP"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/picker.rs",
+      "name": "PICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/rich_text.rs",
+      "name": "CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_OBSERVER_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_STATES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/securefield.rs",
+      "name": "SECUREFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/slider.rs",
+      "name": "SLIDER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/table.rs",
+      "name": "TABLES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/textarea.rs",
+      "name": "TEXTAREA_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_FOCUS_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_SUBMIT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/toggle.rs",
+      "name": "TOGGLE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
+      "name": "TOOLBARS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
+      "name": "TOOLBAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
+      "name": "TREES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/zstack.rs",
+      "name": "ZSTACK_HANDLES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/app.rs",
+      "name": "PENDING_CONFIG"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/app.rs",
+      "name": "TIMER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "BUSES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "FADES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "SOUNDS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "VOICES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/background.rs",
+      "name": "HANDLERS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/background.rs",
+      "name": "REGISTERED_BLOCKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/location.rs",
+      "name": "LOCATION_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/menu.rs",
+      "name": "ACTION_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/menu.rs",
+      "name": "MENUBARS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/menu.rs",
+      "name": "MENUS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "INSTALLED"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "MOUSE_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "MOUSE_MOVE_CB"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "MOUSE_UP_CB"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "ON_CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/button.rs",
+      "name": "BUTTON_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/button.rs",
+      "name": "TAP_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/mod.rs",
+      "name": "DOUBLE_CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/scrollview.rs",
+      "name": "REFRESH_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/securefield.rs",
+      "name": "SECUREFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/slider.rs",
+      "name": "SLIDER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
+      "name": "TABBAR_STATE"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/textarea.rs",
+      "name": "TEXTAREA_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
+      "name": "SUBMIT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/toggle.rs",
+      "name": "TOGGLE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/app.rs",
+      "name": "PENDING_CONFIG"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/app.rs",
+      "name": "TIMER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "BUSES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "FADES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "SOUNDS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "VOICES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/background.rs",
+      "name": "HANDLERS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/background.rs",
+      "name": "REGISTERED_BLOCKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/camera.rs",
+      "name": "TAP_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
+      "name": "DRAG_FILE"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
+      "name": "DRAG_TEXT"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
+      "name": "DRAG_URL"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
+      "name": "DROP_CB"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/location.rs",
+      "name": "LOCATION_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/menu.rs",
+      "name": "ACTION_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/menu.rs",
+      "name": "MENUBARS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/menu.rs",
+      "name": "MENUS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "INSTALLED"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "MOUSE_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "MOUSE_MOVE_CB"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "MOUSE_UP_CB"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "ON_CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/button.rs",
+      "name": "BUTTON_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/button.rs",
+      "name": "TAP_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/calendar.rs",
+      "name": "CALENDAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/chart.rs",
+      "name": "CHARTS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/combobox.rs",
+      "name": "COMBOBOX_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/date_picker.rs",
+      "name": "DATEPICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/mod.rs",
+      "name": "DOUBLE_CLICK_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/rich_text.rs",
+      "name": "CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/scrollview.rs",
+      "name": "REFRESH_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/securefield.rs",
+      "name": "SECUREFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/slider.rs",
+      "name": "SLIDER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
+      "name": "TABBAR_STATE"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/textarea.rs",
+      "name": "TEXTAREA_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
+      "name": "SUBMIT_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
+      "name": "TEXTFIELD_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
+      "name": "TREES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "BUSES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "FADES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "SOUNDS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "VOICES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/background.rs",
+      "name": "HANDLERS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/notifications.rs",
+      "name": "ON_TAP_CALLBACK"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "ON_CHANGE_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/tree.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/app.rs",
+      "name": "APPS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/app.rs",
+      "name": "PENDING_SHORTCUTS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/drag_drop.rs",
+      "name": "DRAG_FILE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/drag_drop.rs",
+      "name": "DRAG_TEXT"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/drag_drop.rs",
+      "name": "DRAG_URL"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/drag_drop.rs",
+      "name": "DROP_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/media_playback.rs",
+      "name": "PLAYERS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/media_playback.rs",
+      "name": "Q"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/menu.rs",
+      "name": "CONTEXT_MENU_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/pointer.rs",
+      "name": "CLICK_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/pointer.rs",
+      "name": "HOVER_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/pointer.rs",
+      "name": "MOUSE_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/pointer.rs",
+      "name": "MOUSE_MOVE_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/pointer.rs",
+      "name": "MOUSE_UP_CB"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "FOR_EACH_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "SLIDER_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "STATES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TEXT_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TOGGLE_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "VISIBILITY_BINDINGS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/toolbar.rs",
+      "name": "TOOLBARS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/tray.rs",
+      "name": "TRAYS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
+      "name": "ITEM_LOOKUP"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
+      "name": "NAVS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/button.rs",
+      "name": "BTN_HWND_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/button.rs",
+      "name": "BUTTON_CONTENT"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/calendar.rs",
+      "name": "CALENDAR_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_CMDS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_CACHE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_SIZES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/chart.rs",
+      "name": "CHARTS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/combobox.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/command_palette.rs",
+      "name": "COMMANDS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/date_picker.rs",
+      "name": "DATEPICKER_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/image_gallery.rs",
+      "name": "GALLERIES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/lazyvstack.rs",
+      "name": "LAZYVSTACK_STATES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
+      "name": "MAPS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "BORDER_STATE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "BORDER_SUBCLASSED"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "CORNER_RADII"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "HWND_MAP"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "OPACITY_VALUES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "PARENT_SHADOW_REGISTRY"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "SHADOW_PARAMS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "WIDGETS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/navstack.rs",
+      "name": "NAV_STACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/pdf_view.rs",
+      "name": "PDFS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/rich_text.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/rich_tooltip.rs",
+      "name": "TOOLTIPS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_STATES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
+      "name": "SCROLL_STATES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/slider.rs",
+      "name": "SLIDER_INFO"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/table.rs",
+      "name": "TABLES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text.rs",
+      "name": "DECORATION_VALUES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text.rs",
+      "name": "HWND_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
+      "name": "NODES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/webview.rs",
+      "name": "HWND_TO_HANDLE"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/webview.rs",
+      "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/window.rs",
+      "name": "FOCUS_LOST_CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/window.rs",
+      "name": "HWND_TO_WINDOW"
+    },
+    {
+      "file": "crates/perry-ui-windows/src/window.rs",
+      "name": "WINDOW_ROOTS"
+    },
+    {
+      "file": "crates/perry-ui/src/key_dispatch.rs",
+      "name": "KEY_DOWN_CB"
+    },
+    {
+      "file": "crates/perry-ui/src/key_dispatch.rs",
+      "name": "KEY_UP_CB"
+    }
+  ]
 }

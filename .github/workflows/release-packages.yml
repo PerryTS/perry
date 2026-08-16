@@ -161,9 +161,19 @@ jobs:
             # nightly. The /release skill dispatches cut_release runs on a
             # pinned release/vX.Y.Z branch for exactly that reason.
             for wf_file in "test.yml" "simctl-tests.yml"; do
-              count=$(gh api \
-                "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=1" \
-                --jq '.total_count')
+              # test.yml: only a FULL-tier run counts (see the poll below), so
+              # look for one of those rather than any run on the SHA -- a
+              # push-to-main sweep on the same commit must not suppress the
+              # dispatch.
+              if [ "$wf_file" = "test.yml" ]; then
+                count=$(gh api \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=20" \
+                  --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "schedule" or .event == "push" and (.head_branch | startswith("v")))] | length')
+              else
+                count=$(gh api \
+                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$SHA&per_page=1" \
+                  --jq '.total_count')
+              fi
               if [ "$count" = "0" ]; then
                 # workflow_dispatch runs on the ref TIP — if the ref moved past
                 # our SHA, a dispatched run would test the wrong commit and the
@@ -174,7 +184,13 @@ jobs:
                   exit 1
                 fi
                 echo "No $wf_file run on $SHA yet — dispatching on $REF_NAME."
-                gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO"
+                if [ "$wf_file" = "test.yml" ]; then
+                  # The tiered CI workflow: `tier=full` is its dispatch default,
+                  # but say so explicitly -- this is the release gate.
+                  gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO" -f tier=full
+                else
+                  gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO"
+                fi
               fi
             done
           fi
@@ -231,6 +247,24 @@ jobs:
               retry_on_error=1
               # Look for ANY successful run on this SHA (order-independent).
               success_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .html_url' | head -1)
+              # test.yml is tiered (scripts/ci_plan.py): a push-to-main SWEEP
+              # or a PR-tier run on this SHA is green too, but only a FULL-tier
+              # run carries the release-grade suites (parity, compile-smoke,
+              # doc-tests, ...). Its fan-in job is NAMED `full-suite-gate` for
+              # exactly this check: keep only successful runs that have it.
+              if [ "$wf_file" = "test.yml" ] && [ -n "$success_url" ]; then
+                success_url=""
+                for run_id in $(echo "$api_out" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id'); do
+                  if gh api "/repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+                       --jq '.jobs[] | select(.name == "full-suite-gate" and .conclusion == "success") | .name' 2>/dev/null | grep -q full-suite-gate; then
+                    success_url="https://github.com/$REPO/actions/runs/$run_id"
+                    break
+                  fi
+                done
+                if [ -z "$success_url" ]; then
+                  echo "  test.yml has green run(s) on $SHA but none is a full-tier run (no successful full-suite-gate job) — waiting for the dispatched one"
+                fi
+              fi
               # Look for any failed/cancelled/timed-out completed run as a
               # FAIL signal — but only if there's NO successful run for
               # this SHA. This way a flaky run that someone reran to green

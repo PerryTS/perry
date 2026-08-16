@@ -373,3 +373,118 @@ fn no_allocation_is_taken_off_a_live_registry_borrow() {
         "the forbidden-pattern list no longer matches the shape it exists to catch"
     );
 }
+
+/// Return the `{ … }` body of `fn <name>` in `text`, brace-matched.
+fn fetch_fn_body<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let start = text.find(&format!("fn {name}("))?;
+    let open = start + text[start..].find('{')?;
+    let mut depth = 0usize;
+    for (offset, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[open..open + offset + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// #8163/#8217: the `Headers` / `FormData` iteration surfaces were the last
+/// unrooted holders behind the production App Route's lost responses, and the
+/// holder is a **native Rust frame slot** — the shape no existing instrument can
+/// see. `scripts/gc_runtime_root_holders.py` audits `static`/`thread_local!`
+/// declarations; `scripts/gc_root_dominance_check.py` reads emitted LLVM IR from
+/// compiled JS; `scripts/raw_handle_debt.py` counts bare reads out of handles
+/// that already exist, and only inside `perry-runtime`. A raw `*const
+/// ClosureHeader` hoisted out of a NaN-box into a Rust local, then reused after
+/// `js_string_from_bytes` and after user JS, is invisible to all three.
+///
+/// The failure mode is a *stale* pointer, not a crash, so a unit test that
+/// reproduced it would have to land a collection inside a specific loop
+/// iteration. The shape is syntactic instead, so scan for it: each pre-fix
+/// idiom below binds a heap address that a later allocation in the same function
+/// can move, and each post-fix entry point opens a `RuntimeHandleScope` and
+/// re-reads through it.
+#[test]
+fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("fetch/headers.rs", include_str!("headers.rs")),
+        ("fetch/body_metadata.rs", include_str!("body_metadata.rs")),
+    ];
+    // Verbatim pre-fix bindings. `let mut arr = …; arr = push(arr, …)` handled the
+    // array GROWING; it never handled the collector MOVING it.
+    const FORBIDDEN: &[&str] = &[
+        "let closure = cb_ptr as *const",
+        "let mut arr = perry_runtime::js_array_alloc(",
+        "let mut pair = perry_runtime::js_array_alloc(",
+    ];
+    let mut offenders = Vec::new();
+    for (name, text) in SOURCES {
+        for (lineno, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or(line);
+            for pattern in FORBIDDEN {
+                if code.contains(pattern) {
+                    offenders.push(format!("{name}:{}: {}", lineno + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a raw heap address is bound across an allocation point (#8163/#8217 — root it \
+         in a `RuntimeHandleScope` and re-read it after every call that can \
+         collect):\n  {}",
+        offenders.join("\n  ")
+    );
+
+    // The negative list alone is satisfiable by renaming a binding, so require the
+    // root positively: every iteration entry point must open a scope.
+    const MUST_OPEN_A_SCOPE: &[(&str, &str)] = &[
+        ("fetch/headers.rs", "js_headers_for_each"),
+        ("fetch/headers.rs", "js_headers_keys"),
+        ("fetch/headers.rs", "js_headers_values"),
+        ("fetch/headers.rs", "js_headers_entries"),
+        ("fetch/headers.rs", "js_headers_get_set_cookie"),
+        ("fetch/body_metadata.rs", "js_form_data_for_each"),
+        ("fetch/body_metadata.rs", "js_form_data_entries"),
+        // Backs `js_form_data_keys` / `js_form_data_values`.
+        ("fetch/body_metadata.rs", "form_data_string_array"),
+    ];
+    for (file, func) in MUST_OPEN_A_SCOPE {
+        let text = SOURCES
+            .iter()
+            .find(|(name, _)| name == file)
+            .expect("source listed in MUST_OPEN_A_SCOPE must be in SOURCES")
+            .1;
+        let body = fetch_fn_body(text, func)
+            .unwrap_or_else(|| panic!("{file}: `fn {func}` not found — has it been renamed?"));
+        assert!(
+            body.contains("RuntimeHandleScope"),
+            "{file}: `{func}` holds heap addresses across allocations but opens no \
+             `RuntimeHandleScope` (#8163/#8217)"
+        );
+    }
+
+    // Both halves must be able to fail, or they are decoration.
+    let planted_binding = "    let closure = cb_ptr as *const perry_runtime::ClosureHeader;";
+    assert!(
+        FORBIDDEN
+            .iter()
+            .any(|pattern| planted_binding.contains(pattern)),
+        "the forbidden-pattern list no longer matches the shape it exists to catch"
+    );
+    let planted_unrooted = "pub extern \"C\" fn js_headers_for_each(h: f64) -> f64 {\n\
+                            \x20   let closure = raw as *const ClosureHeader;\n}\n";
+    let planted_body = fetch_fn_body(planted_unrooted, "js_headers_for_each")
+        .expect("the body extractor must find a plain function");
+    assert!(
+        !planted_body.contains("RuntimeHandleScope"),
+        "the body extractor no longer isolates a function body, so the positive \
+         half of this test cannot fail"
+    );
+}

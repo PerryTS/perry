@@ -18,21 +18,16 @@ name: Container Tests
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-    paths:
-      - 'crates/perry-container-compose/**'
-      - 'crates/perry-container-e2e/**'
-      - 'crates/perry-stdlib/src/container/**'
-      - 'crates/perry-stdlib/tests/container_*'
-      - 'crates/perry-hir/src/lower.rs'
-      - 'crates/perry-hir/src/ir.rs'
-      - 'crates/perry-codegen/src/lower_call.rs'
-      - 'tests/e2e/**'
-      - 'types/perry/{container,compose,workloads}/**'
-      - '.github/workflows/container-tests.yml'
   pull_request:
     branches: [main]
+    # PR arm is OPT-IN via the `run-extended-tests` label (job-level `if:`
+    # below); the paths filter still decides whether a run is created at
+    # all. Post-merge coverage is the nightly `schedule` -- the old
+    # `push: main` arm was 5 jobs (2 macOS) per merge that touched
+    # lower.rs / lower_call.rs, and the workflow has been red on every
+    # scheduled run since 2026-08-07 regardless.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'crates/perry-container-compose/**'
       - 'crates/perry-container-e2e/**'
@@ -82,6 +77,8 @@ jobs:
   # Layer A + B: hermetic tests (no runtime). Every PR.
   # ===========================================================================
   hermetic:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     name: Hermetic Tests (Layer A + B)
     strategy:
       fail-fast: false
@@ -163,7 +160,7 @@ jobs:
   integration-macos-apple:
     name: Layer C — Integration (macOS / apple/container)
     runs-on: macos-14
-    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    if: (github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     steps:
       - uses: actions/checkout@v7
 
@@ -210,7 +207,7 @@ jobs:
   integration-linux-podman:
     name: Layer C — Integration (Linux / podman)
     runs-on: ubuntu-24.04
-    if: github.event_name != 'pull_request' || github.base_ref == 'main'
+    if: (github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     steps:
       - uses: actions/checkout@v7
 
@@ -250,8 +247,9 @@ jobs:
   e2e-linux:
     name: Layer D — E2E (Linux / docker)
     runs-on: ubuntu-24.04
+    # e2e-linux never ran on pull requests (main/tags/manual only) and the
+    # `push: main` arm is gone, so this is tags + manual now.
     if: |
-      github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/tags/v') ||
       github.event.inputs.run_e2e == 'true'
     steps:
@@ -347,7 +345,7 @@ jobs:
     name: Container Tests Gate
     runs-on: ubuntu-24.04
     needs: [hermetic]
-    if: always()
+    if: (always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     steps:
       - name: Check required jobs
         run: |

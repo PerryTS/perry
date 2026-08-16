@@ -159,8 +159,11 @@
     "crates/perry-runtime/src/object/shapes_tests.rs|keys_array|access|let shared_keys = (*a).keys_array;": 1,
     "crates/perry-runtime/src/object/shapes_tests.rs|keys_array|access|unsafe { (*obj).keys_array },": 1,
     "crates/perry-runtime/src/param_type_guard.rs|keys_array|access|let keys = (*object).keys_array;": 1,
+    "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|NODE_TIMING_KEYS_ARRAY.with(|c| c.set((*obj).keys_array as usize));": 1,
+    "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|let keys = (*obj).keys_array as usize;": 1,
     "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|let keys_ptr = (*obj).keys_array as usize;": 1,
-    "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|recorded != 0 && (*obj).keys_array as usize == recorded": 1,
+    "crates/perry-runtime/src/perf_hooks.rs|keys_array|access|recorded != 0 && (*obj).keys_array as usize == recorded": 2,
+    "crates/perry-runtime/src/perf_hooks/resource_timing.rs|keys_array|access|c.set((*out).keys_array as usize);": 1,
     "crates/perry-runtime/src/process/node_module/source_map.rs|keys_array|access|(*obj).keys_array = std::ptr::null_mut();": 1,
     "crates/perry-runtime/src/promise/then_probe.rs|keys_array|access|let keys = (*obj).keys_array;": 2,
     "crates/perry-runtime/src/thread.rs|keys_array|access|let keys = if !(*obj).keys_array.is_null() {": 1,
@@ -177,9 +180,9 @@
   },
   "summary": {
     "codegen_object_header_size_sites": 34,
-    "raw_member_files": 66,
+    "raw_member_files": 67,
     "raw_member_sites": {
-      "keys_array": 180
+      "keys_array": 184
     }
   }
 }

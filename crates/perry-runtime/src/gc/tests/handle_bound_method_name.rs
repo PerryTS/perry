@@ -84,6 +84,20 @@ unsafe fn assert_names_the_literal(
     what: &str,
 ) {
     let (name_ptr, name_len) = captured_name(bound);
+    // Pointer identity is only assertable where the linker merges identical
+    // read-only strings. ELF (`SHF_MERGE|SHF_STRINGS`) and Mach-O
+    // (`__TEXT,__cstring`) do; MSVC does not pool identical literals across
+    // codegen units, so the copy the closure captures and the copy the lookup
+    // returns can be two distinct `&'static [u8]` at different addresses.
+    // Measured on the Windows runner: both failing pairs differed by the SAME
+    // constant offset (0x161F90), i.e. two whole copies of the same read-only
+    // data, not a heap pointer.
+    //
+    // Both are `'static`, which is the property this test exists for: the name
+    // must not be the MOVABLE key string's interior. That invariant is asserted
+    // unconditionally below, together with the length and the bytes, so Windows
+    // keeps real coverage — it just cannot use address equality as the proxy.
+    #[cfg(not(windows))]
     assert_eq!(
         name_ptr,
         expected.as_ptr(),

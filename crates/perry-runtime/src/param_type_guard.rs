@@ -76,6 +76,9 @@ struct Descriptor<'a> {
     bytes: &'a [u8],
     root: u32,
     node_count: usize,
+    /// First byte past the offset table, validated once by `parse`. `node`
+    /// used to recompute it from `node_count` on every single node visit.
+    table_end: usize,
 }
 
 impl<'a> Descriptor<'a> {
@@ -101,6 +104,7 @@ impl<'a> Descriptor<'a> {
             bytes,
             root,
             node_count,
+            table_end,
         })
     }
 
@@ -111,8 +115,7 @@ impl<'a> Descriptor<'a> {
         }
         let start = read_u32(self.bytes, 12 + index * 4)? as usize;
         let end = read_u32(self.bytes, 12 + (index + 1) * 4)? as usize;
-        let table_end = 12 + (self.node_count + 1) * 4;
-        if start < table_end || end < start {
+        if start < self.table_end || end < start {
             return None;
         }
         self.bytes.get(start..end).filter(|node| !node.is_empty())
@@ -132,12 +135,40 @@ struct GuardState<'a> {
     inline_visited_len: usize,
     spill_visited: Option<HashSet<(usize, u32)>>,
     spill_log: Vec<(usize, u32)>,
+    /// The last object `plain_object` validated, keyed on the NaN-box bits it
+    /// came from (#8202). A union tries its arms against the SAME value, so
+    /// every arm past the first re-ran the whole validation — including the
+    /// shape-table probe, which is the object model's hottest lookup. Nothing
+    /// between two arms can invalidate it: validation runs no JavaScript and
+    /// allocates nothing, so no collection can move or mutate the object.
+    validated_object: Option<(u64, ValidObject)>,
+}
+
+/// A `plain_object` result: the header, its address, and the live inline-slot
+/// bound its ShapeId descriptor publishes.
+#[derive(Clone, Copy)]
+struct ValidObject {
+    object: *const ObjectHeader,
+    address: usize,
+    live_slots: usize,
 }
 
 enum OwnField {
     Missing,
     Data(JSValue),
     Invalid,
+}
+
+/// A validated `keys_array`, resolved once per object rather than per field.
+enum ObjectKeys {
+    /// No keys array at all: every field reads as `Missing`.
+    Absent,
+    /// The keys array failed header validation: every field is `Invalid`.
+    Invalid,
+    Present {
+        slots: *const f64,
+        len: usize,
+    },
 }
 
 impl GuardState<'_> {
@@ -213,9 +244,17 @@ impl GuardState<'_> {
     /// live inline-slot bound its ShapeId descriptor publishes (#8113/#8122 —
     /// the one fact `own_data_field` needs to read a slot without probing the
     /// shape table again per field).
-    unsafe fn plain_object(&self, value: JSValue) -> Option<(*const ObjectHeader, usize, usize)> {
+    unsafe fn plain_object(
+        &mut self,
+        value: JSValue,
+    ) -> Option<(*const ObjectHeader, usize, usize)> {
         if !value.is_pointer() {
             return None;
+        }
+        if let Some((bits, cached)) = self.validated_object {
+            if bits == value.bits() {
+                return Some((cached.object, cached.address, cached.live_slots));
+            }
         }
         let address = (value.bits() & POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(address)?;
@@ -248,6 +287,14 @@ impl GuardState<'_> {
         if required > header.size as usize {
             return None;
         }
+        self.validated_object = Some((
+            value.bits(),
+            ValidObject {
+                object,
+                address,
+                live_slots,
+            },
+        ));
         Some((object, address, live_slots))
     }
 
@@ -297,24 +344,21 @@ impl GuardState<'_> {
         Some((set, size))
     }
 
-    unsafe fn own_data_field(
-        &self,
-        object: *const ObjectHeader,
-        object_address: usize,
-        live_slots: usize,
-        name: &[u8],
-    ) -> OwnField {
+    /// Resolve and validate the object's `keys_array` ONCE per object (#8202).
+    /// This ran per descriptor FIELD, so a two-field object paid for the whole
+    /// header validation twice.
+    unsafe fn object_keys(&self, object: *const ObjectHeader) -> ObjectKeys {
         let keys = (*object).keys_array;
         if keys.is_null() {
-            return OwnField::Missing;
+            return ObjectKeys::Absent;
         }
         let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
-            return OwnField::Invalid;
+            return ObjectKeys::Invalid;
         };
         if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
             || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
-            return OwnField::Invalid;
+            return ObjectKeys::Invalid;
         }
         let key_len = (*keys).length as usize;
         let key_capacity = (*keys).capacity as usize;
@@ -326,23 +370,50 @@ impl GuardState<'_> {
                     .and_then(|slots| size.checked_add(slots))
             }) {
             Some(required) => required,
-            None => return OwnField::Invalid,
+            None => return ObjectKeys::Invalid,
         };
         if key_len > key_capacity
             || key_len > MAX_CONTAINER_LEN
             || required > keys_header.size as usize
         {
-            return OwnField::Invalid;
+            return ObjectKeys::Invalid;
         }
-        let key_slots = (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        ObjectKeys::Present {
+            slots: (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64,
+            len: key_len,
+        }
+    }
+
+    unsafe fn own_data_field(
+        &self,
+        object: *const ObjectHeader,
+        object_address: usize,
+        live_slots: usize,
+        keys: &ObjectKeys,
+        may_have_accessors: bool,
+        name: &[u8],
+    ) -> OwnField {
+        let (key_slots, key_len) = match *keys {
+            ObjectKeys::Absent => return OwnField::Missing,
+            ObjectKeys::Invalid => return OwnField::Invalid,
+            ObjectKeys::Present { slots, len } => (slots, len),
+        };
         for index in 0..key_len {
             let key = JSValue::from_bits(std::ptr::read(key_slots.add(index)).to_bits());
             if crate::string::js_string_key_matches_bytes(key, name) {
-                let Ok(name) = std::str::from_utf8(name) else {
-                    return OwnField::Invalid;
-                };
-                if crate::object::get_accessor_descriptor(object_address, name).is_some() {
-                    return OwnField::Invalid;
+                // #8202: `get_accessor_descriptor` ran per field per guarded
+                // call, and its own per-key prefilter still cost a UTF-8
+                // validation plus a key hash. `owner_may_have_descriptor_entries`
+                // answers "does this object own ANY accessor at all" from one
+                // meta word, which is `false` for every ordinary object, so the
+                // per-field work disappears for the whole common case.
+                if may_have_accessors {
+                    let Ok(name) = std::str::from_utf8(name) else {
+                        return OwnField::Invalid;
+                    };
+                    if crate::object::get_accessor_descriptor(object_address, name).is_some() {
+                        return OwnField::Invalid;
+                    }
                 }
                 // #8122: read the inline slot directly against the bound
                 // `plain_object` already resolved from the descriptor. Going
@@ -477,6 +548,14 @@ impl GuardState<'_> {
                 if track && self.seen_or_insert(address, node_id) {
                     return true;
                 }
+                let (keys, may_have_accessors) = if field_count == 0 {
+                    (ObjectKeys::Absent, false)
+                } else {
+                    (
+                        self.object_keys(object),
+                        crate::object::owner_may_have_descriptor_entries(address, true),
+                    )
+                };
                 let mut cursor = 9usize;
                 let mut valid = true;
                 for _ in 0..field_count {
@@ -500,7 +579,14 @@ impl GuardState<'_> {
                         break;
                     };
                     cursor = name_end + 4;
-                    match self.own_data_field(object, address, live_slots, name) {
+                    match self.own_data_field(
+                        object,
+                        address,
+                        live_slots,
+                        &keys,
+                        may_have_accessors,
+                        name,
+                    ) {
                         OwnField::Data(field) if optional != 0 && field.is_undefined() => {}
                         OwnField::Data(field) if self.matches(field, child, depth + 1) => {}
                         OwnField::Missing if optional != 0 => {}
@@ -612,6 +698,7 @@ pub extern "C" fn js_param_type_guard(value: f64, descriptor: *const u8, length:
         inline_visited_len: 0,
         spill_visited: None,
         spill_log: Vec::new(),
+        validated_object: None,
     };
     unsafe { state.matches(JSValue::from_bits(value.to_bits()), root, 0) as i32 }
 }
@@ -652,6 +739,107 @@ mod tests {
             descriptor.as_ptr(),
             descriptor.len() as u32,
         )
+    }
+
+    fn object_node(class_id: u32, fields: &[(bool, &[u8], u32)]) -> Vec<u8> {
+        let mut body = vec![OP_OBJECT];
+        body.extend_from_slice(&class_id.to_le_bytes());
+        body.extend_from_slice(&(fields.len() as u32).to_le_bytes());
+        for (optional, name, child) in fields {
+            body.push(u8::from(*optional));
+            body.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            body.extend_from_slice(name);
+            body.extend_from_slice(&child.to_le_bytes());
+        }
+        body
+    }
+
+    /// `{ kind: "num", num: <num> }` as a real heap object.
+    fn num_node_object(num: f64) -> (*mut ObjectHeader, JSValue) {
+        let object = crate::object::js_object_alloc(0, 0);
+        let kind_key = crate::string::js_string_from_bytes(b"kind".as_ptr(), 4);
+        let kind = crate::string::js_string_from_bytes(b"num".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(
+            object,
+            kind_key,
+            crate::value::js_nanbox_string(kind as i64),
+        );
+        let num_key = crate::string::js_string_from_bytes(b"num".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(object, num_key, num);
+        let value = JSValue::from_bits(crate::value::js_nanbox_pointer(object as i64).to_bits());
+        (object, value)
+    }
+
+    /// `{ kind: "num"; num: number } | { kind: "str"; str: string }` — the
+    /// two-arm shape whose arms both re-validate the SAME object.
+    fn value_union() -> Vec<u8> {
+        descriptor(
+            4,
+            &[
+                &[OP_STRING_LITERAL, 3, 0, 0, 0, b'n', b'u', b'm'],
+                &[OP_NUMBER],
+                &[OP_STRING_LITERAL, 3, 0, 0, 0, b's', b't', b'r'],
+                &[OP_STRING],
+                &[OP_UNION, 2, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0],
+                &object_node(0, &[(false, b"kind", 0), (false, b"num", 1)]),
+                &object_node(0, &[(false, b"kind", 2), (false, b"str", 3)]),
+            ],
+        )
+    }
+
+    /// The per-call `plain_object` reuse must not change any arm's verdict:
+    /// a union retries every arm against the SAME value, and only the arm
+    /// whose literal and field types match may accept it (#8202).
+    #[test]
+    fn union_arms_retried_against_one_object_still_decide_per_arm() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let union = value_union();
+        let (_, num_value) = num_node_object(7.0);
+        assert_eq!(guard(num_value, &union), 1);
+
+        // Same shape, but `num` holds a string: arm 0's literal matches and
+        // its field type does not, arm 1's literal does not match. Reject.
+        let liar = crate::object::js_object_alloc(0, 0);
+        let kind_key = crate::string::js_string_from_bytes(b"kind".as_ptr(), 4);
+        let kind = crate::string::js_string_from_bytes(b"num".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(
+            liar,
+            kind_key,
+            crate::value::js_nanbox_string(kind as i64),
+        );
+        let num_key = crate::string::js_string_from_bytes(b"num".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(
+            liar,
+            num_key,
+            crate::value::js_nanbox_string(kind as i64),
+        );
+        let liar = JSValue::from_bits(crate::value::js_nanbox_pointer(liar as i64).to_bits());
+        assert_eq!(guard(liar, &union), 0);
+    }
+
+    /// An accessor shadowing a descriptor field must still be refused —
+    /// reading it would run user code. #8202 replaced the per-field probe
+    /// with a per-object summary, so this is what proves the summary is not
+    /// simply always-false.
+    #[test]
+    fn an_accessor_shadowing_a_field_is_still_refused() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let union = value_union();
+        let (object, value) = num_node_object(7.0);
+        assert_eq!(guard(value, &union), 1, "plain data object validates");
+
+        crate::object::set_accessor_descriptor(
+            object as usize,
+            "num".to_string(),
+            crate::object::AccessorDescriptor { get: 1, set: 0 },
+        );
+        assert_eq!(
+            guard(value, &union),
+            0,
+            "an accessor over `num` must take the generic fallback"
+        );
+        crate::object::clear_accessor_descriptor(object as usize, "num");
+        assert_eq!(guard(value, &union), 1, "and validate again once cleared");
     }
 
     #[test]

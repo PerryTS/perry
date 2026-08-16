@@ -1,57 +1,80 @@
-name: Tests
+name: CI
+
+# ---------------------------------------------------------------------------
+# ONE workflow, THREE tiers. Which jobs run is decided by `scripts/ci_plan.py`
+# in the `plan` job below; every other job is `needs: plan` and gated on
+# `fromJSON(needs.plan.outputs.plan).jobs.<name>`. Read that script's docstring
+# for the policy and `python3 scripts/ci_plan.py --table` for the job x tier
+# matrix. docs/src/testing/ci-tiers.md is the long-form page.
+#
+#   pr     pull_request        the required gate. Small, fast, must be green
+#                              on main. Fan-in job `pr-gate` is the ONLY
+#                              required status context.
+#   sweep  push: main          coalesced post-merge sweep (at most one running
+#                              + one pending, so a burst of merges is tested at
+#                              its tip). PR tier unscoped + medium-weight jobs.
+#   full   schedule / tags /   everything, incl. parity, compile-smoke,
+#          workflow_dispatch   doc-tests, package smokes, the 8-shard
+#          / label             auto-optimize gap suite. `full-suite-gate` is
+#                              what release-packages.yml waits for.
+#
+# WHY (2026-08-16): the org runs on 20 concurrent hosted runners (5 macOS).
+# The previous shape fanned every PR push out to 14 workflows / 48 jobs /
+# ~650 runner-minutes; at ~66 pushes/day that is 1.5-2x total capacity, so the
+# queue never drained (job queue waits of 3-7 h), 0 of 66 PR runs of this
+# workflow reached a conclusion in the sample window, and every merge was an
+# admin bypass. Two required contexts (`parity`, `compile-smoke`) could not
+# even report on a PR. See changelog.d/ for the measured numbers.
+# ---------------------------------------------------------------------------
 
 on:
-  # Run on version tags so `release-packages.yml` can gate publish on a green
-  # Tests workflow for the exact commit being released. Direct pushes to main
-  # do NOT trigger tests — the gates that matter are PRs (pre-merge) and tags
-  # (pre-release).
-  push:
-    tags: ['v*']
   pull_request:
     branches: [main]
-    # `labeled` is here so the optional opt-in jobs (parity, compile-smoke,
-    # doc-tests) re-fire when a maintainer or the PR author applies the
-    # `run-extended-tests` label. Without it, applying the label on an
-    # existing PR wouldn't re-trigger the workflow.
+    # `labeled` re-fires the run when a maintainer applies `run-extended-tests`
+    # (which promotes the PR to the `full` tier -- see ci_plan.py) or
+    # `skip-changelog`. NO `paths-ignore` here: a docs-only PR must still
+    # produce a `pr-gate` status (the plan turns everything but `lint` off for
+    # it), otherwise the required context never reports and the PR is stuck
+    # behind an admin bypass.
     types: [opened, synchronize, reopened, labeled]
-    paths-ignore:
-      - 'docs/src/**'
-      - '*.md'
-      - '!CLAUDE.md'
-      - '!CHANGELOG.md'
+  push:
+    branches: [main]
+    tags: ['v*']
   schedule:
-    # Nightly full-workspace cargo-test safety net (04:00 UTC). The per-PR
-    # cargo-test gate only exercises crates affected by the diff
-    # (scripts/ci_test_scope.py); a cross-crate regression that slips a scoped
-    # PR is caught here within a day. `schedule` is not `pull_request`, so the
-    # cargo-test job runs the full workspace.
+    # Nightly full tier at 04:00 UTC. The sweep already runs on every merge;
+    # this is the daily arm for the slow suites (parity, compile-smoke,
+    # doc-tests, package smokes, the auto-optimize gap shards).
     - cron: '0 4 * * *'
-  # Manual escape hatch for the opt-in jobs. Maintainers (write access)
-  # can dispatch the workflow against any ref with `run_extended_tests=true`
-  # to run parity / compile-smoke / package smokes / doc-tests on demand
-  # without tagging a release.
   workflow_dispatch:
     inputs:
-      run_extended_tests:
-        description: 'Run extended tests (parity, compile-smoke, package smokes, doc-tests)'
+      tier:
+        description: 'Which tier to run (release-packages.yml dispatches `full`)'
+        type: choice
+        options: [pr, sweep, full]
+        default: full
+      update_gap_snapshot:
+        description: >-
+          Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as
+          ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as
+          an artifact (`gap-snapshot-update`) for you to commit. Nothing else
+          about the run changes.
         type: boolean
         default: false
 
-# Superseded PR pushes cancel their in-flight run (the real minute saver); the
-# nightly cron and release-tag runs never do (#5960). Keying the group on the
-# event as well as the ref means a manual `workflow_dispatch` on `main` — the
-# only other run that shares `refs/heads/main` with the cron, since pushes to
-# main don't trigger this workflow — can't cancel a nightly mid-flight, and
-# `cancel-in-progress` is off for those events regardless. The nightly is the
-# only backstop for integration-suite regressions a scoped PR run can't see, so
-# it must always reach a conclusion.
 concurrency:
-  # #7966: keyed per RUN for non-PR events. A group that is constant across
-  # scheduled runs lets only the first one execute -- GitHub keeps at most one
-  # PENDING run per group and cancels the rest with `jobs: 0`, regardless of
-  # `cancel-in-progress`. PR runs keep the shared per-ref group so superseded
-  # pushes still coalesce. Enforced by scripts/gc_gate_wiring_check.py.
-  group: test-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  # pull_request: superseded pushes cancel their in-flight run (per PR).
+  # push to main: ONE constant group with cancel-in-progress OFF -- GitHub
+  #   keeps at most one running + one pending run per group and replaces the
+  #   pending one with the newest, so merges coalesce onto the tip instead of
+  #   queueing 58 sweeps a day (#7205 / #7856 -- read
+  #   docs/src/testing/ci-gate-scheduling.md before "fixing" this).
+  # everything else (schedule, tags, dispatch): keyed per RUN, because a group
+  #   that is constant across scheduled runs lets only the first one execute
+  #   (#7966). Enforced by scripts/gc_gate_wiring_check.py.
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number)
+     || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ci-main-sweep')
+     || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -60,37 +83,73 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Changeset gate: PRs touching crates/ must ship changelog.d/<PR>-<slug>.md
-  # (see changelog.d/README.md; fragments fold into GitHub Release notes at
-  # tag time via scripts/cut_release_notes.sh — CHANGELOG.md is frozen).
-  # Standalone job, NOT a step inside `lint`, so it can be its own required
-  # status check: lint carries unrelated red debt that gets admin-bypassed,
-  # and this gate must not ride along with that. The `skip-changelog` label
-  # skips it (the `labeled` trigger above refires the workflow, and a skipped
-  # required check counts as satisfied).
+  # plan: the one job that decides what this run does. ~20 s, no toolchain.
+  # Everything below is `needs: plan` + `if: fromJSON(...).jobs.<x>`. If THIS
+  # job fails, every other job is skipped and the fan-in gate fails on
+  # `needs.plan.result != 'success'` -- a broken plan cannot silently pass.
   # ---------------------------------------------------------------------------
-  changeset-gate:
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+  plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      tier: ${{ steps.plan.outputs.tier }}
     steps:
-      - name: Require a changelog.d/ fragment for crates/ changes
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Self-test the planner
+        run: python3 scripts/ci_plan.py --self-test
+
+      - name: List changed files (pull_request only)
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate > files.json
-          jq -r '.[].filename' files.json | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
-          # The fragment must be ADDED in this PR (editing a leftover file
-          # doesn't count) and match the root-level <digits>-<slug>.md shape
-          # cut_release_notes.sh folds at release time.
-          jq -r '.[] | select(.status == "added") | .filename' files.json | grep -qE '^changelog\.d/[0-9]+-[^/]+\.md$' && exit 0
-          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
-          exit 1
+          set -euo pipefail
+          # An API failure aborts here (set -e), which fails `plan` and with it
+          # the gate. It must NOT fall through to an empty list: ci_plan.py
+          # treats an empty listing as `core` for the same reason, but a
+          # loud failure is better than a silent full run.
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed-files.txt
+          echo "Changed files ($(wc -l < changed-files.txt)):"
+          sed 's/^/  /' changed-files.txt
+
+      - name: Compute the plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          LABELS: ${{ github.event_name == 'pull_request' && join(github.event.pull_request.labels.*.name, ',') || '' }}
+          TIER_INPUT: ${{ inputs.tier }}
+          UPDATE_GAP_SNAPSHOT: ${{ inputs.update_gap_snapshot }}
+        run: |
+          set -euo pipefail
+          args=(--event "$EVENT_NAME" --ref "$REF" --labels "$LABELS")
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            args+=(--changed-files changed-files.txt)
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            args+=(--tier "${TIER_INPUT:-full}")
+            if [ "$UPDATE_GAP_SNAPSHOT" = "true" ]; then
+              args+=(--update-gap-snapshot)
+            fi
+          fi
+          python3 scripts/ci_plan.py "${args[@]}"
+
 
   # ---------------------------------------------------------------------------
-  # Lint: cargo fmt --check (formatting gate for every PR)
+  # Lint: cargo fmt --check + every no-compile audit script. Runs in EVERY
+  # tier, including docs-only PRs (it is the one job the plan never turns
+  # off). ~4 min. Add the ci_plan self-test here too so a policy edit that
+  # breaks its own invariants is red before it can plan anything.
   # ---------------------------------------------------------------------------
   lint:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.lint
     # Was macos-14 — moved to ubuntu-latest in v0.5.428 since `cargo fmt
     # --check` is portable. The 6 multiplier-min cut is small in absolute
     # terms (lint runs in ~30s) but it's free.
@@ -98,6 +157,38 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+
+      # Changeset gate (was its own job): PRs touching crates/ must ship
+      # changelog.d/<PR>-<slug>.md (see changelog.d/README.md; fragments fold
+      # into GitHub Release notes at tag time via scripts/cut_release_notes.sh
+      # -- CHANGELOG.md is frozen). The `skip-changelog` label skips it (the
+      # `labeled` trigger refires the workflow). Lives in `lint` now because
+      # `pr-gate` is the single required context, so a red step here is as
+      # blocking as a red job was -- and one fewer job is one fewer runner
+      # slot on a 20-slot org.
+      - name: Require a changelog.d/ fragment for crates/ changes
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate > files.json
+          # jq -e, no pipes: `lint` is a registered gate (gc_gate_wiring_check)
+          # and `jq | grep -q` under pipefail can fail on SIGPIPE when grep
+          # closes early on the first match.
+          # `-s` + `[.[][]]`: --paginate emits one JSON array per page, and
+          # `jq -e` reports only the LAST array's verdict without the slurp.
+          if ! jq -s -e '[.[][]] | any(.filename | startswith("crates/"))' files.json > /dev/null; then
+            echo "No crates/ changes — gate not applicable."; exit 0
+          fi
+          # The fragment must be ADDED in this PR (editing a leftover file
+          # doesn't count) and match the root-level <digits>-<slug>.md shape
+          # cut_release_notes.sh folds at release time.
+          if jq -s -e '[.[][]] | any(.status == "added" and (.filename | test("^changelog\\.d/[0-9]+-[^/]+\\.md$")))' files.json > /dev/null; then
+            exit 0
+          fi
+          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
+          exit 1
 
       - name: Setup Node.js for benchmark harness tests
         uses: actions/setup-node@v7
@@ -135,6 +226,30 @@ jobs:
       - name: Check formatting
         if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
+
+      # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
+      # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
+      # docs-only PRs skip the compile tier, an empty file listing is treated
+      # as core, ...). The table in docs/src/testing/ci-tiers.md is generated
+      # from it and must not drift.
+      - name: CI plan policy self-test + docs table freshness
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/ci_plan.py --self-test
+          python3 scripts/ci_plan.py --table > /tmp/ci-plan-table.md
+          if ! grep -qF -- "$(head -1 /tmp/ci-plan-table.md)" docs/src/testing/ci-tiers.md; then
+            echo "::error::docs/src/testing/ci-tiers.md is missing the tier table header"; exit 1
+          fi
+          python3 - <<'PY'
+          import re, sys
+          want = open('/tmp/ci-plan-table.md').read().strip()
+          doc = open('docs/src/testing/ci-tiers.md').read()
+          if want not in doc:
+              print("::error::docs/src/testing/ci-tiers.md tier table is stale. Regenerate with:")
+              print("  python3 scripts/ci_plan.py --table   # and paste over the table")
+              sys.exit(1)
+          print("ci-tiers.md tier table matches ci_plan.py")
+          PY
 
       - name: Audit workspace architecture
         if: ${{ !cancelled() }}
@@ -531,26 +646,23 @@ jobs:
           python3 scripts/global_sink_isolation.py
 
   # ---------------------------------------------------------------------------
-  # Clippy — enforces the deny-level lints in [workspace.lints] (root
+  # check: clippy (both scopes) + API-docs drift, in ONE job. Was three jobs
+  # (Clippy x2 matrix, api-docs-drift); merged because each job is a runner
+  # slot on a 20-slot org and all three share the same toolchain, cache and
+  # `cargo check` metadata. Steps are `if: !cancelled()` so a clippy failure
+  # still reports the docs verdict.
+  #
+  # Clippy enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
   # warn-level output is informational and never blocks a PR. The product leg
   # gives fast feedback for the CLI; the host-compatible leg names every Linux
   # package explicitly. Neither scope depends on Cargo default-members.
   # ---------------------------------------------------------------------------
-  clippy:
-    name: Clippy (${{ matrix.scope }})
+  check:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.check
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        scope: [product, host-compatible]
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
-      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -560,170 +672,32 @@ jobs:
           components: clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      # Same tarball'd-disk-cache pattern as api-docs-drift (see the comment
-      # there for why SCCACHE_GHA_ENABLED is off).
-      - name: Cache sccache objects
-        uses: actions/cache@v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-
-
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Run clippy for explicit scope
+      - name: Clippy (product)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p perry --bins
+
+      - name: Clippy (host-compatible)
+        if: ${{ !cancelled() }}
         run: |
-          if [[ "${{ matrix.scope }}" == "product" ]]; then
-            cargo clippy -p perry --bins
-          else
-            mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
-              --print-excluded-scope host-compatible)
-            cargo_args=(--workspace)
-            for package in "${excluded[@]}"; do
-              cargo_args+=(--exclude "$package")
-            done
-            cargo clippy "${cargo_args[@]}"
-          fi
-
-  # ---------------------------------------------------------------------------
-  # rustc warnings gate
-  #
-  # `cargo check` with `-D warnings`, so a PR cannot add a rustc warning. This
-  # is deliberately separate from the clippy job above: clippy's own warn-level
-  # lints are informational here, while rustc's are not.
-  #
-  # Both legs are needed because they compile different code. `perry` depends on
-  # perry-runtime with `default-features = false`, so the product leg sees a
-  # runtime with regex-engine, diagnostics and temporal off, where items the
-  # workspace leg finds live are dead. The workspace leg passes `--all-targets`
-  # so test and bench targets count too — without it, test-only code drifts.
-  #
-  # perry-ui-macos is in the excluded scope (this runs on ubuntu), so its
-  # warnings are not gated here.
-  # ---------------------------------------------------------------------------
-  rustc-warnings:
-    name: Warnings (${{ matrix.scope }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        scope: [product, host-compatible]
-    env:
-      RUSTFLAGS: -D warnings
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/setup-llvm22
-
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      - name: Cache sccache objects
-        uses: actions/cache@v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Check for rustc warnings
-        run: |
-          if [[ "${{ matrix.scope }}" == "product" ]]; then
-            cargo check -p perry --bins
-          else
-            mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
-              --print-excluded-scope host-compatible)
-            cargo_args=(--workspace --all-targets)
-            for package in "${excluded[@]}"; do
-              cargo_args+=(--exclude "$package")
-            done
-            cargo check "${cargo_args[@]}"
-          fi
-
-  # ---------------------------------------------------------------------------
-  # API docs drift gate (#465)
-  #
-  # Regenerates `docs/src/api/reference.md` and `docs/api/perry.d.ts` from
-  # the compile-time manifest in `crates/perry-api-manifest/src/entries.rs`,
-  # then `git diff --exit-code`s the result. Fails when a code change updated
-  # the manifest without re-committing the artifacts. Closes the "Release
-  # workflow regenerates docs automatically (no drift from code)" criterion
-  # — committing the diff is the easiest way to keep the docs in sync,
-  # since the diff is reviewable in the PR that introduces it.
-  # ---------------------------------------------------------------------------
-  api-docs-drift:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      RUSTC_WRAPPER: sccache
-      # sccache on a LOCAL DISK cache, persisted as a single tarball via
-      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
-      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
-      # cache object per compilation unit; GitHub's cache service throttled /
-      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
-      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
-      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
-      # recompiled the dependency graph cold. A single tarball'd disk cache
-      # restores in one step and gives real cross-run hit rates. Note
-      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
-      # no-op under the GHA backend, which is why the old "2G" never mattered).
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/setup-llvm22
-
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      # Persist the sccache disk cache across runs. The github.job +
-      # github.run_id key makes every run (including PRs) save its own fresh
-      # entry — distinct per job so the three sccache jobs don't collide on
-      # save — while the shared prefix restore-keys pull the most recent prior
-      # cache from ANY of them. The object cache therefore warms continuously
-      # and cross-pollinates instead of starting cold each run.
-      - name: Cache sccache objects
-        uses: actions/cache@v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+            --print-excluded-scope host-compatible)
+          cargo_args=(--workspace)
+          for package in "${excluded[@]}"; do
+            cargo_args+=(--exclude "$package")
+          done
+          cargo clippy "${cargo_args[@]}"
 
       - name: Regenerate API docs
+        if: ${{ !cancelled() }}
         run: ./scripts/regen_api_docs.sh
 
-      - name: Check for drift
+      - name: Check for API docs drift
+        if: ${{ !cancelled() }}
         run: |
           if ! git diff --quiet -- docs/src/api/reference.md docs/api/perry.d.ts; then
             echo ""
@@ -745,6 +719,89 @@ jobs:
           echo "✅ API docs match the manifest."
 
   # ---------------------------------------------------------------------------
+  # rustc warnings gate
+  #
+  # `cargo check` with `-D warnings`, so a PR cannot add a rustc warning. This
+  # is deliberately separate from the `check` job above: clippy's own
+  # warn-level lints are informational there, while rustc's are not -- and
+  # `-D warnings` on the clippy invocation would promote every clippy warning
+  # too. Both scopes run in ONE job (was a 2-way matrix): they share the
+  # toolchain and cache, and each job is a runner slot.
+  #
+  # Both legs are needed because they compile different code. `perry` depends on
+  # perry-runtime with `default-features = false`, so the product leg sees a
+  # runtime with regex-engine, diagnostics and temporal off, where items the
+  # workspace leg finds live are dead. The workspace leg passes `--all-targets`
+  # so test and bench targets count too — without it, test-only code drifts.
+  #
+  # perry-ui-macos is in the excluded scope (this runs on ubuntu), so its
+  # warnings are not gated here.
+  # ---------------------------------------------------------------------------
+  warnings:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.warnings
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -D warnings
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore sccache objects
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: rustc warnings (product)
+        if: ${{ !cancelled() }}
+        run: cargo check -p perry --bins
+
+      - name: rustc warnings (host-compatible, all targets)
+        if: ${{ !cancelled() }}
+        run: |
+          mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+            --print-excluded-scope host-compatible)
+          cargo_args=(--workspace --all-targets)
+          for package in "${excluded[@]}"; do
+            cargo_args+=(--exclude "$package")
+          done
+          cargo check "${cargo_args[@]}"
+
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
+  # ---------------------------------------------------------------------------
   # Rust unit tests (266+ tests across all crates)
   # ---------------------------------------------------------------------------
   # Note: a separate `build` job that produced runtime/stdlib/compiler
@@ -757,6 +814,8 @@ jobs:
   # required the manual simulator-runtime wipe + cache=registry-only
   # workaround). Each downstream job below builds in parallel directly.
   cargo-test:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test
     # Was macos-14 — moved to ubuntu-latest in v0.5.392 to drop the 10×
     # billing weight. The centralized Linux test scope already filters out
     # platform-specific UI crates, so
@@ -818,8 +877,8 @@ jobs:
       # save — while the shared prefix restore-keys pull the most recent prior
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
-      - name: Cache sccache objects
-        uses: actions/cache@v6
+      - name: Restore sccache objects
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -883,7 +942,7 @@ jobs:
           # whole workspace (~90 min). Release tags, the nightly cron, and
           # workflow_dispatch run the FULL workspace as the safety net. See
           # scripts/ci_test_scope.py for the rules.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope }}" = "pr" ]; then
             changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
               --json files --jq '.files[].path')"
             echo "Changed files in PR:"; printf '%s\n' "$changed_files"
@@ -905,7 +964,7 @@ jobs:
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
 
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope }}" != "pr" ]; then
             # ---- FULL run: release tags / nightly cron / workflow_dispatch ----
             # Every target, including the slow auto-optimize integration tests.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
@@ -1002,6 +1061,20 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: "0"
         run: cargo test -p perry-ffi --features runtime-link --lib
 
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
   # Scoped e2e: run the integration suites NAMED BY THE DIFF (#5960)
   #
@@ -1032,9 +1105,10 @@ jobs:
   # for that class — hence the concurrency carve-out above.
   # ---------------------------------------------------------------------------
   e2e-scoped:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.e2e_scoped
     # PR-only: tags / nightly / workflow_dispatch already run every suite in the
     # full `cargo-test` path.
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # MUST cover the worst case the per-suite bound allows, or the job wall
     # clock kills legitimately-running suites and we get an uninformative
@@ -1105,9 +1179,9 @@ jobs:
         if: steps.scope.outputs.suites != ''
         uses: mozilla-actions/sccache-action@v0.0.11
 
-      - name: Cache sccache objects
+      - name: Restore sccache objects
         if: steps.scope.outputs.suites != ''
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1194,6 +1268,20 @@ jobs:
           fi
           exit "$status"
 
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
   # Windows build gate
   #
@@ -1209,6 +1297,11 @@ jobs:
   # --release would be far too slow for per-PR CI.
   # ---------------------------------------------------------------------------
   windows-build:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.windows_build
     runs-on: windows-latest
     # Cold Windows builds are slow, and this workflow never runs on pushes to
     # main, so rust-cache only saves on the nightly cron (github.ref is
@@ -1338,6 +1431,11 @@ jobs:
   # execute an ARM binary, so keep a focused native job that proves the
   # compiler, runtime ABI, final linker, and advertised target all agree.
   windows-arm64-build:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.windows_arm64_build
     runs-on: windows-11-arm
     timeout-minutes: 75
     steps:
@@ -1448,11 +1546,8 @@ jobs:
   # silently come back.
   # ---------------------------------------------------------------------------
   gc-stress:
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -1495,11 +1590,11 @@ jobs:
       # #6946, #6950) — the script asserts liveness from the collector's own
       # PERRY_GC_TRACE / PERRY_GC_DIAG output rather than trusting the env var.
       - name: GC x representation-selection matrix (PR subset)
-        if: github.event_name == 'pull_request'
+        if: fromJSON(needs.plan.outputs.plan).gc_stress_mode == 'pr'
         run: ./scripts/gc_repsel_matrix.sh --no-build --arms pr --json gc-repsel-matrix.json
 
       - name: GC x representation-selection matrix (full)
-        if: github.event_name != 'pull_request'
+        if: fromJSON(needs.plan.outputs.plan).gc_stress_mode == 'full'
         run: ./scripts/gc_repsel_matrix.sh --no-build --arms all --json gc-repsel-matrix.json
 
       # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
@@ -1550,6 +1645,11 @@ jobs:
   # Fails when hot-loop structural contracts regress.
   # ---------------------------------------------------------------------------
   compiler-output-regression:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.compiler_output_regression
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -1585,8 +1685,8 @@ jobs:
       # save — while the shared prefix restore-keys pull the most recent prior
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
-      - name: Cache sccache objects
-        uses: actions/cache@v6
+      - name: Restore sccache objects
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1694,6 +1794,20 @@ jobs:
           name: compiler-output-regression
           path: target/compiler-output-regression/
 
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
   # Representation-selection promotion census (#7106)
   #
@@ -1734,6 +1848,11 @@ jobs:
   # follow-up is skipped.
   # ---------------------------------------------------------------------------
   repsel-census:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.repsel_census
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -1756,8 +1875,8 @@ jobs:
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
-      - name: Cache sccache objects
-        uses: actions/cache@v6
+      - name: Restore sccache objects
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1881,6 +2000,20 @@ jobs:
           name: repsel-census
           path: target/repsel-census/
 
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
   # Native ABI evidence packet
   #
@@ -1891,10 +2024,11 @@ jobs:
   # the lighter report/unit and compiler-output structural gates above.
   # ---------------------------------------------------------------------------
   native-abi-evidence-packet:
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.native_abi_evidence_packet
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -1913,8 +2047,8 @@ jobs:
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
-      - name: Cache sccache objects
-        uses: actions/cache@v6
+      - name: Restore sccache objects
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
@@ -1946,10 +2080,29 @@ jobs:
           name: native-abi-evidence-packet
           path: target/native-abi-evidence-packet/
 
+      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
+      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
+      # useful entry (including rust-cache's) within the hour. Now only sweep /
+      # nightly / release runs write, and PRs restore the newest main-line blob
+      # via the restore-keys prefix, i.e. a cache built from the tip they
+      # branched from.
+      - name: Save sccache objects (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
+
   # ---------------------------------------------------------------------------
-  # Gap-suite conformance smoke (every PR + main push)
+  # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
+  # tier -- 6 fast-mode shards on a PR, 3 in the sweep, 8 auto-optimize shards
+  # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
+  # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
-  conformance-smoke:
+  gap-suite:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     # 2026-07-02 audit §11: nothing on the default PR path exercised
     # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
     # test the compiler but never diff a compiled program against node, so
@@ -1970,26 +2123,26 @@ jobs:
     # in .node-version so it can't drift out from under the suite again; raise
     # it deliberately, and re-measure the delta when you do (see #6364).
     #
-    # Sharded across 8 parallel runners (--shard N/8) so the ~258-test suite
-    # runs in ~1/8 the wall-time — the 258 sequential Perry compiles dominate
-    # the cost and split evenly, taking the single-job ~57 min down to ~15 min
-    # per shard. The fan-in job `conformance-smoke-complete` below is the ONE
-    # status branch protection requires; a single shard's red bubbles up
-    # through it. Each shard's no-new-untriaged gate (run_gap_tests.sh) covers
-    # only its own slice, which is exactly the right per-shard semantics.
+    # Sharded (--shard N/M, M from the plan). Each shard's snapshot gate
+    # (run_gap_tests.sh) covers only its own slice, which is exactly the right
+    # per-shard semantics; the `gate` fan-in job is the one status branch
+    # protection requires. 2026-08-16: in the harness's default (auto-optimize)
+    # mode 96% of a shard's wall time was ~10 tests at ~200 s each -- the
+    # feature-stripped runtime rebuild per distinct feature set, redone in
+    # every shard. That mode is now the full tier's 8-shard arm; PR and sweep
+    # tiers use `fast` mode against one prebuilt release build (~1.5 s/test).
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        shard: ${{ fromJSON(needs.plan.outputs.plan).gap.shards }}
     runs-on: ubuntu-latest
     # Per-shard wall time has crept up as the gap suite grew: the original
     # sharded run was 19-37 min/shard, but 2026-07-16 measured 33-44 min for
     # shards 2-8 and shard 1 (its slice is the heaviest) hit 55:18 — the exact
     # 55-min cap — and CANCELLED on every run, incl. `gh run rerun --failed`.
     # On slow-runner days a second shard (observed: shard 3) also grazed 55.
-    # Because `conformance-smoke-complete` is a required context, that
-    # deterministic timeout flaky-red-blocked every PR (#6456). Bump to 75 for
+    # Because the fan-in was a required context, that deterministic timeout
+    # flaky-red-blocked every PR (#6456). Bump to 75 for
     # comfortable headroom (~35 min over the normal-day slowest, ~20 over the
     # heavy shard) while still bounding a genuine hang. Durable fix — raising
     # the shard count 8->12 so no single slice approaches the cap — tracked as
@@ -2016,45 +2169,77 @@ jobs:
           # inline here. See CLAUDE.md ("TypeScript Parity Status").
           node-version-file: .node-version
 
-      - name: Run gap suite (shard ${{ matrix.shard }}/8)
-        run: ./scripts/run_gap_tests.sh --shard ${{ matrix.shard }}/8
+      # #8198: six gap tests import npm packages that are now root
+      # devDependencies (`.npmrc`: the root install "materializes the
+      # parity-test fixture deps"). Without this the oracle cannot resolve
+      # them, node exits 1, and the tests read as parity failures.
+      - name: Install the npm packages the gap tests' oracle imports
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
+      #   fast: build the release compiler + runtime archives ONCE here, then
+      #         PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
+      #         (~1.5 s/test). Only ext-routed tests (http/net/ws/zlib/events)
+      #         still take the per-test auto-optimize path, because no single
+      #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
+      #   full: the harness's default -- every test compiles through
+      #         auto-optimize, which rebuilds a feature-stripped runtime per
+      #         distinct feature set (~200 s each; measured 96% of a shard's
+      #         wall time). It is the arm that sees auto-optimize-only bugs,
+      #         so it stays in the nightly/release tier at 8 shards.
+      # Both compare against the SAME committed Linux snapshot; a divergence
+      # between them is a real auto-optimize-specific finding, not noise.
+      - name: Build compiler + runtime archives (fast mode)
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        # Release profile, codegen-units=1: the parity harness's own build
+        # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+
+      - name: Run gap suite (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gap.total }}, ${{ fromJSON(needs.plan.outputs.plan).gap.mode }} mode)
+        env:
+          GAP_MODE: ${{ fromJSON(needs.plan.outputs.plan).gap.mode }}
+          GAP_TOTAL: ${{ fromJSON(needs.plan.outputs.plan).gap.total }}
+          GAP_SHARD: ${{ matrix.shard }}
+          UPDATE_SNAPSHOT: ${{ fromJSON(needs.plan.outputs.plan).gap.update_snapshot && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if [ "$GAP_MODE" = "fast" ]; then
+            export PERRY_SKIP_BUILD=1
+            export PERRY_BIN="$PWD/target/release/perry"
+            export PERRY_RUNTIME_DIR="$PWD/target/release"
+          fi
+          if [ "$GAP_TOTAL" = "1" ]; then
+            ./scripts/run_gap_tests.sh
+          else
+            ./scripts/run_gap_tests.sh --shard "$GAP_SHARD/$GAP_TOTAL"
+          fi
+
+      # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
+      # (one shard, whole suite). Download it and commit test-parity/
+      # gap_snapshot.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
+      - name: Upload re-baselined gap snapshot
+        if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: gap-snapshot-update
+          path: test-parity/gap_snapshot.json
 
       - name: Upload gap report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gap-suite-report-shard-${{ matrix.shard }}
+          name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
           path: test-parity/reports/
-
-  # ---------------------------------------------------------------------------
-  # Fan-in for the sharded gap suite. `needs.conformance-smoke.result` is
-  # "success" only when EVERY shard succeeded, so this single context is a
-  # faithful all-shards-green gate — the one branch protection requires.
-  # `if: always()` guarantees it runs and reports even when a shard fails
-  # (a required check that got *skipped* would otherwise wedge the PR on
-  # "Expected"); the event guard mirrors the shards so it no-ops off the PR
-  # path just like they do.
-  # ---------------------------------------------------------------------------
-  conformance-smoke-complete:
-    needs: conformance-smoke
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require every gap-suite shard to pass
-        run: |
-          result='${{ needs.conformance-smoke.result }}'
-          echo "conformance-smoke (all 8 shards) => $result"
-          if [[ "$result" != "success" ]]; then
-            echo "::error::gap suite failed, was cancelled, or was skipped in one or more shards"
-            exit 1
-          fi
-          echo "All gap-suite shards passed."
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)
   # ---------------------------------------------------------------------------
   parity:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.parity
     # Release-publish decoupling: aspirational extended suite. Per maintainer
     # decision it no longer BLOCKS package publishing — release-packages.yml's
     # await-tests gate keys on this workflow's run conclusion, and job-level
@@ -2062,7 +2247,6 @@ jobs:
     # conclusion. The job still runs on every tag + shows its own pass/fail as
     # an informational signal (and core jobs — cargo-test/lint/api-docs-drift/
     # compiler-output-regression — still gate publish).
-    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. Parity tests
     # just compare Perry's stdout against `node --experimental-strip-types`'s
     # stdout per test file; both run cleanly on Linux. `gtimeout` on
@@ -2081,10 +2265,6 @@ jobs:
     # Opt-in: apply the `run-extended-tests` label to a PR, or dispatch
     # the workflow manually with `run_extended_tests=true`, to run this
     # job on demand. PR authors and maintainers can both apply labels.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -2173,9 +2353,13 @@ jobs:
   # Compile smoke test (all 130+ test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.compile_smoke
     # Release-publish decoupling (see `parity` above): aspirational extended
     # suite, informational only — does not block package publishing.
-    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. The smoke
     # compiles every `test-files/*.ts` with the bare `perry foo.ts -o
     # out` path; the auto-optimize cache + clang link steps work
@@ -2193,10 +2377,6 @@ jobs:
     #
     # Opt-in: `run-extended-tests` PR label or `workflow_dispatch` with
     # `run_extended_tests=true` runs this job on demand.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -2569,12 +2749,16 @@ jobs:
   # entries for the workflow).
   # ---------------------------------------------------------------------------
   harmonyos-smoke:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.harmonyos_smoke
     # Aspirational smoke (informational) — must not block package publish.
     # release-packages await-tests keys on this workflow's run conclusion;
     # continue-on-error keeps a red result here from failing it (same as
     # parity/compile-smoke/doc-tests/drizzle/effect-basic-smoke). Core jobs
     # (cargo-test/lint/api-docs-drift/compiler-output-regression) still gate.
-    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -2617,13 +2801,13 @@ jobs:
   # default. Opt-in via the `run-extended-tests` label.
   # ---------------------------------------------------------------------------
   drizzle-mysql-smoke:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.drizzle_mysql_smoke
     # Release-publish decoupling (see `parity` above): aspirational extended
     # suite, informational only — does not block package publishing.
-    continue-on-error: true
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -2698,12 +2882,12 @@ jobs:
   # `run-extended-tests` label or workflow dispatch.
   # ---------------------------------------------------------------------------
   ink-link-smoke:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.ink_link_smoke
     # Aspirational smoke (informational) — see harmonyos-smoke. Does not block publish.
-    continue-on-error: true
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -2753,11 +2937,11 @@ jobs:
   # progress. Gated to tag pushes + opt-in, matching the named package smokes.
   # ---------------------------------------------------------------------------
   effect-basic-smoke:
-    continue-on-error: true
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.effect_basic_smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -2817,12 +3001,13 @@ jobs:
   # demand. PR authors and maintainers can both apply labels.
   # ---------------------------------------------------------------------------
   doc-tests:
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.doc_tests
     # Blocking host runs and the portable cross-compile subset gate the job.
     # Known platform-tail failures remain advisory at their individual steps.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     strategy:
       fail-fast: false
       matrix:
@@ -3058,7 +3243,11 @@ jobs:
   # Binary size tracking (main branch only)
   # ---------------------------------------------------------------------------
   binary-size:
-    if: github.ref == 'refs/heads/main'
+    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
+    # not take every runner slot the moment a merge lands -- PR gates share
+    # the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.binary_size
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
@@ -3088,3 +3277,93 @@ jobs:
         with:
           name: binary-sizes
           path: /tmp/sizes.md
+
+
+  # ---------------------------------------------------------------------------
+  # security-audit: cargo-audit / cargo-deny / supply-chain soak gate / agent +
+  # skills scans, from the reusable .github/workflows/security-audit.yml. In
+  # the PR tier the plan turns it on only when the diff touches a lockfile,
+  # manifest or policy file (ci_plan.py DEPS_GLOBS) -- a code-only PR cannot
+  # introduce a new advisory, and the weekly schedule in that workflow catches
+  # advisory-database updates on their own. Sweep and full tiers always run it.
+  # ---------------------------------------------------------------------------
+  security-audit:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.security_audit
+    uses: ./.github/workflows/security-audit.yml
+    permissions:
+      contents: read
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
+  # THE fan-in. One job, one status, named by tier so the outside world can
+  # key on it without knowing the job list:
+  #
+  #   pr-gate           pull_request runs. THE ONLY REQUIRED STATUS CONTEXT.
+  #                     Adding or removing a job above never needs a
+  #                     branch-protection edit again.
+  #   main-gate         push-to-main sweeps.
+  #   full-suite-gate   full-tier runs (nightly, tags, dispatch, labelled PRs
+  #                     -- a labelled PR is still `pr-gate`, the event wins).
+  #                     release-packages.yml's await-tests polls for THIS job
+  #                     on the release SHA, so a sweep-level green can never
+  #                     be mistaken for a release-grade one.
+  #
+  # `if: always()` so it reports even when something upstream failed or was
+  # cancelled -- a fan-in that is skipped when a dependency fails would leave
+  # the required context in "expected" limbo, which is exactly the state that
+  # forces admin bypasses. Verdict rules:
+  #   * `plan` itself must be `success` (a broken planner must not turn into
+  #     "everything skipped, therefore green");
+  #   * every other needed job must be `success` or `skipped` (skipped == the
+  #     plan turned it off, which is fine); `failure` and `cancelled` fail.
+  # ---------------------------------------------------------------------------
+  gate:
+    name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}
+    if: always()
+    needs:
+      - plan
+      - lint
+      - check
+      - warnings
+      - cargo-test
+      - e2e-scoped
+      - windows-build
+      - windows-arm64-build
+      - gc-stress
+      - compiler-output-regression
+      - repsel-census
+      - native-abi-evidence-packet
+      - gap-suite
+      - parity
+      - compile-smoke
+      - harmonyos-smoke
+      - drizzle-mysql-smoke
+      - ink-link-smoke
+      - effect-basic-smoke
+      - doc-tests
+      - binary-size
+      - security-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the plan and every planned job to have passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          TIER: ${{ needs.plan.outputs.tier }}
+        run: |
+          set -euo pipefail
+          echo "tier: ${TIER:-<plan did not run>}"
+          echo "$NEEDS" | jq -r 'to_entries[] | "  \(.key): \(.value.result)"'
+          plan_result="$(echo "$NEEDS" | jq -r '.plan.result')"
+          if [ "$plan_result" != "success" ]; then
+            echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
+            exit 1
+          fi
+          bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"
+          if [ -n "$bad" ]; then
+            echo "::error::failed or cancelled: $(echo "$bad" | tr '\n' ' ')"
+            exit 1
+          fi
+          ran="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "success") | .key' | wc -l)"
+          echo "OK: $ran job(s) passed, the rest were turned off by the plan."

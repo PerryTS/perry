@@ -145,15 +145,18 @@ unsafe fn form_data_value_string(value: f64) -> String {
 }
 
 fn form_data_string_array(values: Vec<String>) -> f64 {
-    let mut arr = perry_runtime::js_array_alloc(values.len() as u32);
+    // #8163: `arr` must survive the per-value string allocations below.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(values.len() as u32));
     for value in values {
         let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        arr = perry_runtime::js_array_push_f64(
-            arr,
+        let arr = perry_runtime::js_array_push_f64(
+            arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
             f64::from_bits(JSValue::string_ptr(value_ptr).bits()),
         );
+        arr_handle.set_raw_mut_ptr(arr);
     }
-    nanbox_array_pointer(arr)
+    nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
 }
 
 fn response_string_field(handle: f64, f: impl FnOnce(&FetchResponse) -> &str) -> *mut StringHeader {
@@ -492,22 +495,34 @@ pub extern "C" fn js_form_data_entries(handle: f64) -> f64 {
         .get(&id)
         .map(|form| form.entries.clone())
         .unwrap_or_default();
-    let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
+    // #8163: `arr`, `name_ptr` and `pair` are all raw heap addresses held across
+    // later allocations in this same loop. See `js_headers_entries`.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(entries.len() as u32));
     for (name, value) in entries {
+        let inner = perry_runtime::gc::RuntimeHandleScope::new();
         let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let name_handle = inner.root_nanbox_u64(JSValue::string_ptr(name_ptr).bits());
         let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        let mut pair = perry_runtime::js_array_alloc(2);
-        pair = perry_runtime::js_array_push_f64(
-            pair,
-            f64::from_bits(JSValue::string_ptr(name_ptr).bits()),
+        let value_handle = inner.root_nanbox_u64(JSValue::string_ptr(value_ptr).bits());
+        let pair_handle = inner.root_raw_mut_ptr(perry_runtime::js_array_alloc(2));
+        let pair = perry_runtime::js_array_push_f64(
+            pair_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
+            name_handle.get_nanbox_f64(),
         );
-        pair = perry_runtime::js_array_push_f64(
-            pair,
-            f64::from_bits(JSValue::string_ptr(value_ptr).bits()),
+        pair_handle.set_raw_mut_ptr(pair);
+        let pair = perry_runtime::js_array_push_f64(
+            pair_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
+            value_handle.get_nanbox_f64(),
         );
-        arr = perry_runtime::js_array_push_f64(arr, nanbox_array_pointer(pair));
+        pair_handle.set_raw_mut_ptr(pair);
+        let arr = perry_runtime::js_array_push_f64(
+            arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
+            nanbox_array_pointer(pair_handle.get_raw_mut_ptr()),
+        );
+        arr_handle.set_raw_mut_ptr(arr);
     }
-    nanbox_array_pointer(arr)
+    nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
 }
 
 #[no_mangle]
@@ -547,13 +562,19 @@ pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
     if cb_ptr == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let closure = cb_ptr as *const perry_runtime::ClosureHeader;
+    // #8163: the raw `ClosureHeader*` and the first of the two strings are held
+    // across an allocation and across user JS. See `js_headers_for_each`.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let cb_handle = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(cb_ptr));
     for (name, value) in entries {
+        let inner = perry_runtime::gc::RuntimeHandleScope::new();
         let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let name_handle = inner.root_nanbox_u64(JSValue::string_ptr(name_ptr).bits());
         let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
         let value_value = f64::from_bits(JSValue::string_ptr(value_ptr).bits());
-        perry_runtime::js_closure_call3(closure, value_value, name_value, handle);
+        let closure = perry_runtime::js_nanbox_get_pointer(cb_handle.get_nanbox_f64())
+            as *const perry_runtime::ClosureHeader;
+        perry_runtime::js_closure_call3(closure, value_value, name_handle.get_nanbox_f64(), handle);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
