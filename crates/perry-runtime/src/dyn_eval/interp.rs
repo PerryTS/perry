@@ -50,7 +50,7 @@ pub(crate) enum Flow {
 
 // ── nested-function registration cache ────────────────────────────────────
 
-thread_local! {
+crate::perry_thread_local! {
     /// AST-node address → registered fn id. Nested function/arrow expressions
     /// evaluate many times (ajv validators run per request); registering the
     /// node once keeps the registry bounded by the number of syntactic

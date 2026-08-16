@@ -175,7 +175,7 @@ struct ScriptMetadata {
 
 static VM_COMPILED_FUNCTION_SOURCES: OnceLock<Mutex<HashMap<usize, String>>> = OnceLock::new();
 
-thread_local! {
+crate::perry_thread_local! {
     static VM_INTRINSIC_GLOBAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static VM_CONTEXTS: std::cell::RefCell<HashMap<usize, ContextState>> =
         std::cell::RefCell::new(HashMap::new());

@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 
 const SOURCE_MAP_CLASS_ID: u32 = 0xFFFF_04D0;
 
-thread_local! {
+crate::perry_thread_local! {
     static SOURCE_MAP_PROTOTYPE: Cell<u64> = const { Cell::new(0) };
     static SOURCE_MAP_CACHE: RefCell<std::collections::HashMap<String, u64>> =
         RefCell::new(std::collections::HashMap::new());
