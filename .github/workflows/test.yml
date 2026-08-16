@@ -2234,50 +2234,45 @@ jobs:
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)
   # ---------------------------------------------------------------------------
+  # parity: the full Perry-vs-node parity sweep, SHARDED. Full tier only.
+  #
+  # Sharded 2026-08-16: the unsharded job was killed by GitHub's 6-hour job
+  # cap (run 31935729773, 11:44 -> 17:45) — the release gate could not
+  # complete even in principle. Each shard runs `run_parity_tests.sh
+  # --shard N/M` (round-robin partition, same mechanism as gap-suite) plus
+  # `parity_known_failures.py`, which is shard-safe by design ("not in this
+  # shard is never flagged"). The AGGREGATE gates — the threshold minimums
+  # and the per-module matrix trend, whose baselines describe the whole
+  # suite — run once in `parity-aggregate` below over the merged report
+  # (scripts/parity_report_merge.py, which FAILS on a missing shard rather
+  # than shrinking the suite).
+  #
+  # No `continue-on-error`: since the tiered restructure a red here fails
+  # `full-suite-gate`, which is exactly what release-packages.yml's
+  # await-tests keys on. If a standing failure must not block a release,
+  # triage it into test-parity/known_failures.json — do not soften the job.
+  # ---------------------------------------------------------------------------
   parity:
     # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
     # not take every runner slot the moment a merge lands -- PR gates share
     # the same 20-slot pool.
     needs: [plan, check]
     if: fromJSON(needs.plan.outputs.plan).jobs.parity
-    # Release-publish decoupling: aspirational extended suite. Per maintainer
-    # decision it no longer BLOCKS package publishing — release-packages.yml's
-    # await-tests gate keys on this workflow's run conclusion, and job-level
-    # `continue-on-error: true` keeps a red result here from failing that
-    # conclusion. The job still runs on every tag + shows its own pass/fail as
-    # an informational signal (and core jobs — cargo-test/lint/api-docs-drift/
-    # compiler-output-regression — still gate publish).
-    # Was macos-14 — moved to ubuntu-latest in v0.5.392. Parity tests
-    # just compare Perry's stdout against `node --experimental-strip-types`'s
-    # stdout per test file; both run cleanly on Linux. `gtimeout` on
-    # macOS is `timeout` on Linux (the run_parity_tests.sh wrapper
-    # detects either). Node 22+ is installed via setup-node@v4 below.
-    # 10× billing weight cut.
-    #
-    # v0.5.1018: gated to tag pushes only (`github.event_name == 'push'`).
-    # The pull_request trigger above still fires the workflow on PRs for
-    # the lint / cargo-test / api-docs-drift gates, but parity now only
-    # runs on release tags. Direct main commits + PR cycle no longer pay
-    # the ~20 min parity bill; release tagging still catches regressions
-    # before publish (release-packages.yml await-tests gate waits on
-    # this job by name for tag events).
-    #
-    # Opt-in: apply the `run-extended-tests` label to a PR, or dispatch
-    # the workflow manually with `run_extended_tests=true`, to run this
-    # job on demand. PR authors and maintainers can both apply labels.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).parity.shards }}
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22
-
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -2286,13 +2281,81 @@ jobs:
           # correctness input, not an incidental toolchain detail — never pin it
           # inline here. See CLAUDE.md ("TypeScript Parity Status").
           node-version-file: .node-version
-
+      # #8198: the npm-fixture parity/gap tests import root devDependencies.
+      - name: Install the npm packages the oracle imports
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build compiler
         run: cargo build --release
+      - name: Run parity tests (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }})
+        run: ./run_parity_tests.sh --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}
+      # Bidirectional since #7582: red on a failure that is not allowed here,
+      # AND red on an allowlist entry whose test ran on this platform and
+      # PASSED. Shard-safe: an entry whose test is not in this shard is never
+      # flagged, so each shard adjudicates exactly its own slice.
+      - name: Check for new and stale failures
+        run: >-
+          python3 scripts/parity_known_failures.py
+          --report test-parity/reports/latest.json
+          --known test-parity/known_failures.json
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: parity-shard-${{ matrix.shard }}
+          path: |
+            test-parity/reports/latest.json
+            test-parity/output/node/test_parity_*.txt
+            test-parity/output/perry/test_parity_*.txt
+          if-no-files-found: error
+      # Capture per-test compile stderr written by run_parity_tests.sh into
+      # `test-parity/output/*.compile_error.log` so the long-tail
+      # macOS-14-only compile failures (tracked as `ci-env` in
+      # known_failures.json) can finally be diagnosed by reading the actual
+      # error message rather than inferring from the test family.
+      - name: Upload compile-error logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: parity-compile-errors-${{ runner.os }}-shard-${{ matrix.shard }}
+          path: test-parity/output/*.compile_error.log
+          if-no-files-found: ignore
 
-      - name: Run parity tests
-        run: ./run_parity_tests.sh
-
+  # ---------------------------------------------------------------------------
+  # parity-aggregate: fan-in for the sharded parity sweep. Merges the shard
+  # reports into one whole-suite report and runs the gates whose baselines
+  # only make sense on the aggregate: the global + per-category threshold
+  # minimums (a 62%-floor category with two tests in a shard would flap) and
+  # the per-module matrix trend. The merge REFUSES a missing shard (--expect),
+  # so a lost artifact is a red run, not a smaller green suite.
+  # ---------------------------------------------------------------------------
+  parity-aggregate:
+    needs: [plan, parity]
+    if: fromJSON(needs.plan.outputs.plan).jobs.parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download shard reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: parity-shard-*
+          path: parity-shards
+      - name: Merge shard reports
+        env:
+          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).parity.total }}
+        run: |
+          set -euo pipefail
+          python3 scripts/parity_report_merge.py --self-test
+          mkdir -p test-parity/reports test-parity/output/node test-parity/output/perry
+          # Reconstruct the per-test output captures the matrix trend reads.
+          for d in parity-shards/parity-shard-*/; do
+            if [ -d "$d/test-parity/output/node" ]; then cp "$d"/test-parity/output/node/*.txt test-parity/output/node/ 2>/dev/null || true; fi
+            if [ -d "$d/test-parity/output/perry" ]; then cp "$d"/test-parity/output/perry/*.txt test-parity/output/perry/ 2>/dev/null || true; fi
+          done
+          python3 scripts/parity_report_merge.py \
+            --expect "$EXPECT" \
+            --output test-parity/reports/latest.json \
+            parity-shards/parity-shard-*/test-parity/reports/latest.json
       - name: Check parity threshold
         run: |
           set +e
@@ -2304,18 +2367,6 @@ jobs:
           set -e
           cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
-
-      # Bidirectional since #7582: red on a failure that is not allowed here,
-      # AND red on an allowlist entry whose test ran on this platform and
-      # PASSED. The second direction is the one that matters — the file was a
-      # pure suppression list, so a fixed test kept its entry forever and the
-      # entry silently absorbed that test's next regression (#7580).
-      - name: Check for new and stale failures
-        run: >-
-          python3 scripts/parity_known_failures.py
-          --report test-parity/reports/latest.json
-          --known test-parity/known_failures.json
-
       - name: Generate parity matrix trend
         run: |
           python3 scripts/parity_matrix_trend.py \
@@ -2323,8 +2374,7 @@ jobs:
             --output-json test-parity/reports/parity_matrix_latest.json \
             --output-md test-parity/reports/parity_matrix_latest.md
           cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload parity report
+      - name: Upload merged parity report
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -2336,18 +2386,6 @@ jobs:
             test-parity/reports/parity_matrix_latest.json
             test-parity/reports/parity_matrix_latest.md
 
-      # Capture per-test compile stderr written by run_parity_tests.sh into
-      # `test-parity/output/*.compile_error.log` so the long-tail
-      # macOS-14-only compile failures (tracked as `ci-env` in
-      # known_failures.json) can finally be diagnosed by reading the actual
-      # error message rather than inferring from the test family.
-      - name: Upload compile-error logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: parity-compile-errors-${{ runner.os }}
-          path: test-parity/output/*.compile_error.log
-          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Compile smoke test (all 130+ test files must compile)
@@ -3336,6 +3374,7 @@ jobs:
       - native-abi-evidence-packet
       - gap-suite
       - parity
+      - parity-aggregate
       - compile-smoke
       - harmonyos-smoke
       - drizzle-mysql-smoke

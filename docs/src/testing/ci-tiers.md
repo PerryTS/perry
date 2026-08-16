@@ -156,3 +156,10 @@ that each main-line sweep produces a *successful* run within its budget.
 pinned release branch and polls the SHA for a run whose **`full-suite-gate`** job
 succeeded — a green sweep or PR-tier run on the same SHA does not count. See
 [Releasing](../contributing/releasing.md).
+
+`parity` runs as 8 shards (`run_parity_tests.sh --shard N/8`) after the unsharded
+job was killed by GitHub's 6-hour job cap on 2026-08-16. `parity_known_failures.py`
+runs inside each shard (it is shard-safe by design); the threshold minimums and the
+per-module matrix trend run once in `parity-aggregate` over the merged report
+(`scripts/parity_report_merge.py`, which refuses a missing shard rather than
+shrinking the suite).
