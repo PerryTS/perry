@@ -1,5 +1,5 @@
 use crate::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Module, ModuleInitKind};
+use perry_hir::{types::Type, Expr, Module, ModuleInitKind, Stmt};
 
 fn entry_opts(output_type: &str) -> CompileOptions {
     CompileOptions {
@@ -109,6 +109,18 @@ fn emitted_path_init_ir(output_type: &str) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn nextjs_emitted_ir(output_type: &str) -> String {
+    let mut opts = entry_opts(output_type);
+    opts.non_entry_module_prefixes
+        .push("eager_route".to_string());
+    opts.nextjs_path_init_modules.push((
+        "/fixture/.next/server/chunks/300.js".to_string(),
+        "next_chunk_300".to_string(),
+    ));
+    String::from_utf8(compile_module(&empty_module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
+
 #[test]
 fn executable_exit_releases_collection_side_allocations_last() {
     let ir = emitted_ir("executable");
@@ -210,5 +222,101 @@ fn module_init_body_runs_through_native_exception_boundary() {
     assert!(
         !ir.contains("call void @gc_exit_teardown_ts__init_body()"),
         "the generated wrapper must not bypass the exception boundary\n{ir}"
+    );
+}
+
+#[test]
+fn dylib_entry_registers_nextjs_runtime_paths() {
+    let ir = nextjs_emitted_ir("dylib");
+    assert!(
+        ir.contains("call void @js_globalthis_seed_async_local_storage()"),
+        "a Next dylib must seed AsyncLocalStorage before module init"
+    );
+    assert!(
+        ir.contains("call void @js_register_path_init("),
+        "a Next dylib must register deferred .next/server modules"
+    );
+    assert!(
+        ir.contains("ptrtoint (ptr @next_chunk_300__init to i64)"),
+        "the path registry must point at the generated chunk init"
+    );
+    let path_registration = ir
+        .find("call void @js_register_path_init(")
+        .expect("missing path registration");
+    let eager_init = ir
+        .find("call void @eager_route__init()")
+        .expect("missing eager module init");
+    assert!(
+        path_registration < eager_init,
+        "computed chunk requires can run during eager webpack module init"
+    );
+}
+
+#[test]
+fn unknown_function_fallback_is_module_scoped() {
+    let ir = emitted_ir("dylib");
+    assert!(
+        ir.contains("@__perry_wrap_perry_unknown_func_gc_exit_teardown_ts("),
+        "the fallback wrapper must be unique after codegen-unit promotion"
+    );
+    assert!(
+        !ir.contains("@__perry_wrap_perry_unknown_func("),
+        "the old process-global fallback collides across split modules"
+    );
+}
+
+#[test]
+fn dylib_closures_keep_native_roots() {
+    // #8081: the runtime rebuilds its stack-map index at module init and
+    // discovers compact GC maps in every loaded image, so a dlopen'ed app
+    // dylib keeps the same native-root lowering as an executable. Demoting
+    // dylibs to shadow frames would leave the provider gate exercising a
+    // lowering production never ships.
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let mut module = empty_module();
+    module.init.push(Stmt::Let {
+        id: 0,
+        name: "parse_query".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Closure {
+            func_id: 1,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 2,
+                    name: "result".to_string(),
+                    ty: Type::Array(Box::new(Type::Any)),
+                    mutable: true,
+                    init: Some(Expr::Array(Vec::new())),
+                },
+                Stmt::Return(Some(Expr::LocalGet(2))),
+            ],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        }),
+    });
+
+    let ir = String::from_utf8(compile_module(&module, entry_opts("dylib")).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let closure = ir
+        .split("define ")
+        .find(|body| body.starts_with("double @perry_closure_") && body.contains("__1("))
+        .unwrap_or_else(|| panic!("missing closure body in dylib IR:\n{ir}"));
+    assert!(
+        closure.contains("gc \"statepoint-example\""),
+        "dylib closure must keep the native statepoint lowering:\n{closure}"
+    );
+    assert!(
+        !closure.contains("call ptr @js_shadow_frame_enter(i32 "),
+        "dylib roots must not be demoted to the shadow stack:\n{closure}"
     );
 }

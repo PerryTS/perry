@@ -314,6 +314,7 @@ pub fn lower_class_decl(
     // Set current class for arrow function `this` capture tracking
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.clone());
+    let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
     // The inner (const) binding visible in the body is the source ident.
     ctx.current_class_inner_name = Some(class_decl.ident.sym.to_string());
@@ -1227,6 +1228,7 @@ pub fn lower_class_decl(
 
     // Restore previous current_class
     ctx.current_class = old_class;
+    ctx.current_class_scope_depth = old_class_scope_depth;
     ctx.current_class_inner_name = old_inner_name;
     ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
@@ -1329,6 +1331,7 @@ pub fn lower_class_from_ast(
 
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());
+    let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
     // A class-expression caller stashes the source ident here; fall back
     // to the (possibly synthetic) registration name when absent.
@@ -1818,6 +1821,7 @@ pub fn lower_class_from_ast(
         ctx.register_class_native_extends(name.to_string(), module.clone(), class.clone());
     }
     ctx.current_class = old_class;
+    ctx.current_class_scope_depth = old_class_scope_depth;
     ctx.current_class_inner_name = old_inner_name;
     ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();

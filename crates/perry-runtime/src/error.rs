@@ -1649,7 +1649,12 @@ pub extern "C" fn js_throw_type_error_property_access(
 /// `"boolean"` / `"bigint"`) used for the diagnostic; pass null/0
 /// to omit it. `prop_name_*` carries the called method name.
 #[no_mangle]
-pub extern "C" fn js_throw_type_error_not_a_function(
+// This helper is called both directly from generated code and from the native
+// method-dispatch tower. A generated `try` catches its TypeError through the
+// system unwinder when the fast exception walker declines across separately
+// loaded provider/app images, so every Rust ABI frame between the callsite and
+// `js_throw` must permit foreign unwinding.
+pub extern "C-unwind" fn js_throw_type_error_not_a_function(
     receiver_kind_ptr: *const u8,
     receiver_kind_len: usize,
     prop_name_ptr: *const u8,
@@ -1780,6 +1785,12 @@ static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 #[cfg(test)]
 mod tostring_tests {
     use super::*;
+
+    #[test]
+    fn not_a_function_throw_bridge_is_unwind_capable() {
+        let _: extern "C-unwind" fn(*const u8, usize, *const u8, usize) -> ! =
+            js_throw_type_error_not_a_function;
+    }
 
     fn s(bytes: &[u8]) -> *mut StringHeader {
         js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)

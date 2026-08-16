@@ -461,6 +461,12 @@ pub(super) fn compile_module_entry(
         // `.next/server/**` module path now (before `main` borrows `llmod`); the
         // registration calls go in the block below. `(string_const_name,
         // byte_len, sanitized_prefix)`.
+        // Library entries need the same registry as executables. The host owns
+        // the event loop for a dylib, but `perry_module_init` still owns module
+        // initialization. In particular, a production Next App Route reaches
+        // its webpack chunks through runtime-computed `require(absolutePath)`
+        // calls after `perry_module_init` returns. Omitting these registrations
+        // makes the first dynamic import fail only in the shared-library path.
         let nextjs_path_inits: Vec<(String, usize, String)> = cross_module
             .nextjs_path_init_modules
             .iter()
@@ -807,6 +813,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,
@@ -1494,6 +1501,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,

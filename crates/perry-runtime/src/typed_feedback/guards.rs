@@ -836,7 +836,7 @@ pub extern "C" fn js_class_field_get_ic(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     site_id: u64,
     object: f64,
     method_name_ptr: *const i8,
@@ -886,7 +886,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_by_id(
     site_id: u64,
     object: f64,
     method_id: i64,
@@ -909,7 +909,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
     site_id: u64,
     object: f64,
     method_name_ptr: *const i8,
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply_by_id(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply_by_id(
     site_id: u64,
     object: f64,
     method_id: i64,

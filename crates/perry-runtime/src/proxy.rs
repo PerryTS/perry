@@ -531,6 +531,18 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
     let is_pointer = top16 == 0x7FFD || (top16 == 0 && bits > 0x10000);
     if is_pointer {
         let ptr = (bits & POINTER_MASK) as usize;
+        // `arguments` is an ordinary ObjectHeader backed by the arguments
+        // registry, not a GC_TYPE_ARRAY. Reading it through the generic object
+        // field path below loses its indexed bindings, so
+        // `Reflect.apply(target, thisArg, arguments)` constructed an empty
+        // argument list. Next 16's ProxyTracer forwards startActiveSpan with
+        // exactly that shape; its callback was consequently never invoked and
+        // the production App Route request remained pending (#8036).
+        if let Some(values) = unsafe {
+            crate::object::arguments_object_to_vec(ptr as *const crate::object::ObjectHeader)
+        } {
+            return values;
+        }
         // #7531: `value` is `argumentsList` from `Reflect.apply(target,
         // thisArg, argumentsList)` / `Reflect.construct` -- caller-supplied,
         // so it can be a fetch/zlib/proxy/common-registry handle id under
@@ -2536,6 +2548,24 @@ mod tests {
                 "{addr:#x} must not be misread as a live Array"
             );
         }
+    }
+
+    #[test]
+    fn create_list_from_array_like_unpacks_arguments_objects() {
+        let raw = crate::array::js_array_alloc(3);
+        let raw = crate::array::js_array_push_f64(raw, 11.0);
+        let raw = crate::array::js_array_push_f64(raw, 22.0);
+        let raw = crate::array::js_array_push_f64(raw, 33.0);
+        let raw_args = crate::value::js_nanbox_pointer(raw as i64);
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let arguments = crate::object::js_arguments_object_alloc(raw_args, undefined, 0);
+        let boxed_arguments = crate::value::js_nanbox_pointer(arguments as i64);
+
+        assert_eq!(
+            create_list_from_array_like(boxed_arguments),
+            vec![11.0, 22.0, 33.0],
+            "Reflect.apply must preserve every entry from a real arguments object"
+        );
     }
 
     /// #7531: `raw_ptr_from_value` feeds `array_ptr_from_value`, which derefs

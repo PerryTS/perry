@@ -902,12 +902,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
-        // Runtime `require(absolutePath.js)` of a module Perry AOT-compiled but
-        // that is only reachable via a runtime-computed path (Next.js / turbopack
-        // load page + chunk modules by a manifest path at request time, not a
-        // static specifier). Resolve it from the path->module registry that each
-        // compiled module self-registers into at init; `undefined` = not
-        // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
+        // Runtime `require(path)` of a module Perry AOT-compiled but that is
+        // only reachable via a computed path. Next's webpack runtime uses both
+        // absolute page paths and relative chunk paths (`./chunks/` + id).
+        // Resolve the latter against this CJS module's directory before probing
+        // the path registry, mirroring Node's per-module `require` binding.
+        // `js_require_path_module` canonicalizes the joined path, so `./` and
+        // `../` segments need no source-level normalization here.
         {{
             // A runtime-COMPUTED *relative* specifier never matches that
             // registry, which is keyed by absolute source path. Next's
@@ -929,6 +930,15 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 if (specifier.charCodeAt(1) === 47) {{
                     __perry_path_spec = {module_dir_literal} + '/' + specifier.slice(2);
                 }} else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {{
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
+                }} else if (specifier === '.' || specifier === '..') {{
+                    // The bare directory specifiers carry no trailing
+                    // separator, so the two prefix tests above miss them —
+                    // yet Node accepts `require('.')` / `require('..')` and
+                    // resolves them through the directory's `index.js` /
+                    // package `main`, which `js_require_path_module` also
+                    // does via its directory-candidate fallback. Without the
+                    // join the key stays a bare `.` and can never hit.
                     __perry_path_spec = {module_dir_literal} + '/' + specifier;
                 }}
             }}
