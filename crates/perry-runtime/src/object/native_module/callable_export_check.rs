@@ -592,6 +592,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("perf_histogram", "add")
             | ("perf_histogram", "percentile")
             | ("perf_histogram", "percentileBigInt")
+            | ("perf_histogram", "toJSON")
             // node:cluster — namespace property reads of these callables
             // need to satisfy `typeof cluster.fork === "function"` etc.
             // Calls dispatch through the native module method table, where

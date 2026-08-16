@@ -17,6 +17,12 @@
 //! hold an arbitrary heap JSValue, so the store is registered as a GC root
 //! scanner (`scan_perf_entries_roots_mut`).
 
+mod resource_timing;
+pub use resource_timing::{
+    js_perf_clear_resource_timings, js_perf_mark_resource_timing,
+    js_perf_set_resource_timing_buffer_size,
+};
+
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name,
     js_object_set_field, js_object_set_field_by_name,
@@ -52,6 +58,16 @@ pub(crate) const CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST: u32 = 0xFFFF_008F;
 const PERF_ENTRY_SHAPE: u32 = 0x7FFF_FF40;
 const PERF_ENTRY_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0detail\0";
 
+/// Shape for a `PerformanceResourceTiming` entry. Node exposes these as
+/// prototype accessors (so `Object.keys(entry)` is empty there and non-empty
+/// here), but the value set and its `toJSON()` projection are exactly this
+/// list. `name`/`entryType`/`startTime`/`duration` stay at indices 0..3 so the
+/// shared `perf_entry_type` / instanceof / sorting paths keep working.
+const RESOURCE_ENTRY_SHAPE: u32 = 0x7FFF_FF44;
+const RESOURCE_ENTRY_JSON_SHAPE: u32 = 0x7FFF_FF45;
+const RESOURCE_ENTRY_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0initiatorType\0nextHopProtocol\0workerStart\0redirectStart\0redirectEnd\0fetchStart\0domainLookupStart\0domainLookupEnd\0connectStart\0connectEnd\0secureConnectionStart\0requestStart\0responseStart\0responseEnd\0transferSize\0encodedBodySize\0decodedBodySize\0responseStatus\0deliveryType\0";
+const RESOURCE_ENTRY_FIELD_COUNT: u32 = 23;
+
 /// Distinct shape for the plain object returned by `PerformanceEntry#toJSON()`
 /// (#1387). Same field names as the entry, but a different shape id so its
 /// `keys_array` allocation differs from the entry's — `is_perf_entry_object`
@@ -71,6 +87,11 @@ const TOJSON_KEYS: &[u8] = b"eventLoopUtilization\0nodeTiming\0timeOrigin\0";
 /// Shape id + keys for `performance.nodeTiming` (PerformanceNodeTiming entry).
 const NODE_TIMING_SHAPE: u32 = 0x7FFF_FF43;
 const NODE_TIMING_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0uvMetricsInfo\0";
+
+/// Shape id + keys for the plain object `performance.nodeTiming.toJSON()`
+/// returns — the nodeTiming fields minus `uvMetricsInfo`.
+const NODE_TIMING_JSON_SHAPE: u32 = 0x7FFF_FF52;
+const NODE_TIMING_JSON_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0";
 
 /// Shape id + keys for `performance.nodeTiming.uvMetricsInfo`.
 const UV_METRICS_INFO_SHAPE: u32 = 0x7FFF_FF51;
@@ -106,6 +127,43 @@ thread_local! {
     /// pointer compare (no per-key string matching, no GC-tracked registry of
     /// movable entry pointers). Set on the first `entry_to_object` call.
     static PERF_ENTRY_KEYS_ARRAY: Cell<usize> = const { Cell::new(0) };
+
+    /// Same trick for the wider `PerformanceResourceTiming` shape.
+    static RESOURCE_ENTRY_KEYS_ARRAY: Cell<usize> = const { Cell::new(0) };
+
+    /// Cached `performance.nodeTiming` entry (NaN-boxed bits, 0 = uninit).
+    /// Node returns one PerformanceNodeTiming instance for the process, and
+    /// `performance.toJSON().nodeTiming` is that same object — both
+    /// `timing === performance.nodeTiming` and the toJSON snapshot's
+    /// non-freshness are observable. GC-rooted below.
+    static NODE_TIMING: Cell<u64> = const { Cell::new(0) };
+
+    /// Cached frozen `PerformanceObserver.supportedEntryTypes` array. GC-rooted
+    /// below.
+    static SUPPORTED_ENTRY_TYPES: Cell<u64> = const { Cell::new(0) };
+
+    /// `keys_array` pointer shared by the nodeTiming entry — the same
+    /// single-compare recognition trick `PERF_ENTRY_KEYS_ARRAY` uses, so
+    /// `nodeTiming.toJSON()` can be synthesized without giving the entry an own
+    /// `toJSON` key (Node's is on the prototype, and
+    /// `Object.keys(nodeTiming)` must stay at the 12 milestone names).
+    static NODE_TIMING_KEYS_ARRAY: Cell<usize> = const { Cell::new(0) };
+
+    /// `performance.timeOrigin`-relative timestamp of the first event-loop
+    /// turn, or -1 while the loop has not started. Node's `nodeTiming.loopStart`
+    /// sentinel, and the gate `eventLoopUtilization()` reads before reporting
+    /// anything but zeros.
+    static LOOP_START_MS: Cell<f64> = const { Cell::new(-1.0) };
+}
+
+/// Called from the first event-loop turn (`js_callback_timer_tick`) to stamp
+/// `nodeTiming.loopStart`. Idempotent and cheap enough for the tick path.
+pub(crate) fn note_event_loop_start() {
+    LOOP_START_MS.with(|c| {
+        if c.get() < 0.0 {
+            c.set(performance_now_ms().max(0.0));
+        }
+    });
 }
 
 /// True when `obj` is a mark/measure entry object produced by
@@ -116,7 +174,22 @@ pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeade
     if obj.is_null() {
         return false;
     }
+    let keys = (*obj).keys_array as usize;
     let recorded = PERF_ENTRY_KEYS_ARRAY.with(|c| c.get());
+    if recorded != 0 && keys == recorded {
+        return true;
+    }
+    let resource = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
+    resource != 0 && keys == resource
+}
+
+/// True when `obj` is a `PerformanceResourceTiming` entry — the wider shape
+/// whose `toJSON()` projects 23 keys rather than the base entry's 5.
+pub(crate) unsafe fn is_resource_entry_object(obj: *const crate::object::ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let recorded = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
     recorded != 0 && (*obj).keys_array as usize == recorded
 }
 
@@ -142,6 +215,11 @@ pub(crate) unsafe fn is_perf_entry_object_instance_of(
         CLASS_ID_PERFORMANCE_RESOURCE_TIMING => Some(ENTRY_TYPE_RESOURCE),
         _ => return None,
     };
+    // PerformanceNodeTiming is a PerformanceEntry (entryType "node") but not a
+    // mark/measure/resource, so it answers only the base-class question.
+    if is_node_timing_object(obj) {
+        return Some(want.is_none());
+    }
     if !is_perf_entry_object(obj) {
         return Some(false);
     }
@@ -208,6 +286,20 @@ pub(crate) unsafe fn perf_entry_to_json(this: f64) -> f64 {
     let src = jv.as_pointer::<crate::object::ObjectHeader>();
     if src.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if is_resource_entry_object(src) {
+        let n = RESOURCE_ENTRY_FIELD_COUNT as usize;
+        let fields: Vec<JSValue> = (0..n).map(|i| js_object_get_field(src, i as u32)).collect();
+        let out = js_object_alloc_with_shape(
+            RESOURCE_ENTRY_JSON_SHAPE,
+            RESOURCE_ENTRY_FIELD_COUNT,
+            RESOURCE_ENTRY_KEYS.as_ptr(),
+            RESOURCE_ENTRY_KEYS.len() as u32,
+        );
+        for (i, v) in fields.iter().enumerate() {
+            js_object_set_field(out, i as u32, *v);
+        }
+        return crate::value::js_nanbox_pointer(out as i64);
     }
     // Snapshot the 5 fields BEFORE allocating `out` — the alloc can trigger a
     // GC that relocates `src`, invalidating this raw pointer.
@@ -337,8 +429,26 @@ fn throw_type_error(msg: &str) -> ! {
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
+/// A `TypeError` with no Node `code` — what surfaces when Node reads an
+/// internal symbol off a nullish argument before its own validation runs
+/// (`histogram.add(undefined)`).
+pub(crate) fn throw_plain_type_error(msg: &str) -> ! {
+    throw_type_error(msg)
+}
+
 fn throw_type_error_with_code(msg: &str, code: &'static str) -> ! {
     crate::fs::validate::throw_type_error_with_code(msg, code)
+}
+
+/// Throw a `DOMException` with the given `name`. The User Timing and
+/// PerformanceObserver specs raise DOMExceptions, not Error subclasses, so
+/// `error.name` is the observable — `SyntaxError` for an unset mark endpoint,
+/// `InvalidModificationError` for an observer mode switch.
+fn throw_dom_exception(msg: &str, name: &str) -> ! {
+    let message = f64::from_bits(str_value(msg).bits());
+    let name = f64::from_bits(str_value(name).bits());
+    let err = crate::event_target::js_dom_exception_new(message, name);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn throw_syntax_error_with_code(msg: &str, code: &'static str) -> ! {
@@ -347,6 +457,38 @@ fn throw_syntax_error_with_code(msg: &str, code: &'static str) -> ! {
     let err_ptr = crate::error::js_syntaxerror_new(msg_str);
     let err_value = JSValue::pointer(err_ptr as *const u8).bits();
     crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+/// The `nodeTiming` milestones Node refuses as user-timing mark names — a
+/// `performance.mark("nodeStart")` would shadow the milestone that
+/// `measure({ start: "nodeStart" })` resolves against.
+const RESERVED_MILESTONE_NAMES: &[&str] = &[
+    "nodeStart",
+    "v8Start",
+    "environment",
+    "loopStart",
+    "loopExit",
+    "bootstrapComplete",
+];
+
+fn reject_reserved_milestone_name(name: &str) {
+    if RESERVED_MILESTONE_NAMES.contains(&name) {
+        throw_type_error_with_code(
+            &format!("The argument 'name' must not be one of the node timing milestones. Received '{name}'"),
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+}
+
+/// Milestone lookup for `measure({ start: "nodeStart" })` — the reserved names
+/// resolve against `nodeTiming`, not the mark timeline.
+fn milestone_start(name: &str) -> Option<f64> {
+    match name {
+        "nodeStart" | "v8Start" | "environment" | "bootstrapComplete" => Some(0.0),
+        "loopStart" => Some(LOOP_START_MS.with(|c| c.get())),
+        "loopExit" => Some(-1.0),
+        _ => None,
+    }
 }
 
 fn validate_user_timing_timestamp(value: f64) {
@@ -464,7 +606,10 @@ unsafe fn resolve_positional_endpoint(v: JSValue) -> f64 {
     } else if let Some(name) = string_of(v) {
         match lookup_mark_start(&name) {
             Some(t) => t,
-            None => throw_type_error(&format!("The \"{name}\" performance mark has not been set")),
+            None => throw_syntax_error_with_code(
+                &format!("The \"{name}\" performance mark has not been set"),
+                "12",
+            ),
         }
     } else {
         0.0
@@ -473,6 +618,9 @@ unsafe fn resolve_positional_endpoint(v: JSValue) -> f64 {
 
 /// Most-recent mark startTime for `name`, if any.
 fn lookup_mark_start(name: &str) -> Option<f64> {
+    if let Some(milestone) = milestone_start(name) {
+        return Some(milestone);
+    }
     PERF_ENTRIES.with(|store| {
         store
             .borrow()
@@ -514,7 +662,7 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
     }
 }
 
-fn as_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
+pub(crate) fn as_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
     let jv = JSValue::from_bits(v.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -560,6 +708,7 @@ pub extern "C" fn js_perf_mark(name_val: f64, options_val: f64) -> f64 {
             throw_type_error("Cannot convert a Symbol value to a string");
         }
         let name = coerce_to_string(name_val);
+        reject_reserved_milestone_name(&name);
         let mut start_time = perf_now();
         let mut detail_bits = JSValue::null().bits();
         if let Some(opts) = as_object_ptr(options_val) {
@@ -742,6 +891,7 @@ pub extern "C" fn js_perf_get_entries() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_get_entries_by_type(type_val: f64) -> f64 {
     unsafe {
+        require_entry_query_argument(type_val, "type");
         let want = coerce_to_string(type_val);
         match entry_type_code(&want) {
             Some(want_type) => entries_to_array(move |e| e.entry_type == want_type),
@@ -753,6 +903,7 @@ pub extern "C" fn js_perf_get_entries_by_type(type_val: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_get_entries_by_name(name_val: f64, type_val: f64) -> f64 {
     unsafe {
+        require_entry_query_argument(name_val, "name");
         let want_name = coerce_to_string(name_val);
         let type_jv = JSValue::from_bits(type_val.to_bits());
         let want_type: Option<u8> = if let Some(t) = string_of(type_jv) {
@@ -772,6 +923,26 @@ pub extern "C" fn js_perf_get_entries_by_name(name_val: f64, type_val: f64) -> f
     }
 }
 
+/// Shared guard for `getEntriesByName(name)` / `getEntriesByType(type)`: Node
+/// throws `ERR_MISSING_ARGS` when the query argument is absent, and a plain
+/// TypeError for a Symbol (which cannot be coerced to a string).
+///
+/// Perry's lowering passes `undefined` for an omitted trailing argument, so an
+/// explicit `getEntriesByName(undefined)` is indistinguishable from the
+/// zero-argument form and takes the same throw. Node would treat the explicit
+/// form as the literal name "undefined".
+unsafe fn require_entry_query_argument(value: f64, arg_name: &str) {
+    if crate::symbol::js_is_symbol(value) != 0 {
+        throw_type_error("Cannot convert a Symbol value to a string");
+    }
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        throw_type_error_with_code(
+            &format!("The \"{arg_name}\" argument must be specified"),
+            "ERR_MISSING_ARGS",
+        );
+    }
+}
+
 // ── clearMarks / clearMeasures ───────────────────────────────────────────────
 // `clearMarks()` / `clearMarks(undefined)` clear all marks; `clearMarks(name)`
 // clears only same-named marks (Node parity). Return `undefined`.
@@ -783,7 +954,11 @@ unsafe fn clear_entries(entry_type: u8, name_val: f64) -> f64 {
     let name = if JSValue::from_bits(name_val.to_bits()).is_undefined() {
         None
     } else {
-        Some(coerce_to_string(name_val))
+        let name = coerce_to_string(name_val);
+        if entry_type == ENTRY_TYPE_MARK {
+            reject_reserved_milestone_name(&name);
+        }
+        Some(name)
     };
     PERF_ENTRIES.with(|store| {
         store.borrow_mut().retain(|e| {
@@ -814,6 +989,15 @@ pub extern "C" fn js_perf_clear_measures(name_val: f64) -> f64 {
 // idle/active split anchored to performance.timeOrigin. The result keeps
 // Node's object shape and the diff forms' utilization in [0, 1].
 fn cumulative_idle_active() -> (f64, f64) {
+    // Node's `eventLoopUtilization()` short-circuits to all-zeros while
+    // `nodeTiming.loopStart <= 0` — i.e. for every call made during module
+    // evaluation, before the loop has run a turn. That gate holds for the
+    // two-argument diff form too, which is why a synthetic
+    // `eventLoopUtilization(newer, older)` reports 0/0 rather than the
+    // arithmetic difference of its arguments.
+    if LOOP_START_MS.with(|c| c.get()) <= 0.0 {
+        return (0.0, 0.0);
+    }
     let elapsed = perf_now().max(0.0);
     let active = elapsed * 0.05;
     let idle = elapsed - active;
@@ -836,6 +1020,9 @@ unsafe fn make_elu_object(idle: f64, active: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_event_loop_utilization(util1: f64, util2: f64) -> f64 {
     unsafe {
+        if LOOP_START_MS.with(|c| c.get()) <= 0.0 {
+            return make_elu_object(0.0, 0.0);
+        }
         let (idle, active) = cumulative_idle_active();
         if let Some((u1_idle, u1_active)) = read_elu_idle_active(util1) {
             if let Some((u2_idle, u2_active)) = read_elu_idle_active(util2) {
@@ -898,7 +1085,17 @@ pub extern "C" fn js_perf_to_json() -> f64 {
 /// shape.
 #[no_mangle]
 pub extern "C" fn js_perf_node_timing() -> f64 {
-    unsafe {
+    let cached = NODE_TIMING.with(|c| c.get());
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    let value = unsafe { make_node_timing_object() };
+    NODE_TIMING.with(|c| c.set(value.to_bits()));
+    value
+}
+
+unsafe fn make_node_timing_object() -> f64 {
+    {
         let scope = crate::gc::RuntimeHandleScope::new();
         let node_name = str_value("node");
         let node_name_handle = scope.root_nanbox_u64(node_name.bits());
@@ -919,7 +1116,7 @@ pub extern "C" fn js_perf_node_timing() -> f64 {
         js_object_set_field(obj, 5, JSValue::number(0.0)); // v8Start
         js_object_set_field(obj, 6, JSValue::number(0.0)); // bootstrapComplete
         js_object_set_field(obj, 7, JSValue::number(0.0)); // environment
-        js_object_set_field(obj, 8, JSValue::number(perf_now().max(0.0))); // loopStart
+        js_object_set_field(obj, 8, JSValue::number(LOOP_START_MS.with(|c| c.get()))); // loopStart
         js_object_set_field(obj, 9, JSValue::number(-1.0)); // loopExit (loop running)
         js_object_set_field(obj, 10, JSValue::number(0.0)); // idleTime
         js_object_set_field(
@@ -927,8 +1124,43 @@ pub extern "C" fn js_perf_node_timing() -> f64 {
             11,
             JSValue::from_bits(uv_metrics_handle.get_nanbox_u64()),
         );
+        NODE_TIMING_KEYS_ARRAY.with(|c| c.set((*obj).keys_array as usize));
         crate::value::js_nanbox_pointer(obj as i64)
     }
+}
+
+/// True when `obj` is the `performance.nodeTiming` entry.
+pub(crate) unsafe fn is_node_timing_object(obj: *const crate::object::ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let recorded = NODE_TIMING_KEYS_ARRAY.with(|c| c.get());
+    recorded != 0 && (*obj).keys_array as usize == recorded
+}
+
+/// `performance.nodeTiming.toJSON()` — the milestone numbers plus the entry
+/// header, minus `uvMetricsInfo` (Node's serializer omits it).
+pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
+    let jv = JSValue::from_bits(this.to_bits());
+    if !jv.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let src = jv.as_pointer::<crate::object::ObjectHeader>();
+    if src.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // Snapshot before allocating: the alloc can move `src`.
+    let fields: [JSValue; 11] = std::array::from_fn(|i| js_object_get_field(src, i as u32));
+    let out = js_object_alloc_with_shape(
+        NODE_TIMING_JSON_SHAPE,
+        11,
+        NODE_TIMING_JSON_KEYS.as_ptr(),
+        NODE_TIMING_JSON_KEYS.len() as u32,
+    );
+    for (i, v) in fields.iter().enumerate() {
+        js_object_set_field(out, i as u32, *v);
+    }
+    crate::value::js_nanbox_pointer(out as i64)
 }
 
 unsafe fn make_uv_metrics_info_object() -> f64 {
@@ -944,102 +1176,6 @@ unsafe fn make_uv_metrics_info_object() -> f64 {
     js_object_set_field(obj, 1, JSValue::number(0.0)); // events
     js_object_set_field(obj, 2, JSValue::number(0.0)); // eventsWaiting
     crate::value::js_nanbox_pointer(obj as i64)
-}
-
-// ── clearResourceTimings() / setResourceTimingBufferSize(n) ──────────────────
-#[no_mangle]
-pub extern "C" fn js_perf_clear_resource_timings() -> f64 {
-    PERF_ENTRIES.with(|store| {
-        store
-            .borrow_mut()
-            .retain(|entry| entry.entry_type != ENTRY_TYPE_RESOURCE);
-    });
-    f64::from_bits(JSValue::undefined().bits())
-}
-
-/// Node default for the resource-timing buffer size
-/// (`performance.setResourceTimingBufferSize` unset).
-const RESOURCE_TIMING_BUFFER_DEFAULT: usize = 250;
-
-thread_local! {
-    /// 2026-07-09 GC audit wave 2: the setter used to be a no-op and the
-    /// timeline had NO cap, so per-request `markResourceTiming` leaked
-    /// entries (plus their materialized entry objects, GC-rooted via
-    /// `object_bits`) forever. Node caps 'resource' entries at 250 by
-    /// default and drops new ones when the buffer is full.
-    static RESOURCE_TIMING_BUFFER_SIZE: Cell<usize> =
-        const { Cell::new(RESOURCE_TIMING_BUFFER_DEFAULT) };
-}
-
-#[no_mangle]
-pub extern "C" fn js_perf_set_resource_timing_buffer_size(n: f64) -> f64 {
-    // WebIDL unsigned long conversion, saturating at 0 for junk input.
-    let size = if n.is_finite() && n > 0.0 {
-        n.floor().min(u32::MAX as f64) as usize
-    } else {
-        0
-    };
-    RESOURCE_TIMING_BUFFER_SIZE.with(|cell| cell.set(size));
-    f64::from_bits(JSValue::undefined().bits())
-}
-
-/// True when another 'resource' entry fits in the timeline buffer.
-fn resource_timing_buffer_has_room() -> bool {
-    let cap = RESOURCE_TIMING_BUFFER_SIZE.with(|cell| cell.get());
-    PERF_ENTRIES.with(|store| {
-        store
-            .borrow()
-            .iter()
-            .filter(|entry| entry.entry_type == ENTRY_TYPE_RESOURCE)
-            .count()
-            < cap
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn js_perf_mark_resource_timing(
-    timing_info: f64,
-    requested_url: f64,
-    initiator_type: f64,
-    _global: f64,
-    _cache_mode: f64,
-    _body_info: f64,
-    _response_status: f64,
-    _delivery_type: f64,
-) -> f64 {
-    unsafe {
-        let Some(timing_obj) = as_object_ptr(timing_info) else {
-            throw_type_error_with_code(
-                "The \"timingInfo\" argument must be of type object",
-                "ERR_INVALID_ARG_TYPE",
-            );
-        };
-        let name = coerce_to_string(requested_url);
-        let initiator = coerce_to_string(initiator_type);
-        let start_time = option_number(timing_obj, "startTime")
-            .or_else(|| option_number(timing_obj, "fetchStart"))
-            .unwrap_or(0.0);
-        let entry = PerfEntry {
-            name,
-            entry_type: ENTRY_TYPE_RESOURCE,
-            start_time,
-            duration: f64::NAN,
-            detail_bits: JSValue::null().bits(),
-            object_bits: 0,
-            initiator_type: Some(initiator),
-        };
-        let mut entry = entry;
-        let obj = entry_to_object(&entry);
-        entry.object_bits = obj.to_bits();
-        notify_observers(&entry);
-        // Timeline insertion honors the resource-timing buffer cap (observers
-        // above still see the entry, matching Node: a full buffer only stops
-        // timeline accumulation, not observer delivery).
-        if resource_timing_buffer_has_room() {
-            PERF_ENTRIES.with(|store| store.borrow_mut().push(entry));
-        }
-        obj
-    }
 }
 
 unsafe fn collect_rest_args(rest: f64) -> Vec<f64> {
@@ -1086,11 +1222,19 @@ extern "C" fn perf_timerify_wrapper(
     unsafe {
         let target = crate::closure::js_closure_get_capture_f64(closure, 0);
         let name_value = crate::closure::js_closure_get_capture_f64(closure, 1);
+        let histogram = crate::closure::js_closure_get_capture_f64(closure, 2);
         let name = string_of(JSValue::from_bits(name_value.to_bits())).unwrap_or_default();
         let args = collect_rest_args(rest);
         let start_time = perf_now();
         let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
         let duration = (perf_now() - start_time).max(0.0);
+        // Node records timerify durations in nanoseconds. A sub-nanosecond
+        // call still has to land in a bucket — the histogram's lowest
+        // trackable value is 1 — or `histogram.count` would not move.
+        crate::perf_histogram::record_timerify_duration(
+            histogram,
+            ((duration * 1.0e6).round() as i64).max(1),
+        );
         let entry = PerfEntry {
             name,
             entry_type: ENTRY_TYPE_FUNCTION,
@@ -1109,7 +1253,7 @@ extern "C" fn perf_timerify_wrapper(
 }
 
 #[no_mangle]
-pub extern "C" fn js_perf_timerify(fn_value: f64, _options: f64) -> f64 {
+pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
     unsafe {
         if !is_function_value(fn_value) {
             throw_type_error_with_code(
@@ -1117,14 +1261,28 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, _options: f64) -> f64 {
                 "ERR_INVALID_ARG_TYPE",
             );
         }
+        let mut histogram = f64::from_bits(JSValue::undefined().bits());
+        if let Some(opts) = as_object_ptr(options) {
+            let candidate = f64::from_bits(option_value(opts, "histogram").bits());
+            if !JSValue::from_bits(candidate.to_bits()).is_undefined() {
+                if crate::perf_histogram::histogram_id_from_value(candidate).is_none() {
+                    throw_type_error_with_code(
+                        "The \"options.histogram\" argument must be an instance of RecordableHistogram",
+                        "ERR_INVALID_ARG_TYPE",
+                    );
+                }
+                histogram = candidate;
+            }
+        }
         TIMERIFY_WRAPPER_REGISTERED.call_once(|| {
             crate::closure::js_register_closure_rest(perf_timerify_wrapper as *const u8, 0);
         });
         let name = function_value_name(fn_value);
-        let closure = crate::closure::js_closure_alloc(perf_timerify_wrapper as *const u8, 2);
+        let closure = crate::closure::js_closure_alloc(perf_timerify_wrapper as *const u8, 3);
         crate::closure::js_closure_set_capture_f64(closure, 0, fn_value);
         let name_value = str_value(&name);
         crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(name_value.bits()));
+        crate::closure::js_closure_set_capture_f64(closure, 2, histogram);
 
         if let Some(target) = closure_ptr_from_value(fn_value) {
             if let Some(length) = crate::closure::closure_length(target) {
@@ -1170,6 +1328,16 @@ struct Observer {
     entry_types: Vec<u8>,
     pending: Vec<PerfEntry>,
     active: bool,
+    /// True from the moment an entry is buffered until the queued flush runs.
+    /// `takeRecords()` empties `pending` but leaves this set: Node's dispatch
+    /// was already scheduled and still fires, with an empty entry list. Keying
+    /// the flush on `!pending.is_empty()` instead swallowed that call.
+    flush_queued: bool,
+    /// `Some(true)` once `observe({ type })` has subscribed this observer,
+    /// `Some(false)` for `observe({ entryTypes })`. The two modes are not
+    /// interchangeable: an active observer that switches raises
+    /// `InvalidModificationError`. Cleared by `disconnect()`.
+    single_mode: Option<bool>,
 }
 
 thread_local! {
@@ -1182,6 +1350,11 @@ thread_local! {
 /// Build the `perf_observer` namespace object carrying the registry index.
 unsafe fn make_observer_object(id: usize) -> f64 {
     crate::object::install_native_module_vtable();
+    // These namespace tags never appear in user source (they are handed out as
+    // return values), so codegen emits no `js_nm_install_perf()` for them and
+    // the dispatch bucket would be empty — every method call on the object
+    // would resolve to `undefined` and silently do nothing. Arm it here.
+    crate::object::js_nm_install_perf();
     let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
     let module = b"perf_observer";
     let mname = crate::string::js_string_from_bytes(module.as_ptr(), module.len() as u32);
@@ -1221,6 +1394,8 @@ pub extern "C" fn js_perf_observer_new(cb: f64) -> f64 {
                 entry_types: Vec::new(),
                 pending: Vec::new(),
                 active: false,
+                flush_queued: false,
+                single_mode: None,
             });
             o.len() - 1
         });
@@ -1324,16 +1499,53 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
             }
         }
 
+        // Node returns early when the request resolves to no supported entry
+        // type at all — `observe({ entryTypes: [] })` and
+        // `observe({ type: "bogus" })` are no-ops, and in particular they do
+        // NOT pin the observer's subscription mode. Checking the mode first
+        // would reject a later `observe({ type })` that Node accepts.
+        if types.is_empty() {
+            return f64::from_bits(JSValue::undefined().bits());
+        }
+
+        // An active observer cannot move between the two subscription modes.
+        let previous_mode = OBSERVERS.with(|o| {
+            o.borrow()
+                .get(id)
+                .filter(|obs| obs.active)
+                .and_then(|obs| obs.single_mode)
+        });
+        if previous_mode.is_some_and(|previous| previous != has_type) {
+            throw_dom_exception(
+                "Cannot change to a different PerformanceObserver subscription mode",
+                "InvalidModificationError",
+            );
+        }
+
         // buffered: boolean — also deliver entries already on the timeline.
         let b_v = option_value(opts_obj, "buffered");
         let buffered = crate::value::js_is_truthy(f64::from_bits(b_v.bits())) != 0;
-        let observed = types.clone();
         OBSERVERS.with(|o| {
             if let Some(obs) = o.borrow_mut().get_mut(id) {
-                obs.entry_types = types;
+                // `observe({ type })` ADDS to the subscription (Node's single
+                // mode accumulates across calls); `observe({ entryTypes })`
+                // REPLACES it wholesale.
+                if has_type && obs.active {
+                    for code in &types {
+                        if !obs.entry_types.contains(code) {
+                            obs.entry_types.push(*code);
+                        }
+                    }
+                } else {
+                    obs.entry_types = types;
+                }
                 obs.active = true;
+                obs.single_mode = Some(has_type);
             }
         });
+        let observed = OBSERVERS
+            .with(|o| o.borrow().get(id).map(|obs| obs.entry_types.clone()))
+            .unwrap_or_default();
         // `buffered: true` delivers entries created before observe() was
         // called. Queue the matching timeline entries and arm the async flush
         // so the callback fires on a later turn (Node's buffered semantics).
@@ -1350,6 +1562,7 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
                 OBSERVERS.with(|o| {
                     if let Some(obs) = o.borrow_mut().get_mut(id) {
                         obs.pending.extend(pre);
+                        obs.flush_queued = true;
                     }
                 });
                 schedule_flush();
@@ -1366,6 +1579,8 @@ pub extern "C" fn js_perf_observer_disconnect(obs_val: f64) -> f64 {
     OBSERVERS.with(|o| {
         if let Some(obs) = o.borrow_mut().get_mut(id) {
             obs.active = false;
+            obs.single_mode = None;
+            obs.flush_queued = false;
             obs.pending.clear();
         }
     });
@@ -1405,6 +1620,7 @@ fn notify_observers(entry: &PerfEntry) {
         for obs in o.borrow_mut().iter_mut() {
             if obs.active && obs.entry_types.contains(&entry.entry_type) {
                 obs.pending.push(entry.clone());
+                obs.flush_queued = true;
                 any = true;
             }
         }
@@ -1420,9 +1636,15 @@ fn schedule_flush() {
     }
     FLUSH_SCHEDULED.with(|f| f.set(true));
     {
+        // Node dispatches observer callbacks from the check (setImmediate)
+        // phase, so a `setImmediate` a caller registers AFTER creating an
+        // entry still runs after the callback. A `setTimeout(0)` here lands in
+        // the timer phase instead, i.e. before an immediate the test awaits —
+        // which is why `await new Promise(r => setImmediate(r))` saw
+        // "not delivered".
         let closure =
             crate::closure::js_closure_alloc_singleton(js_perf_observer_flush_all as *const u8);
-        crate::timer::js_set_timeout_callback(closure as i64, 0.0);
+        crate::timer::js_set_immediate_callback(closure as i64);
     }
 }
 
@@ -1435,21 +1657,38 @@ pub extern "C" fn js_perf_observer_flush_all(
     let work: Vec<(u64, u64, Vec<PerfEntry>)> = OBSERVERS.with(|o| {
         o.borrow_mut()
             .iter_mut()
-            .filter(|obs| obs.active && !obs.pending.is_empty())
-            .map(|obs| (obs.cb_bits, obs.obj_bits, std::mem::take(&mut obs.pending)))
+            .filter(|obs| obs.active && obs.flush_queued)
+            .map(|obs| {
+                obs.flush_queued = false;
+                (obs.cb_bits, obs.obj_bits, std::mem::take(&mut obs.pending))
+            })
             .collect()
     });
     for (cb_bits, obj_bits, entries) in work {
         {
             CURRENT_LIST.with(|c| *c.borrow_mut() = entries);
+            // These namespace tags never appear in user source (they are handed out as
+            // return values), so codegen emits no `js_nm_install_perf()` for them and
+            // the dispatch bucket would be empty — every method call on the object
+            // would resolve to `undefined` and silently do nothing. Arm it here.
+            crate::object::js_nm_install_perf();
             let module = b"perf_observer_list";
             let list =
                 crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {
-                let cb_closure = cb_jv.as_pointer::<crate::closure::ClosureHeader>();
-                // Node invokes the callback as `(list, observer)`.
-                crate::closure::js_closure_call2(cb_closure, list, f64::from_bits(obj_bits));
+                // Node invokes the callback as `(list, observer)` with `this`
+                // bound to the observer, so a `function () { this === observer }`
+                // callback sees it. Route through Reflect.apply rather than the
+                // plain closure call, which leaves `this` undefined.
+                let mut args = crate::array::js_array_alloc(2);
+                args = crate::array::js_array_push(args, JSValue::from_bits(list.to_bits()));
+                args = crate::array::js_array_push(args, JSValue::from_bits(obj_bits));
+                crate::proxy::js_reflect_apply(
+                    f64::from_bits(cb_bits),
+                    f64::from_bits(obj_bits),
+                    crate::value::js_nanbox_pointer(args as i64),
+                );
             }
             CURRENT_LIST.with(|c| c.borrow_mut().clear());
         }
@@ -1476,6 +1715,7 @@ pub unsafe fn current_list_get_entries() -> f64 {
 }
 
 pub unsafe fn current_list_get_by_type(type_val: f64) -> f64 {
+    require_entry_query_argument(type_val, "type");
     let want = coerce_to_string(type_val);
     match entry_type_code(&want) {
         Some(code) => current_list_to_array(move |e| e.entry_type == code),
@@ -1484,26 +1724,52 @@ pub unsafe fn current_list_get_by_type(type_val: f64) -> f64 {
 }
 
 pub unsafe fn current_list_get_by_name(name_val: f64) -> f64 {
+    require_entry_query_argument(name_val, "name");
     let want = coerce_to_string(name_val);
     current_list_to_array(move |e| e.name == want)
 }
 
-/// Build the `PerformanceObserver.supportedEntryTypes` array.
+/// `PerformanceObserver.supportedEntryTypes` — Node's exact list, frozen, and
+/// the SAME array on every read (the getter caches it, so
+/// `types !== PerformanceObserver.supportedEntryTypes` is false). Perry only
+/// *produces* mark/measure/resource/function entries; the list is a static
+/// declaration of the spec's entry-type vocabulary, which Node reports in full
+/// regardless of what the process has emitted.
 #[no_mangle]
 pub extern "C" fn js_perf_supported_entry_types() -> f64 {
-    {
-        let mut arr = crate::array::js_array_alloc(4);
-        for t in ["function", "mark", "measure", "resource"] {
-            arr = crate::array::js_array_push(arr, str_value(t));
-        }
-        crate::value::js_nanbox_pointer(arr as i64)
+    let cached = SUPPORTED_ENTRY_TYPES.with(|c| c.get());
+    if cached != 0 {
+        return f64::from_bits(cached);
     }
+    let mut arr = crate::array::js_array_alloc(10);
+    for t in [
+        "dns", "function", "gc", "http", "http2", "mark", "measure", "net", "quic", "resource",
+    ] {
+        arr = crate::array::js_array_push(arr, str_value(t));
+    }
+    unsafe {
+        let gc_header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*gc_header)._reserved |=
+            crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    }
+    let value = crate::value::js_nanbox_pointer(arr as i64);
+    SUPPORTED_ENTRY_TYPES.with(|c| c.set(value.to_bits()));
+    value
 }
 
 // ── GC root scanner ──────────────────────────────────────────────────────────
 /// Keep `detail` JSValues stored in the timeline + observer buffers, and the
 /// observer callbacks, alive across GC.
 pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    for cell in [&NODE_TIMING, &SUPPORTED_ENTRY_TYPES] {
+        cell.with(|c| {
+            let mut bits = c.get();
+            if bits != 0 {
+                visitor.visit_nanbox_u64_slot(&mut bits);
+                c.set(bits);
+            }
+        });
+    }
     PERF_ENTRIES.with(|store| {
         for e in store.borrow_mut().iter_mut() {
             visitor.visit_nanbox_u64_slot(&mut e.detail_bits);
@@ -1541,15 +1807,21 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             c.set(bits);
         }
     });
-    // This is an identity index into structurally rooted entry objects, not
-    // an owner. Follow a forwarding address without keeping the keys array
+    // These are identity indices into structurally rooted entry objects, not
+    // owners. Follow a forwarding address without keeping the keys array
     // alive on its own.
-    PERF_ENTRY_KEYS_ARRAY.with(|c| {
-        let mut addr = c.get();
-        if addr != 0 && visitor.visit_metadata_usize_slot(&mut addr) {
-            c.set(addr);
-        }
-    });
+    for cell in [
+        &PERF_ENTRY_KEYS_ARRAY,
+        &RESOURCE_ENTRY_KEYS_ARRAY,
+        &NODE_TIMING_KEYS_ARRAY,
+    ] {
+        cell.with(|c| {
+            let mut addr = c.get();
+            if addr != 0 && visitor.visit_metadata_usize_slot(&mut addr) {
+                c.set(addr);
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1560,62 +1832,6 @@ pub(crate) fn test_seed_perf_entry_keys_array(addr: usize) {
 #[cfg(test)]
 pub(crate) fn test_perf_entry_keys_array() -> usize {
     PERF_ENTRY_KEYS_ARRAY.with(|slot| slot.get())
-}
-
-// ── Histograms (perf_histogram namespace) ────────────────────────────────────
-// `monitorEventLoopDelay()` returns an IntervalHistogram and
-// `createHistogram()` returns a RecordableHistogram. Perry doesn't actually
-// sample event-loop delay or record user-supplied values yet — every stat
-// reads as 0, and enable/disable/reset/record/recordDelta/add are no-ops.
-// The shape is enough to satisfy feature-detection (`typeof h.record ===
-// "function"`, `typeof h.mean === "number"`) and the trivial-call paths
-// that user code drives through these histograms. Issue #1336.
-
-/// Build a `perf_histogram`-tagged namespace object. Distinguishing
-/// IntervalHistogram vs RecordableHistogram is unnecessary for the stub
-/// surface — every method/property is shared and trivial — so the same
-/// shape covers both. The receiver-less property reads route through
-/// `is_native_module_callable_export` (methods) and
-/// `get_native_module_constant` (numeric accessors).
-unsafe fn make_histogram_object() -> f64 {
-    crate::object::install_native_module_vtable();
-    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 1);
-    let module = b"perf_histogram";
-    let mname = crate::string::js_string_from_bytes(module.as_ptr(), module.len() as u32);
-    js_object_set_field(obj, 0, JSValue::string_ptr(mname));
-    let mut keys = crate::array::js_array_alloc(1);
-    let kp = crate::string::js_string_from_bytes(b"__module__".as_ptr(), 10);
-    keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
-    crate::object::js_object_set_keys(obj, keys);
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
-/// `perf_hooks.monitorEventLoopDelay(options?)` — returns an IntervalHistogram.
-#[no_mangle]
-pub extern "C" fn js_perf_monitor_event_loop_delay(_options: f64) -> f64 {
-    unsafe { make_histogram_object() }
-}
-
-/// `perf_hooks.createHistogram(options?)` — returns a RecordableHistogram.
-#[no_mangle]
-pub extern "C" fn js_perf_create_histogram(_options: f64) -> f64 {
-    unsafe { make_histogram_object() }
-}
-
-/// `histogram.enable()` / `.disable()` / `.reset()` / `.record(n)` /
-/// `.recordDelta()` / `.add(other)` — no-ops on the stub. Returns
-/// `undefined` per Node's signature for the void-returning methods;
-/// `.enable()` actually returns `true` in Node (was it running before?),
-/// but `undefined` is what the unobserved-stub case warrants.
-#[no_mangle]
-pub extern "C" fn js_perf_histogram_noop() -> f64 {
-    f64::from_bits(JSValue::undefined().bits())
-}
-
-/// `histogram.percentile(p)` — returns 0 (no recorded samples).
-#[no_mangle]
-pub extern "C" fn js_perf_histogram_percentile(_p: f64) -> f64 {
-    0.0
 }
 
 #[cfg(test)]

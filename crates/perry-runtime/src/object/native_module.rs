@@ -17,6 +17,8 @@ mod callable_export_arity_table;
 mod callable_export_check;
 mod callable_export_table;
 pub(crate) mod callable_exports;
+mod perf_instance_bind;
+pub(crate) use perf_instance_bind::instance_bound_perf_method;
 mod constants;
 mod constants_tables;
 mod module_keys;
@@ -640,6 +642,14 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             "dgram".len(),
         )),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
+        // node:perf_hooks has no distinct CJS shape — `module.exports` IS the
+        // namespace, and `default` is listed among its keys. Resolving to the
+        // same tag keeps `hooks.default.performance === hooks.performance`
+        // (the `performance` singleton resolves identically from either).
+        "perf_hooks" => Some(js_create_native_module_namespace(
+            b"perf_hooks".as_ptr(),
+            "perf_hooks".len(),
+        )),
         "process" => Some(js_create_native_module_namespace(
             b"process".as_ptr(),
             "process".len(),
@@ -868,7 +878,12 @@ unsafe fn native_module_property_by_name_impl(
         return crate::perf_hooks::performance_namespace();
     }
     if module_name == "perf_hooks" && property_name == "constants" {
-        return js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+        // Its OWN tag. Sharing the `perf_hooks` tag made every read of the
+        // constants object resolve against the MODULE's surface, so
+        // `Object.keys(constants)` enumerated the export list instead of the
+        // `NODE_PERFORMANCE_GC_*` table.
+        let submodule = "perf_hooks.constants";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
     }
     // #1533: node:stream exposes a `promises` namespace (`await pipeline(...)`
     // / `finished(...)`). Resolve `stream.promises` to a `stream/promises`-
@@ -1097,6 +1112,10 @@ pub extern "C" fn js_native_module_bind_method(
     // exports that are actually callable on this platform; otherwise namespace
     // reads such as Linux `fs.lchmodSync` must stay `undefined`.
     if is_native_module_callable_export(module_name, property_name) {
+        if let Some(bound) = instance_bound_perf_method(module_name, property_name, _namespace_obj)
+        {
+            return bound;
+        }
         return bound_native_callable_export_value(module_name, property_name);
     }
 
@@ -1835,6 +1854,9 @@ unsafe fn vt_get_own_field(
     // Issue #894: callable exports (`("events", "EventEmitter")` …) get a
     // bound-method closure for require-then-member-access parity.
     if is_native_module_callable_export(module_name, property_name) {
+        if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
+            return Some(JSValue::from_bits(bound.to_bits()));
+        }
         return Some(JSValue::from_bits(
             bound_native_callable_export_value(module_name, property_name).to_bits(),
         ));

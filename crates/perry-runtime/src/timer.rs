@@ -1082,6 +1082,9 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
 /// Returns the number of callbacks that were called
 #[no_mangle]
 pub extern "C" fn js_callback_timer_tick() -> i32 {
+    // First turn of the codegen event loop — `nodeTiming.loopStart` stops being
+    // the "not started" sentinel here.
+    crate::perf_hooks::note_event_loop_start();
     use crate::closure::{
         js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,

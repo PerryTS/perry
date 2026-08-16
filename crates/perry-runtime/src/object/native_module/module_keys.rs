@@ -1814,6 +1814,21 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"createHistogram",
             b"performance",
             b"constants",
+            b"default",
+        ]),
+        "perf_hooks.constants" => Some(&[
+            b"NODE_PERFORMANCE_GC_MAJOR",
+            b"NODE_PERFORMANCE_GC_MINOR",
+            b"NODE_PERFORMANCE_GC_MINOR_MARK_SWEEP",
+            b"NODE_PERFORMANCE_GC_INCREMENTAL",
+            b"NODE_PERFORMANCE_GC_WEAKCB",
+            b"NODE_PERFORMANCE_GC_FLAGS_NO",
+            b"NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED",
+            b"NODE_PERFORMANCE_GC_FLAGS_FORCED",
+            b"NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING",
+            b"NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE",
+            b"NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY",
+            b"NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE",
         ]),
         // The util/types namespace object is tagged `util.types` internally
         // (see the `callable_module_name` remap below); accept both spellings.

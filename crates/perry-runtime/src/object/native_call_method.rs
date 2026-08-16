@@ -1792,6 +1792,17 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             return crate::perf_hooks::perf_entry_to_json(object());
         }
 
+        // Same shape of synthesis for `performance.nodeTiming.toJSON()`: the
+        // PerformanceNodeTiming entry carries its milestones as own fields, and
+        // Node's `toJSON` lives on the prototype — so it must NOT become an own
+        // key here (`Object.keys(nodeTiming)` is pinned at the 12 milestones).
+        if method_name == "toJSON"
+            && gc_type == crate::gc::GC_TYPE_OBJECT
+            && crate::perf_hooks::is_node_timing_object(obj)
+        {
+            return crate::perf_hooks::node_timing_to_json(object());
+        }
+
         // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these
         // are GcHeader-backed objects stamped with a reserved class_id, so a
         // WeakMap reaching here through an `any`-typed binding (effect's

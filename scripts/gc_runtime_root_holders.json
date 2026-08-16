@@ -154,6 +154,12 @@
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks.rs",
+      "name": "LOOP_START_MS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A timeOrigin-relative millisecond timestamp (or the -1 'loop has not started' sentinel) reported as nodeTiming.loopStart, and the gate eventLoopUtilization() reads before reporting anything but zeros. An f64 time value, never an address."
     }
   ]
 }

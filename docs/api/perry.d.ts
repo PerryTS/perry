@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2010 entries across 123 modules
+// Coverage: 2011 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2420,6 +2420,8 @@ declare module "perf_hooks" {
   export const performance: any;
   /** stdlib */
   export function createHistogram(...args: any[]): any;
+  /** stdlib */
+  export function eventLoopUtilization(...args: any[]): any;
   /** stdlib */
   export function monitorEventLoopDelay(...args: any[]): any;
   /** stdlib */

@@ -637,6 +637,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "record",
             "recordDelta",
             "reset",
+            "toJSON",
         ],
     ),
     (

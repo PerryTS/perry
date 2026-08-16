@@ -605,18 +605,18 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
             crate::perf_hooks::current_list_get_by_name(arg(0))
         }
 
-        // ── Histogram instance methods (#1336) ──
-        // Every method is a no-op on the stub — `enable`/`disable`/`reset`
-        // don't sample anything, `record`/`recordDelta`/`add` discard input.
-        // `percentile(p)` returns 0 (no samples => no rank).
-        ("perf_histogram", "enable")
-        | ("perf_histogram", "disable")
-        | ("perf_histogram", "reset")
-        | ("perf_histogram", "record")
-        | ("perf_histogram", "recordDelta")
-        | ("perf_histogram", "add") => crate::perf_hooks::js_perf_histogram_noop(),
-        ("perf_histogram", "percentile") | ("perf_histogram", "percentileBigInt") => {
-            crate::perf_hooks::js_perf_histogram_percentile(arg(0))
+        // ── Histogram instance methods ──
+        // `record`/`recordDelta`/`add`/`reset`/`percentile*`/`toJSON`, plus the
+        // ELD `enable`/`disable` lifecycle, all re-derive the instance from the
+        // receiver (`perf_histogram::histogram_method`).
+        ("perf_histogram", _) => {
+            let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            };
+            crate::perf_histogram::histogram_method(obj, method_name, args)
+                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
         }
 
         // ── timers module ──

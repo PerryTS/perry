@@ -433,14 +433,21 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
-        // and the `constants.NODE_PERFORMANCE_GC_*` numeric table. Both the
-        // `performance` and `constants` objects are tagged "perf_hooks", so
-        // they share this arm (distinct property names, no collision).
+        // and `performance.nodeTiming`.
         "perf_hooks" => match property {
             "timeOrigin" => Some(crate::perf_hooks::time_origin_ms()),
             "nodeTiming" => Some(crate::perf_hooks::js_perf_node_timing()),
+            // `constants` used to share the `perf_hooks` tag, which made
+            // `Object.keys(constants)` enumerate the MODULE's export list
+            // instead of the GC constants. It is its own namespace in Node.
+            "constants" => Some(create_sub_namespace("perf_hooks.constants")),
+            _ => None,
+        },
+        // `perf_hooks.constants` — the stable NODE_PERFORMANCE_GC_* table.
+        "perf_hooks.constants" => match property {
             "NODE_PERFORMANCE_GC_MAJOR" => Some(4.0),
             "NODE_PERFORMANCE_GC_MINOR" => Some(1.0),
+            "NODE_PERFORMANCE_GC_MINOR_MARK_SWEEP" => Some(2.0),
             "NODE_PERFORMANCE_GC_INCREMENTAL" => Some(8.0),
             "NODE_PERFORMANCE_GC_WEAKCB" => Some(16.0),
             "NODE_PERFORMANCE_GC_FLAGS_NO" => Some(0.0),
@@ -1020,19 +1027,11 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:cluster — primary-side settings and Worker handles are backed
         // by `crate::cluster`; scheduling/identity constants remain static.
         "cluster" => crate::cluster::cluster_property(property),
-        // #1336: Histograms returned by perf_hooks.monitorEventLoopDelay /
-        // .createHistogram expose numeric stats via property read. Perry's
-        // stub doesn't record samples so every accessor reads 0; `exceeds`
-        // and `count` matter for code that branches on counts before
-        // computing averages.
-        "perf_histogram" => match property {
-            "mean" | "min" | "max" | "stddev" | "exceeds" | "count" => Some(0.0),
-            "percentiles" | "percentilesBigInt" => {
-                let obj = js_object_alloc(0, 0);
-                Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
-            }
-            _ => None,
-        },
+        // Histograms returned by perf_hooks.monitorEventLoopDelay /
+        // .createHistogram. Every stat accessor (`count`/`min`/`max`/`mean`/
+        // `stddev`/`exceeds`, their BigInt twins, and the `percentiles` Map)
+        // reads per-instance HDR state keyed off the receiver.
+        "perf_histogram" => crate::perf_histogram::histogram_property(namespace_obj, property),
         _ => None,
     }
 }
