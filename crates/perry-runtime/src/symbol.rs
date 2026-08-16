@@ -20,6 +20,10 @@
 //! functions in this module.
 
 mod accessors;
+#[cfg(test)]
+pub(crate) use accessors::{
+    test_seed_symbol_accessor_property, test_symbol_accessor_property_count,
+};
 mod constructors;
 mod gc_roots;
 mod get;
@@ -527,6 +531,21 @@ per_test_global! {
 /// are never pruned).
 pub(crate) fn prune_dead_symbol_property_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
     let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    // #8195: the accessor table is keyed by the SAME owner address and was the
+    // one of the three not pruned here. Take its verdicts first, into the same
+    // memo, so all three tables agree about every owner within one pass.
+    {
+        let verdicts = std::cell::RefCell::new(&mut verdicts);
+        accessors::prune_dead_symbol_accessor_owners(&|owner| {
+            let mut verdicts = verdicts.borrow_mut();
+            if let Some(&known) = verdicts.get(&owner) {
+                return known;
+            }
+            let dead = is_dead_owner(owner);
+            verdicts.insert(owner, dead);
+            dead
+        });
+    }
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if let Some(map) = guard.as_mut() {

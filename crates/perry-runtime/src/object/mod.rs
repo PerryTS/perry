@@ -1019,6 +1019,64 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     });
 }
 
+/// #8192: death pruning for the transition cache.
+///
+/// Two of an entry's three pointers are metadata-only and therefore weak:
+/// `prev_keys` (the pre-transition keys `ArrayHeader`) and `key_ptr` (the
+/// interned `StringHeader` of the property name). Only `next_keys` is a strong
+/// root. Both weak halves are **rekeyed** by `scan_transition_cache_roots_mut`
+/// when their object moves, which is what makes a dead one dangerous rather
+/// than merely stale: the arena recycles the address and the next rewrite pass
+/// reads the recycled bytes as a `GcHeader` (#8040, and see `gc::dead_owner`).
+///
+/// The entry is a pure cache, so the repair is to drop it. `next_keys == 0` is
+/// the empty-slot sentinel and `prev_keys == 0` is the "object had no keys
+/// array" sentinel; neither is an address, so neither is probed.
+pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    with_transition_cache(|table| unsafe {
+        for i in 0..TRANSITION_CACHE_SIZE {
+            let entry = &mut (*table)[i];
+            if entry.next_keys == 0 {
+                continue;
+            }
+            let dead = (entry.prev_keys != 0 && is_dead_owner(entry.prev_keys))
+                || (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr));
+            if dead {
+                *entry = TransitionEntry {
+                    prev_keys: 0,
+                    key_ptr: 0,
+                    next_keys: 0,
+                    slot_idx: 0,
+                    target_len: 0,
+                };
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_transition_cache_occupancy() -> usize {
+    with_transition_cache(|table| unsafe {
+        (0..TRANSITION_CACHE_SIZE)
+            .filter(|&i| (*table)[i].next_keys != 0)
+            .count()
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_transition_cache_entry(prev_keys: usize, key_ptr: usize, next_keys: usize) {
+    let slot = transition_cache_slot(prev_keys, key_ptr);
+    with_transition_cache(|table| unsafe {
+        (*table)[slot] = TransitionEntry {
+            prev_keys,
+            key_ptr,
+            next_keys,
+            slot_idx: 0,
+            target_len: 1,
+        };
+    });
+}
+
 /// GC root scanner: mark all cached shape keys arrays so they're not freed.
 /// The inline cache + overflow map both hold the raw `*mut ArrayHeader`
 /// pointers; without this scanner, GC would free those arrays, leaving

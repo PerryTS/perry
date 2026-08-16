@@ -721,7 +721,6 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         if new_count > ASYNC_STEP_REENTRY_BOUND {
                             ASYNC_STEP_GUARD.with(|c| {
                                 c.set(AsyncStepGuard {
-                                    last_closure: 0,
                                     consecutive_error_count: 0,
                                 })
                             });
@@ -746,14 +745,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         }
                         ASYNC_STEP_GUARD.with(|c| {
                             c.set(AsyncStepGuard {
-                                last_closure: step_closure as usize,
                                 consecutive_error_count: new_count,
                             })
                         });
                     } else {
                         ASYNC_STEP_GUARD.with(|c| {
                             c.set(AsyncStepGuard {
-                                last_closure: 0,
                                 consecutive_error_count: 0,
                             })
                         });

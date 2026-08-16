@@ -91,6 +91,30 @@ unsafe fn boxed_primitive_payload_for_object(
     Some((class_id, payload))
 }
 
+/// #8191: death pruning for `BOXED_PRIMITIVE_PAYLOADS`.
+///
+/// Keyed by a boxed-primitive wrapper's `ObjectHeader` address, and **rekeyed**
+/// by `scan_boxed_primitive_payload_roots_mut` when that object moves. A dead
+/// key on a rekeyed table is the #8040 shape, not a leak — see
+/// `gc::dead_owner`'s module doc.
+pub(crate) fn prune_dead_boxed_primitive_payload_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
+        m.borrow_mut().retain(|&owner, _| !is_dead_owner(owner));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_boxed_primitive_payload_count() -> usize {
+    BOXED_PRIMITIVE_PAYLOADS.with(|m| m.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_boxed_primitive_payload(owner: usize, payload_bits: u64) {
+    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
+        m.borrow_mut().insert(owner, payload_bits);
+    });
+}
+
 fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, payload: f64) {
     if obj.is_null() {
         return;

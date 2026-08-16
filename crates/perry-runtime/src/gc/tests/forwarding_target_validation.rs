@@ -198,7 +198,7 @@ fn the_dead_key_prune_registry_keeps_its_shape() {
     use crate::gc::dead_owner::{DeadKeyOwner, DEAD_KEY_PRUNES};
 
     assert!(
-        DEAD_KEY_PRUNES.len() >= 15,
+        DEAD_KEY_PRUNES.len() >= 19,
         "DEAD_KEY_PRUNES shrank to {} entries; a prune was removed from the \
          fan-out, and every `dead_owner:` verdict in \
          scripts/gc_rekeyed_key_tables.json that named it is now a lie",

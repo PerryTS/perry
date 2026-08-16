@@ -22,14 +22,14 @@
     {
       "site": "crates/perry-runtime/src/builtins/console.rs::scan_console_log_singleton_roots_mut",
       "table": "CONSOLE_INSTANCES",
-      "death": "open_gap:#8190",
-      "why": "No prune anywhere: absent from DEAD_KEY_PRUNES and from gc_type_clear_dead_payload_side_tables; the key is a plain js_object_alloc address (console.rs:1037-1049)."
+      "death": "dead_owner:prune_dead_console_instance_owners",
+      "why": "#8190: registered prune retains on !is_dead_owner over the console instance object address (builtins/console.rs)."
     },
     {
       "site": "crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs::scan_boxed_primitive_payload_roots_mut",
       "table": "BOXED_PRIMITIVE_PAYLOADS",
-      "death": "open_gap:#8191",
-      "why": "No prune anywhere: the file holds only the declaration, two reads and this scanner; the key is an ObjectHeader address (boxed_primitives.rs:98)."
+      "death": "dead_owner:prune_dead_boxed_primitive_payload_owners",
+      "why": "#8191: registered prune retains on !is_dead_owner over the wrapper ObjectHeader address (builtins/formatting/boxed_primitives.rs)."
     },
     {
       "site": "crates/perry-runtime/src/closure/dynamic_props.rs::scan_closure_dynamic_props_roots_mut",
@@ -86,16 +86,16 @@
       "why": "Registered prune retains both maps on !is_dead_owner (object/descriptor_state.rs:1035-1055); handle-band ids in the same maps are skipped by the probe as unattributable."
     },
     {
-      "site": "crates/perry-runtime/src/object/mod.rs::scan_transition_cache_roots_mut",
-      "table": "TRANSITION_CACHE_GLOBAL",
-      "death": "open_gap:#8192",
-      "why": "Neither entry.prev_keys nor entry.key_ptr is marked or pruned; only entry.next_keys is a strong root (object/mod.rs:1005-1007). A rewrite does invalidate the entry, but only after rewrite_raw_addr has already read the recycled header."
-    },
-    {
       "site": "crates/perry-runtime/src/object/mod.rs::scan_overflow_fields_roots_mut",
       "table": "state().object_hot.overflow_fields",
       "death": "self_pruned:clear_overflow_for_ptr",
       "why": "Cleared per dead object by gc_type_clear_dead_payload_side_tables (gc/types.rs:799) from the sweep (gc/oldgen.rs:700, 924, 1573), outside the dead_owner fan-out."
+    },
+    {
+      "site": "crates/perry-runtime/src/object/mod.rs::scan_transition_cache_roots_mut",
+      "table": "TRANSITION_CACHE_GLOBAL",
+      "death": "dead_owner:prune_dead_transition_cache_entries",
+      "why": "#8192: registered prune drops the whole cache entry when either weak half (prev_keys keys-array, key_ptr interned string) is dead; next_keys is a strong root and cannot be."
     },
     {
       "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_table_rekey_mut",
@@ -122,34 +122,16 @@
       "why": "Sweep path via the PromiseCleanup finalize hook (gc/types.rs:835-838 -> promise/mod.rs:1024); copying path via cleanup_copied_minor_all_states_for_gc (promise/mod.rs:1087), which validates obj_type == GC_TYPE_PROMISE before trusting FORWARDED."
     },
     {
-      "site": "crates/perry-runtime/src/promise/reactions.rs::scan_promise_settle_listeners_mut",
-      "table": "PROMISE_SETTLE_LISTENERS",
-      "death": "self_pruned:remove_settle_listeners_for_dead_promise",
-      "why": "Sweep path from promise/mod.rs:1022 and copying path via cleanup_copied_minor_settle_listeners_for_gc (promise/mod.rs:1085), both keyed on a validated promise header."
-    },
-    {
       "site": "crates/perry-runtime/src/promise/reactions.rs::scan_promise_overflow_reactions_mut",
       "table": "PROMISE_OVERFLOW_REACTIONS",
       "death": "self_pruned:remove_overflow_reactions_for_dead_promise",
       "why": "Sweep path from promise/mod.rs:1023 and copying path via cleanup_copied_minor_overflow_reactions_for_gc (promise/mod.rs:1086), both keyed on a validated promise header."
     },
     {
-      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_roots_mut",
-      "table": "ASYNC_STEP_GUARD.last_closure (+ PROMISE_CONTEXTS)",
-      "death": "open_gap:#8193",
-      "why": "PROMISE_CONTEXTS in this same function is self-pruned by clear_promise_context, but ASYNC_STEP_GUARD.last_closure (scanners.rs:89) is written at microtasks.rs:749 and never marked or pruned; the verdict takes the weaker of the two keys."
-    },
-    {
-      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_async_step_guard_step",
-      "table": "ASYNC_STEP_GUARD.last_closure",
-      "death": "open_gap:#8193",
-      "why": "Budgeted twin of the scanners.rs:89 site on the identical Cell, with the identical missing prune."
-    },
-    {
-      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_contexts_step",
-      "table": "PROMISE_CONTEXTS",
-      "death": "self_pruned:clear_promise_context",
-      "why": "Budgeted twin of the scanners.rs:100 site on the same store; sweep path promise/mod.rs:1005-1012, copying path promise/mod.rs:1069-1084."
+      "site": "crates/perry-runtime/src/promise/reactions.rs::scan_promise_settle_listeners_mut",
+      "table": "PROMISE_SETTLE_LISTENERS",
+      "death": "self_pruned:remove_settle_listeners_for_dead_promise",
+      "why": "Sweep path from promise/mod.rs:1022 and copying path via cleanup_copied_minor_settle_listeners_for_gc (promise/mod.rs:1085), both keyed on a validated promise header."
     },
     {
       "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_all_states_step",
@@ -158,10 +140,10 @@
       "why": "Budgeted twin of scan_promise_all_states_mut on the same PromiseKeyedTable, with the same two prune paths."
     },
     {
-      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_settle_listeners_step",
-      "table": "PROMISE_SETTLE_LISTENERS",
-      "death": "self_pruned:remove_settle_listeners_for_dead_promise",
-      "why": "Budgeted twin of scan_promise_settle_listeners_mut on the same PromiseKeyedTable, with the same two prune paths."
+      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_contexts_step",
+      "table": "PROMISE_CONTEXTS",
+      "death": "self_pruned:clear_promise_context",
+      "why": "Budgeted twin of the scanners.rs:100 site on the same store; sweep path promise/mod.rs:1005-1012, copying path promise/mod.rs:1069-1084."
     },
     {
       "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_overflow_reactions_step",
@@ -170,10 +152,22 @@
       "why": "Budgeted twin of scan_promise_overflow_reactions_mut on the same PromiseKeyedTable, with the same two prune paths."
     },
     {
+      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_roots_mut",
+      "table": "PROMISE_CONTEXTS",
+      "death": "self_pruned:clear_promise_context",
+      "why": "Sweep path via the PromiseCleanup finalize hook (gc/types.rs -> promise/mod.rs clear_promise_context) and copying path via cleanup_copied_minor_promise_contexts_for_gc. #8193 deleted this function's other metadata key, ASYNC_STEP_GUARD.last_closure, which nothing read."
+    },
+    {
+      "site": "crates/perry-runtime/src/promise/scanners.rs::scan_promise_settle_listeners_step",
+      "table": "PROMISE_SETTLE_LISTENERS",
+      "death": "self_pruned:remove_settle_listeners_for_dead_promise",
+      "why": "Budgeted twin of scan_promise_settle_listeners_mut on the same PromiseKeyedTable, with the same two prune paths."
+    },
+    {
       "site": "crates/perry-runtime/src/proxy.rs::rewrite_metadata_target_bits",
       "table": "REFLECT_METADATA (MetadataKey.target_bits)",
-      "death": "open_gap:#8194",
-      "why": "Entries are removed only by Reflect.deleteMetadata (proxy/metadata.rs:95); only the value is marked (proxy.rs:2009), and the scanner's own doc concedes keys go stale on a target move."
+      "death": "dead_owner:prune_dead_reflect_metadata_targets",
+      "why": "#8194: registered prune retains entries whose POINTER_TAG'd target is not dead; non-pointer keys and handle ids are left alone."
     },
     {
       "site": "crates/perry-runtime/src/set.rs::scan_set_iterator_array_roots_mut",
@@ -182,40 +176,22 @@
       "why": "Registered prune retains on !is_dead_owner over the iterator array address (set.rs:51)."
     },
     {
-      "site": "crates/perry-runtime/src/symbol/accessors.rs::scan_symbol_accessor_roots_mut",
-      "table": "SYMBOL_ACCESSOR_PROPERTIES (owner half)",
-      "death": "open_gap:#8195",
-      "why": "prune_dead_symbol_property_owners covers only SYMBOL_PROPERTIES and SYMBOL_PROPERTY_ATTRS (symbol.rs:528-550); the accessor table's only bulk removal is on the handle-recycle path (symbol/properties.rs:163). The sym_key half IS rooted (accessors.rs:149)."
-    },
-    {
       "site": "crates/perry-runtime/src/symbol/accessors.rs::scan_symbol_accessor_root_slot",
       "table": "SYMBOL_ACCESSOR_PROPERTIES (owner half)",
-      "death": "open_gap:#8195",
-      "why": "Budgeted twin of scan_symbol_accessor_roots_mut on the same table, with the identical missing prune."
-    },
-    {
-      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_property_roots_mut",
-      "table": "SYMBOL_PROPERTIES",
       "death": "dead_owner:prune_dead_symbol_property_owners",
-      "why": "Registered prune retains on !is_dead_owner over the property owner (symbol.rs:530-539)."
+      "why": "#8195: budgeted twin of scan_symbol_accessor_roots_mut on the same table, covered by the same prune."
     },
     {
-      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_property_attrs_mut",
-      "table": "SYMBOL_PROPERTY_ATTRS",
+      "site": "crates/perry-runtime/src/symbol/accessors.rs::scan_symbol_accessor_roots_mut",
+      "table": "SYMBOL_ACCESSOR_PROPERTIES (owner half)",
       "death": "dead_owner:prune_dead_symbol_property_owners",
-      "why": "Same registered prune retains the attrs map on the owner half of its tuple key (symbol.rs:540-549)."
+      "why": "#8195: the accessor table now shares that prune with SYMBOL_PROPERTIES and SYMBOL_PROPERTY_ATTRS, through one memoized owner verdict per pass (symbol/accessors.rs prune_dead_symbol_accessor_owners)."
     },
     {
-      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_pointer_metadata_roots_mut",
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::rewrite_symbol_pointer_metadata_if_forwarded",
       "table": "SYMBOL_POINTERS",
       "death": "dead_owner:prune_dead_symbol_pointers",
-      "why": "Registered prune retains on the GC_TYPE_STRING-narrowed predicate (symbol.rs:563-568), which is correct because symbols are gc_malloc'd with GC_TYPE_STRING (symbol.rs:646-649)."
-    },
-    {
-      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::rewrite_symbol_property_owner_if_forwarded",
-      "table": "SYMBOL_PROPERTIES",
-      "death": "dead_owner:prune_dead_symbol_property_owners",
-      "why": "Budgeted per-slot twin of scan_symbol_property_roots_mut on the same table and prune (symbol.rs:530)."
+      "why": "Budgeted per-slot twin of scan_symbol_pointer_metadata_roots_mut on the same table and prune (symbol.rs:563)."
     },
     {
       "site": "crates/perry-runtime/src/symbol/gc_roots.rs::rewrite_symbol_property_attrs_if_forwarded",
@@ -224,10 +200,28 @@
       "why": "Budgeted per-slot twin of scan_symbol_property_attrs_mut on the same table and prune (symbol.rs:540)."
     },
     {
-      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::rewrite_symbol_pointer_metadata_if_forwarded",
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::rewrite_symbol_property_owner_if_forwarded",
+      "table": "SYMBOL_PROPERTIES",
+      "death": "dead_owner:prune_dead_symbol_property_owners",
+      "why": "Budgeted per-slot twin of scan_symbol_property_roots_mut on the same table and prune (symbol.rs:530)."
+    },
+    {
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_pointer_metadata_roots_mut",
       "table": "SYMBOL_POINTERS",
       "death": "dead_owner:prune_dead_symbol_pointers",
-      "why": "Budgeted per-slot twin of scan_symbol_pointer_metadata_roots_mut on the same table and prune (symbol.rs:563)."
+      "why": "Registered prune retains on the GC_TYPE_STRING-narrowed predicate (symbol.rs:563-568), which is correct because symbols are gc_malloc'd with GC_TYPE_STRING (symbol.rs:646-649)."
+    },
+    {
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_property_attrs_mut",
+      "table": "SYMBOL_PROPERTY_ATTRS",
+      "death": "dead_owner:prune_dead_symbol_property_owners",
+      "why": "Same registered prune retains the attrs map on the owner half of its tuple key (symbol.rs:540-549)."
+    },
+    {
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_property_roots_mut",
+      "table": "SYMBOL_PROPERTIES",
+      "death": "dead_owner:prune_dead_symbol_property_owners",
+      "why": "Registered prune retains on !is_dead_owner over the property owner (symbol.rs:530-539)."
     },
     {
       "site": "crates/perry-runtime/src/weakref.rs::rewritten_holder_addr",

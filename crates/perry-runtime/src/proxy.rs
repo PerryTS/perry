@@ -1961,6 +1961,48 @@ static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
 #[used]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
 
+/// #8194: death pruning for `REFLECT_METADATA`.
+///
+/// The key carries the decorator target's NaN-boxed bits, and
+/// `rewrite_metadata_target_bits` **rekeys** them when the target moves.
+/// Entries were removed only by `Reflect.deleteMetadata`, so a target that
+/// simply became unreachable left its address in the key — the #8040 shape,
+/// because the next rewrite pass reads whatever the arena put there.
+///
+/// Non-`POINTER_TAG` keys (class refs, primitives) and handle-band ids are
+/// left alone: they are not heap addresses, and the `gc::dead_owner` probes
+/// decline to attribute them anyway.
+pub(crate) fn prune_dead_reflect_metadata_targets(is_dead_owner: &dyn Fn(usize) -> bool) {
+    REFLECT_METADATA.with(|store| {
+        store.borrow_mut().retain(|key, _| {
+            if (key.target_bits & !POINTER_MASK) != POINTER_TAG {
+                return true;
+            }
+            let addr = (key.target_bits & POINTER_MASK) as usize;
+            addr == 0 || !is_dead_owner(addr)
+        });
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_reflect_metadata_len() -> usize {
+    REFLECT_METADATA.with(|store| store.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_reflect_metadata(target_bits: u64, key: &str) {
+    REFLECT_METADATA.with(|store| {
+        store.borrow_mut().insert(
+            MetadataKey {
+                target_bits,
+                key: key.to_string(),
+                property_key: None,
+            },
+            f64::from_bits(TAG_UNDEFINED),
+        );
+    });
+}
+
 /// Rewrite a `REFLECT_METADATA` key's POINTER-tagged target bits during the
 /// GC metadata-rewrite phase; non-pointer targets (class refs, primitives)
 /// pass through untouched.

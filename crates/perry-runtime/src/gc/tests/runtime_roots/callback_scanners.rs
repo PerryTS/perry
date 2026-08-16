@@ -1307,7 +1307,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     assert_eq!(promise.current_microtask_next_ptr, fixture.old_addr());
     assert_eq!(promise.inline_trap_next_ptr, fixture.old_addr());
     assert_eq!(promise.inline_trap_step_ptr, fixture.old_addr());
-    assert_eq!(promise.async_step_guard_last_closure, fixture.old_addr());
     assert_eq!(promise.inline_callback_ptr, fixture.old_addr());
     assert_eq!(promise.inline_next_ptr, fixture.old_addr());
     assert_eq!(promise.inline_value_bits, fixture.old_bits);

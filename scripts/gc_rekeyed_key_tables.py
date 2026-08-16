@@ -117,10 +117,13 @@ EXCLUDED_FILES = ("crates/perry-runtime/src/gc/roots.rs",)
 
 # Floors. A regex that stops matching must fail loudly, not report a clean run.
 MIN_SITES = 30
-MIN_REGISTRY_PRUNES = 12
-# The number of declared, tracked `open_gap` verdicts at landing time. This
-# number may go DOWN. Raising it is a decision, not a fix.
-MAX_OPEN_GAPS = 8
+MIN_REGISTRY_PRUNES = 16
+# Declared, tracked `open_gap` verdicts allowed. ZERO, and it stays zero: the
+# audit that came with this gate found six rekeyed tables with no death story
+# (#8190-#8195) and all six were fixed rather than exempted, so there is no
+# precedent here for declaring one. Raising this is a decision to ship a known
+# #8040 exposure, not a fix.
+MAX_OPEN_GAPS = 0
 
 REKEY_CALL = re.compile(
     r"\.visit_metadata_(?:usize_slot|i64_slot|usize_raw_slot)\s*\("

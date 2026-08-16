@@ -65,11 +65,11 @@ the invariant was maintained by hand, and a rekeyed table added without a prune
 reopens #8040 in a form that takes days to trace back.
 
 * `DEAD_KEY_PRUNES` (`gc/dead_owner.rs`) is now the registry `fan_out` iterates,
-  15 entries, each naming the tables it prunes and which of the pass's three
+  19 entries, each naming the tables it prunes and which of the pass's three
   deadness predicates it takes.
 * `scripts/gc_rekeyed_key_tables.py` (wired into `lint`, a required context)
   enumerates every `visit_metadata_*` call site in `perry-runtime` /
-  `perry-stdlib` — 38 of them — and requires a written verdict for each in
+  `perry-stdlib` — 37 of them — and requires a written verdict for each in
   `scripts/gc_rekeyed_key_tables.json`. A `dead_owner:<fn>` verdict must name a
   prune that is actually in the registry; a `self_pruned:<fn>` verdict must name
   a function that exists; a new unclassified site fails; **an exemption that
@@ -81,13 +81,44 @@ reopens #8040 in a form that takes days to trace back.
   floor rots, and a doc comment that must NOT count as a site — and requires the
   checker to adjudicate each correctly.
 
-**What the audit found.** Six tables are rekeyed with no prune and no rooting.
-They are declared `open_gap` and capped at the count they land at, so the number
-can only go down: `CONSOLE_INSTANCES` (#8190), `BOXED_PRIMITIVE_PAYLOADS`
-(#8191), `TRANSITION_CACHE_GLOBAL`'s `prev_keys`/`key_ptr` (#8192),
-`ASYNC_STEP_GUARD.last_closure` (#8193), `REFLECT_METADATA.target_bits` (#8194),
-and `SYMBOL_ACCESSOR_PROPERTIES`'s owner half (#8195, which also leaks its
-accessor closures). Each closure must delete its own manifest entry.
+**What the audit found, and what happened to it.** The gate's first run turned
+up six more rekeyed tables with no death story — live #8040 exposure, in six
+places, none of them previously named. All six are fixed here, so the manifest
+lands with **zero** declared gaps and `MAX_OPEN_GAPS = 0`:
+
+| table | fix | issue |
+|---|---|---|
+| `CONSOLE_INSTANCES` | `prune_dead_console_instance_owners` | #8190 |
+| `BOXED_PRIMITIVE_PAYLOADS` | `prune_dead_boxed_primitive_payload_owners` | #8191 |
+| `TRANSITION_CACHE_GLOBAL` (`prev_keys`, `key_ptr`) | `prune_dead_transition_cache_entries` | #8192 |
+| `ASYNC_STEP_GUARD.last_closure` | **field deleted** | #8193 |
+| `REFLECT_METADATA.target_bits` | `prune_dead_reflect_metadata_targets` | #8194 |
+| `SYMBOL_ACCESSOR_PROPERTIES` (owner half) | folded into `prune_dead_symbol_property_owners` | #8195 |
+
+#8193 is the one that is not a prune. `AsyncStepGuard::last_closure` held the
+address of the closure that took the last erroring async step, for a
+same-closure check that was **deleted** when #712/#921/#922 showed a runaway
+loop alternates between two closures. Nothing has read it since. It was not
+inert, though: it was a raw heap address the promise scanner rekeyed without
+marking, and nothing pruned it. Writing a prune to maintain state nobody reads
+would be its own dead code, so the field goes, and with it the
+`PROMISE_SCAN_ASYNC_STEP_GUARD` budgeted phase, whose only slot it was.
+
+#8195 is not a new prune either: the accessor table shares its owner key with
+`SYMBOL_PROPERTIES` and `SYMBOL_PROPERTY_ATTRS`, both pruned since the
+2026-07-09 audit, and was simply left out. It now takes the same pass's
+memoized owner verdict, so all three tables agree about every owner. That also
+closes a leak — the accessor closures in a dead owner's descriptors were
+immortal.
+
+Each of the four new prunes has a pair of cases in
+`gc/tests/dead_owner_side_tables.rs`: the prune **fires** (dead owner, one
+collection, the table observably shrinks) and its inverse (a rooted owner's
+entry survives — a prune that drops live entries is worse than the stale key it
+removes). The transition-cache case allocates its rooted `next_keys` in OLD-GEN
+on purpose: a reachable neighbour in the dead array's own nursery block would
+force-mark it (#7975) and the prune would correctly decline, which would have
+read as a failure of the prune.
 
 **Tests** (`gc/tests/forwarding_target_validation.rs`, 5 cases). The two
 sabotage cases plant #8040's shape verbatim and **assert the premise first** —

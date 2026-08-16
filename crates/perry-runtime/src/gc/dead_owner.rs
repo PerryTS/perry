@@ -1,10 +1,13 @@
 //! Death pruning for object-ADDRESS-keyed side tables (2026-07-09 GC audit,
 //! wave 2 batch B).
 //!
-//! Around a dozen runtime side tables are keyed by the raw address of an
-//! owning heap object (descriptor tables, symbol-keyed properties, closure
+//! Nineteen runtime side tables are keyed by the raw address of an owning heap
+//! object (descriptor tables, symbol-keyed properties and accessors, closure
 //! dynamic props, arguments metadata, recorded prototypes, exotic expandos,
-//! array expandos and iterator brands, `node:vm` metadata, fs FileHandle fds).
+//! array expandos and iterator brands, the shape and transition caches,
+//! synthetic class ids, console instances, boxed-primitive payloads,
+//! reflect-metadata targets, `node:vm` metadata, fs FileHandle fds) — see
+//! [`DEAD_KEY_PRUNES`], which is the authoritative list.
 //! The owning GC types mostly have no
 //! finalize hook, so nothing told those tables when the owner died: entries —
 //! and any strongly-rooted values inside them (accessor closures, symbol
@@ -359,6 +362,30 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "FILEHANDLE_OBJECT_FDS",
         owner: DeadKeyOwner::Any,
         prune: crate::fs::prune_dead_filehandle_fd_entries,
+    },
+    // #8190/#8191/#8192/#8194: four more REKEYED tables that the #8174 audit
+    // found had no death story at all. Each is the #8040 shape — see this
+    // module's doc — and each entry is what
+    // `scripts/gc_rekeyed_key_tables.json` now points its verdict at.
+    DeadKeyPrune {
+        table: "CONSOLE_INSTANCES",
+        owner: DeadKeyOwner::Any,
+        prune: crate::builtins::prune_dead_console_instance_owners,
+    },
+    DeadKeyPrune {
+        table: "BOXED_PRIMITIVE_PAYLOADS",
+        owner: DeadKeyOwner::Any,
+        prune: crate::builtins::prune_dead_boxed_primitive_payload_owners,
+    },
+    DeadKeyPrune {
+        table: "TRANSITION_CACHE_GLOBAL",
+        owner: DeadKeyOwner::Any,
+        prune: crate::object::prune_dead_transition_cache_entries,
+    },
+    DeadKeyPrune {
+        table: "REFLECT_METADATA",
+        owner: DeadKeyOwner::Any,
+        prune: crate::proxy::prune_dead_reflect_metadata_targets,
     },
 ];
 
