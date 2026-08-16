@@ -547,13 +547,19 @@ pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
     if cb_ptr == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let closure = cb_ptr as *const perry_runtime::ClosureHeader;
+    // #8163: the raw `ClosureHeader*` and the first of the two strings are held
+    // across an allocation and across user JS. See `js_headers_for_each`.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let cb_handle = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(cb_ptr));
     for (name, value) in entries {
+        let inner = perry_runtime::gc::RuntimeHandleScope::new();
         let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let name_handle = inner.root_nanbox_u64(JSValue::string_ptr(name_ptr).bits());
         let value_ptr = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-        let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
         let value_value = f64::from_bits(JSValue::string_ptr(value_ptr).bits());
-        perry_runtime::js_closure_call3(closure, value_value, name_value, handle);
+        let closure = perry_runtime::js_nanbox_get_pointer(cb_handle.get_nanbox_f64())
+            as *const perry_runtime::ClosureHeader;
+        perry_runtime::js_closure_call3(closure, value_value, name_handle.get_nanbox_f64(), handle);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
