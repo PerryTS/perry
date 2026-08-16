@@ -118,6 +118,7 @@ pub extern "C" fn js_reflect_apply(f: f64, this_arg: f64, args_array: f64) -> f6
 #[no_mangle]
 pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
     if lookup(obj).is_some() {
+        let _proxy_pin = pin_proxy_for_native_call(obj);
         let id = lookup(obj).unwrap();
         let (target, handler, revoked) = PROXIES.with(|p| {
             p.borrow()
@@ -195,6 +196,7 @@ pub(crate) fn js_proxy_get_prototype_of(obj: f64) -> f64 {
 /// target's actual prototype. Used by both `Object.getPrototypeOf(proxy)` and
 /// `Reflect.getPrototypeOf(proxy)` so they validate identically.
 pub(super) fn proxy_get_prototype_of_impl(obj: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(obj);
     let Some(id) = lookup(obj) else {
         return crate::object::js_object_get_prototype_of(obj);
     };
@@ -261,6 +263,7 @@ pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
     if let Some(id) = lookup(target) {
+        let _proxy_pin = pin_proxy_for_native_call(target);
         let (inner, handler, revoked) = PROXIES.with(|p| {
             p.borrow()
                 .get(id as usize)
@@ -308,6 +311,7 @@ pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
     if let Some(id) = lookup(target) {
+        let _proxy_pin = pin_proxy_for_native_call(target);
         let (inner, handler, revoked) = PROXIES.with(|p| {
             p.borrow()
                 .get(id as usize)

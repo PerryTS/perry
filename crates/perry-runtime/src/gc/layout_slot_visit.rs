@@ -76,7 +76,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             if raw_numeric_object_slots != 0 {
                 record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
             }
-            visit(GcMutableSlotDescriptor::PointerFreeRange);
+            visit(GcMutableSlotDescriptor::PointerFreeRange(range));
         }
         HeapPayloadSlotScan::AllPointers {
             raw_numeric_object_slots,

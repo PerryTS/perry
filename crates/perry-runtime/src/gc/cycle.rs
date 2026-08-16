@@ -1165,6 +1165,9 @@ impl GcCycleState {
             .take()
             .expect("valid-pointer builder exists");
         self.valid_ptrs = Some(builder.finish());
+        if self.minor.is_none() {
+            crate::proxy::gc_begin_full_trace();
+        }
         trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
         // Enable the incremental mark barrier for BOTH kinds. A budgeted
         // MINOR cycle sliced across mutator turns has the same lost-store
@@ -1688,6 +1691,9 @@ impl GcCycleState {
                 while !gap_drain.step(valid_ptrs, usize::MAX) {}
                 incremental_mark_barrier_disable();
             }
+            if full_trace {
+                crate::proxy::gc_finish_full_trace();
+            }
 
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
@@ -1972,6 +1978,9 @@ impl Drop for GcCycleState {
         // Both kinds enable the barrier now (minor cycles too); never let the
         // raw valid-ptrs pointer dangle past the cycle that owns the set.
         if self.phase != GcCyclePhase::Complete {
+            if self.minor.is_none() {
+                crate::proxy::gc_abort_full_trace();
+            }
             incremental_mark_barrier_disable();
             super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
             clear_mark_seeds();

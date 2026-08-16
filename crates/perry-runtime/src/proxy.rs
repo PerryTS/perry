@@ -17,7 +17,7 @@
 //! codegen rewrites known Proxy locals to ProxyGet/ProxySet/etc. variants at
 //! HIR lowering time, which route through the entry points here.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
@@ -63,9 +63,10 @@ pub use reflect::{
 ///
 /// Revocation detaches: `js_proxy_revoke` stores 0 bits into `target` and
 /// `handler` (spec: [[ProxyTarget]]/[[ProxyHandler]] become null) so the
-/// wrapped graphs can die — `scan_proxy_roots_mut` otherwise strongly roots
-/// them for the life of the registry slot (2026-07-09 GC audit). No valid
-/// proxy target/handler is ever the all-zero-bits number `0.0` (both must be
+/// wrapped graphs can die. Minor collections strongly scan live entries;
+/// full collections instead discover proxy handles through traced slots and
+/// prune entries whose handles were not observed. No valid proxy
+/// target/handler is ever the all-zero-bits number `0.0` (both must be
 /// objects), so 0 bits is an unambiguous detached sentinel. Every trap path
 /// checks `revoked` before touching `target`/`handler`.
 #[repr(C)]
@@ -96,6 +97,14 @@ thread_local! {
     /// a scanner that rewrites `target_bits` during GC fixup (similar to the
     /// 9 existing scanners in gc.rs).
     static REFLECT_METADATA: RefCell<HashMap<MetadataKey, f64>> = RefCell::new(HashMap::new());
+    /// Live proxy ids observed by the current full GC trace. `None` outside a
+    /// full trace; minors continue to root every registry entry strongly.
+    static PROXY_FULL_TRACE_LIVE: RefCell<Option<Vec<bool>>> = const { RefCell::new(None) };
+    /// Hot reject-path gate: collector funnels test this before decoding a
+    /// proxy-band payload, so ordinary marking pays one TLS boolean branch.
+    static PROXY_FULL_TRACE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// Monotone liveness counter for diagnostics and non-vacuous tests.
+    static PROXY_GC_RECLAIMED_TOTAL: Cell<u64> = const { Cell::new(0) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -233,15 +242,138 @@ fn lookup(proxy_boxed: f64) -> Option<u64> {
         return None;
     }
     let id = decode_proxy_id(lower48 as i64)?;
-    // Only a real entry in the registry counts as a proxy.
-    PROXIES.with(|p| {
+    // A collected slot remains a tombstone. Treating it as a non-proxy would
+    // hand the small id-band payload to generic object code, which may
+    // dereference it; fail loudly if the collector ever under-approximates.
+    let status = PROXIES.with(|p| {
         let v = p.borrow();
-        if (id as usize) < v.len() && v[id as usize].is_some() {
-            Some(id)
-        } else {
-            None
+        match v.get(id as usize) {
+            Some(Some(_)) => 1,
+            Some(None) => 2,
+            None => 0,
         }
-    })
+    });
+    match status {
+        1 => Some(id),
+        2 => collected_return(),
+        _ => None,
+    }
+}
+
+/// Keep a proxy id visible to any full collection that starts while a native
+/// proxy operation is running. The returned scope owns the slot; the handle
+/// itself need not be retained because slots live until the scope is dropped.
+fn pin_proxy_for_native_call(proxy_boxed: f64) -> crate::gc::RuntimeHandleScope {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _ = scope.root_nanbox_f64(proxy_boxed);
+    scope
+}
+
+/// Arm proxy-id observation for a full trace. The registry becomes weak for
+/// the mark phase until [`gc_finish_full_trace`] prunes unobserved entries.
+pub(crate) fn gc_begin_full_trace() {
+    let (len, has_live_entries) = PROXIES.with(|p| {
+        let proxies = p.borrow();
+        (proxies.len(), proxies.iter().any(Option::is_some))
+    });
+    PROXY_FULL_TRACE_LIVE.with(|live| {
+        assert!(live.borrow().is_none(), "proxy full trace already active");
+        *live.borrow_mut() = Some(vec![false; len]);
+    });
+    PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(has_live_entries));
+}
+
+#[inline(always)]
+pub(crate) fn gc_full_trace_active() -> bool {
+    PROXY_FULL_TRACE_ACTIVE.with(Cell::get)
+}
+
+/// Observe one bits value from a collector-owned tracing funnel. Returns true
+/// when it names an existing proxy slot (live or a collected tombstone).
+/// First observation marks the live entry's target/handler immediately; this
+/// closes the cycle without making the whole registry a strong root.
+pub(crate) fn gc_observe_traced_value(bits: u64, valid_ptrs: &crate::gc::ValidPointerSet) -> bool {
+    if !gc_full_trace_active() || (bits & !POINTER_MASK) != POINTER_TAG {
+        return false;
+    }
+    let payload = (bits & POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_proxy_id_band(payload) {
+        return false;
+    }
+    let Some(id) = decode_proxy_id(payload as i64) else {
+        return false;
+    };
+    let entry = PROXIES.with(|proxies| {
+        let proxies = proxies.borrow();
+        proxies.get(id as usize).map(|slot| {
+            slot.as_ref()
+                .map(|entry| (entry.target.to_bits(), entry.handler.to_bits()))
+        })
+    });
+    let Some(entry) = entry else {
+        return false;
+    };
+    let first_observation = PROXY_FULL_TRACE_LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        let live = live.as_mut().expect("proxy observation outside full trace");
+        if id as usize >= live.len() {
+            live.resize(id as usize + 1, false);
+        }
+        let first = !live[id as usize];
+        live[id as usize] = true;
+        first
+    });
+    if first_observation {
+        if let Some((target, handler)) = entry {
+            crate::gc::try_mark_value_or_raw(target, valid_ptrs);
+            crate::gc::try_mark_value_or_raw(handler, valid_ptrs);
+        }
+    }
+    true
+}
+
+/// End a full proxy trace and tombstone every registry entry whose handle was
+/// not observed. Returns the number reclaimed in this pass.
+pub(crate) fn gc_finish_full_trace() -> usize {
+    PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(false));
+    let live = PROXY_FULL_TRACE_LIVE.with(|state| {
+        state
+            .borrow_mut()
+            .take()
+            .expect("proxy full trace was not active")
+    });
+    let (reclaimed, remaining, slots) = PROXIES.with(|proxies| {
+        let mut proxies = proxies.borrow_mut();
+        let mut reclaimed = 0usize;
+        for (id, slot) in proxies.iter_mut().enumerate().skip(1) {
+            if slot.is_some() && !live.get(id).copied().unwrap_or(false) {
+                slot.take();
+                reclaimed += 1;
+            }
+        }
+        let remaining = proxies.iter().flatten().count();
+        (reclaimed, remaining, proxies.len().saturating_sub(1))
+    });
+    let total = PROXY_GC_RECLAIMED_TOTAL.with(|counter| {
+        let total = counter.get().saturating_add(reclaimed as u64);
+        counter.set(total);
+        total
+    });
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-proxy-registry] live={remaining} tombstones={} slots={slots} reclaimed={reclaimed} reclaimed_total={total}",
+            slots.saturating_sub(remaining),
+        );
+    }
+    reclaimed
+}
+
+/// Cancel observation when an in-progress GC cycle is dropped.
+pub(crate) fn gc_abort_full_trace() {
+    PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(false));
+    PROXY_FULL_TRACE_LIVE.with(|live| {
+        live.borrow_mut().take();
+    });
 }
 
 /// Allocate a new proxy. Returns the NaN-boxed POINTER_TAG value holding the
@@ -329,6 +461,12 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
             revoked: false,
             callable,
         })));
+        // A proxy born during a sliced full trace was absent from the begin
+        // snapshot. Arm observation before its handle can be published into a
+        // root/heap slot; the incremental write barrier will record it.
+        if PROXY_FULL_TRACE_LIVE.with(|live| live.borrow().is_some()) {
+            PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(true));
+        }
         let encoded = encode_proxy_id(id) as u64;
         f64::from_bits(POINTER_TAG | (encoded & POINTER_MASK))
     })
@@ -465,6 +603,13 @@ fn handler_trap(handler: f64, trap_name: &str) -> f64 {
 /// Raise a "proxy revoked" TypeError via `js_throw`. Does not return.
 fn revoked_return() -> f64 {
     revoked_return_with_message("Cannot perform operation on a proxy that has been revoked")
+}
+
+fn collected_return() -> ! {
+    let _ = revoked_return_with_message(
+        "Cannot perform operation on a proxy that has been garbage collected",
+    );
+    unreachable!("js_throw returned from collected proxy TypeError")
 }
 
 fn revoked_return_with_message(msg: &str) -> f64 {
@@ -721,6 +866,7 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
 /// otherwise fetch the field from the target directly via the generic path.
 #[no_mangle]
 pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
@@ -2121,19 +2267,24 @@ fn rewrite_metadata_target_bits(
     }
 }
 
-/// GC scanner for the proxy registry + reflect-metadata store (2026-07-02
-/// audit P0; ported from the stranded be73b4f8d). A proxy's target/handler
-/// are commonly reachable ONLY through `PROXIES` — without visiting them a
-/// minor GC collects (or moves) them and every subsequent trap derefs freed
-/// or stale memory. `REFLECT_METADATA`'s own doc admits its keys go stale on
-/// a target move; rekey them during the metadata-rewrite phase.
+/// GC scanner for the proxy registry + reflect-metadata store. A minor trace
+/// must visit every live entry because it does not scan the whole heap. A full
+/// mark trace skips those strong edges and observes proxy handles from roots
+/// and heap slots instead; rewrite/verify phases still visit surviving entry
+/// slots. `REFLECT_METADATA`'s keys are rekeyed during metadata rewrite.
 pub(crate) fn scan_proxy_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROXIES.with(|proxies| {
-        for entry in proxies.borrow_mut().iter_mut().flatten() {
-            visitor.visit_nanbox_f64_slot(&mut entry.target);
-            visitor.visit_nanbox_f64_slot(&mut entry.handler);
-        }
-    });
+    // A full mark trace discovers liveness from proxy-band handles instead of
+    // making the registry itself a root. Minors cannot make that inference
+    // because they do not scan the whole heap, and rewrite/verify phases must
+    // still update the live entries after evacuation.
+    if !(gc_full_trace_active() && visitor.is_mark_phase()) {
+        PROXIES.with(|proxies| {
+            for entry in proxies.borrow_mut().iter_mut().flatten() {
+                visitor.visit_nanbox_f64_slot(&mut entry.target);
+                visitor.visit_nanbox_f64_slot(&mut entry.handler);
+            }
+        });
+    }
 
     REFLECT_METADATA.with(|store| {
         let mut store = store.borrow_mut();
@@ -2153,6 +2304,25 @@ pub(crate) fn scan_proxy_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             }
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_proxy_slot_is_live(proxy_boxed: f64) -> bool {
+    let bits = proxy_boxed.to_bits();
+    let Some(id) = decode_proxy_id((bits & POINTER_MASK) as i64) else {
+        return false;
+    };
+    PROXIES.with(|proxies| {
+        proxies
+            .borrow()
+            .get(id as usize)
+            .is_some_and(Option::is_some)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_proxy_gc_reclaimed_total() -> u64 {
+    PROXY_GC_RECLAIMED_TOTAL.with(Cell::get)
 }
 
 #[cfg(test)]

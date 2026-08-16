@@ -621,7 +621,7 @@ pub(super) fn try_mark_conservative_word(
     true
 }
 
-pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
+pub(crate) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
     // First try NaN-boxed interpretation (POINTER_TAG / STRING_TAG / BIGINT_TAG)
     if try_mark_value(word, valid_ptrs) {
         return true;
@@ -919,11 +919,21 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     #[inline]
     pub(super) fn record_source_scan_bits(&mut self, bits: u64) {
+        if crate::proxy::gc_full_trace_active() {
+            if let RuntimeRootVisitMode::Mark { valid_ptrs } = &self.mode {
+                crate::proxy::gc_observe_traced_value(bits, valid_ptrs);
+            }
+        }
         if let Some(stats) = self.root_source_stats {
             unsafe {
                 (*stats).record_scan(bits != 0, root_slot_pointer_candidate(bits));
             }
         }
+    }
+
+    #[inline]
+    pub(crate) fn is_mark_phase(&self) -> bool {
+        matches!(self.mode, RuntimeRootVisitMode::Mark { .. })
     }
 
     #[inline]

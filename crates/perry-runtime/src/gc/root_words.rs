@@ -154,6 +154,11 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
 /// covers them.
 #[inline]
 pub(super) fn mark_mutable_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
+    if crate::proxy::gc_full_trace_active()
+        && crate::proxy::gc_observe_traced_value(bits, valid_ptrs)
+    {
+        return;
+    }
     let Some(word) = decode_root_word(bits) else {
         return;
     };

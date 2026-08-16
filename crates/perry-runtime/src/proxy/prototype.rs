@@ -3,8 +3,8 @@
 
 use super::{
     call_trap, handler_trap, is_callable_function, js_reflect_is_extensible, lookup, nanbox_bool,
-    reflect_non_object_typeerror, reflect_target_get_prototype_of, reflect_value_is_object,
-    revoked_return, throw_type_error, PROXIES, TAG_NULL, TAG_UNDEFINED,
+    pin_proxy_for_native_call, reflect_non_object_typeerror, reflect_target_get_prototype_of,
+    reflect_value_is_object, revoked_return, throw_type_error, PROXIES, TAG_NULL, TAG_UNDEFINED,
 };
 
 /// `Reflect.setPrototypeOf(target, proto)` (#2761).
@@ -56,6 +56,7 @@ pub extern "C" fn js_reflect_set_prototype_of(target: f64, proto: f64) -> f64 {
 /// non-extensible-target invariant: a `true` result requires the new proto to
 /// SameValue the target's current proto.
 fn proxy_set_prototype_of(proxy_boxed: f64, proto: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return nanbox_bool(false),

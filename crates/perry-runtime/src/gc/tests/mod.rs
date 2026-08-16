@@ -36,6 +36,7 @@ mod lazy_tape_side_alloc;
 mod oldgen;
 mod os_tag;
 mod promote_in_place;
+mod proxy_registry;
 mod root_words;
 mod rooted_container_values;
 mod rooted_define_property;

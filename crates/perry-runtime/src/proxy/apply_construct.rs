@@ -5,9 +5,9 @@
 //! (split-large-files recipe). Pure relocation; behavior is unchanged.
 
 use super::{
-    closure_from, create_list_from_array_like, handler_trap, lookup, reflect_value_is_object,
-    revoked_return, throw_type_error, value_display_string, POINTER_MASK, POINTER_TAG, PROXIES,
-    TAG_NULL, TAG_UNDEFINED,
+    closure_from, create_list_from_array_like, handler_trap, lookup, pin_proxy_for_native_call,
+    reflect_value_is_object, revoked_return, throw_type_error, value_display_string, POINTER_MASK,
+    POINTER_TAG, PROXIES, TAG_NULL, TAG_UNDEFINED,
 };
 use crate::closure::js_closure_call3;
 
@@ -139,6 +139,7 @@ pub fn call_proxy_value_with_this(proxy: f64, this_arg: f64, args: &[f64]) -> f6
 /// `args_array` is an already-constructed Array JSValue (NaN-boxed).
 #[no_mangle]
 pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
@@ -216,6 +217,7 @@ fn forward_construct(target: f64, args_array: f64, new_target: f64) -> f64 {
 /// `undefined` (the `new Proxy(...)` path).
 #[no_mangle]
 pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_target: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),

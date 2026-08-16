@@ -7,7 +7,8 @@
 
 use super::{
     call_trap, create_list_from_array_like, handler_trap, is_callable_function, lookup,
-    revoked_return, throw_type_error, POINTER_MASK, POINTER_TAG, PROXIES, TAG_NULL, TAG_UNDEFINED,
+    pin_proxy_for_native_call, revoked_return, throw_type_error, POINTER_MASK, POINTER_TAG,
+    PROXIES, TAG_NULL, TAG_UNDEFINED,
 };
 
 /// #7949: root the caller's key list before touching the heap.
@@ -122,6 +123,7 @@ fn target_key_is_configurable(target: f64, key: f64) -> bool {
 /// forwards to the target when no trap is present.
 #[no_mangle]
 pub extern "C" fn js_proxy_own_keys(proxy_boxed: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return alloc_key_array(&[]),

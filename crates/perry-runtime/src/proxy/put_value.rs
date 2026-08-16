@@ -54,6 +54,7 @@ pub(crate) fn proxy_set_with_receiver(
     value: f64,
     receiver: f64,
 ) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),

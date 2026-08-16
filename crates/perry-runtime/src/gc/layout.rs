@@ -1680,7 +1680,7 @@ pub(super) enum GcMutableSlotDescriptor {
         range: HeapSlotRange,
         layout_kind: Option<HeapChildSlotReadKind>,
     },
-    PointerFreeRange,
+    PointerFreeRange(HeapSlotRange),
 }
 
 impl GcMutableSlotDescriptor {
@@ -1692,7 +1692,7 @@ impl GcMutableSlotDescriptor {
                     visit(GcMutableSlot::new(range.slot(i), layout_kind));
                 }
             }
-            GcMutableSlotDescriptor::PointerFreeRange => {}
+            GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         }
     }
 }

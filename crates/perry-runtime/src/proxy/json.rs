@@ -1,6 +1,6 @@
 use super::{
-    closure_from, handler_trap, is_callable, lookup, revoked_return, revoked_return_with_message,
-    POINTER_MASK, POINTER_TAG, PROXIES, TAG_UNDEFINED,
+    closure_from, handler_trap, is_callable, lookup, pin_proxy_for_native_call, revoked_return,
+    revoked_return_with_message, POINTER_MASK, POINTER_TAG, PROXIES, TAG_UNDEFINED,
 };
 
 /// Return the proxy target for internal-operation callers that must throw on a
@@ -43,6 +43,7 @@ fn js_proxy_checked_target_with_revoked_message(
 /// abrupt completions are visible to callers that implement
 /// `EnumerableOwnProperties`.
 pub(crate) fn js_proxy_own_keys_for_json(proxy_boxed: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),

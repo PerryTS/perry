@@ -130,7 +130,7 @@ impl DirtyHeaderSlotScan {
                     }));
                 }
             }
-            GcMutableSlotDescriptor::PointerFreeRange => {}
+            GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         });
 
         Some(Self {
@@ -612,7 +612,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
                     }
                 }
             }
-            GcMutableSlotDescriptor::PointerFreeRange => {}
+            GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         }
     });
 }
@@ -964,6 +964,11 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     value_bits: u64,
     valid_ptrs: &ValidPointerSet,
 ) -> bool {
+    if crate::proxy::gc_full_trace_active()
+        && crate::proxy::gc_observe_traced_value(value_bits, valid_ptrs)
+    {
+        return false;
+    }
     let Some((addr, header)) = current_heap_header_for_heap_word(value_bits, Some(valid_ptrs))
     else {
         return false;

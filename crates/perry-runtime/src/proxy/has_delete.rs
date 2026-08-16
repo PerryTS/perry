@@ -5,13 +5,14 @@
 
 use super::{
     call_trap, handler_trap, invariants, is_callable, is_non_configurable_exotic_own, lookup,
-    nanbox_bool, revoked_return, PROXIES, TAG_FALSE, TAG_UNDEFINED,
+    nanbox_bool, pin_proxy_for_native_call, revoked_return, PROXIES, TAG_FALSE, TAG_UNDEFINED,
 };
 
 /// `key in proxy` — if `handler.has` exists, call it; else forward to the
 /// target's `[[HasProperty]]` (recursing through a proxy target).
 #[no_mangle]
 pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),
@@ -64,6 +65,7 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
 /// delegate to `js_object_delete_field` on the target.
 #[no_mangle]
 pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
+    let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),
