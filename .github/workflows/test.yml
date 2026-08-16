@@ -954,7 +954,7 @@ jobs:
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
 
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope }}" != "pr" ]; then
             # ---- FULL run: release tags / nightly cron / workflow_dispatch ----
             # Every target, including the slow auto-optimize integration tests.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then

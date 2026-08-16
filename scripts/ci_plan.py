@@ -271,9 +271,11 @@ def plan(
         "scope": scope,
         "jobs": jobs,
         "gap": gap,
-        # cargo-test: the PR tier scopes to the diff via ci_test_scope.py; the
-        # other tiers run the full workspace.
-        "cargo_test_scope": "pr" if tier == "pr" else "full",
+        # cargo-test: a pull_request run scopes to the diff via ci_test_scope.py
+        # (`--lib --bins` of the affected crates); everything else -- including a
+        # `workflow_dispatch --tier pr`, which has no PR to read -- runs the full
+        # workspace with integration suites.
+        "cargo_test_scope": "pr" if event == "pull_request" else "full",
         # gc-stress: the PR subset of the GC x repsel matrix vs the full one.
         "gc_stress_mode": "pr" if tier == "pr" else "full",
     }
@@ -376,6 +378,7 @@ def _self_test() -> int:
     snap = plan("workflow_dispatch", "refs/heads/x", tier_input="pr", update_gap_snapshot=True)
     check("snapshot update: one fast shard", snap["gap"] == {"mode": "fast", "total": 1, "shards": [1], "update_snapshot": True})
     check("dispatch --tier pr has no PR to scope e2e against", not snap["jobs"]["e2e_scoped"])
+    check("dispatch --tier pr runs cargo-test unscoped (no PR to read)", snap["cargo_test_scope"] == "full")
 
     # 4. The gc_gate_wiring_check contract: `gc-stress` is a registered
     #    moving-GC gate and MUST be main-line reachable (push:main or
