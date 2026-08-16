@@ -519,7 +519,7 @@ export async function installTool(name: string, tools: Record<string, ToolPin>):
     // bin). Its download+verify+cache resolver lives in the compat runner,
     // which needs a full node tree rather than a rack bin handle.
     console.log(
-      `[external-tools] ${name} is a node-dist pin — installed by scripts/node_compat_matrix.mjs (its own resolver), not the tool rack`,
+      `[external-tools] ${name} is a node-dist pin — installed by scripts/node_compat_matrix.mts (its own resolver), not the tool rack`,
     )
     return
   }

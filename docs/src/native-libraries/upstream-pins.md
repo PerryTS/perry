@@ -26,7 +26,7 @@ date      = "2026-07-30"
 
 **`ported-at` must equal `version`.** Re-pinning a binding to a newer upstream
 release without re-reviewing the wrapper against the upstream diff reds the
-`binding_pins.mjs --check` gate — and the perry binary itself refuses to load a
+`binding_pins.mts --check` gate — and the perry binary itself refuses to load a
 skewed table. An upstream release can never go silently stale, and a pin bump
 can never outrun the review it demands: bumping `version` forces you to advance
 `ported-at`, which forces the review.
@@ -46,26 +46,26 @@ Note that a distinct npm package served by a shared wrapper crate is **not** an
 alias — `redis` and `iovalkey` both use `perry-ext-ioredis` but are separately
 published and versioned, so each carries its own pin.
 
-## Tooling — `scripts/binding_pins.mjs`
+## Tooling — `scripts/binding_pins.mts`
 
 ```sh
 # Provision or bump one pin to a specific version (default: latest stable)
-node scripts/binding_pins.mjs --set ioredis 5.11.1
+node scripts/binding_pins.mts --set ioredis 5.11.1
 
 # Provision every currently-unpinned binding at its latest stable
-node scripts/binding_pins.mjs --backfill
+node scripts/binding_pins.mts --backfill
 
 # Offline gate (CI): pins present, lock-stepped, crates exist. Exit 1 on any
 # violation. No network.
-node scripts/binding_pins.mjs --check
+node scripts/binding_pins.mts --check
 
 # Advisory: additionally flag pins whose upstream has a newer stable release
 # that has soaked >= N days (default 7). Network. Run in the weekly update.
-node scripts/binding_pins.mjs --check --refresh --soak-days 7
+node scripts/binding_pins.mts --check --refresh --soak-days 7
 
 # Materialize the upstream repo at the pinned ref into gitignored upstream/<name>
 # for port review (diff the old pin against a candidate new tag)
-node scripts/binding_pins.mjs --materialize ioredis
+node scripts/binding_pins.mts --materialize ioredis
 ```
 
 Never hand-edit `version` / `sha256` / `ref` — the tarball hash can't be

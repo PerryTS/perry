@@ -71,7 +71,7 @@ pub struct WellKnownBinding {
     /// Upstream provenance pin — which release of the npm package this
     /// wrapper ports, and when it was last reviewed against it. See
     /// `docs/src/native-libraries/upstream-pins.md` and the lock-step
-    /// gate in `scripts/binding_pins.mjs`. `None` for entries exempt
+    /// gate in `scripts/binding_pins.mts`. `None` for entries exempt
     /// from pinning (`node_builtin`, `alias_of`, and perry-owned
     /// packages).
     // Provenance metadata parsed from `well_known_bindings.toml` and consulted
@@ -133,7 +133,7 @@ fn binding_is_faithful(
 ///
 /// The **lock-step rule**: `ported_at` must equal `version`. Re-pinning
 /// an upstream release without re-reviewing the wrapper against the
-/// upstream diff reds the `binding_pins.mjs --check` gate until
+/// upstream diff reds the `binding_pins.mts --check` gate until
 /// `ported_at` advances with the review — an upstream release can never
 /// go silently stale, and a pin bump can never outrun its port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,7 +317,7 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
                 let version = required("version")?;
                 let ported_at = required("ported-at")?;
                 // Parse-time lock-step backstop. The authoritative gate is
-                // `scripts/binding_pins.mjs --check` (CI); failing here too
+                // `scripts/binding_pins.mts --check` (CI); failing here too
                 // means a skewed pin can't even ship inside the binary.
                 if ported_at != version {
                     return Err(format!(
@@ -741,7 +741,7 @@ mod tests {
 
     /// The lock-step rule enforced at parse time: a pin bump
     /// (`version`) that outruns its review (`ported-at`) must refuse
-    /// to load — the authoritative CI gate is binding_pins.mjs
+    /// to load — the authoritative CI gate is binding_pins.mts
     /// --check, but a skewed pin must not even ship inside the binary.
     #[test]
     fn upstream_pin_rejects_lock_step_violation() {
@@ -793,7 +793,7 @@ mod tests {
         assert!(
             unpinned.is_empty(),
             "bindings without an [bindings.<name>.upstream] pin — provision one with \
-             `node scripts/binding_pins.mjs --set <name>`:\n  {}",
+             `node scripts/binding_pins.mts --set <name>`:\n  {}",
             unpinned.join("\n  ")
         );
     }

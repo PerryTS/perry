@@ -95,19 +95,29 @@ const NODE_TIMEOUT_MS = 15_000
 
 // --- CLI -------------------------------------------------------------------
 
-function parseArgs(argv) {
+function parseArgs(argv: string[]) {
   // moduleSet: null = all builtins; otherwise the selected base modules.
   // methodMap: base -> [export names] to fingerprint (subset mode).
-  const args = {
+  const args: {
+    mode: 'run' | 'check' | 'update' | 'help'
+    moduleSet: Set<string> | null
+    methodMap: Map<string, string[]>
+    globalMethods: string[]
+    nodeVersion: string | null
+    json: boolean
+    subsetActive: boolean
+  } = {
     mode: 'run',
     moduleSet: null,
-    methodMap: new Map(),
+    methodMap: new Map<string, string[]>(),
     globalMethods: [],
     nodeVersion: null,
     json: false,
+    subsetActive: false,
   }
-  const modules = new Set()
-  const splitList = s => (s || '').split(',').map(x => x.trim()).filter(Boolean)
+  const modules = new Set<string>()
+  const splitList = (s: string | undefined): string[] =>
+    (s || '').split(',').map(x => x.trim()).filter(Boolean)
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--check') args.mode = 'check'
@@ -151,20 +161,20 @@ function parseArgs(argv) {
   return args
 }
 
-const HELP = `node_compat_matrix.mjs — Node builtin-module compatibility matrix
+const HELP = `node_compat_matrix.mts — Node builtin-module compatibility matrix
 
   # FAST LOOP (reach for this while iterating on one builtin):
-  node scripts/node_compat_matrix.mjs --module fs
-  node scripts/node_compat_matrix.mjs --module fs,path,crypto
-  node scripts/node_compat_matrix.mjs --module fs --method readFileSync,promises
-  node scripts/node_compat_matrix.mjs --only fs.readFileSync,path.join
+  node scripts/node_compat_matrix.mts --module fs
+  node scripts/node_compat_matrix.mts --module fs,path,crypto
+  node scripts/node_compat_matrix.mts --module fs --method readFileSync,promises
+  node scripts/node_compat_matrix.mts --only fs.readFileSync,path.join
 
   # FULL SWEEP + GATE:
-  node scripts/node_compat_matrix.mjs                 run + print table
-  node scripts/node_compat_matrix.mjs --check         gate against baseline
-  node scripts/node_compat_matrix.mjs --update-baseline
-  node scripts/node_compat_matrix.mjs --node-version 24.18.1
-  node scripts/node_compat_matrix.mjs --json
+  node scripts/node_compat_matrix.mts                 run + print table
+  node scripts/node_compat_matrix.mts --check         gate against baseline
+  node scripts/node_compat_matrix.mts --update-baseline
+  node scripts/node_compat_matrix.mts --node-version 24.18.1
+  node scripts/node_compat_matrix.mts --json
 
 A --module selector makes --check / --update-baseline touch only that slice.
 A --method / --only subset is a print-only fast diagnostic (it changes the
@@ -175,28 +185,34 @@ Bump it there, run --update-baseline, and review the diff.`
 
 // --- pin + platform --------------------------------------------------------
 
-function loadNodePin() {
+interface NodePin {
+  version: string
+  distBaseUrl?: string
+  platforms?: Record<string, { integrity: string }>
+}
+
+function loadNodePin(): NodePin {
   const pin = JSON.parse(readFileSync(EXTERNAL_TOOLS_JSON, 'utf8')).tools.node
   if (!pin) throw new Error('external-tools.json has no "node" pin')
   return pin
 }
 
-function platformKey() {
+function platformKey(): string {
   const okey = { darwin: 'darwin', linux: 'linux', win32: 'win' }[process.platform]
   const akey = { arm64: 'arm64', x64: 'x64' }[process.arch]
   if (!okey || !akey) throw new Error(`unsupported platform ${process.platform}-${process.arch}`)
   return `${okey}-${akey}`
 }
 
-function sriSha512(buf) {
+function sriSha512(buf: Buffer): string {
   return `sha512-${createHash('sha512').update(buf).digest('base64')}`
 }
 
-function sha256hex(buf) {
+function sha256hex(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
 }
 
-async function fetchBuffer(url) {
+async function fetchBuffer(url: string): Promise<Buffer> {
   const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(180_000) })
   if (!res.ok) throw new Error(`download failed ${res.status} ${url}`)
   return Buffer.from(await res.arrayBuffer())
@@ -208,7 +224,7 @@ async function fetchBuffer(url) {
  * Pinned line: verify against the sha512 SRI in external-tools.json.
  * Non-pinned line: verify against that version's SHASUMS256.txt (sha256).
  */
-async function resolveNode(pin, versionOverride) {
+async function resolveNode(pin: NodePin, versionOverride: string | null): Promise<string> {
   const version = versionOverride || pin.version
   const key = platformKey()
   const [okey, akey] = key.split('-')
@@ -285,7 +301,7 @@ async function resolveNode(pin, versionOverride) {
 
 const FP_RE = /__FP__([\s\S]*?)__FP__/
 
-function probeSource(spec, methods) {
+function probeSource(spec: string, methods: string[] | undefined): string {
   // A single sentinel-wrapped line carries the shape fingerprint, so any
   // node/perry warnings on stdout/stderr are simply ignored by the extractor.
   // With a method subset, fingerprint ONLY those exports (a fast diagnostic
@@ -306,17 +322,17 @@ function probeSource(spec, methods) {
   ].join('\n')
 }
 
-function extractFp(output) {
+function extractFp(output: string): string | null {
   const m = FP_RE.exec(output)
-  return m ? m[1] : null
+  return m ? m[1]! : null
 }
 
-function fpHash(fp) {
+function fpHash(fp: string | null): string {
   return fp === null ? '' : createHash('sha256').update(fp).digest('hex').slice(0, 12)
 }
 
 /** Ask the pinned Node (oracle) for a module form's fingerprint. */
-function oracleFingerprint(nodeBin, probeFile) {
+function oracleFingerprint(nodeBin: string, probeFile: string): string | null {
   const res = spawnSync(
     nodeBin,
     ['--experimental-strip-types', probeFile],
@@ -330,7 +346,7 @@ function oracleFingerprint(nodeBin, probeFile) {
 }
 
 /** Compile with Perry, run, return the fingerprint (or null on any failure). */
-function perryFingerprint(probeFile, outBin) {
+function perryFingerprint(probeFile: string, outBin: string): string | null {
   const compileEnv = { ...process.env, PERRY_ALLOW_UNIMPLEMENTED: '1' }
   let c = spawnSync(PERRY_BIN, [probeFile, '-o', outBin], {
     encoding: 'utf8',
@@ -361,7 +377,7 @@ function perryFingerprint(probeFile, outBin) {
 // --- status model ----------------------------------------------------------
 
 // Lower is better. --check flags a cell whose severity increased.
-const SEVERITY = {
+const SEVERITY: Record<string, number> = {
   skip: -1,
   match: 0,
   'perry-extra': 0, // Perry resolves a form Node's oracle didn't — not a regression.
@@ -370,7 +386,7 @@ const SEVERITY = {
   'perry-unresolved': 3,
 }
 
-function cellStatus(oracleFp, perryFp, skipped) {
+function cellStatus(oracleFp: string | null, perryFp: string | null, skipped: boolean): string {
   if (skipped) return 'skip'
   const oracleOk = oracleFp !== null
   const perryOk = perryFp !== null
@@ -382,17 +398,17 @@ function cellStatus(oracleFp, perryFp, skipped) {
 
 // --- manifest cross-check --------------------------------------------------
 
-function extractRustArray(src, name) {
+function extractRustArray(src: string, name: string): string[] {
   const start = src.indexOf(`${name}: &[&str] = &[`)
   if (start < 0) return []
   const end = src.indexOf('];', start)
   const body = src.slice(start, end)
-  const out = new Set()
+  const out = new Set<string>()
   for (const m of body.matchAll(/"([^"]+)"/g)) out.add(m[1])
   return [...out]
 }
 
-function loadManifestModules() {
+function loadManifestModules(): Set<string> {
   const src = readFileSync(MANIFEST_ENTRIES, 'utf8')
   const native = extractRustArray(src, 'NATIVE_MODULES')
   const submodules = extractRustArray(src, 'NODE_SUBMODULES')
@@ -401,7 +417,7 @@ function loadManifestModules() {
 
 // --- enumerate builtins ----------------------------------------------------
 
-function enumerateBuiltins(nodeBin) {
+function enumerateBuiltins(nodeBin: string): string[] {
   const res = spawnSync(
     nodeBin,
     ['-e', "process.stdout.write(require('module').builtinModules.join('\\n'))"],
@@ -420,14 +436,21 @@ function enumerateBuiltins(nodeBin) {
   return [...bases].sort()
 }
 
-function loadSkip() {
+function loadSkip(): Record<string, { reason?: string }> {
   if (!existsSync(SKIP_PATH)) return {}
   return JSON.parse(readFileSync(SKIP_PATH, 'utf8')).modules || {}
 }
 
 // --- run the matrix --------------------------------------------------------
 
-async function runMatrix(args) {
+type ParsedArgs = ReturnType<typeof parseArgs>
+
+async function runMatrix(args: ParsedArgs): Promise<{
+  version: string
+  platform: string
+  modules: Record<string, any>
+  __partial?: boolean
+}> {
   if (!existsSync(PERRY_BIN)) {
     throw new Error(
       `perry release binary missing at ${PERRY_BIN}\n  build it: cargo build --release -p perry`,
@@ -450,12 +473,12 @@ async function runMatrix(args) {
   }
 
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'perry-node-compat-'))
-  const results = {}
+  const results: Record<string, any> = {}
   let done = 0
   for (const base of bases) {
     done++
     process.stderr.write(`\r[node-compat] ${done}/${bases.length} ${base.padEnd(24)}`)
-    const entry = {}
+    const entry: Record<string, any> = {}
     const methods = args.methodMap.get(base)
     for (const [form, spec] of [
       ['unprefixed', base],
@@ -501,7 +524,7 @@ async function runMatrix(args) {
 
 // --- reporting -------------------------------------------------------------
 
-const GLYPH = {
+const GLYPH: Record<string, string> = {
   match: 'match',
   'shape-diff': 'SHAPE-DIFF',
   'perry-unresolved': 'UNRESOLVED',
@@ -510,16 +533,25 @@ const GLYPH = {
   skip: 'skip',
 }
 
-function summarize(matrix, manifestModules) {
+function summarize(matrix: { modules: Record<string, any> }, manifestModules: Set<string>): {
+  total: number
+  bothMatch: number
+  perryUnresolved: string[]
+  shapeDiff: string[]
+  prefixDivergences: string[]
+  claimedButBroken: string[]
+  worksButUnclaimed: string[]
+  skipped: string[]
+} {
   const mods = Object.entries(matrix.modules)
   const total = mods.length
   let bothMatch = 0
-  const perryUnresolved = []
-  const shapeDiff = []
-  const prefixDivergences = []
-  const claimedButBroken = []
-  const worksButUnclaimed = []
-  const skipped = []
+  const perryUnresolved: string[] = []
+  const shapeDiff: string[] = []
+  const prefixDivergences: string[] = []
+  const claimedButBroken: string[] = []
+  const worksButUnclaimed: string[] = []
+  const skipped: string[] = []
 
   for (const [base, e] of mods) {
     if (e.unprefixed.status === 'skip') {
@@ -550,7 +582,7 @@ function summarize(matrix, manifestModules) {
   }
 }
 
-function printTable(matrix) {
+function printTable(matrix: { modules: Record<string, any> }): void {
   const rows = Object.entries(matrix.modules)
   const w = Math.max(...rows.map(([b]) => b.length), 6)
   console.log('')
@@ -564,7 +596,7 @@ function printTable(matrix) {
   }
 }
 
-function printSummary(s, matrix) {
+function printSummary(s: ReturnType<typeof summarize>, matrix: { version: string; platform: string }): void {
   console.log('')
   console.log(`Node oracle:        v${matrix.version} (${matrix.platform})`)
   console.log(`Builtins probed:    ${s.total}`)
@@ -581,7 +613,7 @@ function printSummary(s, matrix) {
 
 const BASELINE_SCHEMA = {
   description:
-    'Per-module x per-form (unprefixed / node:-prefixed) export-shape status for the Node builtin-module compatibility matrix. Generated by scripts/node_compat_matrix.mjs against the pinned Node oracle (external-tools.json tools.node). --check fails on any cell that got strictly worse or any prefix-parity invariant that broke; improvements are accepted. Regenerate with --update-baseline and review the diff.',
+    'Per-module x per-form (unprefixed / node:-prefixed) export-shape status for the Node builtin-module compatibility matrix. Generated by scripts/node_compat_matrix.mts against the pinned Node oracle (external-tools.json tools.node). --check fails on any cell that got strictly worse or any prefix-parity invariant that broke; improvements are accepted. Regenerate with --update-baseline and review the diff.',
   statuses: {
     match: 'perry export fingerprint == node oracle fingerprint',
     'shape-diff': 'both resolved, fingerprints differ (a real shape gap)',
@@ -598,7 +630,7 @@ const BASELINE_SCHEMA = {
   },
 }
 
-function toBaseline(matrix) {
+function toBaseline(matrix: { version: string; platform: string; modules: Record<string, any> }): any {
   return {
     _schema: BASELINE_SCHEMA,
     nodeVersion: matrix.version,
@@ -607,7 +639,7 @@ function toBaseline(matrix) {
   }
 }
 
-function writeBaseline(matrix, partial) {
+function writeBaseline(matrix: { version: string; platform: string; modules: Record<string, any> }, partial: boolean): void {
   let doc = toBaseline(matrix)
   if (partial && existsSync(BASELINE_PATH)) {
     // Selector-scoped update: overlay ONLY the probed modules onto the
@@ -625,7 +657,7 @@ function writeBaseline(matrix, partial) {
   console.error(`[node-compat] wrote baseline ${path.relative(REPO_ROOT, BASELINE_PATH)}${scope}`)
 }
 
-function baselineValidationError(base) {
+function baselineValidationError(base: any): string | null {
   if (!base || typeof base !== 'object' || Array.isArray(base)) {
     return 'baseline root must be an object'
   }
@@ -649,7 +681,7 @@ function baselineValidationError(base) {
   return null
 }
 
-function checkAgainstBaseline(matrix) {
+function checkAgainstBaseline(matrix: { version: string; platform: string; modules: Record<string, any>; __partial?: boolean }): number {
   if (!existsSync(BASELINE_PATH)) {
     console.error(`[node-compat] no baseline at ${BASELINE_PATH} — run --update-baseline first`)
     return 1
@@ -707,7 +739,7 @@ function checkAgainstBaseline(matrix) {
     )
     return 1
   }
-  const regressions = []
+  const regressions: string[] = []
   for (const [name, cur] of Object.entries(matrix.modules)) {
     const prev = base.modules[name]
     if (!prev) continue // new module (e.g. after a node bump) — not a regression
@@ -743,7 +775,7 @@ function checkAgainstBaseline(matrix) {
 
 // --- main ------------------------------------------------------------------
 
-async function main() {
+async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2))
   if (args.mode === 'help') {
     console.log(HELP)

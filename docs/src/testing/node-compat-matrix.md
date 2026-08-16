@@ -1,7 +1,7 @@
 # Node builtin-module Compatibility Matrix
 
 Perry reimplements the `node:*` module surface natively. The **compatibility
-matrix** (`scripts/node_compat_matrix.mjs`) measures — against a *pinned,
+matrix** (`scripts/node_compat_matrix.mts`) measures — against a *pinned,
 verified* Node — how faithfully Perry reproduces each builtin's **export
 shape**, for **both** import forms (`M` and `node:M`).
 
@@ -14,7 +14,7 @@ matrix"). Deep *behavioral* parity lives in the hand-authored node-suite
 ## To check one module fast
 
 ```bash
-node scripts/node_compat_matrix.mjs --module fs
+node scripts/node_compat_matrix.mts --module fs
 ```
 
 That is the command to reach for while iterating on a single builtin. The
@@ -22,9 +22,9 @@ pinned Node download happens once and is cached under `.cache/node-pin/`, so
 subsequent runs are just Perry compile + run. Narrow further:
 
 ```bash
-node scripts/node_compat_matrix.mjs --module fs,path,crypto            # a few modules
-node scripts/node_compat_matrix.mjs --module fs --method readFileSync,promises  # only these exports
-node scripts/node_compat_matrix.mjs --only fs.readFileSync,path.join   # combined mod.export form
+node scripts/node_compat_matrix.mts --module fs,path,crypto            # a few modules
+node scripts/node_compat_matrix.mts --module fs --method readFileSync,promises  # only these exports
+node scripts/node_compat_matrix.mts --only fs.readFileSync,path.join   # combined mod.export form
 ```
 
 A `--method`/`--only` subset narrows the fingerprint to those exports for a
@@ -35,9 +35,9 @@ for `--check`/`--update-baseline`.
 ## Full sweep and the CI gate
 
 ```bash
-node scripts/node_compat_matrix.mjs                 # whole matrix + summary table
-node scripts/node_compat_matrix.mjs --check         # exit 1 on regressions vs the baseline
-node scripts/node_compat_matrix.mjs --update-baseline   # rewrite the committed baseline
+node scripts/node_compat_matrix.mts                 # whole matrix + summary table
+node scripts/node_compat_matrix.mts --check         # exit 1 on regressions vs the baseline
+node scripts/node_compat_matrix.mts --update-baseline   # rewrite the committed baseline
 ```
 
 The harness needs the release binary (`cargo build --release -p perry`). The
@@ -127,7 +127,7 @@ as `perry-extra`: a documented leniency, not prefix parity.
 1. Edit `tools.node.version` in `external-tools.json` and refresh the
    per-platform `sha512` SRI (download each dist tarball, verify its sha256
    against that version's `SHASUMS256.txt`, then record the recomputed sha512).
-2. `node scripts/node_compat_matrix.mjs --update-baseline`.
+2. `node scripts/node_compat_matrix.mts --update-baseline`.
 3. **Review the diff.** A Node bump legitimately changes fingerprints (new
    exports, typeof changes); confirm the deltas are Node's, not Perry
    regressions, before committing.

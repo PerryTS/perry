@@ -294,7 +294,7 @@ jobs:
       # newly-soaked upstream releases as advisories.
       - name: Binding upstream pins (lock-step)
         if: ${{ !cancelled() }}
-        run: node scripts/binding_pins.mjs --check
+        run: node scripts/binding_pins.mts --check
 
       # GC write-barrier store-site inventory: every raw heap-slot store in
       # perry-codegen / perry-runtime / perry-stdlib must be barriered or

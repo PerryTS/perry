@@ -107,7 +107,7 @@ because a gap-suite oracle bump must not be able to move a publishing toolchain.
 ### FINDING 4 — stale instruction inside `external-tools.json`
 
 `tools.node.notes[0]` says "Bump via the NODE_PIN.version constant in
-scripts/node_compat_matrix.mjs". There is **no `NODE_PIN` constant** in that
+scripts/node_compat_matrix.mts". There is **no `NODE_PIN` constant** in that
 file (grep: zero hits); the script reads `external-tools.json` itself and its
 own `--help` says so ("The pinned Node version lives in external-tools.json").
 CLAUDE.md gives the correct instruction. Fixed the note in place.

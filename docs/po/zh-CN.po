@@ -49008,13 +49008,13 @@ msgstr "正确性数据"
 
 #: src/cli/fast-math.md:123
 msgid ""
-"`scripts/fp_fuzz.mjs` — randomly generates TS programs exercising the six "
+"`scripts/fp_fuzz.mts` — randomly generates TS programs exercising the six "
 "patterns most likely to trip per-instruction FMFs (left-fold, tree-fold, "
 "right-fold reductions; FMA-shaped chains; algebraic identities like "
 "`(a/b)*b`; cancellation predicates). Each program is compiled with both Node"
 " and Perry, and stdout is diffed byte-for-byte."
 msgstr ""
-"`scripts/fp_fuzz.mjs` — 随机生成 TS 程序，使用最有可能触发按指令 FMF 的六种模式（左折叠、树折叠、右折叠归约；FMA "
+"`scripts/fp_fuzz.mts` — 随机生成 TS 程序，使用最有可能触发按指令 FMF 的六种模式（左折叠、树折叠、右折叠归约；FMA "
 "形状链；像 `(a/b)*b` 的代数恒等式；抵消谓词）。每个程序都用 Node 和 Perry 编译，并对 stdout 进行逐字节比对。"
 
 #: src/cli/fast-math.md:129

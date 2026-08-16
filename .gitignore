@@ -6,7 +6,7 @@ __pycache__/
 *.py[cod]
 
 # Pinned Node oracle for the builtin-module compat matrix
-# (scripts/node_compat_matrix.mjs downloads + SRI-verifies + caches here).
+# (scripts/node_compat_matrix.mts downloads + SRI-verifies + caches here).
 .cache/node-pin/
 
 # Android Gradle: caches and build outputs are regenerable. Source under
@@ -192,7 +192,7 @@ private-*
 # mdBook output
 docs/book/
 
-# scripts/fp_fuzz.mjs failure dumps (regenerable, machine-local)
+# scripts/fp_fuzz.mts failure dumps (regenerable, machine-local)
 fp_fuzz_failures/
 
 test-files/.perry-cache/

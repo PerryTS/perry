@@ -45,6 +45,34 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+interface UpstreamPin {
+  version: string;
+  sha256: string;
+  repo?: string;
+  ref?: string;
+  'ported-at': string;
+  date: string;
+}
+
+interface Binding {
+  name: string;
+  fields: Record<string, string>;
+  upstream: Record<string, string> | null;
+}
+
+interface NpmManifest {
+  dist: { tarball: string };
+  repository?: string | { url?: string };
+  gitHead?: string;
+}
+
+interface NpmPackument {
+  name: string;
+  'dist-tags'?: { latest?: string };
+  versions?: Record<string, NpmManifest>;
+  time?: Record<string, string>;
+}
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOML_PATH = path.join(ROOT, 'crates', 'perry', 'well_known_bindings.toml');
 const REGISTRY = 'https://registry.npmjs.org';
@@ -54,12 +82,13 @@ const TARBALL_TIMEOUT_MS = 60_000;
 const GIT_TIMEOUT_MS = 60_000;
 
 // Perry's own packages have no third-party upstream to pin.
-const SELF_OWNED = (name) => name.startsWith('@perryts/') || name.startsWith('perry/');
+const SELF_OWNED = (name: string): boolean =>
+  name.startsWith('@perryts/') || name.startsWith('perry/');
 
 // A binding is exempt from carrying its own npm provenance pin when it is
 // perry-owned, a Node builtin (upstream is Node core, not an npm dist), or an
 // alias/subpath of another binding (it shares that binding's pin).
-const isExempt = (b) =>
+const isExempt = (b: Binding): boolean =>
   SELF_OWNED(b.name) || b.fields['node-builtin'] === 'true' || Boolean(b.fields['alias-of']);
 
 // ---------------------------------------------------------------------------
@@ -69,10 +98,10 @@ const isExempt = (b) =>
 // instead of pulling a toml dependency into the repo's script surface.
 // ---------------------------------------------------------------------------
 
-function parseBindings(raw) {
-  const bindings = new Map();
-  let current = null;
-  let section = null; // 'binding' | 'upstream'
+function parseBindings(raw: string): Map<string, Binding> {
+  const bindings = new Map<string, Binding>();
+  let current: Binding | null = null;
+  let section: 'binding' | 'upstream' | null = null;
   for (const line of raw.split('\n')) {
     const header = line.match(/^\[bindings\.(?:"([^"]+)"|([^.\]"]+))(\.upstream)?\]\s*$/);
     if (header) {
@@ -107,7 +136,7 @@ function parseBindings(raw) {
   return bindings;
 }
 
-function upstreamBlockText(name, pin) {
+function upstreamBlockText(name: string, pin: UpstreamPin): string {
   const key = /^[A-Za-z0-9_-]+$/.test(name) ? name : `"${name}"`;
   const lines = [`[bindings.${key}.upstream]`];
   lines.push(`version = "${pin.version}"`);
@@ -121,7 +150,7 @@ function upstreamBlockText(name, pin) {
 
 // Insert or replace the upstream sub-block directly after the binding's
 // own block, preserving every other byte of the file (comments included).
-function writePin(raw, name, pin) {
+function writePin(raw: string, name: string, pin: UpstreamPin): string {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A binding key may appear bare (`date-fns`) or quoted (`"decimal.js"`,
   // and quoted-anyway `"date-fns"`); match whichever the file actually uses
@@ -152,7 +181,7 @@ function writePin(raw, name, pin) {
 // npm registry
 // ---------------------------------------------------------------------------
 
-async function fetchJson(url) {
+async function fetchJson(url: string): Promise<any> {
   let res;
   try {
     res = await fetch(url, {
@@ -168,17 +197,17 @@ async function fetchJson(url) {
   return res.json();
 }
 
-async function fetchPackument(name) {
+async function fetchPackument(name: string): Promise<NpmPackument> {
   return fetchJson(`${REGISTRY}/${name.replace('/', '%2f')}`);
 }
 
-function latestStable(packument) {
+function latestStable(packument: NpmPackument): string {
   const version = packument['dist-tags']?.latest;
   if (!version) throw new Error(`${packument.name}: no dist-tags.latest`);
   return version;
 }
 
-async function sha256OfTarball(url) {
+async function sha256OfTarball(url: string): Promise<string> {
   let res;
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
@@ -192,7 +221,7 @@ async function sha256OfTarball(url) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function normalizeRepo(repository) {
+function normalizeRepo(repository: string | { url?: string } | undefined): string | undefined {
   const url = typeof repository === 'string' ? repository : repository?.url;
   if (!url) return undefined;
   return url
@@ -202,7 +231,7 @@ function normalizeRepo(repository) {
     .replace(/\.git$/, '');
 }
 
-async function provisionPin(name, requestedVersion) {
+async function provisionPin(name: string, requestedVersion?: string): Promise<UpstreamPin> {
   const packument = await fetchPackument(name);
   const version = requestedVersion ?? latestStable(packument);
   const manifest = packument.versions?.[version];
@@ -222,7 +251,7 @@ async function provisionPin(name, requestedVersion) {
 // modes
 // ---------------------------------------------------------------------------
 
-async function modeSet(names, requestedVersion) {
+async function modeSet(names: string[], requestedVersion?: string): Promise<void> {
   let raw = fs.readFileSync(TOML_PATH, 'utf8');
   const bindings = parseBindings(raw);
   for (const name of names) {
@@ -236,7 +265,7 @@ async function modeSet(names, requestedVersion) {
   fs.writeFileSync(TOML_PATH, raw);
 }
 
-async function modeBackfill() {
+async function modeBackfill(): Promise<void> {
   const raw = fs.readFileSync(TOML_PATH, 'utf8');
   const bindings = parseBindings(raw);
   const unpinned = [...bindings.values()].filter((b) => !b.upstream && !isExempt(b));
@@ -249,7 +278,7 @@ async function modeBackfill() {
   }
 }
 
-function checkOffline(bindings) {
+function checkOffline(bindings: Map<string, Binding>): string[] {
   const failures = [];
   for (const b of bindings.values()) {
     // Aliases inherit their target's provenance — verify the target exists
@@ -297,16 +326,17 @@ function checkOffline(bindings) {
   return failures;
 }
 
-async function checkRefresh(bindings, soakDays) {
-  const advisories = [];
+async function checkRefresh(bindings: Map<string, Binding>, soakDays: number): Promise<string[]> {
+  const advisories: string[] = [];
   const now = Date.now();
   for (const b of bindings.values()) {
     if (isExempt(b) || !b.upstream?.version) continue;
-    let packument;
+    let packument: NpmPackument;
     try {
       packument = await fetchPackument(b.name);
     } catch (err) {
-      advisories.push(`${b.name}: registry lookup failed (${err.message}) — skipping`);
+      const msg = err instanceof Error ? err.message : String(err);
+      advisories.push(`${b.name}: registry lookup failed (${msg}) — skipping`);
       continue;
     }
     const latest = latestStable(packument);
@@ -319,14 +349,14 @@ async function checkRefresh(bindings, soakDays) {
       advisories.push(
         `${b.name}: pinned ${b.upstream.version}, latest stable ${latest} ` +
           `(soaked ${soakedDays}d >= ${soakDays}d) — re-pin, re-review, advance ported-at: ` +
-          `node scripts/binding_pins.mjs --set ${b.name}`,
+          `node scripts/binding_pins.mts --set ${b.name}`,
       );
     }
   }
   return advisories;
 }
 
-function modeMaterialize(name) {
+function modeMaterialize(name: string): void {
   const bindings = parseBindings(fs.readFileSync(TOML_PATH, 'utf8'));
   const b = bindings.get(name);
   if (!b) throw new Error(`no [bindings.${name}] block`);
@@ -362,9 +392,9 @@ function modeMaterialize(name) {
 
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
-const has = (flag) => args.includes(flag);
-const valueOf = (flag) => {
+const args: string[] = process.argv.slice(2);
+const has = (flag: string): boolean => args.includes(flag);
+const valueOf = (flag: string): string | undefined => {
   const i = args.indexOf(flag);
   return i !== -1 ? args[i + 1] : undefined;
 };
@@ -387,7 +417,7 @@ try {
     const bindings = parseBindings(fs.readFileSync(TOML_PATH, 'utf8'));
     const failures = checkOffline(bindings);
     for (const f of failures) console.error(`FAIL ${f}`);
-    let advisories = [];
+    let advisories: string[] = [];
     if (has('--refresh')) {
       const soakDays = Number(valueOf('--soak-days') ?? DEFAULT_SOAK_DAYS);
       advisories = await checkRefresh(bindings, soakDays);
@@ -399,11 +429,12 @@ try {
     );
   } else {
     console.error(
-      'usage: binding_pins.mjs --set <name> [version] | --backfill | --check [--refresh [--soak-days N]] | --materialize <name>',
+      'usage: binding_pins.mts --set <name> [version] | --backfill | --check [--refresh [--soak-days N]] | --materialize <name>',
     );
     process.exit(2);
   }
 } catch (err) {
-  console.error(`error: ${err.message}`);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`error: ${msg}`);
   process.exit(1);
 }

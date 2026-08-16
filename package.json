@@ -1,5 +1,8 @@
 {
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "soak": "node scripts/soak/soak.mts --check",
     "soak:fix": "node scripts/soak/soak.mts --fix",

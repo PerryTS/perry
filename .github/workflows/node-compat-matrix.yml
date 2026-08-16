@@ -1,6 +1,6 @@
 name: Node Compat Matrix Guard
 
-# Gates scripts/node_compat_matrix.mjs --check: a breadth sweep over every
+# Gates scripts/node_compat_matrix.mts --check: a breadth sweep over every
 # require("module").builtinModules entry, both import forms (M and node:M),
 # against a PINNED, SRI-verified Node oracle (external-tools.json tools.node,
 # currently 26.5.1). It compares Perry's export-SHAPE fingerprint per module
@@ -11,7 +11,7 @@ name: Node Compat Matrix Guard
 #
 # Its OWN job on purpose: the runner downloads the pinned Node dist tarball
 # (~40MB) and verifies it, which must not slow the main cargo-test job. The
-# node used by setup-node here only EXECUTES the .mjs; the oracle Node is the
+# node used by setup-node here only EXECUTES the .mts; the oracle Node is the
 # pinned dist the runner fetches + SRI-verifies itself.
 #
 # Decoupled from the (not-yet-enabled) merge queue like node-suite-guard.yml:
@@ -76,7 +76,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. This node
-          # only RUNS node_compat_matrix.mjs; the compat oracle is the pinned
+          # only RUNS node_compat_matrix.mts; the compat oracle is the pinned
           # Node the runner downloads + SRI-verifies from external-tools.json.
           node-version-file: .node-version
 
@@ -91,6 +91,6 @@ jobs:
           set -euo pipefail
           echo '### Node builtin compat matrix guard' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          node scripts/node_compat_matrix.mjs --check \
+          node scripts/node_compat_matrix.mts --check \
             | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

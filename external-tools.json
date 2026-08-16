@@ -1,15 +1,15 @@
 {
   "tools": {
     "node": {
-      "description": "Node.js — the pinned oracle for the builtin-module compatibility matrix (scripts/node_compat_matrix.mjs).",
+      "description": "Node.js — the pinned oracle for the builtin-module compatibility matrix (scripts/node_compat_matrix.mts).",
       "version": "26.5.1",
       "release": "node-dist",
       "repository": "github:nodejs/node",
       "distBaseUrl": "https://nodejs.org/dist",
       "notes": [
-        "Latest CURRENT stable at pin time. Bump by editing tools.node.version here (plus each platform asset name and its sha512 SRI), then run scripts/node_compat_matrix.mjs --update-baseline and review the diff. There is no NODE_PIN constant in that script — it reads this file; an earlier revision of this note said otherwise.",
+        "Latest CURRENT stable at pin time. Bump by editing tools.node.version here (plus each platform asset name and its sha512 SRI), then run scripts/node_compat_matrix.mts --update-baseline and review the diff. There is no NODE_PIN constant in that script — it reads this file; an earlier revision of this note said otherwise.",
         "Assets are the official nodejs.org dist tarballs. Integrity is sha512 recomputed from the downloaded bytes (matching this file's sha512 SRI convention); nodejs.org also publishes sha256 in SHASUMS256.txt, cross-checked at pin time against every asset here.",
-        "Installed by scripts/node_compat_matrix.mjs via its own resolver (download + SRI-verify + cache under .cache/node-pin/), NOT the shared tool rack: nodejs.org is not a github release host, and the tarball is a full node tree rather than a single bin.",
+        "Installed by scripts/node_compat_matrix.mts via its own resolver (download + SRI-verify + cache under .cache/node-pin/), NOT the shared tool rack: nodejs.org is not a github release host, and the tarball is a full node tree rather than a single bin.",
         "Official dist ships no musl build (musl lives on unofficial-builds.nodejs.org); alpine/musl runners fall back to a system node.",
         "LTS alternate: v24.18.1 (Krypton). Pass --node-version <ver> to fetch a non-pinned line — it is verified against that version's SHASUMS256.txt (sha256) since no sha512 pin exists here for it."
       ],

@@ -120,7 +120,7 @@ giving up bit-exact parity.
 
 ## Correctness numbers
 
-`scripts/fp_fuzz.mjs` — randomly generates TS programs exercising the
+`scripts/fp_fuzz.mts` — randomly generates TS programs exercising the
 six patterns most likely to trip per-instruction FMFs (left-fold,
 tree-fold, right-fold reductions; FMA-shaped chains; algebraic
 identities like `(a/b)*b`; cancellation predicates). Each program is
