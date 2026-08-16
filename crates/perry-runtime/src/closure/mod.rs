@@ -46,11 +46,12 @@ pub use dispatch::{
     js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2,
     js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7,
     js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
-    js_function_bind, js_native_call_value, throw_not_callable,
+    js_function_bind, js_native_call_value, throw_not_callable, DirectCall1, DirectCall2,
+    DirectCall3, DirectCall4,
 };
 pub(crate) use dispatch::{
     coerce_call_this, rebind_explicit_this, reify_function_method_value,
-    reset_throw_not_callable_counter, resolve_call2_direct,
+    reset_throw_not_callable_counter,
 };
 pub use unbox::js_closure_unbox_callee_checked;
 

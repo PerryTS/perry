@@ -116,6 +116,7 @@ pub extern "C" fn js_typed_array_sort_default(ta: *mut TypedArrayHeader) -> *mut
 /// the comparator body itself) can trigger a GC that would otherwise sweep —
 /// or move — the first while its pointer sits in a bare Rust local.
 unsafe fn bigint_lane_compare(
+    site: crate::closure::DirectCall2,
     comparator: *const ClosureHeader,
     a_bits: u64,
     b_bits: u64,
@@ -131,7 +132,7 @@ unsafe fn bigint_lane_compare(
     };
     let a_handle = scope.root_nanbox_f64(box_lane(a_bits));
     let b_handle = scope.root_nanbox_f64(box_lane(b_bits));
-    let r = crate::closure::js_closure_call2(
+    let r = site.call(
         comparator,
         a_handle.get_nanbox_f64(),
         b_handle.get_nanbox_f64(),
@@ -161,9 +162,12 @@ unsafe fn sorted_bigint_lanes(
 ) -> Vec<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cmp_handle = scope.root_raw_const_ptr(comparator);
+    // #8180: one resolution for the whole sort, not one per comparison.
+    let cmp_site = crate::closure::DirectCall2::resolve(comparator);
     let mut lanes: Vec<u64> = std::slice::from_raw_parts(data_ptr(ta) as *const u64, len).to_vec();
     lanes.sort_by(|&a, &b| {
         bigint_lane_compare(
+            cmp_site,
             cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
             a,
             b,
@@ -218,14 +222,14 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
         // non-BigInt arms were missed.
         let scope = crate::gc::RuntimeHandleScope::new();
         let cmp_handle = scope.root_raw_const_ptr(comparator);
+        // #8180: one resolution for the whole sort, not one per comparison.
+        let cmp_site = crate::closure::DirectCall2::resolve(comparator);
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta_clean, i)).collect();
         buf.sort_by(|a, b| {
             // `with_const_ptr`: an argument-position read, which `across_*`
             // cannot express. The handle is re-read per comparison, so a
             // relocation during comparison `i` is reflected in `i + 1`.
-            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
-                crate::closure::js_closure_call2(cmp, *a, *b)
-            });
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| cmp_site.call(cmp, *a, *b));
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
@@ -303,14 +307,14 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
         // non-BigInt arms were missed.
         let scope = crate::gc::RuntimeHandleScope::new();
         let cmp_handle = scope.root_raw_const_ptr(comparator);
+        // #8180: one resolution for the whole sort, not one per comparison.
+        let cmp_site = crate::closure::DirectCall2::resolve(comparator);
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta, i)).collect();
         buf.sort_by(|a, b| {
             // `with_const_ptr`: an argument-position read, which `across_*`
             // cannot express. The handle is re-read per comparison, so a
             // relocation during comparison `i` is reflected in `i + 1`.
-            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
-                crate::closure::js_closure_call2(cmp, *a, *b)
-            });
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| cmp_site.call(cmp, *a, *b));
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
@@ -379,9 +383,13 @@ pub extern "C" fn js_typed_array_find_last(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -403,9 +411,13 @@ pub extern "C" fn js_typed_array_find_last_index(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }

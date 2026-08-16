@@ -1,6 +1,11 @@
-//! Per-arity `js_closure_callN` FFI entry points (0..=16), the `resolve_call2_direct`
-//! hot-loop helper, and the shared `dispatch_registered_call` /
-//! `dispatch_rest_or_declared_arity` routing helpers.
+//! Per-arity `js_closure_callN` FFI entry points (0..=16) and the shared
+//! `dispatch_registered_call` / `dispatch_rest_or_declared_arity` routing
+//! helpers.
+//!
+//! The hot-loop counterpart -- resolve a closure ONCE and call it directly for
+//! the rest of the loop -- lives in the sibling `direct` module (#8180). It
+//! subsumes the `resolve_call2_direct` helper that used to sit here and had
+//! exactly one consumer.
 
 use super::*;
 
@@ -50,36 +55,6 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
             func(closure, arg0)
         }
     }
-}
-
-/// Resolve a 2-arg closure call once: returns Some(typed_fn_ptr) when
-/// the closure can be invoked via a direct call without per-call
-/// dispatch adjustments (no rest-bundling, no arity-padding, no
-/// bound-method routing). Returns None when the call must go through
-/// the slow `js_closure_call2` path. Hot loops that call the same
-/// closure many times (e.g. `array.sort((a,b) => a-b)`) can hoist
-/// this resolution out of the loop and skip ~50M HashMap lookups
-/// over a 1.25M-element sort.
-#[inline]
-pub(crate) fn resolve_call2_direct(
-    closure: *const ClosureHeader,
-) -> Option<extern "C" fn(*const ClosureHeader, f64, f64) -> f64> {
-    let func_ptr = get_valid_func_ptr(closure);
-    if func_ptr.is_null()
-        || func_ptr == BOUND_METHOD_FUNC_PTR
-        || func_ptr == BOUND_FUNCTION_FUNC_PTR
-    {
-        return None;
-    }
-    if lookup_closure_rest(func_ptr).is_some() {
-        return None;
-    }
-    if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared > 2 {
-            return None;
-        }
-    }
-    Some(unsafe { std::mem::transmute(func_ptr) })
 }
 
 /// Call a closure with 2 arguments, returning f64

@@ -633,10 +633,14 @@ impl<'s> RootedUint8Buffer<'s> {
 /// verdict showing the subject was live: `safepoints=5306
 /// scheduled_collections=5306 copying_minors=5306 moved_objects=25760`.
 
+/// #8180: each type also carries the closure's dispatch strategy, resolved
+/// ONCE for the whole loop (`closure/dispatch/direct.rs`) instead of
+/// re-derived per element by `js_closure_callN`.
 macro_rules! rooted_callback {
-    ($name:ident, $slow:ident, $($arg:ident),+) => {
+    ($name:ident, $site:ident, $($arg:ident),+) => {
         struct $name<'s> {
             handle: crate::gc::RuntimeHandle<'s>,
+            site: crate::closure::$site,
         }
 
         impl<'s> $name<'s> {
@@ -647,6 +651,7 @@ macro_rules! rooted_callback {
             ) -> Self {
                 Self {
                     handle: scope.root_raw_const_ptr(callback),
+                    site: crate::closure::$site::resolve(callback),
                 }
             }
 
@@ -660,21 +665,22 @@ macro_rules! rooted_callback {
             /// `scan_runtime_handle_roots_mut` both marks and REWRITES. So a
             /// collection during call `i` is reflected in the address call
             /// `i + 1` uses, which is precisely the ordering `across_*` exists
-            /// to enforce.
+            /// to enforce. The resolved `site` needs no such treatment: it is a
+            /// static CODE address, which relocation does not change.
             #[inline]
             fn call(&self, $($arg: f64),+) -> f64 {
                 self.handle
                     .with_const_ptr::<crate::closure::ClosureHeader, _>(|cb| {
-                        crate::closure::$slow(cb, $($arg),+)
+                        self.site.call(cb, $($arg),+)
                     })
             }
         }
     };
 }
 
-rooted_callback!(RootedCallback2, js_closure_call2, arg0, arg1);
-rooted_callback!(RootedCallback3, js_closure_call3, arg0, arg1, arg2);
-rooted_callback!(RootedCallback4, js_closure_call4, arg0, arg1, arg2, arg3);
+rooted_callback!(RootedCallback2, DirectCall2, arg0, arg1);
+rooted_callback!(RootedCallback3, DirectCall3, arg0, arg1, arg2);
+rooted_callback!(RootedCallback4, DirectCall4, arg0, arg1, arg2, arg3);
 
 pub(crate) unsafe fn dispatch_uint8_buffer_method(
     addr: usize,

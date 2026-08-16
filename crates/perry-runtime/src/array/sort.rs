@@ -1,7 +1,7 @@
 //! Mutating sort — default + comparator, plus the spec-ops path for exotic
 //! receivers (index accessors, sparse storage, inherited prototype elements).
 use super::*;
-use crate::closure::{js_closure_call2, ClosureHeader};
+use crate::closure::ClosureHeader;
 
 // ---------------------------------------------------------------------------
 // SortCompare helpers shared by the dense fast paths, the exotic spec path,
@@ -13,14 +13,14 @@ use crate::closure::{js_closure_call2, ClosureHeader};
 #[derive(Clone, Copy)]
 pub(crate) struct ComparatorCall {
     comparator: *const ClosureHeader,
-    direct: Option<extern "C" fn(*const ClosureHeader, f64, f64) -> f64>,
+    direct: crate::closure::DirectCall2,
 }
 
 impl ComparatorCall {
     pub(crate) fn new(comparator: *const ClosureHeader) -> Self {
         ComparatorCall {
             comparator,
-            direct: crate::closure::resolve_call2_direct(comparator),
+            direct: crate::closure::DirectCall2::resolve(comparator),
         }
     }
 
@@ -40,10 +40,7 @@ impl ComparatorCall {
     /// which relocation does not change.
     #[inline(always)]
     pub(crate) fn compare_at(&self, comparator: *const ClosureHeader, a: f64, b: f64) -> f64 {
-        let r = match self.direct {
-            Some(f) => f(comparator, a, b),
-            None => js_closure_call2(comparator, a, b),
-        };
+        let r = self.direct.call(comparator, a, b);
         if !r.is_nan() {
             return r;
         }
