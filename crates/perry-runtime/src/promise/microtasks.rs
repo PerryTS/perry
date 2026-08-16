@@ -172,6 +172,7 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
+    let async_box_ref_depth = async_box_execution_ref_depth();
     let reentrant = MICROTASK_RUN_DEPTH.with(|depth| {
         let current = depth.get();
         depth.set(current.saturating_add(1));
@@ -265,6 +266,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
         CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
         CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+        let unwound_trap = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
+        // `longjmp` bypasses Rust destructors and normal dispatch tails. Drain
+        // exactly the activation references acquired since THIS (possibly
+        // re-entrant) runner began; an enclosing activation is below the saved
+        // depth and must remain owned when this runner returns.
+        unwind_async_box_execution_refs(async_box_ref_depth);
         if !cur.is_null() {
             unsafe {
                 if !(*cur).next.is_null() {
@@ -273,9 +280,8 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
             }
             ran += 1;
         } else {
-            let prev = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
-            if !prev.trap_next.is_null() {
-                js_promise_reject(prev.trap_next, exc);
+            if !unwound_trap.trap_next.is_null() {
+                js_promise_reject(unwound_trap.trap_next, exc);
                 ran += 1;
             } else {
                 crate::node_submodules::diagnostics::schedule_uncaught(exc);
@@ -568,6 +574,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         c.set(InlineTrap {
                             trap_next: next,
                             current_step: 0,
+                            box_activation: std::ptr::null_mut(),
                         })
                     });
 
@@ -594,6 +601,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             current_step: prev_trap_step_handle
                                 .get_raw_const_ptr::<crate::closure::ClosureHeader>()
                                 as usize,
+                            box_activation: prev_trap.box_activation,
                         })
                     });
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
@@ -653,8 +661,21 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     restore_microtask_context();
                     ran += 1;
                 }
-                Some(Task::AsyncStep(step_closure, value, next, is_error, task_context)) => {
+                Some(Task::AsyncStep(
+                    step_closure,
+                    value,
+                    next,
+                    is_error,
+                    task_context,
+                    box_activation,
+                )) => {
                     bump(&MT_RUN_COUNT);
+                    // The popped Task's activation reference transfers to the
+                    // running-reference stack until one of this arm's tails (or
+                    // the setjmp recovery path) releases it.
+                    if !box_activation.is_null() {
+                        push_async_box_execution_ref(box_activation);
+                    }
                     // #7497: ROOT BEFORE `enter_microtask_context`. A Task stops
                     // being a scanned root the instant it is popped off
                     // TASK_QUEUE, and everything between the pop and the
@@ -689,6 +710,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             }
                         }
                         restore_microtask_context();
+                        if !box_activation.is_null() {
+                            pop_async_box_execution_ref(box_activation);
+                        }
+                        crate::r#box::release_async_box_activation(box_activation);
                         ran += 1;
                         continue;
                     }
@@ -740,6 +765,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                             CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                             restore_microtask_context();
+                            if !box_activation.is_null() {
+                                pop_async_box_execution_ref(box_activation);
+                            }
+                            crate::r#box::release_async_box_activation(box_activation);
                             ran += 1;
                             continue;
                         }
@@ -809,6 +838,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         c.set(InlineTrap {
                             trap_next: next,
                             current_step: step_closure as usize,
+                            box_activation,
                         })
                     });
 
@@ -861,6 +891,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             current_step: prev_trap_step_handle
                                 .get_raw_const_ptr::<crate::closure::ClosureHeader>()
                                 as usize,
+                            box_activation: prev_trap.box_activation,
                         })
                     });
                     // #789: pair the `before()` above — fires the after hook and
@@ -900,6 +931,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
                     restore_microtask_context();
+                    if !box_activation.is_null() {
+                        pop_async_box_execution_ref(box_activation);
+                    }
+                    crate::r#box::release_async_box_activation(box_activation);
                     ran += 1;
                 }
             }
@@ -973,15 +1008,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         crate::gc::gc_safepoint_moving_minor();
     }
 
-    // #7933 follow-up: at the outermost pump exit with a fully drained task
-    // queue, no `Task::AsyncStep` referencing a released activation's cells
-    // can still exist (a duplicate resume can only live in TASK_QUEUE, and it
-    // has run — against inert, de-registered cells — by the time the queue is
-    // empty). That makes the released cells reusable: drain the release
-    // quarantines into the free pools. See the QUARANTINE doc in
-    // `crate::r#box`. Skipped when the drain exited early with tasks still
-    // queued — the quarantine just keeps accumulating until the next clean
-    // boundary.
+    // Fallback for release entry points invoked without a tracked plain-async
+    // activation (principally direct runtime tests). Production async frames
+    // publish at their own queued/running AsyncStep refcount reaching zero;
+    // they do not wait for this global pump boundary.
     if MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
         && TASK_QUEUE.with(|q| q.borrow().is_empty())
     {

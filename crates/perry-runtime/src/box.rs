@@ -169,19 +169,19 @@ crate::perry_thread_local! {
 }
 
 crate::perry_thread_local! {
-    /// #7933 follow-up: reusable cells for each box kind, and the quarantine
-    /// feeding them.
+    /// #7933 follow-up: reusable cells for each box kind, plus the fallback
+    /// quarantine used by release calls made outside a tracked activation.
     ///
     /// `js_*box_release` (emitted at a plain-async activation's terminal
     /// states, ONLY for cells the transform's escape analysis proved no
     /// closure can observe — `perry-transform/src/generator/box_release.rs`)
-    /// clears the cell, removes it from its registry, and parks the address
-    /// in the QUARANTINE. The quarantine drains into the free list at the
-    /// outermost microtask-pump boundary once the task queue is empty
-    /// (`flush_released_boxes`, called from `promise/microtasks.rs`), and
-    /// `js_*box_alloc*` pops the pool before touching `std::alloc`.
+    /// clears the cell, removes it from its registry, and parks the address in
+    /// that activation's tagged release range. The async pump retains the
+    /// activation token for each queued/running `Task::AsyncStep`; the final
+    /// decrement publishes the range to these free lists. `js_*box_alloc*`
+    /// pops the matching list before touching `std::alloc`.
     ///
-    /// ## Why the boundary, and why this is sound
+    /// ## Why the per-activation boundary is sound
     ///
     /// A released cell's address can still be REACHED (not legitimately
     /// read) by one thing: a duplicate resume of the already-terminal
@@ -193,9 +193,9 @@ crate::perry_thread_local! {
     /// so `js_box_set` drops the write and `js_box_get` returns `undefined`,
     /// which routes a stray resume into the dispatch loop's default
     /// done-arm — byte-for-byte the behavior of the pre-existing cleared-cell
-    /// path. By the time the queue has fully drained, no reference to the
-    /// activation's cells exists anywhere, so reusing the address is
-    /// unobservable.
+    /// path. When this activation's reference count reaches zero, no queued or
+    /// running resume can still carry its step closure; reusing its cells is
+    /// unobservable even while unrelated tasks remain in the queue.
     ///
     /// Memory safety is unconditional either way: cells only ever move
     /// between the registry, the quarantine and the pool — they are never
@@ -221,10 +221,10 @@ crate::perry_thread_local! {
     /// REGRESSION; threading the list through the cells removes it entirely.
     ///
     /// Overwriting the cell is why this list holds only cells that are PAST
-    /// the quarantine. A quarantined cell must keep the parked terminal value
-    /// a stray duplicate resume reads (`-1` / `true` / `undefined`); once
-    /// `flush_released_boxes` has run, the task queue is empty and no such
-    /// resume can exist, so the bytes are free to become a link.
+    /// their activation's reachability boundary. A parked cell must keep the
+    /// terminal value a stray duplicate resume reads (`-1` / `true` /
+    /// `undefined`); only the final activation decrement makes its bytes free
+    /// to become an intrusive link.
     static BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static I32_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BOOL_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -234,6 +234,249 @@ crate::perry_thread_local! {
         std::cell::RefCell::new(Vec::new());
     static BOOL_BOX_RELEASE_QUARANTINE: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::new());
+
+    /// Stable non-GC activation tokens. Tokens are recycled rather than freed;
+    /// a pending-await thunk captures the token pointer plus its generation and
+    /// can therefore reject a stale capture without a per-activation HashMap.
+    /// The control block contains no GC pointers and does not move when the
+    /// collector relocates the activation's step closure or result Promise.
+    static NEXT_ASYNC_BOX_ACTIVATION_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    static ASYNC_BOX_ACTIVATION_FREE_HEAD: std::cell::Cell<*mut AsyncBoxActivation> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// Tagged cell addresses released by tracked activations. An activation's
+    /// entries are one contiguous range because `ReleaseBoxes` contains only
+    /// adjacent, non-reentrant runtime calls. Published ranges become zeroed
+    /// holes and trailing holes are popped, so capacity is bounded by delayed
+    /// activations plus one releasing frame rather than process history.
+    static ASYNC_RELEASED_CELLS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Malloc-side reachability token for one lowered plain-async activation.
+///
+/// `refs` counts the lifecycle owner plus every queued/running async-step
+/// owner. Released cells stay parked at their terminal values in the token's
+/// tagged range until the last owner goes away; that zero transition publishes
+/// the whole frame to the intrusive free pools. This is the exact reachability
+/// boundary that a global "task queue empty" flush could only approximate.
+pub(crate) struct AsyncBoxActivation {
+    id: u64,
+    refs: std::cell::Cell<usize>,
+    lifecycle_owned: std::cell::Cell<bool>,
+    release_start: std::cell::Cell<usize>,
+    release_end: std::cell::Cell<usize>,
+    next_free: std::cell::Cell<*mut AsyncBoxActivation>,
+}
+
+const NO_RELEASE_RANGE: usize = usize::MAX;
+const ASYNC_RELEASE_JS: usize = 1;
+const ASYNC_RELEASE_I32: usize = 2;
+const ASYNC_RELEASE_BOOL: usize = 3;
+const ASYNC_RELEASE_TAG_MASK: usize = 0b11;
+
+/// Create the stable token for a plain-async activation. The activation
+/// lifecycle owns the initial reference until a terminal release (or
+/// `js_async_step_done`) marks the activation complete.
+pub(crate) fn new_async_box_activation() -> *mut AsyncBoxActivation {
+    let id = NEXT_ASYNC_BOX_ACTIVATION_ID.with(|next| {
+        let id = next.get();
+        // IDs are stored losslessly in a closure's f64 capture. Reaching 2^53
+        // activations in one thread is not realistic; wrapping to 1 keeps 0 as
+        // the permanent "not a tracked plain-async activation" sentinel.
+        let following = if id >= (1u64 << 53) - 1 { 1 } else { id + 1 };
+        next.set(following);
+        id
+    });
+    let ptr = ASYNC_BOX_ACTIVATION_FREE_HEAD.with(|head| {
+        let ptr = head.get();
+        if ptr.is_null() {
+            std::boxed::Box::into_raw(std::boxed::Box::new(AsyncBoxActivation {
+                id,
+                refs: std::cell::Cell::new(1),
+                lifecycle_owned: std::cell::Cell::new(true),
+                release_start: std::cell::Cell::new(NO_RELEASE_RANGE),
+                release_end: std::cell::Cell::new(NO_RELEASE_RANGE),
+                next_free: std::cell::Cell::new(std::ptr::null_mut()),
+            }))
+        } else {
+            unsafe {
+                head.set((*ptr).next_free.get());
+                (*ptr).id = id;
+                (*ptr).refs.set(1);
+                (*ptr).lifecycle_owned.set(true);
+                (*ptr).release_start.set(NO_RELEASE_RANGE);
+                (*ptr).release_end.set(NO_RELEASE_RANGE);
+                (*ptr).next_free.set(std::ptr::null_mut());
+            }
+            ptr
+        }
+    });
+    ptr
+}
+
+#[inline]
+pub(crate) fn async_box_activation_id(ptr: *mut AsyncBoxActivation) -> u64 {
+    if ptr.is_null() {
+        0
+    } else {
+        unsafe { (*ptr).id }
+    }
+}
+
+/// Validate the stable token pointer + generation captured by a pending-await
+/// thunk. Token storage is never freed, so reading it is safe even after the
+/// token was recycled; the generation and lifecycle bit reject that stale
+/// capture without a HashMap lookup on every async activation.
+pub(crate) fn find_async_box_activation(
+    ptr: *mut AsyncBoxActivation,
+    id: u64,
+) -> *mut AsyncBoxActivation {
+    if ptr.is_null() || id == 0 {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        if (*ptr).id == id && (*ptr).lifecycle_owned.get() && (*ptr).refs.get() > 0 {
+            ptr
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn retain_async_box_activation(ptr: *mut AsyncBoxActivation) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let old = (*ptr).refs.get();
+        debug_assert!(old > 0);
+        (*ptr).refs.set(
+            old.checked_add(1)
+                .expect("async activation refcount overflow"),
+        );
+    }
+}
+
+#[inline]
+pub(crate) fn release_async_box_activation(ptr: *mut AsyncBoxActivation) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let old = (*ptr).refs.get();
+        debug_assert!(old > 0);
+        let new = old - 1;
+        (*ptr).refs.set(new);
+        if new == 0 {
+            debug_assert!(!(*ptr).lifecycle_owned.get());
+            publish_async_activation_cells(ptr);
+            ASYNC_BOX_ACTIVATION_FREE_HEAD.with(|head| {
+                (*ptr).next_free.set(head.get());
+                head.set(ptr);
+            });
+        }
+    }
+}
+
+fn park_async_activation_cell(activation: *mut AsyncBoxActivation, addr: usize, tag: usize) {
+    debug_assert!(!activation.is_null());
+    debug_assert_eq!(addr & ASYNC_RELEASE_TAG_MASK, 0);
+    debug_assert!((ASYNC_RELEASE_JS..=ASYNC_RELEASE_BOOL).contains(&tag));
+    ASYNC_RELEASED_CELLS.with(|cells| {
+        let mut cells = cells.borrow_mut();
+        unsafe {
+            let start = (*activation).release_start.get();
+            if start == NO_RELEASE_RANGE {
+                (*activation).release_start.set(cells.len());
+            } else {
+                debug_assert_eq!(
+                    (*activation).release_end.get(),
+                    cells.len(),
+                    "ReleaseBoxes calls for one activation must be contiguous"
+                );
+            }
+            cells.push(addr | tag);
+            (*activation).release_end.set(cells.len());
+        }
+    });
+}
+
+fn push_free_cell(addr: usize, head: &'static crate::tls_hot::HotKey<std::cell::Cell<usize>>) {
+    head.with(|head| {
+        let next = head.get();
+        debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+        unsafe { (addr as *mut usize).write(next) };
+        head.set(addr);
+    });
+}
+
+fn publish_async_activation_cells(activation: *mut AsyncBoxActivation) {
+    let (start, end) = unsafe {
+        (
+            (*activation).release_start.get(),
+            (*activation).release_end.get(),
+        )
+    };
+    if start == NO_RELEASE_RANGE {
+        return;
+    }
+    let mut published = 0u64;
+    ASYNC_RELEASED_CELLS.with(|cells| {
+        let mut cells = cells.borrow_mut();
+        debug_assert!(start <= end && end <= cells.len());
+        for tagged in &mut cells[start..end] {
+            let value = *tagged;
+            if value == 0 {
+                continue;
+            }
+            let addr = value & !ASYNC_RELEASE_TAG_MASK;
+            match value & ASYNC_RELEASE_TAG_MASK {
+                ASYNC_RELEASE_JS => push_free_cell(addr, &BOX_FREE_HEAD),
+                ASYNC_RELEASE_I32 => push_free_cell(addr, &I32_BOX_FREE_HEAD),
+                ASYNC_RELEASE_BOOL => push_free_cell(addr, &BOOL_BOX_FREE_HEAD),
+                _ => unreachable!("invalid async released-cell tag"),
+            }
+            *tagged = 0;
+            published += 1;
+        }
+        while cells.last() == Some(&0) {
+            cells.pop();
+        }
+    });
+    BOX_FLUSH_PUBLISHED.fetch_add(published, Ordering::Relaxed);
+}
+
+/// Drop the activation lifecycle's owner at terminal state. Queued or running
+/// steps keep their own references; the cells publish only when the last of
+/// those references is released. `replace(false)` makes duplicate terminal
+/// releases idempotent without a per-activation registry lookup.
+pub(crate) fn finish_async_box_activation(ptr: *mut AsyncBoxActivation) {
+    if ptr.is_null() {
+        return;
+    }
+    if unsafe { (*ptr).lifecycle_owned.replace(false) } {
+        release_async_box_activation(ptr);
+    }
+}
+
+fn publish_released_cells(
+    cells: &mut Vec<usize>,
+    head: &'static crate::tls_hot::HotKey<std::cell::Cell<usize>>,
+) {
+    if cells.is_empty() {
+        return;
+    }
+    BOX_FLUSH_PUBLISHED.fetch_add(cells.len() as u64, Ordering::Relaxed);
+    head.with(|h| {
+        let mut next = h.get();
+        for addr in cells.drain(..) {
+            debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+            unsafe { (addr as *mut usize).write(next) };
+            next = addr;
+        }
+        h.set(next);
+    });
 }
 
 /// Drain the release quarantines into the free pools. Called at the
@@ -251,19 +494,7 @@ pub fn flush_released_boxes() {
             if q.is_empty() {
                 return;
             }
-            BOX_FLUSH_PUBLISHED.fetch_add(q.len() as u64, Ordering::Relaxed);
-            head.with(|h| {
-                let mut next = h.get();
-                for addr in q.drain(..) {
-                    // Publishing is the first moment the parked terminal value
-                    // is dead (queue empty => no resume can read it), so the
-                    // cell's own bytes become the link to the next free cell.
-                    debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
-                    unsafe { (addr as *mut usize).write(next) };
-                    next = addr;
-                }
-                h.set(next);
-            });
+            publish_released_cells(&mut q, head);
             // Deliberately NOT shrunk. The quarantine is refilled to roughly
             // the same size every interval, so handing the buffer back here
             // just makes the next interval re-grow it: measured, shrinking to
@@ -460,8 +691,8 @@ pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
 /// (`perry-transform/src/generator/box_release.rs`), which is the same
 /// precondition the pre-existing clear-to-`undefined` release relied on.
 /// Clears the cell, removes it from the registry, evicts the positive-cache
-/// slot, and parks the address in the release quarantine for reuse after the
-/// next microtask-drain boundary (see the QUARANTINE doc).
+/// slot, and parks the address for reuse after this activation's final queued
+/// or running async-step reference is released (see the pool doc above).
 ///
 /// Idempotent and foreign-pointer-safe by the same gate: a pointer that is
 /// not currently registered — already released, never a box, or a
@@ -486,7 +717,13 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
         // root scanner only walks the registry, which no longer has it).
         (*ptr).value = crate::value::TAG_UNDEFINED;
     }
-    BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    let activation = crate::promise::current_async_box_activation();
+    if activation.is_null() {
+        BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    } else {
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_JS);
+        finish_async_box_activation(activation);
+    }
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -514,7 +751,13 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     unsafe {
         (*ptr).value = -1;
     }
-    I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    let activation = crate::promise::current_async_box_activation();
+    if activation.is_null() {
+        I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    } else {
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_I32);
+        finish_async_box_activation(activation);
+    }
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -543,7 +786,13 @@ pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     unsafe {
         (*ptr).value = true;
     }
-    BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    let activation = crate::promise::current_async_box_activation();
+    if activation.is_null() {
+        BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    } else {
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_BOOL);
+        finish_async_box_activation(activation);
+    }
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -989,6 +1238,7 @@ pub(crate) fn test_clear_box_registry() {
     BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
+    ASYNC_RELEASED_CELLS.with(|cells| cells.borrow_mut().clear());
     // Registry membership is not monotonic any more (#8208: `js_*box_release`
     // de-registers a completed activation's cells), so the positive cache is
     // kept coherent by an eviction on every un-registration rather than by
@@ -1241,6 +1491,16 @@ mod tests {
 mod release_tests {
     use super::*;
 
+    fn install_test_activation(activation: *mut AsyncBoxActivation) -> crate::promise::InlineTrap {
+        crate::promise::INLINE_TRAP.with(|trap| {
+            trap.replace(crate::promise::InlineTrap {
+                trap_next: std::ptr::null_mut(),
+                current_step: 0,
+                box_activation: activation,
+            })
+        })
+    }
+
     /// `BOX_ALLOC_COUNT` / `BOX_POOL_REUSE_COUNT` / `BOX_RELEASE_COUNT` are
     /// process-global atomics, while the registries, quarantines and free
     /// lists they describe are THREAD-LOCAL. Any test that asserts on a
@@ -1293,9 +1553,9 @@ mod release_tests {
         assert_eq!(parked, 1, "double release must park exactly once");
     }
 
-    /// Reuse contract: a released cell becomes allocatable only AFTER the
-    /// quarantine flush (the outermost microtask-pump boundary in production),
-    /// and the reused cell is re-registered with the fresh initial value.
+    /// Fallback reuse contract: an untracked released cell becomes allocatable
+    /// only AFTER the outermost-pump quarantine flush, and the reused cell is
+    /// re-registered with the fresh initial value.
     #[test]
     fn released_cell_is_reused_only_after_flush() {
         super::test_clear_box_registry();
@@ -1315,6 +1575,143 @@ mod release_tests {
         );
         assert!(is_registered_box_ptr(third), "reused cell re-registers");
         assert_eq!(js_box_get_bits(third), 3.0f64.to_bits() as i64);
+    }
+
+    /// The #8208 floor-closing contract: terminal release alone does not make
+    /// a cell reusable while another queued resume still owns the activation.
+    /// The last queued/running-reference decrement publishes it immediately,
+    /// without waiting for the whole thread's task queue to drain.
+    #[test]
+    fn activation_cells_publish_at_its_reachability_zero() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation(); // lifecycle owner
+        retain_async_box_activation(activation); // currently running step
+        retain_async_box_activation(activation); // duplicate queued step
+        let previous = install_test_activation(activation);
+
+        let released = js_box_alloc_bits(1.0f64.to_bits() as i64);
+        js_box_release(released); // also drops the lifecycle owner
+
+        let before_zero = js_box_alloc_bits(2.0f64.to_bits() as i64);
+        assert_ne!(
+            released, before_zero,
+            "a queued resume still reaches the frame"
+        );
+        release_async_box_activation(activation); // running step exits
+        let still_reachable = js_box_alloc_bits(3.0f64.to_bits() as i64);
+        assert_ne!(
+            released, still_reachable,
+            "duplicate task still owns the frame"
+        );
+
+        release_async_box_activation(activation); // duplicate dispatch exits
+        let after_zero = js_box_alloc_bits(4.0f64.to_bits() as i64);
+        assert_eq!(
+            released, after_zero,
+            "the final decrement must publish immediately"
+        );
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// Pending-await thunks carry a raw malloc-token pointer so the moving GC
+    /// cannot invalidate it. Reusing that token must not make an old thunk
+    /// name a new activation; the captured generation is the discriminator.
+    #[test]
+    fn recycled_activation_token_rejects_a_stale_generation() {
+        test_clear_box_registry();
+        let first = new_async_box_activation();
+        let first_id = async_box_activation_id(first);
+        assert_eq!(find_async_box_activation(first, first_id), first);
+        finish_async_box_activation(first);
+        assert!(find_async_box_activation(first, first_id).is_null());
+
+        let second = new_async_box_activation();
+        let second_id = async_box_activation_id(second);
+        assert_eq!(second, first, "the test must exercise token recycling");
+        assert_ne!(second_id, first_id);
+        assert!(find_async_box_activation(second, first_id).is_null());
+        assert_eq!(find_async_box_activation(second, second_id), second);
+        finish_async_box_activation(second);
+    }
+
+    /// Reachability is per activation, not a renamed global queue-empty gate:
+    /// B's completed frame is reusable while A still has a stale queued task.
+    #[test]
+    fn one_activation_does_not_quarantine_an_unrelated_completed_frame() {
+        test_clear_box_registry();
+
+        let activation_a = new_async_box_activation();
+        retain_async_box_activation(activation_a); // running
+        retain_async_box_activation(activation_a); // delayed duplicate
+        let previous = install_test_activation(activation_a);
+        let a = js_box_alloc_bits(10.0f64.to_bits() as i64);
+        js_box_release(a);
+        release_async_box_activation(activation_a); // leave duplicate alive
+
+        let activation_b = new_async_box_activation();
+        retain_async_box_activation(activation_b); // running
+        install_test_activation(activation_b);
+        let b = js_box_alloc_bits(20.0f64.to_bits() as i64);
+        js_box_release(b);
+        release_async_box_activation(activation_b); // B reaches zero
+
+        let reused_b = js_box_alloc_bits(30.0f64.to_bits() as i64);
+        assert_eq!(
+            b, reused_b,
+            "B must publish independently of A's queued task"
+        );
+        assert_ne!(a, reused_b, "A must remain parked");
+
+        release_async_box_activation(activation_a);
+        let reused_a = js_box_alloc_bits(40.0f64.to_bits() as i64);
+        assert_eq!(a, reused_a, "A publishes when its own duplicate exits");
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// The pump's setjmp recovery must release the inner task reference that
+    /// `longjmp` skipped, while leaving a re-entrant caller's activation below
+    /// the saved depth untouched.
+    #[test]
+    fn exception_unwind_releases_only_this_pumps_activation_refs() {
+        test_clear_box_registry();
+        let base_depth = crate::promise::async_box_execution_ref_depth();
+
+        let outer = new_async_box_activation();
+        retain_async_box_activation(outer); // running owner
+        crate::promise::push_async_box_execution_ref(outer);
+        let previous = install_test_activation(outer);
+        let outer_cell = js_box_alloc_bits(1.0f64.to_bits() as i64);
+        js_box_release(outer_cell); // drop outer lifecycle owner
+
+        let nested_depth = crate::promise::async_box_execution_ref_depth();
+        let inner = new_async_box_activation();
+        retain_async_box_activation(inner); // running owner skipped by longjmp
+        crate::promise::push_async_box_execution_ref(inner);
+        install_test_activation(inner);
+        let inner_cell = js_box_alloc_bits(2.0f64.to_bits() as i64);
+        js_box_release(inner_cell); // drop inner lifecycle owner
+
+        crate::promise::unwind_async_box_execution_refs(nested_depth);
+        let reused_inner = js_box_alloc_bits(3.0f64.to_bits() as i64);
+        assert_eq!(
+            inner_cell, reused_inner,
+            "inner unwind must release its owner"
+        );
+        assert_ne!(
+            outer_cell, reused_inner,
+            "outer owner is below nested depth"
+        );
+
+        crate::promise::pop_async_box_execution_ref(outer);
+        release_async_box_activation(outer);
+        assert_eq!(
+            crate::promise::async_box_execution_ref_depth(),
+            base_depth,
+            "test must restore the execution-ref stack"
+        );
+        let reused_outer = js_box_alloc_bits(4.0f64.to_bits() as i64);
+        assert_eq!(outer_cell, reused_outer, "outer publishes at its own tail");
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
     }
 
     /// Generated async-step code reads the compiler-private control cells

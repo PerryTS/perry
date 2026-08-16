@@ -121,6 +121,7 @@ fn unboxed_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 fn suspend_on_awaited(
     step: ClosurePtr,
     trap_next: *mut Promise,
+    box_activation: *mut crate::r#box::AsyncBoxActivation,
     awaited_in: *mut Promise,
     make_awaited: impl FnOnce() -> *mut Promise,
 ) -> *mut Promise {
@@ -128,8 +129,11 @@ fn suspend_on_awaited(
     let step_h = scope.root_nanbox_f64(boxed_closure_or_undef(step));
     let trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap_next));
     let awaited_in_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited_in));
-    let (fulfill, reject) =
-        build_async_step_thunks(unboxed_closure(&step_h), unboxed_promise(&trap_h));
+    let (fulfill, reject) = build_async_step_thunks(
+        unboxed_closure(&step_h),
+        unboxed_promise(&trap_h),
+        box_activation,
+    );
     let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
     let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
     let awaited = if unboxed_promise(&awaited_in_h).is_null() {
@@ -529,24 +533,36 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
                     trace_async_suspend(inner);
-                    return suspend_on_awaited(rooted_step(), trap_next, inner, || {
-                        std::ptr::null_mut()
-                    });
+                    return suspend_on_awaited(
+                        rooted_step(),
+                        trap_next,
+                        trap.box_activation,
+                        inner,
+                        || std::ptr::null_mut(),
+                    );
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
-            return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
-                js_promise_resolved(value)
-            });
+            return suspend_on_awaited(
+                rooted_step(),
+                trap_next,
+                trap.box_activation,
+                std::ptr::null_mut(),
+                || js_promise_resolved(value),
+            );
         }
     } else {
         // Pointer-tagged but not a Promise (thenable etc.). Take the
         // fully-general path so assimilation runs.
         bump(&MT_STEP_CHAIN_REUSE_MISS);
-        return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
-            js_promise_resolved(value)
-        });
+        return suspend_on_awaited(
+            rooted_step(),
+            trap_next,
+            trap.box_activation,
+            std::ptr::null_mut(),
+            || js_promise_resolved(value),
+        );
     };
 
     // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
@@ -567,6 +583,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             crate::value::js_nanbox_get_pointer(v) as *mut Promise
         }
     };
+    crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::AsyncStep(
             rooted_step(),
@@ -574,6 +591,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             next,
             is_error,
             context,
+            trap.box_activation,
         ));
     });
     crate::event_pump::js_notify_main_thread();
@@ -629,6 +647,7 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
     let value = adapt_foreign_promise_value(value);
 
     let trap = INLINE_TRAP.with(|c| c.get());
+    crate::r#box::finish_async_box_activation(trap.box_activation);
     if !trap.trap_next.is_null() && trap.current_step == step_closure as usize {
         bump(&MT_STEP_DONE_REUSE_HIT);
         // Issue #4828: an async fn whose tail is `return <promise>` must
@@ -792,6 +811,7 @@ pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
         f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
         f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
         std::ptr::null_mut(),
+        crate::r#box::new_async_box_activation(),
     )
 }
 
@@ -818,7 +838,13 @@ pub extern "C" fn js_async_generator_resume(
 ) -> f64 {
     let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
         as *mut crate::closure::ClosureHeader;
-    call_async_step_body(ptr, value, is_error, std::ptr::null_mut())
+    call_async_step_body(
+        ptr,
+        value,
+        is_error,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    )
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -864,8 +890,12 @@ pub fn scan_async_step_thunk_cache_mut(visitor: &mut crate::gc::RuntimeRootVisit
 fn build_async_step_thunks(
     step_closure: ClosurePtr,
     trap_next: *mut Promise,
+    box_activation: *mut crate::r#box::AsyncBoxActivation,
 ) -> (ClosurePtr, ClosurePtr) {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
+    let box_activation_id = crate::r#box::async_box_activation_id(box_activation);
     let key = step_closure as usize;
     let cached = LAST_ASYNC_STEP_THUNKS.with(|c| c.get());
     if cached.0 == key && !cached.1.is_null() && !cached.2.is_null() {
@@ -874,15 +904,25 @@ fn build_async_step_thunks(
         // same pointer; refreshing keeps us correct if the slot is reused.
         js_closure_set_capture_ptr(cached.1, 1, trap_next as i64);
         js_closure_set_capture_ptr(cached.2, 1, trap_next as i64);
+        js_closure_set_capture_ptr(cached.1, 2, box_activation as i64);
+        js_closure_set_capture_ptr(cached.2, 2, box_activation as i64);
+        js_closure_set_capture_f64(cached.1, 3, box_activation_id as f64);
+        js_closure_set_capture_f64(cached.2, 3, box_activation_id as f64);
         return (cached.1 as ClosurePtr, cached.2 as ClosurePtr);
     }
-    // Capture layout: [step_closure_ptr, activation_trap_next_ptr] (#5485).
-    let fulfill = js_closure_alloc(async_step_fulfill_thunk as *const u8, 2);
+    // Capture layout: [step_closure_ptr, activation_trap_next_ptr,
+    // stable_box_activation_ptr, generation]. Token storage is never freed;
+    // pointer + generation rejects a capture after the token is recycled.
+    let fulfill = js_closure_alloc(async_step_fulfill_thunk as *const u8, 4);
     js_closure_set_capture_ptr(fulfill, 0, step_closure as i64);
     js_closure_set_capture_ptr(fulfill, 1, trap_next as i64);
-    let reject = js_closure_alloc(async_step_reject_thunk as *const u8, 2);
+    js_closure_set_capture_ptr(fulfill, 2, box_activation as i64);
+    js_closure_set_capture_f64(fulfill, 3, box_activation_id as f64);
+    let reject = js_closure_alloc(async_step_reject_thunk as *const u8, 4);
     js_closure_set_capture_ptr(reject, 0, step_closure as i64);
     js_closure_set_capture_ptr(reject, 1, trap_next as i64);
+    js_closure_set_capture_ptr(reject, 2, box_activation as i64);
+    js_closure_set_capture_f64(reject, 3, box_activation_id as f64);
     LAST_ASYNC_STEP_THUNKS.with(|c| c.set((key, fulfill, reject)));
     (fulfill as ClosurePtr, reject as ClosurePtr)
 }
@@ -904,8 +944,12 @@ extern "C" fn async_step_fulfill_thunk(
     // value keeps same-activation settlement working while preventing the
     // cross-activation leak.
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let box_activation = crate::closure::js_closure_get_capture_ptr(closure, 2)
+        as *mut crate::r#box::AsyncBoxActivation;
+    let box_activation_id = crate::closure::js_closure_get_capture_f64(closure, 3) as u64;
+    let box_activation = crate::r#box::find_async_box_activation(box_activation, box_activation_id);
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
-    call_async_step_body(step, value, false_bits, captured_trap_next)
+    call_async_step_body(step, value, false_bits, captured_trap_next, box_activation)
 }
 
 /// Invoke an async step while keeping every pointer needed after the call in
@@ -918,7 +962,12 @@ fn call_async_step_body(
     value: f64,
     is_error: f64,
     captured_trap_next: *mut Promise,
+    box_activation: *mut crate::r#box::AsyncBoxActivation,
 ) -> f64 {
+    crate::r#box::retain_async_box_activation(box_activation);
+    if !box_activation.is_null() {
+        push_async_box_execution_ref(box_activation);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let captured_h = scope.root_nanbox_f64(boxed_promise_or_undef(captured_trap_next));
 
@@ -933,6 +982,7 @@ fn call_async_step_body(
         c.set(InlineTrap {
             trap_next: captured_trap_next,
             current_step: step as usize,
+            box_activation,
         });
         old
     });
@@ -948,10 +998,16 @@ fn call_async_step_body(
         c.set(InlineTrap {
             trap_next: unboxed_promise(&prev_trap_h),
             current_step: unboxed_closure(&prev_step_h) as usize,
+            box_activation: prev.box_activation,
         })
     });
     forward_swallowed_rejection(result_h.get_nanbox_f64(), unboxed_promise(&captured_h));
-    result_h.get_nanbox_f64()
+    let result = result_h.get_nanbox_f64();
+    if !box_activation.is_null() {
+        pop_async_box_execution_ref(box_activation);
+    }
+    crate::r#box::release_async_box_activation(box_activation);
+    result
 }
 
 /// #5941: a thunk-resumed step that exits through its internal catch arm
@@ -1004,8 +1060,12 @@ extern "C" fn async_step_reject_thunk(
     // #5485: restore the captured per-activation trap_next (see
     // async_step_fulfill_thunk for the full rationale).
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let box_activation = crate::closure::js_closure_get_capture_ptr(closure, 2)
+        as *mut crate::r#box::AsyncBoxActivation;
+    let box_activation_id = crate::closure::js_closure_get_capture_f64(closure, 3) as u64;
+    let box_activation = crate::r#box::find_async_box_activation(box_activation, box_activation_id);
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
-    call_async_step_body(step, value, true_bits, captured_trap_next)
+    call_async_step_body(step, value, true_bits, captured_trap_next, box_activation)
 }
 
 const AFA_RESULT_PROMISE: u32 = 0;
@@ -1513,6 +1573,7 @@ mod tests {
                 slot.set(InlineTrap {
                     trap_next: previous_from,
                     current_step: previous_step_from as usize,
+                    box_activation: std::ptr::null_mut(),
                 });
                 original
             });

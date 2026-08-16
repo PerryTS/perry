@@ -1739,6 +1739,7 @@ extern "C" fn finally_passthrough_fulfill(
                 next,
                 false,
                 capture_context(),
+                std::ptr::null_mut(),
             ));
         });
         crate::event_pump::js_notify_main_thread();
@@ -1764,6 +1765,7 @@ extern "C" fn finally_passthrough_reject(
                 next,
                 true,
                 capture_context(),
+                std::ptr::null_mut(),
             ));
         });
         crate::event_pump::js_notify_main_thread();
