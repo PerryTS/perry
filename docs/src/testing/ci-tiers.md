@@ -27,7 +27,7 @@ copy is current.
 | `check` | yes | yes | yes |
 | `warnings` | yes | yes | yes |
 | `cargo-test` | yes | yes | yes |
-| `gap-suite` | 4x fast | 2x fast | 8x full |
+| `gap-suite` | 6x fast | 3x fast | 8x full |
 | `gc-stress` | yes | yes | yes |
 | `e2e-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |
@@ -102,9 +102,9 @@ which costs no runner slot.
 
 | tier | typical jobs | typical runner-minutes | target wall clock |
 |---|--:|--:|--:|
-| pr (core) | ~11 (4 gap shards) | ~140 | ≤ 30 min once queued |
+| pr (core) | ~13 (6 gap shards) | ~200 | ≤ 30 min once queued |
 | pr (docs-only) | 2 | ~5 | ≤ 5 min |
-| sweep | ~19 | ~240 | not a target — it coalesces |
+| sweep | ~19 | ~300 | not a target — it coalesces |
 | full | ~30 | ~1500 | not a target |
 
 `push` to `main` uses ONE constant concurrency group with `cancel-in-progress: false`:

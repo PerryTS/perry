@@ -115,7 +115,7 @@ Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
 
 ```bash
-./scripts/run_gap_tests.sh                          # ~560 tests; the PR gate runs this in 4 shards
+./scripts/run_gap_tests.sh                          # ~560 tests; the PR gate runs this in 6 shards
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
 

@@ -18,7 +18,7 @@ self-tested; `--table` prints the job × tier matrix and `lint` keeps the docs c
 current), one fan-in status per tier:
 
 - **pr** (every PR push): `lint` (now also the changeset step), `check` (clippy ×2 +
-  api-docs-drift), `warnings`, scoped `cargo-test`, the gap suite in **4 shards of
+  api-docs-drift), `warnings`, scoped `cargo-test`, the gap suite in **6 shards of
   the harness's `fast` mode** (`PERRY_SKIP_BUILD=1`, one prebuilt release compiler,
   ~1.5 s/test), `gc-stress` (PR subset), `e2e-scoped`, and `security-audit` only when
   a lockfile/manifest/policy file changed. Docs-only PRs run `lint` only. Fan-in

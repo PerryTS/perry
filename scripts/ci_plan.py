@@ -106,9 +106,17 @@ TIERS = ("pr", "sweep", "full")
 #          (~200 s each, redundantly per shard). ~40 min/shard. This is the
 #          arm that sees auto-optimize-only link bugs, so it stays in the
 #          nightly/release tier.
+#
+# Shard counts, measured 2026-08-16 on ubuntu-latest in fast mode: the release
+# build is ~8 min per shard, non-ext tests are ~2 s each (~18 min for the whole
+# suite), and every ext-routed test whose feature set the shard has not seen
+# yet costs a ~4-5 min auto-optimize runtime rebuild (23 such tests, spread
+# round-robin). At 4 shards the slowest shard was 39.5 min (6 rebuilds); at 6
+# it is ~28 min, level with gc-stress, for ~170 job-minutes -- against 480 for
+# the old 8 x auto-optimize shards.
 GAP_SUITE = {
-    "pr": {"mode": "fast", "total": 4},
-    "sweep": {"mode": "fast", "total": 2},
+    "pr": {"mode": "fast", "total": 6},
+    "sweep": {"mode": "fast", "total": 3},
     "full": {"mode": "full", "total": 8},
 }
 
@@ -337,7 +345,7 @@ def _self_test() -> int:
     check("core PR: windows off", not core["jobs"]["windows_build"])
     check("core PR: parity off", not core["jobs"]["parity"])
     check("core PR: security-audit off (no deps change)", not core["jobs"]["security_audit"])
-    check("core PR: 4 fast gap shards", core["gap"] == {"mode": "fast", "total": 4, "shards": [1, 2, 3, 4], "update_snapshot": False})
+    check("core PR: 6 fast gap shards", core["gap"] == {"mode": "fast", "total": 6, "shards": [1, 2, 3, 4, 5, 6], "update_snapshot": False})
     check("core PR: cargo-test scoped", core["cargo_test_scope"] == "pr")
 
     deps = plan("pull_request", "refs/pull/1/merge", changed=["Cargo.lock"])
@@ -364,7 +372,7 @@ def _self_test() -> int:
     check("sweep: binary-size off (macOS report-only, nightly is enough)", not sweep["jobs"]["binary_size"])
     check("sweep: parity off", not sweep["jobs"]["parity"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])
-    check("sweep: 2 fast gap shards", sweep["gap"]["total"] == 2 and sweep["gap"]["mode"] == "fast")
+    check("sweep: 3 fast gap shards", sweep["gap"]["total"] == 3 and sweep["gap"]["mode"] == "fast")
     check("sweep: cargo-test full", sweep["cargo_test_scope"] == "full")
     check("sweep: security-audit on", sweep["jobs"]["security_audit"])
 

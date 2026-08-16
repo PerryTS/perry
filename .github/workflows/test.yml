@@ -2086,7 +2086,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
-  # tier -- 4 fast-mode shards on a PR, 2 in the sweep, 8 auto-optimize shards
+  # tier -- 6 fast-mode shards on a PR, 3 in the sweep, 8 auto-optimize shards
   # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
   # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
