@@ -175,7 +175,11 @@ impl GuardState<'_> {
         Some((array, length))
     }
 
-    unsafe fn plain_object(&self, value: JSValue) -> Option<(*const ObjectHeader, usize)> {
+    /// A validated ordinary object: its header pointer, its address, and the
+    /// live inline-slot bound its ShapeId descriptor publishes (#8113/#8122 —
+    /// the one fact `own_data_field` needs to read a slot without probing the
+    /// shape table again per field).
+    unsafe fn plain_object(&self, value: JSValue) -> Option<(*const ObjectHeader, usize, usize)> {
         if !value.is_pointer() {
             return None;
         }
@@ -187,19 +191,30 @@ impl GuardState<'_> {
             return None;
         }
         let object = address as *const ObjectHeader;
-        if (*object).object_type != crate::error::OBJECT_TYPE_REGULAR
-            || (*object).field_count as usize > MAX_CONTAINER_LEN
-        {
+        // #8113: the header no longer carries `object_type` / `field_count`;
+        // both the receiver kind and the live inline-slot bound come from the
+        // ShapeId descriptor. ONE probe: this runs on every guarded call, and
+        // `object_is_regular` + `object_live_slot_count` would be two probes
+        // plus a second read of the GcHeader already validated above
+        // (measured +3% instructions on `interp`/`iso_miss`).
+        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(object) else {
+            return None;
+        };
+        if descriptor.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
             return None;
         }
-        let inline_fields = ((*object).field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
+        let live_slots = descriptor.live_inline_slot_count as usize;
+        if live_slots > MAX_CONTAINER_LEN {
+            return None;
+        }
+        let inline_fields = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
         let required = crate::gc::GC_HEADER_SIZE
             .checked_add(std::mem::size_of::<ObjectHeader>())?
             .checked_add(inline_fields.checked_mul(std::mem::size_of::<JSValue>())?)?;
         if required > header.size as usize {
             return None;
         }
-        Some((object, address))
+        Some((object, address, live_slots))
     }
 
     unsafe fn plain_map(&self, value: JSValue) -> Option<(*const crate::map::MapHeader, usize)> {
@@ -252,6 +267,7 @@ impl GuardState<'_> {
         &self,
         object: *const ObjectHeader,
         object_address: usize,
+        live_slots: usize,
         name: &[u8],
     ) -> OwnField {
         let keys = (*object).keys_array;
@@ -293,6 +309,25 @@ impl GuardState<'_> {
                 };
                 if crate::object::get_accessor_descriptor(object_address, name).is_some() {
                     return OwnField::Invalid;
+                }
+                // #8122: read the inline slot directly against the bound
+                // `plain_object` already resolved from the descriptor. Going
+                // through `js_object_get_field` re-derived that bound with a
+                // shape-table probe per field per guarded call — measured +3%
+                // instructions on `interp`/`iso_miss` after #8113 replaced the
+                // header's `field_count` word with the descriptor. Slots past
+                // the inline bound (spill) still take the runtime getter,
+                // which owns that path.
+                if index < live_slots {
+                    let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>())
+                        as *const u64;
+                    let bits = std::ptr::read(fields.add(index));
+                    // Mirror `js_object_get_field`: a null POINTER_TAG payload
+                    // is never a legitimate value and reads as `undefined`.
+                    if bits == 0x7FFD_0000_0000_0000 {
+                        return OwnField::Data(JSValue::undefined());
+                    }
+                    return OwnField::Data(JSValue::from_bits(bits));
                 }
                 return OwnField::Data(crate::object::js_object_get_field(object, index as u32));
             }
@@ -393,7 +428,7 @@ impl GuardState<'_> {
                 ) else {
                     return false;
                 };
-                let Some((object, address)) = self.plain_object(value) else {
+                let Some((object, address, live_slots)) = self.plain_object(value) else {
                     return false;
                 };
                 if class_id != 0
@@ -427,7 +462,7 @@ impl GuardState<'_> {
                         break;
                     };
                     cursor = name_end + 4;
-                    match self.own_data_field(object, address, name) {
+                    match self.own_data_field(object, address, live_slots, name) {
                         OwnField::Data(field) if optional != 0 && field.is_undefined() => {}
                         OwnField::Data(field) if self.matches(field, child, depth + 1) => {}
                         OwnField::Missing if optional != 0 => {}
