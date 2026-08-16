@@ -119,12 +119,35 @@ amending the existing one.
 
 ## 4. Release gates (what blocks a release)
 
-- Parity tests must clear the threshold in `test-parity/threshold.json`
-- `cargo test --workspace` (macOS excluded list as above) must be green
-- `compile-smoke` must compile every file under `test-files/`
-- `doc-tests` must compile + run every example under `docs/examples/`
+`release-packages.yml`'s `await-tests` job dispatches `test.yml` with `tier=full`
+on the pinned release branch and waits for a run whose **`full-suite-gate`** job
+succeeded (a green PR-tier or push-to-main sweep run on the same SHA does *not*
+count — only the full tier carries the release-grade suites; see
+[CI tiers](../testing/ci-tiers.md)). It also waits for `simctl-tests.yml`. The
+full tier is:
+
+- everything the PR gate and the post-merge sweep run (`lint`, `check`, `warnings`,
+  `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
+  compiler-output gates, `repsel-census`, `harmonyos-smoke`, `security-audit`),
+  plus `binary-size` and
+- `parity` — must clear the threshold in `test-parity/threshold.json` and add no
+  new / stale known-failure entries
+- `compile-smoke` — must compile every file under `test-files/`, plus the UI
+  styling matrix, Fastify integration and memory-stability tests
+- the gap suite in its 8-shard **auto-optimize** mode (the PR/sweep tiers use the
+  prebuilt-runtime `fast` mode)
+- `doc-tests` (macOS + Windows) — must compile + run every example under
+  `docs/examples/`
+- the package smokes (`drizzle-mysql-smoke`, `ink-link-smoke`, `effect-basic-smoke`)
+  and `native-abi-evidence-packet`
 - Benchmark regressions in `benchmark.yml` hard-fail on release tags (warn only
   on main-branch pushes)
+
+None of these carries `continue-on-error` any more: a red suite in the full tier
+blocks the release. If a suite is red for a reason that is not the release
+candidate's fault, fix it on `main` first (or open an issue and consciously
+re-add a job-level `continue-on-error: true` with that issue number) — do not
+publish past it.
 
 ## 4a. What tells you a release is overdue
 

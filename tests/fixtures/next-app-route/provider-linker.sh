@@ -103,9 +103,17 @@ if [[ "$host_os" == Darwin ]]; then
     while IFS= read -r symbol; do
         arguments+=("-Wl,-u,$symbol")
     done <"$selected"
+    # Two-level namespace, on purpose (#8205): every undefined symbol in this
+    # image is bound at link time to the image that defines it, so the stdlib
+    # provider's `__rust_alloc`/`__rust_dealloc` imports resolve to the runtime
+    # dylib's mimalloc-backed shim no matter what else the process defines. A
+    # `-flat_namespace` link would instead bind them at load time to the FIRST
+    # definition in the process, which for a Rust host executable is its own
+    # System-allocator shim — a mimalloc buffer freed by libsystem, `abort()`
+    # on the first cross-image `Vec` drop.
     arguments+=(
         '-Wl,-exported_symbols_list' "-Wl,$exports"
-        '-Wl,-rpath,@loader_path' '-Wl,-flat_namespace' '-Wl,-interposable'
+        '-Wl,-rpath,@loader_path'
     )
 else
     version_script="$scratch/exports.map"

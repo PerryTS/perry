@@ -151,6 +151,7 @@
 - [Test Registration (dark tests)](testing/test-registration.md)
 - [Geisterhand (UI Fuzzer)](testing/geisterhand.md)
 - [Node Compatibility Matrix](testing/node-compat-matrix.md)
+- [CI Tiers (PR gate / sweep / full)](testing/ci-tiers.md)
 - [CI Gate Scheduling](testing/ci-gate-scheduling.md)
 
 # CLI Reference

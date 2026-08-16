@@ -1013,9 +1013,11 @@ fn test_dead_shape_descriptor_churn_returns_to_baseline_after_full_gc() {
     );
 }
 
-/// #8067: the header is the sole strong edge; a live stamped object's scan
-/// synchronizes its weak descriptor mirror. Two siblings share one descriptor;
-/// after copied-minor evacuation both headers and that descriptor must agree.
+/// #8112: the DESCRIPTOR record is the strong edge and the rewritten location;
+/// the header word is a derived mirror the collector also keeps valid until
+/// #8047 deletes it. Two siblings share one descriptor — and therefore one
+/// edge — so after copied-minor evacuation both mirrors and that record must
+/// agree.
 #[test]
 fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let _guard = CopyingNurseryTestGuard::new(2);
@@ -1035,9 +1037,19 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
         (*b).parent_class_id = id;
     }
     assert_eq!(
-        crate::gc::test_gc_rewrite_slot_count(a as usize),
-        Some(1),
-        "a stamped object must enumerate only its authoritative header keys slot"
+        crate::gc::test_gc_rewrite_slot_addresses(a as usize),
+        Some(vec![
+            unsafe { std::ptr::addr_of_mut!((*a).keys_array) } as usize,
+            crate::object::shapes::shape_descriptor_keys_slot(id)
+                .expect("a table-resident descriptor exposes its keys word") as usize,
+        ]),
+        "#8112: a stamped object enumerates its derived header mirror AND the \
+         authoritative descriptor record"
+    );
+    assert_eq!(
+        crate::gc::test_gc_rewrite_slot_addresses(b as usize).map(|slots| slots[1]),
+        crate::gc::test_gc_rewrite_slot_addresses(a as usize).map(|slots| slots[1]),
+        "#8112: siblings of one shape must share ONE keys edge"
     );
     js_shadow_slot_set(0, ptr_bits(a as usize));
     js_shadow_slot_set(1, ptr_bits(b as usize));
@@ -1066,12 +1078,20 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     js_shadow_slot_set(1, 0);
 }
 
-/// #8074 review: a forwarded array's from-space payload contains its forwarding
-/// address, not a usable `(length, capacity)` pair. Descriptor fact capture
-/// must resolve both values from the live array or the stale capacity word can
-/// truncate the logical count and make an immediate header rewrite fail closed.
+/// #8074 review, retired by #8112 and kept as its regression guard.
+///
+/// The hazard was real under the old model: a forwarded array's from-space
+/// payload holds its forwarding address, not a usable `(length, capacity)`
+/// pair, and the post-visit callback CAPTURED descriptor facts from the header
+/// edge — so a stale capacity word could truncate the logical count and make
+/// the rewrite fail closed. There is no fact capture any more. The visitor
+/// writes the record it was handed, reading no `ArrayHeader` field at all, so
+/// this fixture now asserts the structural reason the hazard cannot recur:
+/// rewriting through the enumerated descriptor slot lands exactly, with every
+/// other fact untouched, while the array's own length/capacity words say
+/// something impossible.
 #[test]
-fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
+fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
     let _guard = GcTestIsolationGuard::new();
     crate::object::shapes::test_clear_shape_table();
 
@@ -1079,7 +1099,7 @@ fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
     let live_keys = unsafe { alloc_nursery_test_array() };
     // `set_forwarding_address` stores this pointer over the old length/capacity
     // pair. Pick a logical count one above the resulting stale capacity word,
-    // so the pre-fix mixed old/new read deterministically truncates it.
+    // so a re-derivation from the array would deterministically truncate it.
     let stale_capacity = ((live_keys as u64) >> 32) as u32;
     let logical_key_count = stale_capacity
         .checked_add(1)
@@ -1106,17 +1126,18 @@ fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
         assert_eq!((*old_keys).capacity, stale_capacity);
         assert!(
             (*old_keys).capacity < logical_key_count,
-            "test premise: the stale capacity must truncate the live count"
+            "test premise: the stale capacity would truncate the live count"
         );
     }
 
     let owner_header = unsafe { header_from_user_ptr(owner.cast()) } as *mut GcHeader;
-    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    let descriptor_keys_slot = crate::object::shapes::shape_descriptor_keys_slot(id)
+        .expect("a table-resident descriptor exposes its keys word");
     let mut rewritten = 0usize;
     unsafe {
         visit_gc_layout_slot_descriptors(owner_header, &mut |descriptor| {
             descriptor.visit_slots(&mut |slot| {
-                if slot.slot == header_keys_slot {
+                if slot.slot == descriptor_keys_slot {
                     *slot.slot = live_keys as u64;
                     rewritten += 1;
                 }
@@ -1125,12 +1146,16 @@ fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
     }
     assert_eq!(
         rewritten, 1,
-        "the authoritative header edge must be rewritten once"
+        "the authoritative descriptor edge must be enumerated exactly once"
     );
     let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
         .expect("rewritten live descriptor disappeared");
     assert_eq!(descriptor.keys, live_keys as u64);
-    assert_eq!(descriptor.logical_key_count, logical_key_count);
+    assert_eq!(
+        descriptor.logical_key_count, logical_key_count,
+        "#8112: nothing in the visit re-derives a count from the array, so the \
+         stale capacity word cannot truncate it"
+    );
     assert_eq!(descriptor.live_inline_slot_count, 0);
 
     unsafe {
@@ -1140,11 +1165,13 @@ fn test_forwarded_keys_capacity_preserves_immediate_descriptor_sync() {
     crate::object::shapes::test_clear_shape_table();
 }
 
-/// #8067 release fail-closed guard: descriptor fact capture must classify the
-/// keys word before reading ArrayHeader fields. A live GC_TYPE_OBJECT can
-/// carry a corrupt header edge and a real ShapeId at the same time; the
-/// authoritative header edge remains visible, but descriptor synchronization
-/// must skip without dereferencing that word.
+/// #8067 release fail-closed guard, restated for #8112. A live GC_TYPE_OBJECT
+/// can carry a corrupt header word and a real ShapeId at the same time. Under
+/// the old model the collector captured descriptor FACTS from that word, so it
+/// had to classify it before dereferencing. The descriptor is now the source,
+/// so the corrupt word is never read for facts at all — it is only a mirror
+/// slot the collector still rewrites, and the unrelated descriptor must come
+/// through untouched.
 #[test]
 fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
     let _guard = GcTestIsolationGuard::new();
@@ -1167,8 +1194,9 @@ fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
 
     assert_eq!(
         crate::gc::test_gc_rewrite_slot_count(owner as usize),
-        Some(1),
-        "only the authoritative corrupt header slot may be enumerated"
+        Some(2),
+        "#8112: the corrupt mirror stays enumerated (the collector still has to \
+         rewrite it) alongside the authoritative descriptor record"
     );
     let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
         .expect("invalid header facts must not retire the unrelated descriptor");
@@ -1180,10 +1208,13 @@ fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
     crate::object::shapes::test_drop_shape_descriptors(valid_keys as usize);
 }
 
-/// #8067: DirtyHeaderSlotScan retains enumerated raw slot pointers between
-/// budgeted work units. Descriptor-table growth in that mutator window must
-/// not invalidate any saved pointer, so a stamped object's enumeration may
-/// contain its stable ObjectHeader slot but never a HashMap bucket address.
+/// DirtyHeaderSlotScan retains enumerated raw slot pointers between budgeted
+/// work units, and descriptor-table growth in that mutator window must not
+/// invalidate any saved pointer. #8067 answered that by refusing to enumerate
+/// the descriptor at all; #8112 answers it by BOXING the record, so the map
+/// may rehash freely while every enumerated `keys` word stays put. This test
+/// is the difference between those two answers: it saves the enumeration,
+/// forces a thousand insertions, and demands the identical addresses back.
 #[test]
 fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation() {
     let _guard = GcTestIsolationGuard::new();
@@ -1204,10 +1235,14 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
     let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)
         .expect("tracked object must have a rewrite descriptor");
     let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
+    let descriptor_keys_slot = crate::object::shapes::shape_descriptor_keys_slot(id)
+        .expect("a table-resident descriptor exposes its keys word")
+        as usize;
     assert_eq!(
         saved_slots,
-        vec![header_keys_slot as usize],
-        "deferred work retained a descriptor-table bucket address"
+        vec![header_keys_slot as usize, descriptor_keys_slot],
+        "#8112: the enumeration is the derived mirror plus the authoritative \
+         descriptor record"
     );
 
     for i in 0..1024usize {
@@ -1220,8 +1255,14 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
         .expect("rooted object must remain enumerable after table growth");
     assert_eq!(
         slots_after,
-        vec![header_keys_slot as usize],
-        "descriptor-table growth changed the stable authoritative slot address"
+        vec![header_keys_slot as usize, descriptor_keys_slot],
+        "descriptor-table growth moved a keys word that deferred dirty-page \
+         work may still be holding — the box did not keep the record put"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_keys_slot(id).map(|slot| slot as usize),
+        Some(descriptor_keys_slot),
+        "1024 insertions rehashed the map and moved the record with it"
     );
 
     js_shadow_slot_set(0, 0);

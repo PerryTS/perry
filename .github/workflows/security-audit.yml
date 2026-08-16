@@ -1,9 +1,14 @@
 name: Security Audit
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  # Called from .github/workflows/test.yml: in the PR tier only when the diff
+  # touches a lockfile / manifest / policy file (scripts/ci_plan.py DEPS_GLOBS),
+  # and unconditionally in the post-merge sweep and the full tier. That is why
+  # there is no `pull_request` / `push` trigger here any more -- running these
+  # five jobs on every PR push was ~5 of the 48 runner slots each push burned
+  # on a 20-slot org (see the header of test.yml).
+  workflow_call:
+  # Weekly on its own: the advisory database moves without any commit.
   schedule:
     - cron: "0 12 * * 1"
   workflow_dispatch:

@@ -293,16 +293,31 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
 
     for pattern, label in (
         # `PtrHashMap` since #8157 (SipHash on a bare u32 was 25% of self time in
-        # `shapes`). The fact this asserts is that a by-id table EXISTS, not which
-        # hasher backs it, so accept either spelling.
-        (r"descriptors\s*:\s*(?:[\w:]+::)?(?:Ptr)?HashMap\s*<\s*u32\s*,\s*ShapeDescriptor", "by-id descriptor table"),
+        # `shapes`). The hasher is free; the BOX is not. Since #8112 the
+        # collector enumerates `&mut record.keys` as an ordinary GC slot, and a
+        # budgeted dirty scan can hold that address across mutator resumptions
+        # that insert descriptors. Un-boxing the value puts the record back in
+        # the bucket, where a rehash moves it under the collector's feet.
+        (r"descriptors\s*:\s*(?:[\w:]+::)?(?:Ptr)?HashMap\s*<\s*u32\s*,\s*Box\s*<\s*ShapeDescriptor\s*>", "by-id descriptor table, boxed for a stable keys slot"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
         (r"object_kind\s*:\s*ShapeObjectKind", "authoritative receiver-kind fact"),
         (r"\bfn\s+shape_descriptor_by_id\b", "by-id lookup"),
         (r"\bfn\s+debug_assert_object_shape_parity\b", "parity assertion"),
-        (r"\bfn\s+synchronize_live_object_shape_descriptor_after_header_visit\b", "live-object descriptor mirror"),
+        # #8112 replaced the post-visit write-back callback with a rewritable
+        # location: the lifted descriptor carries the address of its own BOXED
+        # record, so the slot visitor writes that record and there is nothing
+        # left to reconcile.
+        (r"pub\(crate\)\s+record\s*:\s*usize", "authoritative descriptor record address"),
+        (r"\bfn\s+keys_slot\b", "authoritative keys-edge slot"),
+        # The liveness gate. Rooting the table unconditionally would make every
+        # keys array ever minted immortal and turn `prune_dead_shape_keys`'s
+        # "is the keys array dead?" into a question it asks of itself; rooting
+        # nothing loses the keys array of a shape only OLD objects carry, which
+        # a minor never enumerates.
+        (r"pub\(crate\)\s+old_carrier\s*:\s*bool", "old-carrier ephemeron gate"),
+        (r"\bfn\s+rotate_old_carrier_epoch_after_full_trace\b", "old-carrier gate recomputed by a full trace"),
         (r"is_dead_owner\s*\(\s*descriptor\.keys\s+as\s+usize\s*\)", "dead descriptor pruning"),
     ):
         require_code(shapes, pattern, label)
@@ -321,31 +336,57 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
 
     scanner = function_body(shapes, "scan_shape_table_rekey_mut")
     require_code(scanner, r"\bvisit_metadata_usize_slot\s*\(", "weak metadata rewrite")
+    # #8112: the scanner has exactly TWO arms, and which one a descriptor takes
+    # IS the liveness protocol. `visit_usize_slot` ROOTS — reserved for a shape
+    # an OLD object still carries, which a minor cannot enumerate for itself.
+    # `visit_metadata_usize_slot` does not root — a young carrier is traced and
+    # emits its own edge, and rooting those from the table would make every
+    # keys array ever minted immortal. Pin the whole two-armed expression, not
+    # just the set of APIs called: a sabotage that widens the gate, or that
+    # swaps the arms, has to be red.
+    if not re.search(
+        r"if\s+descriptor\.old_carrier\s*\{\s*"
+        r"visitor\.visit_usize_slot\(&mut addr\)\s*\}\s*else\s*\{\s*"
+        r"visitor\.visit_metadata_usize_slot\(&mut addr\)\s*\}",
+        scanner,
+    ):
+        raise CensusError(
+            "descriptor rooting is not gated on `old_carrier`: the shape table "
+            "either roots unconditionally (every keys array immortal) or not at "
+            "all (a shape only old objects carry loses its keys array)"
+        )
     scanner_slot_apis = set(re.findall(r"\b(visit_[A-Za-z0-9_]*slot)\s*\(", scanner))
-    if scanner_slot_apis != {"visit_metadata_usize_slot"}:
+    if scanner_slot_apis != {"visit_metadata_usize_slot", "visit_usize_slot"}:
         raise CensusError(
             "descriptor scanner slot API allowlist failed: "
             + ", ".join(sorted(scanner_slot_apis))
         )
 
     layout_body = function_body(layout_visit, "visit_gc_layout_slot_descriptors")
-    assert_before(
-        layout_body,
-        "child_slots.take_prefix_child_slot()",
-        "synchronize_live_object_shape_descriptor_after_header_visit(",
-        "authoritative header visit before descriptor mirror",
-    )
-    assert_before(
-        layout_body,
-        "try_read_tracked_gc_header(old_keys as usize)",
-        "keys_array_len_capped_to_capacity(old_keys)",
-        "array-header validation before descriptor fact read",
-    )
     require_code(
         layout_body,
-        r"\(\s*\*\s*keys_header\.as_ptr\s*\(\s*\)\s*\)\.obj_type\s*==\s*GC_TYPE_ARRAY",
-        "descriptor fact capture exact array type",
+        r"gc_shape_keys_edge_slot\s*\(",
+        "descriptor keys edge enumerated as a child slot",
     )
+    # #8112: the authoritative edge is resolved from the descriptor BEFORE the
+    # derived header mirror is handed to the visitor. Reversing that would let
+    # a mirror rewrite feed back into the edge, which is the inversion this
+    # issue exists to remove.
+    assert_before(
+        layout_body,
+        "gc_shape_keys_edge_slot(",
+        "child_slots.take_prefix_child_slot()",
+        "authoritative descriptor edge before derived mirror visit",
+    )
+    # And nothing in the visit reads the mirror for a FACT. The old model
+    # captured `logical_key_count` from the header's array and validated the
+    # header word before dereferencing it; both are gone, which is why #8047
+    # can delete the word without touching this function's logic.
+    if re.search(r"keys_array", layout_body):
+        raise CensusError(
+            "the GC slot visitor reads ObjectHeader::keys_array again; the "
+            "descriptor is the authoritative edge since #8112"
+        )
 
     ensure = function_body(shapes, "shape_descriptor_ensure_with_generation")
     assert_before(
@@ -705,10 +746,47 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
     inverted_gc[path] = swap_once(
         inverted_gc[path],
+        "gc_shape_keys_edge_slot(",
         "child_slots.take_prefix_child_slot()",
-        "synchronize_live_object_shape_descriptor_after_header_visit(",
     )
-    expect_rejected("descriptor before header visit", lambda: assert_authority_surfaces(inverted_gc))
+    expect_rejected(
+        "derived mirror visited before the authoritative descriptor edge",
+        lambda: assert_authority_surfaces(inverted_gc),
+    )
+
+    shapes_path = "crates/perry-runtime/src/object/shapes.rs"
+    unboxed_table = dict(sources)
+    unboxed_table[shapes_path] = unboxed_table[shapes_path].replace(
+        "PtrHashMap<u32, Box<ShapeDescriptor>>",
+        "PtrHashMap<u32, ShapeDescriptor>",
+        1,
+    )
+    expect_rejected(
+        "descriptor record un-boxed back into a rehashing bucket",
+        lambda: assert_authority_surfaces(unboxed_table),
+    )
+
+    ungated_root = dict(sources)
+    ungated_root[shapes_path] = ungated_root[shapes_path].replace(
+        "let moved = if descriptor.old_carrier {",
+        "let moved = if true {",
+        1,
+    )
+    expect_rejected(
+        "descriptor rooting un-gated into an unconditional table root",
+        lambda: assert_authority_surfaces(ungated_root),
+    )
+
+    header_fact_read = dict(sources)
+    header_fact_read[path] = header_fact_read[path].replace(
+        "let shape_keys_edge = if",
+        "let _mirror = (*obj).keys_array;\n    let shape_keys_edge = if",
+        1,
+    )
+    expect_rejected(
+        "GC slot visitor reads the header mirror for a fact",
+        lambda: assert_authority_surfaces(header_fact_read),
+    )
 
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"

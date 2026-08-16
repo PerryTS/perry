@@ -4,12 +4,32 @@
 # What this asserts, on every run: Next 16.3.0's UNTOUCHED production webpack
 # output compiles to an app-only dylib against separately loaded runtime and
 # stdlib provider images, serves through a `dlopen` host, and matches the Node
-# production oracle byte-for-byte across 10 cold starts of two 21-request
-# verifier passes each.
+# production oracle byte-for-byte across 10 cold starts of
+# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START` (default 10) 21-request verifier
+# passes each — 100 batches by default, #8040's "100-iteration run of the
+# 20-way concurrent request batch". Every request must also enter the generated
+# `AppRouteRouteModule.handle`: `perry-host.js` wraps it and logs
+# `generated handler bypassed routeModule.handle` for any request that reached
+# the userland handler another way, and each cold-start log is grepped for that
+# line as a hard failure. That signal lives ONLY in the host log — the guard
+# throws inside a `.then()` after the response is already sent, so
+# `verify.mjs` still exits 0 when it fires (#8161).
 #
-# Odd cold starts run under FORCED evacuation with a seeded GC schedule and the
-# moving-GC liveness assert (#8163 — fixed; `PERRY_NEXT_ROUTE_FORCED_GC=0`
-# turns that arm off for a normal-only run).
+# Known state (#8163, reopened): #8211 rooted the two holders behind the
+# forced-evacuation arm, but a default-GC residual remains — a default-mode
+# copying minor occasionally strands a stale closure, and ~1-2% of the batches
+# that follow one lose a response (`TypeError: value is not a function` in the
+# host log right after a `[gc-copy-minor] ran` line, then an empty body in
+# `verify.mjs`). With the default 10 verifier passes per process this fixture
+# is therefore intermittently RED until that residual lands. Two passes per
+# process finished before the first copying minor (~pass 3), which is how the
+# fixture read green while #8040's 100-iteration bullet was red; set
+# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2` to recover exactly the old
+# coverage.
+#
+# Odd cold starts run under FORCED evacuation with a seeded GC schedule and
+# the moving-GC liveness assert (its two #8163 holders were fixed in #8211;
+# `PERRY_NEXT_ROUTE_FORCED_GC=0` turns that arm off for a normal-only run).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,6 +38,14 @@ REPO_ROOT="$(cd ../../../.. && pwd)"
 PERRY_BIN="${PERRY_BIN:-$REPO_ROOT/target/release/perry}"
 PORT_BASE="${PERRY_NEXT_ROUTE_PORT:-31836}"
 COLD_STARTS="${PERRY_NEXT_ROUTE_COLD_STARTS:-10}"
+# Verifier passes per cold start: restart/ABI/parity/bypass-guard coverage
+# across N fresh processes. Each 10-pass process runs ~2-3 copying minors
+# (the first lands around pass 3), so this arm is sensitive to per-collection
+# bugs — but a fresh process lives permanently in the early/small-heap regime
+# and never reaches the grown heap where collections accelerate. Collection
+# DEPTH in one process is a different knob (`PERRY_NEXT_ROUTE_WARM_PASSES`,
+# #8215); neither substitutes for the other.
+VERIFIERS_PER_START="${PERRY_NEXT_ROUTE_VERIFIERS_PER_START:-10}"
 if [[ -n "${PERRY_NEXT_ROUTE_BUILD_DIR:-}" ]]; then
   BUILD_DIR="$PERRY_NEXT_ROUTE_BUILD_DIR"
   BUILD_DIR_OWNED=0
@@ -60,6 +88,14 @@ fail() {
 for tool in npm node cargo cc ar nm python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH"
 done
+for value in "$COLD_STARTS" "$VERIFIERS_PER_START"; do
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "cold starts and verifiers per start must be positive integers (got '$value')"
+done
+TOTAL_BATCHES=$((COLD_STARTS * VERIFIERS_PER_START))
+# `generated handler bypassed` is the routeModule.handle guard in perry-host.js.
+# It is a log line, not an exit code: verify.mjs passes even when it fires, so
+# the per-cold-start grep below is the only place the guard can fail the run.
+FORBIDDEN_DIAGNOSTICS='generated handler bypassed|\[perry-gc\].*SKIPPED|unsettled-await|unimplemented|compatibility[- ]fallback'
 [[ -x "$PERRY_BIN" ]] || fail "perry not found at $PERRY_BIN"
 
 case "$(uname -s)" in
@@ -174,14 +210,21 @@ run_cold_start() {
   done
   [[ "$ready" == "1" ]] || fail "$mode cold start $index did not become ready"
 
-  BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode cold verifier 1 failed"
-  BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode warm verifier 2 failed"
+  local verifier label
+  for verifier in $(seq 1 "$VERIFIERS_PER_START"); do
+    if (( verifier == 1 )); then label="cold"; else label="warm"; fi
+    BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || {
+      tail -40 "$log" | sed 's/^/    /'
+      fail "$mode cold start $index: $label verifier $verifier/$VERIFIERS_PER_START failed"
+    }
+  done
   if [[ "$mode" == "forced" ]]; then
     python3 "$REPO_ROOT/scripts/gc_evacuation_liveness_assert.py" \
       "$log" --probe "$NAME-$mode-$index" \
       || fail "$mode cold start $index did not prove moving-GC liveness"
   fi
-  if grep -Eiq '\[perry-gc\].*SKIPPED|unsettled-await|unimplemented|compatibility[- ]fallback' "$log"; then
+  if grep -Eiq "$FORBIDDEN_DIAGNOSTICS" "$log"; then
+    grep -Ein "$FORBIDDEN_DIAGNOSTICS" "$log" | head -20 | sed 's/^/    /'
     fail "$mode cold start $index emitted a forbidden fallback diagnostic"
   fi
   cleanup_server
@@ -308,9 +351,9 @@ PY
 # the normal arm only; it is a knob, not a skip, and never `continue-on-error`.
 FORCED_GC="${PERRY_NEXT_ROUTE_FORCED_GC:-1}"
 if [[ "$FORCED_GC" == "1" ]]; then
-  echo "  [6/7] $COLD_STARTS cold processes (alternating normal / FORCED-evacuation), two 21-request verifier runs each"
+  echo "  [6/7] $COLD_STARTS cold processes (alternating normal / FORCED-evacuation), $VERIFIERS_PER_START 21-request verifier runs each ($TOTAL_BATCHES batches)"
 else
-  echo "  [6/7] $COLD_STARTS cold processes, two 21-request verifier runs each"
+  echo "  [6/7] $COLD_STARTS cold processes, $VERIFIERS_PER_START 21-request verifier runs each ($TOTAL_BATCHES batches)"
   echo "        forced-evacuation arm OFF (PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi
 for index in $(seq 0 $((COLD_STARTS - 1))); do
@@ -320,9 +363,9 @@ done
 
 run_warm_soak
 
-echo "  [7/7] production AppRouteRouteModule.handle parity complete"
+echo "  [7/7] production AppRouteRouteModule.handle parity complete: $TOTAL_BATCHES verifier batches over $COLD_STARTS cold starts, 0 bypass-guard fires"
 if [[ "$FORCED_GC" == "1" ]]; then
-  echo "PASS $NAME (with forced-evacuation arm)"
+  echo "PASS $NAME ($TOTAL_BATCHES batches, with forced-evacuation arm)"
 else
-  echo "PASS $NAME (forced-evacuation arm not run — PERRY_NEXT_ROUTE_FORCED_GC=0)"
+  echo "PASS $NAME ($TOTAL_BATCHES batches, forced-evacuation arm not run — PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi

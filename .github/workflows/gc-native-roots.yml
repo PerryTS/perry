@@ -174,6 +174,12 @@ on:
   push:
     tags: ["v*"]
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 concurrency:
@@ -239,6 +245,8 @@ jobs:
   # not a parse error but a wrong answer: two bytes of drift per field
   # silently relocates every root that follows, and every arm stays green.
   native-roots-rs4gc:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     strategy:
       fail-fast: false
       matrix:
@@ -728,7 +736,7 @@ jobs:
   # Deliberately cheap: one probe, no runtime, no oracle.
   gc-native-roots-complete:
     needs: [native-roots-rs4gc]
-    if: always()
+    if: (always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

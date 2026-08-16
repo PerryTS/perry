@@ -204,6 +204,14 @@ fn owner_type_matches(header: &GcHeader, expected_obj_type: Option<u8>) -> bool 
 /// entry, before any header is finalized or freed, so deadness probes read
 /// intact headers.
 pub(super) fn prune_dead_owner_side_tables_post_trace(full_trace: bool) {
+    if full_trace {
+        // #8112: a full trace enumerated every live object, so the old-carrier
+        // notes it accumulated are exactly the shapes old objects still carry.
+        // Adopting them here is what lets the gate SHED a shape — minors only
+        // ever add notes, so without this the table's root set would grow
+        // monotonically and no keys array would ever be reclaimed again.
+        crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
+    }
     let probe = PostTraceProbe::new(full_trace);
     fan_out(
         &|addr| probe.owner_is_dead(addr, None),

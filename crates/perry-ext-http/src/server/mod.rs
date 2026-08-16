@@ -178,6 +178,10 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<Http2StreamHandle, _>(|stream| {
         scan_listener_roots(&mut stream.listeners, visitor);
     });
+
+    // Closures parked in the HTTP/2 pending-event queue between a JS-side
+    // `session.close/settings/ping(cb)` and the main-thread drain.
+    http2_server::scan_h2_pending_event_roots(visitor);
 }
 
 #[cfg(test)]

@@ -15,80 +15,48 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
 ) {
     let mut child_slots = gc_child_slots(header);
-    // Capture the authoritative descriptor facts. `gc_child_slots` has already
-    // copied the descriptor's keys edge into the compatibility header scratch
-    // slot; a copying visit can rewrite that slot, after which the descriptor
-    // table is updated below.
-    let object_shape_facts = if (*header).obj_type == GC_TYPE_OBJECT {
-        let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
-        // #8122: the descriptor `gc_child_slots` resolved for this receiver.
-        // Nothing between that probe and here can allocate or mutate the
-        // shape table, so it is the same value a fresh probe would return.
-        let descriptor = child_slots.object_shape;
-        let old_keys = descriptor
-            .map(|facts| facts.keys as usize as *mut crate::array::ArrayHeader)
-            .unwrap_or((*obj).keys_array);
-        let live_inline_slot_count = descriptor
-            .map(|facts| facts.live_inline_slot_count)
-            // #8113: 0, not a second descriptor probe. `unwrap_or` is EAGER,
-            // so re-deriving the bound here cost a whole extra shape-table
-            // lookup on every call — and the bound has no other source now, so
-            // the fallback could only ever have returned 0 anyway.
-            .unwrap_or(0);
-        if old_keys.is_null() {
-            Some((obj, 0, 0, live_inline_slot_count))
-        } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)
-            .is_some_and(|keys_header| (*keys_header.as_ptr()).obj_type == GC_TYPE_ARRAY)
-        {
-            // A forwarded tracked array still carries GC_TYPE_ARRAY in
-            // its from-space header. The length helper follows that stub,
-            // so a sibling whose shared keys edge was already rewritten
-            // can still validate against the descriptor's new pointer.
-            Some((
-                obj,
-                old_keys as u64,
-                descriptor
-                    .map(|facts| facts.logical_key_count)
-                    .unwrap_or_else(|| {
-                        crate::array::keys_array_len_capped_to_capacity(old_keys) as u32
-                    }),
-                live_inline_slot_count,
-            ))
-        } else {
-            // Do not dereference corrupt/unmapped header words merely because
-            // their sibling word happens to look like a ShapeId. The
-            // authoritative header edge below is still enumerated; only
-            // redundant descriptor synchronization is skipped.
-            None
+    // #8112: the authoritative ordered-keys edge, taken from the descriptor
+    // `gc_child_slots` already resolved for this receiver. It is the boxed
+    // record's OWN `keys` word, so the collector marks through it and rewrites
+    // it in place — the descriptor is the root and the rewritable location,
+    // and the header word below is a derived mirror.
+    //
+    // Never enumerate the HashMap BUCKET as a GC slot: dirty-page work may
+    // retain enumerated slot addresses across budgeted resumptions, during
+    // which descriptor insertion can reallocate the table. Boxing the record
+    // is what answers that — the bucket moves, the record does not.
+    //
+    // Liveness is an ephemeron relation with two halves. A YOUNG carrier is
+    // traced, so emitting the edge here marks the keys array exactly while
+    // that receiver lives. An OLD carrier is not traced by a minor at all —
+    // and because the record is SHARED, one sibling's rewrite creates an
+    // old→young edge for a parent the minor never visits, which no per-parent
+    // remembered-set page can describe. That half is the `old_carrier` gate
+    // armed below and rooted by `shapes::scan_shape_table_rekey_mut`.
+    // `PERRY_GC_VERIFY_EVACUATION` is what established the second half is
+    // needed: without it the verifier aborts on a `slot_page_ever_dirty=false`
+    // old→young edge through this word.
+    let shape_keys_edge = if (*header).obj_type == GC_TYPE_OBJECT {
+        // A receiver the minor will not enumerate for itself arms the table's
+        // ephemeron gate. The test is "not in the nursery", not "in old-gen":
+        // a `gc_malloc`'d large object and an immortal bootstrap resident are
+        // both outside the young generation and both invisible to a minor, and
+        // over-arming the gate only costs one extra rooted record until the
+        // next full trace recomputes it. A to-space survivor IS nursery, so a
+        // young carrier still relies on the edge emitted just below.
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+            crate::object::shapes::note_old_generation_carrier(child_slots.object_shape);
         }
+        crate::object::gc_shape_keys_edge_slot(child_slots.object_shape)
     } else {
         None
     };
     if let Some(slot) = child_slots.take_prefix_child_slot() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
-    // #8067: the header keys slot above is the sole strong edge. Once its
-    // visitor callback has run, mirror an immediate rewrite into the weak
-    // descriptor. Never enumerate the HashMap bucket as a GC slot: dirty-page
-    // work may retain enumerated slot addresses across budgeted resumptions,
-    // during which descriptor insertion can reallocate the table. A deferred
-    // visitor leaves old==new here; the metadata forwarding pass repairs it
-    // after copying. RegExp uses its dedicated GC slot kind and never enters
-    // the ObjectHeader branch above.
-    if let Some((obj, old_keys, logical_key_count, live_inline_slot_count)) = object_shape_facts {
-        let new_keys = (*obj).keys_array as u64;
-        // Mark, verify, and deferred dirty scans leave the header edge
-        // unchanged. Only a copying rewrite needs to borrow and update the
-        // weak descriptor table.
-        if new_keys != old_keys {
-            crate::object::shapes::synchronize_live_object_shape_descriptor_after_header_visit(
-                obj,
-                old_keys,
-                new_keys,
-                logical_key_count,
-                live_inline_slot_count,
-            );
-        }
+    if let Some(slot) = shape_keys_edge {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));

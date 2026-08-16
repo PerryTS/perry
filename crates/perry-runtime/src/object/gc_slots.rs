@@ -1,15 +1,52 @@
 use super::{shapes, ObjectHeader};
 use crate::ArrayHeader;
 
-/// The object's keys-array child slot, given the receiver's `ShapeDescriptor`.
+/// The AUTHORITATIVE ordered-keys edge of a traced receiver (#8112).
 ///
-/// #8122: the collector resolves the receiver's `ShapeDescriptor` ONCE per
-/// traced object (`gc::layout::gc_child_slots`) and threads it through the
-/// keys-slot, field-range, payload-mask and slot-visit steps, which used to
-/// probe the shape table independently — five `shape_descriptor_by_id`
-/// lookups per traced object, the top leaf of a traced in-place-promotion
-/// cycle's profile. Callers therefore pass the descriptor rather than the
-/// function re-deriving it.
+/// This is the descriptor's own `keys` word, not a copy of it: the record is
+/// boxed (`object::shapes::ShapeDescriptor`), so its address is fixed for the
+/// record's lifetime and the collector can mark through it and rewrite it in
+/// place like any other child slot. The address rides along on the descriptor
+/// `gc::layout::gc_child_slots` already resolved for this receiver, so the
+/// edge costs no extra shape-table probe (#8122's one-probe rule) and needs no
+/// post-visit write-back callback.
+///
+/// Siblings sharing a ShapeId hand the collector the SAME slot: one shape, one
+/// edge. For a YOUNG carrier that is the whole liveness rule — the receiver is
+/// traced, so the edge is emitted exactly while it lives. An OLD carrier needs
+/// more, because a minor never enumerates it: the visitor also arms
+/// `ShapeDescriptor::old_carrier`, and `shapes::scan_shape_table_rekey_mut`
+/// roots the record for it. Emitting here regardless of generation is
+/// deliberate — the alternative loses a shape whose only carrier is promoted
+/// during the very drain that would have emitted it.
+#[inline]
+pub(crate) fn gc_shape_keys_edge_slot(
+    descriptor: Option<shapes::ShapeDescriptor>,
+) -> Option<*mut u64> {
+    #[cfg(test)]
+    if shapes::test_keys_edge_suppressed() {
+        // Sabotage arm: with BOTH this edge and the header mirror gone, a keys
+        // array has no root and no rewritable location at all. The fixtures use
+        // it to prove their detector fires — a green protected run then means
+        // the detector works, not that nothing was tried.
+        return None;
+    }
+    let descriptor = descriptor?;
+    if descriptor.keys == 0 {
+        return None;
+    }
+    descriptor.keys_slot()
+}
+
+/// The object's keys-array MIRROR slot.
+///
+/// #8112 demoted this word. It is no longer the strong edge and no longer the
+/// scratch buffer the descriptor is repaired from — `gc_shape_keys_edge_slot`
+/// above is both. What remains is an ABI mirror the mutator still loads
+/// directly (codegen emits the load), so the collector refreshes it from the
+/// authoritative record and keeps rewriting it across a move. #8047 deletes
+/// the word, this function, and its call site together; nothing else has to
+/// change, which is exactly what this issue had to establish.
 pub(crate) unsafe fn gc_keys_array_slot(
     obj: *mut ObjectHeader,
     descriptor: Option<shapes::ShapeDescriptor>,
@@ -17,18 +54,21 @@ pub(crate) unsafe fn gc_keys_array_slot(
     if obj.is_null() {
         return None;
     }
+    #[cfg(test)]
+    if shapes::test_keys_mirror_suppressed() {
+        // #8047 rehearsal: with the mirror gone, the descriptor edge is the
+        // only thing that can keep this receiver's keys array alive and
+        // correctly forwarded. `gc/tests/shape_keys_descriptor_edge.rs` runs
+        // real collections in this mode.
+        return None;
+    }
     if let Some(descriptor) = descriptor {
-        // Compatibility scratch slot: GC obtains the authoritative edge from
-        // the ShapeId descriptor, then lets the existing slot visitor rewrite
-        // it in place. #8047 can replace this scratch with a descriptor-table
-        // rewrite without changing the source of the edge.
-        //
-        // The descriptor lookup immediately precedes this collector-side
-        // materialization: no allocation or callback can change its `keys`
-        // edge before the visitor receives the slot. That ordering is what
-        // makes the descriptor authoritative while this legacy field remains
-        // only the mutable scratch location used for pointer rewriting.
-        // GC_STORE_AUDIT(ROOT): collector materializes the authoritative descriptor root into its compatibility rewrite slot.
+        // Mirror refresh, not an edge: a sibling traced earlier in this cycle
+        // may already have rewritten the shared record, in which case this
+        // receiver's word is stale and the slot visitor below would otherwise
+        // hand the collector a from-space address it has no forwarding record
+        // for.
+        // GC_STORE_AUDIT(ROOT): collector refreshes the derived keys mirror from the authoritative descriptor record.
         (*obj).keys_array = descriptor.keys as usize as *mut ArrayHeader;
     }
     if (*obj).keys_array.is_null() {
