@@ -7,6 +7,8 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
+use crate::rooting;
+use crate::rooting::Repr;
 use crate::type_analysis::compute_auto_captures;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
@@ -120,6 +122,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     captured_value_bits.push(v_bits);
                 }
             }
+
+            // #8258: Root captured values across js_closure_alloc, which can
+            // trigger a copying minor. Box pointers (raw i64) and NaN-boxed
+            // values held in bare SSA registers are invisible to the collector;
+            // without rooting, a GC during the allocation moves the underlying
+            // objects, the registers hold stale addresses, and
+            // js_closure_set_capture_bits stores stale pointers into the
+            // closure's capture slots. Later, js_box_get_bits on a stale box
+            // pointer reads garbage, surfacing as "TypeError: Cannot convert
+            // undefined or null to object" when the closure body calls
+            // js_require_object_coercible on the captured value.
+            //
+            // The captured-singleton path (js_closure_alloc_with_captures_singleton)
+            // roots captures inside the runtime helper, so this group is only
+            // re-read on the non-singleton path below.
+            let mut capture_handles: Vec<rooting::EmittedValue> = Vec::new();
+            let capture_group = if !captured_value_bits.is_empty() {
+                let mut g = rooting::open_rooted_group(captured_value_bits.len());
+                for v_bits in &captured_value_bits {
+                    let h = g.adopt_emitted(ctx, Repr::Ptr, v_bits, true);
+                    capture_handles.push(h);
+                }
+                Some(g)
+            } else {
+                None
+            };
 
             // Compute the closure function name BEFORE taking the
             // mutable block borrow.
@@ -350,8 +378,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (so the cached layout matches a fresh allocation). The
             // other paths still need explicit per-slot writes.
             if !captured_singleton {
+                // #8258: Re-read captured values after js_closure_alloc
+                // (which may have triggered a copying minor that moved the
+                // boxed objects). The captured-singleton path roots captures
+                // inside the runtime helper; this path does not, so the
+                // re-read is mandatory.
+                let re_read_bits: Vec<String> = if let Some(ref g) = capture_group {
+                    capture_handles.iter()
+                        .map(|h| g.reread_emitted(ctx, *h))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let bits_to_set: &[String] = if re_read_bits.is_empty() {
+                    &captured_value_bits
+                } else {
+                    &re_read_bits
+                };
                 let blk = ctx.block();
-                for (idx, val_bits) in captured_value_bits.iter().enumerate() {
+                for (idx, val_bits) in bits_to_set.iter().enumerate() {
                     let idx_str = idx.to_string();
                     blk.call_void(
                         "js_closure_set_capture_bits",
@@ -417,6 +462,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (I64, &new_target_bits),
                     ],
                 );
+            }
+            // #8258: Release the capture root group after all capture slots
+            // are written. The `this` and `new.target` captures are loaded
+            // from the frame's this/new_target stack or IMPLICIT_THIS, which
+            // are runtime singletons not at risk from a copying minor.
+            if let Some(g) = capture_group {
+                g.release(ctx);
             }
             Ok(nanbox_pointer_inline(ctx.block(), &closure_handle))
         }

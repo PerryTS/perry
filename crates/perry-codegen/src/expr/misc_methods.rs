@@ -9,6 +9,7 @@ use perry_hir::{Expr, UnaryOp};
 
 use crate::nanbox::double_literal;
 use crate::native_value::{ExpectedNativeRep, LoweredValue, MaterializationReason, NativeRep};
+use crate::rooting;
 use crate::type_analysis::{is_numeric_expr, is_provably_not_bigint};
 use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
 
@@ -190,17 +191,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Object.defineProperty --------
+        // #8258: root all three operands across each other's lowering.
+        // `key` and `value` are arbitrary expressions that can allocate
+        // (ToString, accessor descriptors, closure creation), leaving `obj`
+        // and `key` stale in bare SSA registers across the collection point.
         Expr::ObjectDefineProperty(obj, key, value) => {
-            let o = lower_expr(ctx, obj)?;
-            let k = lower_expr(ctx, key)?;
-            let v = lower_expr(ctx, value)?;
-            let blk = ctx.block();
-            blk.call(
-                DOUBLE,
-                "js_object_define_property",
-                &[(DOUBLE, &o), (DOUBLE, &k), (DOUBLE, &v)],
-            );
-            Ok(o)
+            rooting::with_operands_rooted(ctx, &[obj, key, value], |ctx, vals| {
+                let blk = ctx.block();
+                blk.call(
+                    DOUBLE,
+                    "js_object_define_property",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                );
+                Ok(vals[0].clone())
+            })
         }
 
         // -------- path.isAbsolute(p) -> boolean --------
@@ -675,32 +679,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- process.on(event, handler) — EventEmitter listener
         // registration on the process singleton.
+        // #8258: root `event` across `handler`'s lowering (closure creation
+        // allocates) and across `unbox_str_handle` (SSO materialization
+        // allocates). Root `handler` across `unbox_str_handle` for the same
+        // reason. Without rooting, the event string held in a bare register
+        // across the closure allocation becomes stale after a copying minor,
+        // and the stale NaN-box is read as undefined/null by the runtime.
         Expr::ProcessOn { event, handler } => {
-            let event_box = lower_expr(ctx, event)?;
-            let handler_box = lower_expr(ctx, handler)?;
-            let blk = ctx.block();
-            let event_handle = unbox_str_handle(blk, &event_box);
-            let handler_handle = unbox_to_i64(blk, &handler_box);
-            Ok(blk.call(
+            let mut group = rooting::open_rooted_group(2);
+            let event_idx = group.lower(ctx, event, true)?;
+            let _handler_idx = group.lower(ctx, handler, true)?;
+            // Re-read event after handler's lowering (closure creation).
+            let event_box = group.reread(ctx, event_idx)?;
+            // unbox_str_handle can allocate (SSO materialization).
+            let event_handle = unbox_str_handle(ctx.block(), &event_box);
+            // Re-read handler after unbox_str_handle's potential allocation.
+            let handler_box = group.reread(ctx, _handler_idx)?;
+            let handler_handle = unbox_to_i64(ctx.block(), &handler_box);
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_process_on",
                 &[(I64, &event_handle), (I64, &handler_handle)],
-            ))
+            );
+            group.release(ctx);
+            Ok(result)
         }
 
         // -------- process.once(event, handler) — one-shot listener;
         // the handler is removed after its first invocation (Node parity).
+        // #8258: same rooting as ProcessOn — see above.
         Expr::ProcessOnce { event, handler } => {
-            let event_box = lower_expr(ctx, event)?;
-            let handler_box = lower_expr(ctx, handler)?;
-            let blk = ctx.block();
-            let event_handle = unbox_str_handle(blk, &event_box);
-            let handler_handle = unbox_to_i64(blk, &handler_box);
-            Ok(blk.call(
+            let mut group = rooting::open_rooted_group(2);
+            let event_idx = group.lower(ctx, event, true)?;
+            let _handler_idx = group.lower(ctx, handler, true)?;
+            let event_box = group.reread(ctx, event_idx)?;
+            let event_handle = unbox_str_handle(ctx.block(), &event_box);
+            let handler_box = group.reread(ctx, _handler_idx)?;
+            let handler_handle = unbox_to_i64(ctx.block(), &handler_box);
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_process_once",
                 &[(I64, &event_handle), (I64, &handler_handle)],
-            ))
+            );
+            group.release(ctx);
+            Ok(result)
         }
 
         // -------- process.stdin.setRawMode(enabled) — toggle raw-mode

@@ -698,6 +698,19 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         ctx.func
             .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
+        // #8258: Bind a shadow slot for the box-pointer alloca so the
+        // precise-roots pass retypes it to `ptr addrspace(1)`, making the
+        // RS4GC pass relocate the box pointer during a copying minor.
+        // Without this, the alloca stays `i64` — invisible to the collector
+        // — and a GC that moves the box leaves the slot holding a stale
+        // from-space pointer. Subsequent `js_box_set_bits` writes go to the
+        // old (freed) box location while the moved box retains its sentinel
+        // (`TAG_UNDEFINED | 1`), surfacing later as
+        // "TypeError: Cannot convert undefined or null to object" when a
+        // closure reads the stale box.
+        if let Some(slot_idx) = ctx.func.reserve_shadow_slot() {
+            crate::expr::shadow_slot::emit_shadow_slot_bind_ptr(ctx, slot_idx, &slot);
+        }
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
             let lowered = LoweredValue::js_value_bits(&box_ptr);
