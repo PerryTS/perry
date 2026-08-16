@@ -203,17 +203,22 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             }
             // Defensive tripwire (# fabricated-Map): if a fabricated Map
             // header ever slips past `plausible_gc_header`, the `entries`
-            // field would be a NaN-boxed JSValue (top bits 0x7FFD…) read
-            // from the original object's payload — an impossible pointer
-            // on x86-64 where user-space addresses stay below bit 47.
-            // Reject it rather than dereference a derived slot range from
-            // a garbage base. This is a backstop; the primary fix is the
-            // fixed-layout size check in `plausible_gc_header`.
-            if ((*map).entries as usize) >> 47 != 0 {
+            // field would be a NaN-boxed JSValue (top bits 0x7FFD…) or some
+            // other non-pointer word read from the original object's
+            // payload. Reject it rather than dereference a derived slot
+            // range from a garbage base. This is a backstop; the primary
+            // fix is the fixed-layout size check in `plausible_gc_header`.
+            // Use the shared heap-address classifier so the bound is
+            // platform-correct (a fixed `>> 47` cutoff would false-reject
+            // genuine entries on aarch64 Linux, where user space reaches
+            // bit 48) and so low / handle-band garbage is rejected too,
+            // not only the NaN-box signature.
+            let entries_addr = (*map).entries as usize;
+            if !crate::value::addr_class::is_plausible_heap_addr(entries_addr) {
                 if crate::gc::gc_diag_enabled() {
                     eprintln!(
-                        "[gc-tripwire] Map entries has implausible top bits: {:#x} (fabricated Map?)",
-                        (*map).entries as usize
+                        "[gc-tripwire] Map entries is not a plausible heap address: {:#x} (fabricated Map?)",
+                        entries_addr
                     );
                 }
                 return;

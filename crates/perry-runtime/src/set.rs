@@ -557,12 +557,18 @@ pub(crate) unsafe fn gc_element_slot_range(
     }
     // Defensive tripwire (cf. Map's entries check in layout_slot_visit):
     // a NaN-boxed JSValue read as `elements` carries 0x7FFD in the top
-    // bits — an impossible x86-64 user-space pointer.
-    if ((*set).elements as usize) >> 47 != 0 {
+    // bits, and other non-pointer payload words can land below the heap
+    // range or in the handle band. Reject any `elements` that is not a
+    // plausible heap address rather than dereference a derived slot range
+    // from a garbage base. Uses the shared platform-correct classifier
+    // (a fixed `>> 47` cutoff would false-reject genuine elements on
+    // aarch64 Linux, where user space reaches bit 48).
+    let elements_addr = (*set).elements as usize;
+    if !crate::value::addr_class::is_plausible_heap_addr(elements_addr) {
         if crate::gc::gc_diag_enabled() {
             eprintln!(
-                "[gc-tripwire] Set elements has implausible top bits: {:#x} (fabricated Set?)",
-                (*set).elements as usize
+                "[gc-tripwire] Set elements is not a plausible heap address: {:#x} (fabricated Set?)",
+                elements_addr
             );
         }
         return None;
@@ -2445,5 +2451,52 @@ mod tests {
             jsvalue_eq(val1, val2),
             "cross-tag strings with same content should be equal"
         );
+    }
+
+    /// `gc_element_slot_range`'s defensive tripwire must reject an
+    /// `elements` word that is not a plausible heap address — a NaN-boxed
+    /// JSValue (top bits 0x7FFD), a low garbage address below the handle
+    /// band, and a handle-band id — while still accepting a genuine
+    /// system-allocator `elements` pointer. The previous `>> 47` cutoff
+    /// only caught the NaN-box signature and accepted low / handle-band
+    /// garbage; the unified `is_plausible_heap_addr` classifier closes
+    /// both gaps and is platform-correct.
+    #[test]
+    fn test_gc_element_slot_range_rejects_implausible_elements() {
+        // Genuine Set: elements is a real system-allocator pointer.
+        let set = js_set_alloc(4);
+        js_set_add(set, 1.0);
+        assert!(
+            unsafe { gc_element_slot_range(set) }.is_some(),
+            "genuine Set elements must yield a slot range"
+        );
+
+        // Build a stack SetHeader so we can control `elements` directly.
+        let mut header = SetHeader {
+            size: 1,
+            capacity: 4,
+            elements: std::ptr::null_mut(),
+        };
+
+        let cases: &[(&str, *mut f64)] = &[
+            // NaN-boxed JSValue (POINTER_TAG 0x7FFD) — the fabricated-Map
+            // signature that crashes on dereference.
+            ("nan-box", 0x7FFD_0000_0000_1000u64 as *mut f64),
+            // Low address below the handle band — the old `>> 47` check
+            // accepted this (0 >> 47 == 0), letting the collector derive a
+            // slot range from an unmapped / unrelated low address.
+            ("low-addr", 0x4000u64 as *mut f64),
+            // Handle-band id (just below HANDLE_BAND_MAX = 0x100000).
+            ("handle-band", 0x80000u64 as *mut f64),
+        ];
+
+        for &(label, fake_elements) in cases {
+            header.elements = fake_elements;
+            let got = unsafe { gc_element_slot_range(&mut header as *mut SetHeader) };
+            assert!(
+                got.is_none(),
+                "elements={label} must be rejected by the tripwire, got {got:?}"
+            );
+        }
     }
 }
