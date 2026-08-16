@@ -36,7 +36,7 @@ copy is current.
 | `compiler-output-regression` |  | yes | yes |
 | `repsel-census` |  | yes | yes |
 | `harmonyos-smoke` |  | yes | yes |
-| `binary-size` |  | yes | yes |
+| `binary-size` |  |  | yes |
 | `parity` |  |  | yes |
 | `compile-smoke` |  |  | yes |
 | `native-abi-evidence-packet` |  |  | yes |

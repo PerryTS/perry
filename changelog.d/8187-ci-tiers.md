@@ -28,13 +28,14 @@ current), one fan-in status per tier:
 - **sweep** (every push to `main`, coalesced via a constant concurrency group with
   `cancel-in-progress: false`): the PR tier unscoped plus Windows x64/ARM64 builds,
   full `gc-stress`, `compiler-output-regression`, `repsel-census`, `harmonyos-smoke`,
-  `binary-size`, `security-audit`. Sweep-only jobs chain behind `check` so a merge
+  `security-audit`. Sweep-only jobs chain behind `check` so a merge
   does not take every runner slot. Fan-in `main-gate`. This is also the
   cache-producing build on `main` (rust-cache + sccache save here), replacing
   `cache-warm.yml`.
 - **full** (nightly, `v*` tags, `workflow_dispatch`, PRs labelled `run-extended-tests`):
   the sweep plus `parity`, `compile-smoke`, the 8-shard auto-optimize gap suite,
-  `doc-tests`, the drizzle/ink/effect smokes and `native-abi-evidence-packet` —
+  `doc-tests`, `binary-size`, the drizzle/ink/effect smokes and
+  `native-abi-evidence-packet` —
   **all without `continue-on-error` now**. Fan-in `full-suite-gate`;
   `release-packages.yml` dispatches `tier=full` and accepts only a run whose
   `full-suite-gate` succeeded on the release SHA.

@@ -85,7 +85,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     "compiler_output_regression": ("sweep", "full"),
     "repsel_census": ("sweep", "full"),
     "harmonyos_smoke": ("sweep", "full"),
-    "binary_size": ("sweep", "full"),
+    "binary_size": ("full",),  # report-only, macOS: not worth a scarce mac slot per merge
     "parity": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
@@ -354,6 +354,7 @@ def _self_test() -> int:
     # 3. Sweep and full.
     sweep = plan("push", "refs/heads/main")
     check("sweep: windows on", sweep["jobs"]["windows_build"] and sweep["jobs"]["windows_arm64_build"])
+    check("sweep: binary-size off (macOS report-only, nightly is enough)", not sweep["jobs"]["binary_size"])
     check("sweep: parity off", not sweep["jobs"]["parity"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])
     check("sweep: 2 fast gap shards", sweep["gap"]["total"] == 2 and sweep["gap"]["mode"] == "fast")

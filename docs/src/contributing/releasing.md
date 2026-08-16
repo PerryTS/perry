@@ -128,8 +128,8 @@ full tier is:
 
 - everything the PR gate and the post-merge sweep run (`lint`, `check`, `warnings`,
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
-  compiler-output gates, `repsel-census`, `harmonyos-smoke`, `binary-size`,
-  `security-audit`), plus
+  compiler-output gates, `repsel-census`, `harmonyos-smoke`, `security-audit`),
+  plus `binary-size` and
 - `parity` — must clear the threshold in `test-parity/threshold.json` and add no
   new / stale known-failure entries
 - `compile-smoke` — must compile every file under `test-files/`, plus the UI
