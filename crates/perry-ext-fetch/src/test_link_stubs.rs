@@ -94,13 +94,22 @@ mod tests {
     /// non-`cfg(test)` definition is the check that survives that move.
     #[test]
     fn shipped_staticlib_does_not_define_stdlib_owned_fetch_symbols() {
-        let source = include_str!("test_link_stubs.rs");
-        let cfg_test_position = source
-            .find("#[cfg(test)]")
-            .expect("this module is gated behind #[cfg(test)] in lib.rs");
+        // Read the GATE, not this file. An earlier version scanned
+        // `test_link_stubs.rs` for `#[cfg(test)]` and found the annotation on
+        // the inner `mod tests` below — so deleting the gate in `lib.rs`, the
+        // one thing that keeps these four symbols out of the shipped archive,
+        // left the assertion passing. The fact under test lives in lib.rs.
+        let lib_rs = include_str!("lib.rs");
+        let declaration = lib_rs
+            .find("mod test_link_stubs;")
+            .expect("lib.rs must declare the test_link_stubs module");
+        let preceding = &lib_rs[..declaration];
         assert!(
-            cfg_test_position > 0,
-            "test_link_stubs must stay behind #[cfg(test)]"
+            preceding.trim_end().ends_with("#[cfg(test)]"),
+            "`mod test_link_stubs;` in lib.rs must be immediately preceded by \
+             #[cfg(test)] — without it these four symbols land in \
+             libperry_ext_fetch.a and override perry-stdlib's implementations \
+             at the final link, because ext archives are linked first"
         );
 
         for symbol in [
