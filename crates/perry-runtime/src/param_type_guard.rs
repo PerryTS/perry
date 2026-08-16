@@ -923,13 +923,19 @@ mod tests {
         );
 
         assert_eq!(
-            guard(node, &descriptor(0, &[&tracked_single_field_node(true, b"next", 0)])),
+            guard(
+                node,
+                &descriptor(0, &[&tracked_single_field_node(true, b"next", 0)])
+            ),
             1
         );
         // Without it the walk runs out of depth and the caller conservatively
         // takes the generic function — never a hang, never a false accept.
         assert_eq!(
-            guard(node, &descriptor(0, &[&tracked_single_field_node(false, b"next", 0)])),
+            guard(
+                node,
+                &descriptor(0, &[&tracked_single_field_node(false, b"next", 0)])
+            ),
             0
         );
     }
