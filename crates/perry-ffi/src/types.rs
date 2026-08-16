@@ -8,6 +8,26 @@
 /// Length of the fixed BigInt limb array.
 pub const BIGINT_LIMBS: usize = 16;
 
+/// Revision of the [`ObjectHeader`] ABI this crate mirrors.
+///
+/// Bump on ANY change to `ObjectHeader`'s size, field set, or field offsets,
+/// and bump `perry_runtime::perry_object_header_abi_revision()` in the same
+/// commit — `object_header_abi_revision_matches_the_pinned_layout` fails
+/// otherwise.
+///
+/// It exists because `perry-ffi` is **published to crates.io**: a wrapper built
+/// against an older mirror and linked by `perry compile` against a newer
+/// runtime reads the wrong offsets with no diagnostic at all. An out-of-tree
+/// wrapper should assert
+/// `perry_ffi::OBJECT_HEADER_ABI_REVISION == perry_object_header_abi_revision()`
+/// (declared `extern "C" fn() -> u32`) once at startup and refuse to run on a
+/// mismatch.
+///
+/// * 1 — `{object_type, class_id, parent_class_id, field_count, keys_array, meta}`,
+///   32 bytes on LP64.
+/// * 2 — `{class_id, parent_class_id, keys_array, meta}`, 24 bytes on LP64 (#8113).
+pub const OBJECT_HEADER_ABI_REVISION: u32 = 2;
+
 /// Header for a runtime-allocated JS string.
 #[repr(C)]
 pub struct StringHeader {
@@ -33,16 +53,29 @@ pub struct ArrayHeader {
 }
 
 /// Header for a runtime-allocated JS object.
+///
+/// # ABI revision 2 (#8113) — BREAKING for out-of-tree mirrors
+///
+/// Revision 1 opened with `object_type: u32` and carried `field_count: u32`.
+/// Both were derivable and both are gone; `class_id` moved from offset 4 to 0,
+/// the shape word from 8 to 4, and the struct shrank from 32 to 24 bytes on
+/// LP64 (16 on ILP32).
+///
+/// A wrapper compiled against the revision-1 mirror and linked against a
+/// revision-2 runtime reads `class_id` out of the deleted `object_type` slot
+/// with **no compile error**. That cannot be detected retroactively — nothing in
+/// revision 1 references a version symbol — so revision 1 consumers must
+/// recompile. From this revision on, [`OBJECT_HEADER_ABI_REVISION`] gives the
+/// tripwire: assert it against the runtime's
+/// `perry_object_header_abi_revision()` at startup, and a future layout change
+/// is caught instead of silently misread.
 #[repr(C)]
 pub struct ObjectHeader {
-    /// Runtime object type discriminator.
-    pub object_type: u32,
-    /// Runtime class identifier.
+    /// Runtime class identifier. Offset 0 since ABI revision 2 (#8113).
     pub class_id: u32,
-    /// Runtime parent class identifier, or zero when absent.
+    /// Runtime parent class identifier during allocation, then the runtime
+    /// ShapeId after shape stamping. Never authoritative parent data.
     pub parent_class_id: u32,
-    /// Number of inline fields.
-    pub field_count: u32,
     /// Runtime array of object keys, or null for class instances.
     pub keys_array: *mut ArrayHeader,
     /// Per-object metadata record (#6759 Phase B), or null when the object
@@ -147,13 +180,16 @@ mod layout_tests {
         );
     }
 
+    /// #8113: this test — and the whole `layout_tests` module — had **never
+    /// executed**. `runtime-link` is enabled nowhere in `.github/`, and
+    /// `cargo-test` is a per-package loop, so a size or padding divergence
+    /// between the mirror and the runtime was invisible; only outright field
+    /// DELETION went red, via `offset_of!` failing to compile. `test.yml`'s
+    /// `cargo-test` job now runs
+    /// `cargo test -p perry-ffi --features runtime-link` unconditionally.
     #[test]
     fn object_header_matches_runtime() {
         assert_layout!(ObjectHeader, perry_runtime::ObjectHeader);
-        assert_eq!(
-            offset_of!(ObjectHeader, object_type),
-            offset_of!(perry_runtime::ObjectHeader, object_type)
-        );
         assert_eq!(
             offset_of!(ObjectHeader, class_id),
             offset_of!(perry_runtime::ObjectHeader, class_id)
@@ -163,10 +199,6 @@ mod layout_tests {
             offset_of!(perry_runtime::ObjectHeader, parent_class_id)
         );
         assert_eq!(
-            offset_of!(ObjectHeader, field_count),
-            offset_of!(perry_runtime::ObjectHeader, field_count)
-        );
-        assert_eq!(
             offset_of!(ObjectHeader, keys_array),
             offset_of!(perry_runtime::ObjectHeader, keys_array)
         );
@@ -174,6 +206,30 @@ mod layout_tests {
             offset_of!(ObjectHeader, meta),
             offset_of!(perry_runtime::ObjectHeader, meta)
         );
+    }
+
+    /// The size/padding half of the mirror contract, spelled separately so a
+    /// failure names the actual problem. `assert_layout!` above already covers
+    /// it, but this pins the ABSOLUTE numbers too: a mirror that tracks the
+    /// runtime while BOTH drift is still an ABI break for every published
+    /// consumer, and that is the case `object_header_matches_runtime` cannot
+    /// see.
+    #[test]
+    fn object_header_abi_revision_matches_the_pinned_layout() {
+        assert_eq!(OBJECT_HEADER_ABI_REVISION, 2);
+        assert_eq!(
+            OBJECT_HEADER_ABI_REVISION,
+            perry_runtime::perry_object_header_abi_revision(),
+            "the runtime and the published mirror disagree about the header ABI \
+             revision — bump BOTH, in the same commit, and say so in the \
+             changelog: perry-ffi is published to crates.io"
+        );
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(size_of::<ObjectHeader>(), 24);
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(size_of::<ObjectHeader>(), 16);
+        assert_eq!(offset_of!(ObjectHeader, class_id), 0);
+        assert_eq!(offset_of!(ObjectHeader, parent_class_id), 4);
     }
 
     #[test]

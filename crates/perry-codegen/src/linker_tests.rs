@@ -232,6 +232,67 @@ fn compile_plan_keeps_o0_for_oversized_giant_function_monolith() {
     assert!(!plan.clang_args.contains(&"-Os".to_string()));
 }
 
+/// A unit with hundreds of ordinary functions and ONE outsized body: 19 MB of
+/// IR over 400 functions is 48 KB/fn, five times UNDER the 256 KB AVERAGE cap,
+/// so the average arm always says `-Os` here and only the per-function arm can
+/// decide. Shape taken from `next@16.3.0`'s bundled `jsonwebtoken` (#8132).
+///
+/// Sizes are absolute on purpose. Deriving them from `ll_o0_max_fn_bytes()`
+/// makes the fixtures move with the constant, and then lowering the cap keeps
+/// both tests green — measured, not assumed: that version survived a sabotage
+/// run at a 256 KB cap.
+fn plan_for_unit_with_widest_function(widest_bytes: usize) -> ClangCompilePlan {
+    build_clang_compile_plan(
+        PathBuf::from("clang"),
+        PathBuf::from("/tmp/input.ll"),
+        PathBuf::from("/tmp/output.o"),
+        None,
+        19 * 1024 * 1024,
+        400,
+        Some(widest_bytes),
+        false,
+        false,
+    )
+}
+
+#[test]
+fn compile_plan_drops_to_o0_when_one_function_is_a_monolith() {
+    // 8 MB in one body is past any reading of "ordinary", and the unit's
+    // average cannot see it. Deleting the per-function arm, or raising its cap
+    // above 8 MB, turns this red.
+    let plan = plan_for_unit_with_widest_function(8 * 1024 * 1024);
+    assert!(
+        plan.clang_args.contains(&"-O0".to_string()),
+        "a unit carrying an 8 MB function must compile at -O0 despite a \
+         48 KB/fn average; got {:?}",
+        plan.clang_args
+    );
+    assert!(!plan.clang_args.contains(&"-Os".to_string()));
+    assert!(!plan.clang_args.contains(&"-O3".to_string()));
+}
+
+#[test]
+fn compile_plan_keeps_os_for_the_8132_bundle_shape() {
+    // 3.5 MB is the widest body Perry lowers `next@16.3.0`'s bundled
+    // `jsonwebtoken` to (#8132), and this pins the deliberate decision NOT to
+    // catch it. Dropping that unit to -O0 takes its 400 ordinary functions
+    // with it: measured on that bundle, +95% __text (2.80 MB -> 5.45 MB) to
+    // buy -62% clang CPU (43.8 s -> 16.5 s). Nothing in the corpus separates
+    // "monolith" from "ordinary bundle": the 52 oversized units measured over
+    // next@16.3.0's bundles run continuously from 751 KB to 11.1 MB, so a cap
+    // low enough to catch this one (<= 1.5 MB) reclassifies 44 of those 52.
+    // Lowering DEFAULT_LL_O0_MAX_FN_BYTES turns this red, which is the point.
+    let plan = plan_for_unit_with_widest_function(3557 * 1024);
+    assert!(
+        plan.clang_args.contains(&"-Os".to_string()),
+        "the #8132 bundle shape keeps -Os by default; lowering the cap is a \
+         measured size regression, not a free win. got {:?}",
+        plan.clang_args
+    );
+    assert!(!plan.clang_args.contains(&"-O0".to_string()));
+    assert!(!plan.clang_args.contains(&"-O3".to_string()));
+}
+
 #[test]
 fn compile_plan_skips_native_tuning_for_explicit_target() {
     let plan = build_clang_compile_plan(

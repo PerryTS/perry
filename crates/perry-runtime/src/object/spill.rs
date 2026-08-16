@@ -166,8 +166,10 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
 
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
-        let inline_capacity =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        let inline_capacity = std::cmp::max(
+            crate::object::object_live_slot_count(obj),
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        );
         if field_count <= inline_capacity {
             return;
         }

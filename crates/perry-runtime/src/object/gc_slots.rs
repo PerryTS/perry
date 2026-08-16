@@ -1,11 +1,23 @@
 use super::{shapes, ObjectHeader};
 use crate::ArrayHeader;
 
-pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
+/// The object's keys-array child slot, given the receiver's `ShapeDescriptor`.
+///
+/// #8122: the collector resolves the receiver's `ShapeDescriptor` ONCE per
+/// traced object (`gc::layout::gc_child_slots`) and threads it through the
+/// keys-slot, field-range, payload-mask and slot-visit steps, which used to
+/// probe the shape table independently — five `shape_descriptor_by_id`
+/// lookups per traced object, the top leaf of a traced in-place-promotion
+/// cycle's profile. Callers therefore pass the descriptor rather than the
+/// function re-deriving it.
+pub(crate) unsafe fn gc_keys_array_slot(
+    obj: *mut ObjectHeader,
+    descriptor: Option<shapes::ShapeDescriptor>,
+) -> Option<*mut u64> {
     if obj.is_null() {
         return None;
     }
-    if let Some(descriptor) = shapes::object_shape_descriptor(obj) {
+    if let Some(descriptor) = descriptor {
         // Compatibility scratch slot: GC obtains the authoritative edge from
         // the ShapeId descriptor, then lets the existing slot visitor rewrite
         // it in place. #8047 can replace this scratch with a descriptor-table
@@ -25,17 +37,27 @@ pub(crate) unsafe fn gc_keys_array_slot(obj: *mut ObjectHeader) -> Option<*mut u
     Some(&mut (*obj).keys_array as *mut _ as *mut u64)
 }
 
+/// The object's inline field-slot range, given the receiver's `ShapeDescriptor`
+/// (see [`gc_keys_array_slot`]).
 pub(crate) unsafe fn gc_field_slot_range(
     obj: *mut ObjectHeader,
+    descriptor: Option<shapes::ShapeDescriptor>,
 ) -> Option<crate::gc::HeapSlotRange> {
     if obj.is_null() {
         return None;
     }
-    let field_count = shapes::object_shape_descriptor(obj)
+    // #8113: the descriptor is now the SOLE record of the live inline-slot
+    // bound — there is no header word left to fall back to. An unstamped
+    // receiver therefore traces zero payload slots, which is the fail-closed
+    // answer for the only population that can be unstamped: synthetic/raw test
+    // fixtures that bypass every runtime allocator, and which hold no heap
+    // edges. Every runtime allocator publishes a descriptor before its header
+    // escapes (`object/alloc.rs`), and every bound change is mint-then-stamp
+    // (`shapes::publish_object_live_slot_count`), so a live object is never
+    // observed here without one.
+    let field_count = descriptor
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        // Compatibility only for synthetic/raw test fixtures that bypass all
-        // runtime allocators. Published runtime objects are always stamped.
-        .unwrap_or((*obj).field_count as usize);
+        .unwrap_or(0);
     if field_count > 1_000_000 {
         return None;
     }

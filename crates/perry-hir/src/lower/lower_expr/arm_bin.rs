@@ -246,37 +246,16 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         }),
 
         // Comparison (treat == same as === for typed code)
-        ast::BinaryOp::EqEq => {
-            // Proxy/Reflect fold: `Reflect.getPrototypeOf(x) === <Class>.prototype`
-            // always true in our model (we don't maintain real prototypes).
-            // Same fold for `Object.getPrototypeOf(x) === <Class>.prototype`.
-            if matches!(
-                &*left,
-                Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)
-            ) && matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype")
-            {
-                return Ok(Expr::Bool(true));
-            }
-            Ok(Expr::Compare {
-                op: CompareOp::LooseEq,
-                left,
-                right,
-            })
-        }
-        ast::BinaryOp::EqEqEq => {
-            if matches!(
-                &*left,
-                Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)
-            ) && matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype")
-            {
-                return Ok(Expr::Bool(true));
-            }
-            Ok(Expr::Compare {
-                op: CompareOp::Eq,
-                left,
-                right,
-            })
-        }
+        ast::BinaryOp::EqEq => Ok(Expr::Compare {
+            op: CompareOp::LooseEq,
+            left,
+            right,
+        }),
+        ast::BinaryOp::EqEqEq => Ok(Expr::Compare {
+            op: CompareOp::Eq,
+            left,
+            right,
+        }),
         ast::BinaryOp::NotEq => Ok(Expr::Compare {
             op: CompareOp::LooseNe,
             left,

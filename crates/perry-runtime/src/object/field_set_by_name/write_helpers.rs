@@ -47,7 +47,7 @@ pub(super) unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[
 /// round-trips via `closure_set_via_function_prototype_descriptor` before
 /// falling back to a plain own-property write.
 /// #6530: mirror a SUCCESSFUL own-data write on a per-evaluation CLASS OBJECT
-/// (`object_type == OBJECT_TYPE_CLASS` — what a capture-carrying class
+/// (`ShapeObjectKind::Class` — what a capture-carrying class
 /// statement materializes as) into the class_id-keyed `CLASS_DYNAMIC_PROPS`
 /// side table. Compiled method bodies reference sibling classes as INT32
 /// ClassRefs (bundled zod's `ZodOptional.create(this, this._def)` inside

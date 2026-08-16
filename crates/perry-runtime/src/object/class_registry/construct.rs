@@ -140,7 +140,9 @@ pub(crate) unsafe fn nm_ctor_vm(
     if method == "Script" {
         let code = nm_ctor_arg(args_ptr, args_len, 0);
         let options = nm_ctor_arg(args_ptr, args_len, 1);
-        return Some(crate::node_vm::js_vm_script_new(code, options));
+        return Some(super::brand_vm_script_instance(
+            crate::node_vm::js_vm_script_new(code, options),
+        ));
     }
     None
 }

@@ -419,9 +419,10 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 
 /// #1789: stamp a freshly-allocated object as a heap "class object" (the
 /// value a class EXPRESSION evaluates to). Transitions the authoritative
-/// ShapeId descriptor kind and updates `object_type` only as a compatibility
-/// mirror. Called by codegen right after `js_object_alloc` in the
-/// `ClassExprFresh` lowering.
+/// ShapeId descriptor kind. #8113 deleted the `object_type` compatibility
+/// mirror this also used to write; the descriptor kind is the only record.
+/// Called by codegen right after `js_object_alloc` in the `ClassExprFresh`
+/// lowering.
 #[no_mangle]
 pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
@@ -434,9 +435,6 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             {
                 return;
             }
-            // Compatibility mirror only; all semantic reads use the ShapeId
-            // descriptor kind so #8047 can remove this payload word atomically.
-            (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
             // Becoming a class object changes dispatch semantics even though
             // the rooted keys and slot layout stay the same.
             crate::object::shapes::transition_object_shape_to_class(obj as *mut ObjectHeader);
@@ -1731,8 +1729,21 @@ mod shape_authority_tests_8067 {
         super::js_object_mark_class(1);
     }
 
+    /// #8113 replaces #8067's "saved lineage beats an interim self-heal" test.
+    ///
+    /// The self-heal it modelled is GONE: `typed_feedback::object_shape` used to
+    /// mint a lineage-free descriptor for an unstamped receiver, which under
+    /// #8113 would also publish a live inline-slot bound of ZERO — a read-only
+    /// observation path silently truncating the object's payload. The property
+    /// worth pinning is now the stronger one: an unstamped receiver MISSES, and
+    /// observing it publishes nothing at all.
+    ///
+    /// The clear here is manufactured with a test-only helper. No production
+    /// path clears a stamp any more (`shapes::clear_object_shape_stamp` is
+    /// `#[cfg(test)]`), which is what makes the window this used to model
+    /// unreachable rather than merely narrow.
     #[test]
-    fn saved_class_lineage_beats_an_interim_shape_self_heal() {
+    fn an_unstamped_receiver_misses_instead_of_being_self_healed() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             const CID: u32 = 0x8068;
@@ -1749,30 +1760,36 @@ mod shape_authority_tests_8067 {
                 predecessor.object_kind,
                 crate::object::shapes::ShapeObjectKind::Class
             );
+            assert_eq!(predecessor.live_inline_slot_count, 1);
 
-            // Model a re-entrant shape observer in the narrow mutation window:
-            // the structural mutator has saved its predecessor and cleared the
-            // stamp, then typed feedback defensively self-heals the object.
             assert!(crate::object::shapes::clear_object_shape_stamp(obj));
             let (interim, obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
                 crate::typed_feedback::test_object_shape_token(obj as usize)
             });
             assert_eq!(
-                crate::object::shapes::shape_descriptor_by_id(interim as u32)
-                    .expect("interim descriptor")
-                    .object_kind,
-                crate::object::shapes::ShapeObjectKind::Ordinary,
-                "test premise: a lineage-free self-heal is ordinary"
+                interim, 0,
+                "an unstamped receiver must MISS; minting a lineage-free \
+                 descriptor for it would publish a zero live-slot bound"
+            );
+            assert!(
+                crate::object::shapes::object_shape_descriptor(obj).is_none(),
+                "observing an unstamped receiver must not publish a descriptor"
             );
 
-            crate::object::shapes::synchronize_object_shape_descriptor_from(obj, Some(predecessor));
-            assert_eq!(
-                crate::object::shapes::object_shape_descriptor(obj)
-                    .expect("restored descriptor")
-                    .object_kind,
-                crate::object::shapes::ShapeObjectKind::Class,
-                "the mutator's saved semantic lineage must outrank an interim self-heal"
+            // The mutator's saved lineage still restores both facts exactly.
+            crate::object::shapes::synchronize_object_shape_descriptor_from(
+                obj,
+                Some(predecessor),
+                predecessor.live_inline_slot_count,
             );
+            let restored =
+                crate::object::shapes::object_shape_descriptor(obj).expect("restored descriptor");
+            assert_eq!(
+                restored.object_kind,
+                crate::object::shapes::ShapeObjectKind::Class,
+                "the mutator's saved semantic lineage must survive the window"
+            );
+            assert_eq!(restored.live_inline_slot_count, 1);
         }
     }
 
@@ -1803,9 +1820,9 @@ mod shape_authority_tests_8067 {
                 crate::object::shapes::ShapeObjectKind::Class
             );
 
-            // Sabotage the compatibility mirror. Classification must remain
-            // driven by the ShapeId descriptor transition above.
-            (*obj).object_type = crate::error::OBJECT_TYPE_REGULAR;
+            // #8113 removed the `object_type` compatibility mirror this used to
+            // sabotage. Classification is driven by the ShapeId descriptor
+            // transition above and by nothing else, so assert that directly.
             assert!(super::is_class_object_ptr(obj.cast()));
             assert!(!crate::object::object_is_regular(obj));
 

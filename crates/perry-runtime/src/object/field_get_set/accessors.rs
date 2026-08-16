@@ -36,34 +36,51 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
     unsafe {
         // Bounds check: check inline fields first, then overflow map
-        let fc = (*obj).field_count;
-        if field_index >= fc {
-            // Check overflow map for fields that didn't fit in inline storage
-            return match overflow_get(obj as usize, field_index as usize) {
-                Some(bits) => JSValue::from_bits(bits),
-                None => JSValue::undefined(),
-            };
-        }
-        // Guard: corrupted objects with unreasonably large field_count
-        if fc > 10000 {
-            return JSValue::undefined();
-        }
-        let fields_ptr =
-            (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
-        let val = *fields_ptr.add(field_index as usize);
-        // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
-        if val.bits() == 0x7FFD_0000_0000_0000 {
-            eprintln!(
-                "[NULL_PTR_FIELD_GET] obj={:p} field_index={} class_id={} field_count={}",
-                obj,
-                field_index,
-                (*obj).class_id,
-                (*obj).field_count
-            );
-            return JSValue::undefined();
-        }
-        val
+        let fc = crate::object::object_live_slot_count(obj);
+        object_field_at_with_live(obj, field_index, fc)
     }
+}
+
+/// [`js_object_get_field`]'s body against a live inline-slot bound the caller
+/// already resolved (#8122): the by-name lookup tail and the parameter guard
+/// resolve the receiver's descriptor once per call and read every field they
+/// need against that bound, instead of paying `object_live_slot_count`'s
+/// shape-table probe per field.
+///
+/// # Safety
+/// `obj` must be a live, non-null `GC_TYPE_OBJECT` and `live` its published
+/// live inline-slot bound.
+#[inline]
+pub(crate) unsafe fn object_field_at_with_live(
+    obj: *const ObjectHeader,
+    field_index: u32,
+    live: u32,
+) -> JSValue {
+    if field_index >= live {
+        // Check overflow map for fields that didn't fit in inline storage
+        return match overflow_get(obj as usize, field_index as usize) {
+            Some(bits) => JSValue::from_bits(bits),
+            None => JSValue::undefined(),
+        };
+    }
+    // Guard: corrupted objects with unreasonably large field_count
+    if live > 10000 {
+        return JSValue::undefined();
+    }
+    let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
+    let val = *fields_ptr.add(field_index as usize);
+    // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
+    if val.bits() == 0x7FFD_0000_0000_0000 {
+        eprintln!(
+            "[NULL_PTR_FIELD_GET] obj={:p} field_index={} class_id={} field_count={}",
+            obj,
+            field_index,
+            (*obj).class_id,
+            live
+        );
+        return JSValue::undefined();
+    }
+    val
 }
 
 pub(crate) unsafe fn own_data_field_by_name(
@@ -94,8 +111,10 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key_count > 65536 {
         return None;
     }
-    let alloc_limit =
-        std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit = std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    ) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         // #1781: accept inline SSO short keys — `is_string()` is

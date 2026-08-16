@@ -252,6 +252,16 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.params.iter().any(|param| param.is_rest))
             .collect(),
+        method_has_synthetic_arguments: class
+            .methods
+            .iter()
+            .map(|method| {
+                method
+                    .params
+                    .last()
+                    .is_some_and(|param| param.arguments_object.is_some())
+            })
+            .collect(),
         static_field_names: class
             .static_fields
             .iter()
@@ -2056,6 +2066,16 @@ pub fn run_with_parse_cache(
         path_to_module_name.insert(path.clone(), hir_module.name.clone());
         module_name_to_path.insert(hir_module.name.clone(), path.clone());
     }
+    // The CJS wrapper always materializes the evaluated `module.exports` as
+    // the synthetic top-level `_cjs` binding. Keep this structural check here
+    // (rather than keying on `.cjs`) because CommonJS packages commonly use
+    // `.js` files too.
+    let is_wrapped_cjs = |module: &perry_hir::Module| {
+        module
+            .init
+            .iter()
+            .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "_cjs"))
+    };
     // Build a normalized HIR-by-name map for `flatten_exports`. Each
     // module's `Export::ReExport::source`, `Export::ExportAll::source`,
     // and `Export::NamespaceReExport::source` strings hold the raw
@@ -2312,6 +2332,31 @@ pub fn run_with_parse_cache(
                 kind,
             });
         }
+        if is_wrapped_cjs(target_hir) {
+            // Node's CJS namespace has two aliases for the exact evaluated
+            // `module.exports` object. Do not clone/project it: identity with
+            // require(), the default import, and shared nested values matters.
+            let default_kind = entries
+                .iter()
+                .find(|entry| entry.name == "default")
+                .map(|entry| entry.kind.clone())
+                .unwrap_or_else(|| perry_codegen::NamespaceEntryKind::ForeignVar {
+                    source_prefix: sanitize_module_name(&target_hir.name),
+                    source_local: "default".to_string(),
+                });
+            if !entries.iter().any(|entry| entry.name == "default") {
+                entries.push(perry_codegen::NamespaceEntry {
+                    name: "default".to_string(),
+                    kind: default_kind.clone(),
+                });
+            }
+            if !entries.iter().any(|entry| entry.name == "module.exports") {
+                entries.push(perry_codegen::NamespaceEntry {
+                    name: "module.exports".to_string(),
+                    kind: default_kind,
+                });
+            }
+        }
         per_module_namespace_entries.insert(target_path.clone(), entries);
     }
     // For each consumer module, map every `Expr::DynamicImport` arg-path
@@ -2532,8 +2577,9 @@ pub fn run_with_parse_cache(
             let nextjs_path_init_modules: Vec<(String, String)> = if is_entry {
                 ctx.native_modules
                     .iter()
-                    .filter(|(p, _)| {
-                        self::collect_modules::is_nextjs_runtime_module(p)
+                    .filter(|(p, module)| {
+                        module.init_kind == perry_hir::ModuleInitKind::Deferred
+                            || self::collect_modules::is_nextjs_runtime_module(p)
                             // A `perry.compilePackages` module may be reachable
                             // ONLY through a runtime-computed require (Next's
                             // require-hook aliases `styled-jsx` to its resolved
@@ -3177,6 +3223,52 @@ pub fn run_with_parse_cache(
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
+                                }
+                            }
+                        }
+                        if source_module.is_some_and(|module| is_wrapped_cjs(module)) {
+                            let default_prefix = compute_module_prefix(
+                                &resolved_path_str,
+                                &ctx.project_root,
+                            );
+                            let default_is_var = all_module_exports
+                                .get(&resolved_path_str)
+                                .and_then(|exports| exports.get("default"))
+                                .is_some_and(|origin_path| {
+                                    let origin_name = all_module_export_origin_names
+                                        .get(&resolved_path_str)
+                                        .and_then(|names| names.get("default"))
+                                        .cloned()
+                                        .unwrap_or_else(|| "default".to_string());
+                                    exported_var_names
+                                        .contains(&(origin_path.clone(), origin_name))
+                                })
+                                || exported_var_names.contains(&(
+                                    resolved_path_str.clone(),
+                                    "default".to_string(),
+                                ));
+                            // CJS namespace exotic objects expose both names
+                            // as aliases of the evaluated exports object. The
+                            // per-namespace origin map makes `module.exports`
+                            // call the existing `default` getter rather than a
+                            // nonexistent dotted symbol.
+                            for member in ["default", "module.exports"] {
+                                namespace_member_prefixes.insert(
+                                    (local.clone(), member.to_string()),
+                                    default_prefix.clone(),
+                                );
+                                namespace_member_origin_names.insert(
+                                    (local.clone(), member.to_string()),
+                                    "default".to_string(),
+                                );
+                                import_function_prefixes
+                                    .entry(member.to_string())
+                                    .or_insert_with(|| default_prefix.clone());
+                                import_function_origin_names
+                                    .entry(member.to_string())
+                                    .or_insert_with(|| "default".to_string());
+                                if member == "module.exports" || default_is_var {
+                                    imported_vars.insert(member.to_string());
                                 }
                             }
                         }

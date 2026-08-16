@@ -1,0 +1,19 @@
+[workspace]
+members = ["runtime", "stdlib"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[profile.release]
+codegen-units = 16
+lto = false
+strip = false
+# Required, not stylistic: this workspace builds a Perry runtime archive, and a
+# runtime on the `unwind` strategy aborts the process on any JS throw that
+# crosses an `extern "C"` helper with an interior Rust call (RFC 2945). The
+# exception transport in `perry-runtime/src/eh.rs` is written for `abort`
+# semantics — it steps the unwinder THROUGH runtime frames without running
+# their cleanups, which is only sound when there are none to run. Enforced by
+# `panic_profile_contract`.
+panic = "abort"

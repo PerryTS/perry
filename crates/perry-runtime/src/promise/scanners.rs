@@ -84,13 +84,6 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
     });
 
-    ASYNC_STEP_GUARD.with(|c| {
-        let mut guard = c.get();
-        if visitor.visit_metadata_usize_slot(&mut guard.last_closure) {
-            c.set(guard);
-        }
-    });
-
     PROMISE_CONTEXTS.with(|contexts| {
         let mut contexts = contexts.borrow_mut();
         let mut moved = Vec::new();
@@ -136,14 +129,17 @@ const PROMISE_SCAN_CURRENT_MICROTASK_CALLBACK: u8 = 2;
 const PROMISE_SCAN_CURRENT_MICROTASK_VALUE: u8 = 3;
 const PROMISE_SCAN_CURRENT_MICROTASK_NEXT: u8 = 4;
 const PROMISE_SCAN_INLINE_TRAP: u8 = 5;
-const PROMISE_SCAN_ASYNC_STEP_GUARD: u8 = 6;
-const PROMISE_SCAN_CONTEXTS: u8 = 7;
-const PROMISE_SCAN_ALL_STATES: u8 = 8;
-const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 9;
-const PROMISE_SCAN_OVERFLOW_REACTIONS: u8 = 10;
-const PROMISE_SCAN_PREV_CONTEXTS: u8 = 11;
-const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 12;
-const PROMISE_SCAN_DONE: u8 = 13;
+// #8193 removed PROMISE_SCAN_ASYNC_STEP_GUARD: the only slot it visited was
+// `AsyncStepGuard::last_closure`, a write-only raw closure address that this
+// pass rekeyed and nothing pruned. The field is gone, so the phase has nothing
+// left to scan and the ordinals close up behind it.
+const PROMISE_SCAN_CONTEXTS: u8 = 6;
+const PROMISE_SCAN_ALL_STATES: u8 = 7;
+const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 8;
+const PROMISE_SCAN_OVERFLOW_REACTIONS: u8 = 9;
+const PROMISE_SCAN_PREV_CONTEXTS: u8 = 10;
+const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 11;
+const PROMISE_SCAN_DONE: u8 = 12;
 
 #[derive(Default)]
 pub(crate) struct PromiseRootScanState {
@@ -199,7 +195,6 @@ pub(crate) fn scan_promise_roots_mut_step(
                 scan_current_microtask_next_step(visitor, remaining)
             }
             PROMISE_SCAN_INLINE_TRAP => scan_inline_trap_step(visitor, state, remaining),
-            PROMISE_SCAN_ASYNC_STEP_GUARD => scan_async_step_guard_step(visitor, remaining),
             PROMISE_SCAN_CONTEXTS => scan_promise_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_ALL_STATES => scan_promise_all_states_step(visitor, state, remaining),
             PROMISE_SCAN_SETTLE_LISTENERS => {
@@ -488,22 +483,6 @@ fn scan_inline_trap_step(
     })
 }
 
-fn scan_async_step_guard_step(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    remaining: &mut usize,
-) -> bool {
-    if !consume_root_work(remaining) {
-        return false;
-    }
-    ASYNC_STEP_GUARD.with(|c| {
-        let mut guard = c.get();
-        if visitor.visit_metadata_usize_slot(&mut guard.last_closure) {
-            c.set(guard);
-        }
-    });
-    true
-}
-
 fn scan_promise_contexts_step(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     state: &mut PromiseRootScanState,
@@ -751,7 +730,6 @@ pub(crate) struct TestPromiseScannerSnapshot {
     pub current_microtask_next_ptr: usize,
     pub inline_trap_next_ptr: usize,
     pub inline_trap_step_ptr: usize,
-    pub async_step_guard_last_closure: usize,
     pub inline_callback_ptr: usize,
     pub inline_next_ptr: usize,
     pub inline_value_bits: u64,
@@ -815,7 +793,6 @@ pub(crate) fn test_seed_promise_scanner_roots(
     });
     ASYNC_STEP_GUARD.with(|c| {
         c.set(AsyncStepGuard {
-            last_closure: callback_ptr as usize,
             consecutive_error_count: 1,
         })
     });
@@ -898,9 +875,6 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
         snapshot.inline_trap_next_ptr = trap.trap_next as usize;
         snapshot.inline_trap_step_ptr = trap.current_step;
     });
-    ASYNC_STEP_GUARD.with(|c| {
-        snapshot.async_step_guard_last_closure = c.get().last_closure;
-    });
     PROMISE_CONTEXTS.with(|contexts| {
         let contexts = contexts.borrow();
         if let Some((key, context)) = contexts.first() {
@@ -941,7 +915,6 @@ pub(crate) fn test_clear_promise_scanner_roots() {
     INLINE_TRAP.with(|c| c.set(InlineTrap::empty()));
     ASYNC_STEP_GUARD.with(|c| {
         c.set(AsyncStepGuard {
-            last_closure: 0,
             consecutive_error_count: 0,
         })
     });

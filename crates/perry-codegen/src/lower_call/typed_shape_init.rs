@@ -35,10 +35,22 @@ use crate::types::{I32, I64, PTR};
 /// [`crate::typed_shape::class_layout_declarable_at_allocation`], which
 /// documents what they are and why they are enough.
 pub(super) fn layout_declared_at_allocation(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    if !ctx.class_keys_globals.contains_key(class_name) {
+    layout_declared_at_allocation_in(ctx.classes, ctx.class_keys_globals, class_name)
+}
+
+/// [`layout_declared_at_allocation`] over the module-level maps a `FnCtx`
+/// carries by reference (#8122: the module-level header-image table needs the
+/// same answer before any function is lowered — one implementation, two
+/// callers).
+pub(crate) fn layout_declared_at_allocation_in(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_keys_globals: &std::collections::HashMap<String, String>,
+    class_name: &str,
+) -> bool {
+    if !class_keys_globals.contains_key(class_name) {
         return false;
     }
-    let single = ctx.classes.get(class_name).is_some_and(|class| {
+    let single = classes.get(class_name).is_some_and(|class| {
         let prologue = super::field_init::ctor_prologue_param_assigned_fields(class);
         crate::typed_shape::class_layout_declarable_at_allocation(class, &prologue)
     });
@@ -49,11 +61,9 @@ pub(super) fn layout_declared_at_allocation(ctx: &FnCtx<'_>, class_name: &str) -
     // which denies an at-allocation declaration to every subclass instance and
     // puts every constructor store on the whole chain — the base class's own
     // included — on the by-name fallback. Try the chain form.
-    super::field_init::chain_prologue_assigned_fields(ctx.classes, class_name).is_some_and(
-        |chain| {
-            crate::typed_shape::class_chain_layout_declarable_at_allocation(ctx.classes, &chain)
-        },
-    )
+    super::field_init::chain_prologue_assigned_fields(classes, class_name).is_some_and(|chain| {
+        crate::typed_shape::class_chain_layout_declarable_at_allocation(classes, &chain)
+    })
 }
 
 /// #7834: is `class_name`'s at-allocation declaration expressible as a
@@ -81,10 +91,33 @@ pub(super) fn layout_pointer_free_at_allocation(
     class_name: &str,
     field_count: u32,
 ) -> bool {
-    if !layout_declared_at_allocation(ctx, class_name) {
+    layout_pointer_free_at_allocation_in(
+        ctx.classes,
+        ctx.class_keys_globals,
+        ctx.class_init_chains,
+        class_name,
+        field_count,
+    )
+}
+
+/// [`layout_pointer_free_at_allocation`] over the module-level maps (#8122; see
+/// [`layout_declared_at_allocation_in`]).
+pub(crate) fn layout_pointer_free_at_allocation_in(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_keys_globals: &std::collections::HashMap<String, String>,
+    class_init_chains: &std::collections::HashMap<
+        String,
+        Vec<(String, Vec<perry_hir::ClassField>)>,
+    >,
+    class_name: &str,
+    field_count: u32,
+) -> bool {
+    if !layout_declared_at_allocation_in(classes, class_keys_globals, class_name) {
         return false;
     }
-    let Some(typed_layout) = resolve_typed_layout(ctx, class_name) else {
+    let Some(typed_layout) =
+        resolve_typed_layout_in(classes, class_keys_globals, class_init_chains, class_name)
+    else {
         return false;
     };
     typed_layout.pointer_mask_words.is_empty() && typed_layout.slot_count == field_count
@@ -187,12 +220,29 @@ fn resolve_typed_layout(
     ctx: &FnCtx<'_>,
     class_name: &str,
 ) -> Option<crate::typed_shape::TypedShapeLayout> {
-    ctx.class_keys_globals.get(class_name)?;
+    resolve_typed_layout_in(
+        ctx.classes,
+        ctx.class_keys_globals,
+        ctx.class_init_chains,
+        class_name,
+    )
+}
+
+fn resolve_typed_layout_in(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_keys_globals: &std::collections::HashMap<String, String>,
+    class_init_chains: &std::collections::HashMap<
+        String,
+        Vec<(String, Vec<perry_hir::ClassField>)>,
+    >,
+    class_name: &str,
+) -> Option<crate::typed_shape::TypedShapeLayout> {
+    class_keys_globals.get(class_name)?;
     Some(
-        ctx.class_init_chains
+        class_init_chains
             .get(class_name)
             .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
-            .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name)),
+            .unwrap_or_else(|| crate::typed_shape::class_typed_layout(classes, class_name)),
     )
 }
 

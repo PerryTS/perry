@@ -168,9 +168,15 @@ thread_local! {
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
     /// the calibration reference so a process with no completed copying minor
-    /// paces exactly as it did before the object denomination existed.
+    /// paces exactly as it did before the object denomination existed — until
+    /// #8122's allocation census (below) replaces the seed with a measurement
+    /// of THIS program's objects, halfway to the first cap.
     static MEAN_SURVIVING_OBJECT_BYTES: Cell<usize> =
         const { Cell::new(NURSERY_CAP_REFERENCE_OBJECT_BYTES) };
+    /// #8122: has ANY census — the collector's survivor census or the one-time
+    /// allocation census — replaced the seed? Once true the allocation probe
+    /// never runs again (its walk is paid at most once per process).
+    static OBJECT_CENSUS_SEEDED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The survivals threshold the next copying minor should promote at:
@@ -347,6 +353,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
     if mean == 0 {
         return;
     }
+    OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
     let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
     if previous != mean && crate::gc::gc_diag_enabled() {
         eprintln!(
@@ -354,6 +361,71 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
              (scale {} permille, band {} B)",
             previous,
             mean,
+            nursery_cap_object_scale_permille(mean),
+            influx_driven_nursery_cap_bytes()
+        );
+    }
+}
+
+/// #8122: seed the object denomination from an ALLOCATION census, once, before
+/// the first copying minor exists to measure survivors.
+///
+/// # Why
+///
+/// The constant band is denominated in objects (#7929) only once a copying
+/// minor has reported what it moved. Until then `MEAN_SURVIVING_OBJECT_BYTES`
+/// holds the 72 B calibration reference, so the FIRST minor fires on the raw
+/// 16 MB byte band whatever the program's objects actually weigh: for a 56 B
+/// object that is 300k objects, for a 48 B one 350k, against the 233k the band
+/// was calibrated to buy. That first minor is also the one that has to TRACE
+/// (no survival estimate exists yet, so it cannot promote untraced), and a
+/// traced in-place-promotion cycle costs ~1,600 instructions per object.
+/// Measured on `deeplist`/`retain1` when the two-field object went 56 → 48 B:
+/// the whole +8–9% instruction regression was those extra first-cycle objects;
+/// the mutator with no collection at all was byte-identical.
+///
+/// # What it does
+///
+/// Halfway to the configured base cap (8 MB of from-space by default) — a
+/// point every program that will ever reach the cap passes exactly once — hop
+/// the young generation's headers (`arena::young_allocation_census`, ~1M
+/// instructions for 8 MB of small objects, paid ONCE per process) and install
+/// `bytes / objects` as the mean. The first minor is then object-denominated
+/// like every later one, and a smaller representation no longer buys the
+/// collector a bigger first trace. The one-sided clamp still applies: a mean
+/// above the reference leaves the 16 MB band untouched, so an array-dominated
+/// allocation stream cannot raise the cap. The collector's survivor census
+/// overwrites this seed at the first minor, so steady state is unchanged.
+///
+/// Returns without walking when the base cap is not yet half full, when a
+/// census (either kind) already exists, or when the nursery is empty.
+pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: usize) {
+    if OBJECT_CENSUS_SEEDED.with(Cell::get) {
+        return;
+    }
+    if from_space_in_use_bytes < super::policy::gc_scavenge_nursery_cap_bytes() / 2 {
+        return;
+    }
+    // Take the walk at most once even if it yields nothing (an empty or
+    // header-less nursery): the flag is the bound on its cost.
+    OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
+    let (bytes, objects) = crate::arena::young_allocation_census();
+    if objects == 0 {
+        return;
+    }
+    let mean = bytes / objects;
+    if mean == 0 {
+        return;
+    }
+    let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery cap object denomination: allocation census seeded \
+             mean_object_bytes {} -> {} ({} objects / {} B in from-space; scale {} permille, band {} B)",
+            previous,
+            mean,
+            objects,
+            bytes,
             nursery_cap_object_scale_permille(mean),
             influx_driven_nursery_cap_bytes()
         );
@@ -622,6 +694,14 @@ pub(super) fn reset_for_test() {
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
+    OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
+}
+
+/// Test-only view of the seed flag (#8122): has any census replaced the
+/// calibration seed yet?
+#[cfg(test)]
+pub(super) fn object_census_seeded_for_test() -> bool {
+    OBJECT_CENSUS_SEEDED.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -721,6 +801,47 @@ mod tests {
         );
         reset_for_test();
         assert_eq!(influx_driven_nursery_cap_bytes(), base);
+    }
+
+    /// #8122: the allocation census seeds the mean ONCE, only past half the
+    /// base cap, and never after a census of either kind exists.
+    ///
+    /// Pure-policy half. The walk itself (a real nursery, real headers) is
+    /// driven in `gc::tests::copying::adaptive_tenuring`; this pins the gate
+    /// logic that decides whether the walk runs, in isolation from the heap.
+    #[test]
+    fn allocation_census_seed_is_gated_and_one_shot() {
+        reset_for_test();
+        let base = gc_scavenge_nursery_cap_bytes();
+        assert!(!object_census_seeded_for_test());
+
+        // Below half the base cap: nothing happens, the seed stays armed.
+        maybe_seed_object_census_from_allocation(base / 2 - 1);
+        assert!(
+            !object_census_seeded_for_test(),
+            "the probe must not fire below half the base cap"
+        );
+        assert_eq!(
+            mean_surviving_object_bytes(),
+            NURSERY_CAP_REFERENCE_OBJECT_BYTES
+        );
+
+        // A collector census arriving first disarms the probe for good: the
+        // survivor mean is strictly better information than the allocation
+        // mean, and the walk must never overwrite it.
+        note_surviving_object_census(56 * 1000, 1000);
+        assert!(object_census_seeded_for_test());
+        maybe_seed_object_census_from_allocation(base);
+        assert_eq!(
+            mean_surviving_object_bytes(),
+            56,
+            "an allocation census must never replace a survivor census"
+        );
+        reset_for_test();
+        assert!(
+            !object_census_seeded_for_test(),
+            "reset must re-arm the probe"
+        );
     }
 
     /// The tenured-proportional term is representation-invariant by

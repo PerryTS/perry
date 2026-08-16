@@ -106,6 +106,7 @@ pub(super) fn emit_string_pool(
     strings: &StringPool,
     module_prefix: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
+    class_header_image_inits: &std::collections::HashMap<String, (u32, u64)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
@@ -491,6 +492,33 @@ pub(super) fn emit_string_pool(
             crate::typed_shape::shape_id_global_name_from_keys_global(global_name)
         );
         blk.store(I32, &shape_id, &shape_global);
+
+        // #8122: compose the class's inline-`new` header image —
+        // `[packed GcHeader word | class_id | ShapeId << 32]` — beside the
+        // ShapeId it consumes, ONCE. Every inline allocation of this class
+        // then stores its 16-byte header prefix with one `<2 x i64>` store
+        // instead of composing the pair per site (or per call in a recursive
+        // allocator). The packed word came from
+        // `target_layout::inline_alloc_gc_packed`, the same derivation the
+        // site performs and cross-checks before it trusts this global.
+        if let Some(&(image_class_id, gc_packed)) = class_header_image_inits.get(global_name) {
+            let image_global = format!(
+                "@{}",
+                crate::typed_shape::header_image_global_name_from_keys_global(global_name)
+            );
+            let shape_i64 = blk.zext(I32, &shape_id, I64);
+            let shape_shifted = blk.shl(I64, &shape_i64, "32");
+            let header_word = blk.or(I64, &shape_shifted, &image_class_id.to_string());
+            let image = blk.fresh_reg();
+            blk.emit_raw(format!(
+                "{} = insertelement <2 x i64> <i64 {}, i64 0>, i64 {}, i32 1",
+                image, gc_packed, header_word
+            ));
+            blk.emit_raw(format!(
+                "store <2 x i64> {}, ptr {}, align 8",
+                image, image_global
+            ));
+        }
     }
 
     // Register the parent-class chain for every class with a parent.

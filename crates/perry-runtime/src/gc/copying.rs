@@ -315,6 +315,34 @@ impl CopyingNurseryCollector {
     /// `try_rewrite_raw_addr`'s 64-hop cap and `next == 0 || next == current`
     /// stops, returning `rewrote.then_some(current)` (Some only when the
     /// address actually moved).
+    ///
+    /// #8174: the heap-region gate answers "could this address carry a
+    /// forwarding header", NOT "is this a live object" — mid-cycle there is no
+    /// census to ask, which is why `self.ptrs.classify()` cannot be used here.
+    /// So a DEAD key whose address the arena recycled reaches the header read,
+    /// and the recycled payload bytes can carry `GC_FLAG_FORWARDED` by
+    /// coincidence (#8040: `gc_flags = 0x86`, `obj_type = 104`). What made that
+    /// corrupt rather than merely useless was the *target*: the walk accepted a
+    /// NaN-boxed word as a forwarding pointer, stopped one hop later because it
+    /// did not classify, and RETURNED it — after which
+    /// `visit_metadata_nanbox_key` masked it to 48 bits and named a live,
+    /// unrelated survivor.
+    ///
+    /// Two discriminators close that, at both ends of the hop:
+    ///
+    /// * [`forwarding_walk_header`] refuses to read a forwarding pointer out of
+    ///   an address that does not read back as a real arena object header.
+    ///   #8040's recycled bytes carried `obj_type = 104`, which no `GcTypeInfo`
+    ///   entry exists for, so the walk now stops before the flag test. This is
+    ///   NOT the `self.ptrs.classify()` gate rejected above — that one narrows
+    ///   on SPACE as well, which is what un-rekeyed legitimate `shapes.entries`
+    ///   keys; the header test carries none of that.
+    /// * [`accept_forwarding_target`] refuses a target that is not the start of
+    ///   a heap object, so a bogus word cannot become the answer by virtue of
+    ///   the walk merely stopping at it.
+    ///
+    /// The in-loop `current < GC_HEADER_SIZE` guard went with them: every value
+    /// `current` can take has passed one of the two checks on the way in.
     pub(super) fn rewrite_raw_addr(&self, addr: usize) -> Option<usize> {
         if addr < GC_HEADER_SIZE {
             return None;
@@ -322,17 +350,9 @@ impl CopyingNurseryCollector {
         let mut current = addr;
         let mut rewrote = false;
         for _ in 0..64 {
-            if current < GC_HEADER_SIZE {
+            let Some(header) = forwarding_walk_header(current) else {
                 return rewrote.then_some(current);
-            }
-            let header_addr = current - GC_HEADER_SIZE;
-            if matches!(
-                crate::arena::classify_heap_space(header_addr),
-                crate::arena::HeapSpace::Unknown
-            ) {
-                return rewrote.then_some(current);
-            }
-            let header = header_addr as *mut GcHeader;
+            };
             unsafe {
                 if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
                     return rewrote.then_some(current);
@@ -340,6 +360,9 @@ impl CopyingNurseryCollector {
                 let next = forwarding_address(header) as usize;
                 if next == 0 || next == current {
                     return rewrote.then_some(current);
+                }
+                if !accept_forwarding_target(next) {
+                    return None;
                 }
                 current = next;
                 rewrote = true;
@@ -1746,6 +1769,7 @@ pub(super) fn run_copied_minor_attempt(
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
     }
+    report_forwarding_refusals("copying_minor");
     super::scanner_profile::report_and_reset("copying_minor");
     CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {
         freed_bytes,

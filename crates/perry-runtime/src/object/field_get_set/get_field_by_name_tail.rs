@@ -1589,11 +1589,15 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        // Slow path: linear scan through keys array
-        let _field_count = (*obj).field_count as usize;
-
+        // Slow path: linear scan through keys array.
+        //
+        // #8122: ONE shape-table probe for the live inline-slot bound, reused
+        // by every field read below and by the stamp; this used to be two
+        // probes here (one of them into an unused binding) plus one more
+        // inside every `js_object_get_field` the scan returned through.
+        let live_slots = crate::object::object_live_slot_count(obj);
         let alloc_limit =
-            std::cmp::max((*obj).field_count, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+            std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
         // #5054: wide objects get a validated key→index map so per-key reads
         // stay O(1) instead of O(key_count). A `None` falls through to the
@@ -1614,7 +1618,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                 }
                 return if (i as usize) < alloc_limit {
-                    js_object_get_field(obj, i)
+                    super::accessors::object_field_at_with_live(obj, i, live_slots)
                 } else {
                     match overflow_get(obj as usize, i as usize) {
                         Some(bits) => JSValue::from_bits(bits),
@@ -1640,10 +1644,14 @@ pub(crate) fn get_field_by_name_object_tail(
                 // grow-reallocs and GC moves that retire `keys_id`.
                 // #6759 C3 rung 1: class instances are stamped here too.
                 {
+                    // #8113: the live inline-slot bound is a parameter now.
+                    // This is a READ path — it must not change the bound, so it
+                    // republishes exactly what the receiver already carries.
                     let id = super::super::shapes::stamp_object_shape(
                         obj as *mut ObjectHeader,
                         keys,
                         key_count as u32,
+                        live_slots,
                     );
                     let store_key = if id != 0 { id as usize } else { keys_id };
                     let store_idx =
@@ -1669,7 +1677,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                 }
                 if i < alloc_limit {
-                    return js_object_get_field(obj, i as u32);
+                    return super::accessors::object_field_at_with_live(obj, i as u32, live_slots);
                 } else {
                     return match overflow_get(obj as usize, i) {
                         Some(bits) => JSValue::from_bits(bits),
@@ -1801,6 +1809,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     return JSValue::from_bits(result.to_bits());
                 }
             }
+        }
+
+        // CommonJS Module instances inherit an intrinsic constructor accessor.
+        // Resolve it to the exact shared ESM/callable identity after own-field
+        // lookup, preserving ordinary shadowing while avoiding a rebound
+        // function value from the generic inherited-accessor path.
+        if (*obj).class_id == crate::process::MODULE_CJS_CLASS_ID && key_bytes == b"constructor" {
+            return JSValue::from_bits(
+                crate::object::module_constructor_identity_value().to_bits(),
+            );
         }
 
         // #2820: before giving up, walk an explicit `Object.setPrototypeOf`

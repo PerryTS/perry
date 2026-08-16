@@ -115,27 +115,28 @@ fn eval_ident(ctx: &Ctx, name: &str, env_idx: usize) -> f64 {
         "undefined" => return bridge::undefined(),
         "NaN" => return bridge::make_number(f64::NAN),
         "Infinity" => return bridge::make_number(f64::INFINITY),
-        "globalThis" => return crate::object::js_get_global_this(),
-        "arguments" => throw_unsupported("the arguments object"),
+        "globalThis" => return root_get(ctx.global_idx),
         _ => {}
     }
-    let global = bridge::global_lookup(name);
+    let global =
+        bridge::global_lookup(root_get(ctx.global_idx), root_get(ctx.intrinsics_idx), name);
     if !bridge::is_undefined(global) {
         return global;
     }
-    if global_has_own(name) {
+    if global_has_own(ctx, name) {
         return global;
     }
     bridge::throw_reference_error(&format!("{name} is not defined"))
 }
 
-fn global_has_own(name: &str) -> bool {
-    let g = crate::object::js_get_global_this();
-    let g_idx = root_push(g);
-    let key = bridge::make_string(name);
-    let has = crate::object::js_object_has_own(root_get(g_idx), key);
-    roots_truncate(g_idx);
-    bridge::truthy(has)
+fn global_has_own(ctx: &Ctx, name: &str) -> bool {
+    let global = root_get(ctx.global_idx);
+    bridge::global_has_property(global, name)
+        || !bridge::is_undefined(bridge::global_lookup(
+            global,
+            root_get(ctx.intrinsics_idx),
+            name,
+        ))
 }
 
 // ── literals ───────────────────────────────────────────────────────────────
@@ -204,13 +205,22 @@ fn eval_array_lit(ctx: &Ctx, a: &ast::ArrayLit, env_idx: usize) -> f64 {
             }
         }
     }
-    let arr = root_get(arr_idx);
+    let arr = bridge::attach_intrinsic_prototype(
+        root_get(arr_idx),
+        root_get(ctx.intrinsics_idx),
+        "Array",
+    );
     roots_truncate(arr_idx);
     arr
 }
 
 fn eval_object_lit(ctx: &Ctx, o: &ast::ObjectLit, env_idx: usize) -> f64 {
-    let obj_idx = root_push(bridge::object_new());
+    let object = bridge::attach_intrinsic_prototype(
+        bridge::object_new(),
+        root_get(ctx.intrinsics_idx),
+        "Object",
+    );
+    let obj_idx = root_push(object);
     for prop in &o.props {
         match prop {
             ast::PropOrSpread::Spread(s) => {
@@ -229,7 +239,12 @@ fn eval_object_lit(ctx: &Ctx, o: &ast::ObjectLit, env_idx: usize) -> f64 {
                     let key_idx = root_push(key);
                     let value = bridge::get_index(root_get(src_idx), root_get(key_idx));
                     let value_idx = root_push(value);
-                    bridge::set_index(root_get(obj_idx), root_get(key_idx), root_get(value_idx));
+                    bridge::set_index(
+                        root_get(obj_idx),
+                        root_get(key_idx),
+                        root_get(value_idx),
+                        false,
+                    );
                     roots_truncate(key_idx);
                 }
                 roots_truncate(src_idx);
@@ -291,12 +306,17 @@ fn set_prop_by_name(ctx: &Ctx, obj_idx: usize, key: &ast::PropName, value: f64, 
         ),
         ast::PropName::Num(n) => {
             let k = bridge::make_number(n.value);
-            bridge::set_index(root_get(obj_idx), k, root_get(value_idx));
+            bridge::set_index(root_get(obj_idx), k, root_get(value_idx), false);
         }
         ast::PropName::Computed(c) => {
             let k = eval_expr(ctx, &c.expr, env_idx);
             let k_idx = root_push(k);
-            bridge::set_index(root_get(obj_idx), root_get(k_idx), root_get(value_idx));
+            bridge::set_index(
+                root_get(obj_idx),
+                root_get(k_idx),
+                root_get(value_idx),
+                false,
+            );
             roots_truncate(k_idx);
         }
         ast::PropName::BigInt(_) => throw_unsupported("bigint property key"),
@@ -312,7 +332,7 @@ fn eval_unary(ctx: &Ctx, u: &ast::UnaryExpr, env_idx: usize) -> f64 {
         TypeOf => {
             // `typeof missingIdent` must not throw.
             if let ast::Expr::Ident(i) = u.arg.as_ref() {
-                if !env::is_bound(root_get(env_idx), &i.sym) && !global_has_own(&i.sym) {
+                if !env::is_bound(root_get(env_idx), &i.sym) && !global_has_own(ctx, &i.sym) {
                     let special =
                         matches!(&*i.sym, "undefined" | "NaN" | "Infinity" | "globalThis");
                     if !special {
@@ -591,7 +611,7 @@ fn assign_to_assign_target(ctx: &Ctx, target: &ast::AssignTarget, value: f64, en
     match target {
         ast::AssignTarget::Simple(simple) => match simple {
             ast::SimpleAssignTarget::Ident(b) => {
-                env::assign(root_get(env_idx), &b.id.sym, value);
+                env::assign(root_get(env_idx), &b.id.sym, value, ctx.strict);
             }
             ast::SimpleAssignTarget::Member(m) => assign_to_member(ctx, m, value, env_idx),
             ast::SimpleAssignTarget::Paren(p) => {
@@ -614,7 +634,12 @@ fn assign_to_assign_target(ctx: &Ctx, target: &ast::AssignTarget, value: f64, en
 fn assign_to_member(ctx: &Ctx, m: &ast::MemberExpr, value: f64, env_idx: usize) {
     let value_idx = root_push(value);
     let (obj_idx, key_idx) = eval_member_parts(ctx, m, env_idx);
-    bridge::set_index(root_get(obj_idx), root_get(key_idx), root_get(value_idx));
+    bridge::set_index(
+        root_get(obj_idx),
+        root_get(key_idx),
+        root_get(value_idx),
+        ctx.strict,
+    );
     roots_truncate(value_idx);
 }
 
@@ -622,7 +647,7 @@ fn assign_to_member(ctx: &Ctx, m: &ast::MemberExpr, value: f64, env_idx: usize) 
 /// destructuring targets, parenthesized targets).
 pub(crate) fn assign_to_target_expr(ctx: &Ctx, e: &ast::Expr, value: f64, env_idx: usize) {
     match e {
-        ast::Expr::Ident(i) => env::assign(root_get(env_idx), &i.sym, value),
+        ast::Expr::Ident(i) => env::assign(root_get(env_idx), &i.sym, value, ctx.strict),
         ast::Expr::Member(m) => assign_to_member(ctx, m, value, env_idx),
         ast::Expr::Paren(p) => assign_to_target_expr(ctx, &p.expr, value, env_idx),
         _ => throw_unsupported("assignment to this expression form"),
@@ -663,12 +688,100 @@ fn call_with_args(callee: f64, this: f64, args: &[f64]) -> f64 {
     bridge::call_function(callee, this, args)
 }
 
+fn is_string_codegen_callee(ctx: &Ctx, callee: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(callee);
+    ["eval", "Function"].into_iter().any(|name| {
+        bridge::get_member(root_get(ctx.intrinsics_idx), name).to_bits()
+            == callee.get_nanbox_f64().to_bits()
+    })
+}
+
+fn is_wasm_namespace(ctx: &Ctx, value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    bridge::get_member(root_get(ctx.intrinsics_idx), "WebAssembly").to_bits()
+        == value.get_nanbox_f64().to_bits()
+}
+
+fn is_wasm_module_constructor(ctx: &Ctx, callee: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(callee);
+    let namespace = scope.root_nanbox_f64(bridge::get_member(
+        root_get(ctx.intrinsics_idx),
+        "WebAssembly",
+    ));
+    bridge::get_member(namespace.get_nanbox_f64(), "Module").to_bits()
+        == callee.get_nanbox_f64().to_bits()
+}
+
+fn attach_realm_static_result(ctx: &Ctx, receiver: f64, method: &str, result: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let result = scope.root_nanbox_f64(result);
+    let promise_ctor = bridge::get_member(root_get(ctx.intrinsics_idx), "Promise");
+    if receiver.get_nanbox_f64().to_bits() == promise_ctor.to_bits()
+        && crate::promise::js_value_is_promise(result.get_nanbox_f64()) != 0
+    {
+        return bridge::attach_intrinsic_prototype(
+            result.get_nanbox_f64(),
+            root_get(ctx.intrinsics_idx),
+            "Promise",
+        );
+    }
+    let object_ctor = bridge::get_member(root_get(ctx.intrinsics_idx), "Object");
+    if receiver.get_nanbox_f64().to_bits() == object_ctor.to_bits()
+        && method == "getOwnPropertyDescriptor"
+        && !bridge::is_undefined(result.get_nanbox_f64())
+    {
+        return bridge::attach_intrinsic_prototype(
+            result.get_nanbox_f64(),
+            root_get(ctx.intrinsics_idx),
+            "Object",
+        );
+    }
+    result.get_nanbox_f64()
+}
+
 fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
     let callee = match &c.callee {
         ast::Callee::Expr(e) => e,
         ast::Callee::Super(_) => throw_unsupported("super(…) call"),
         ast::Callee::Import(_) => throw_unsupported("dynamic import in interpreted code"),
     };
+    if let ast::Expr::Ident(ident) = callee.as_ref() {
+        if ident.sym.as_ref() == "eval" {
+            let resolved = eval_ident(ctx, "eval", env_idx);
+            let resolved_idx = root_push(resolved);
+            let intrinsic_eval = bridge::get_member(root_get(ctx.intrinsics_idx), "eval");
+            if root_get(resolved_idx).to_bits() != intrinsic_eval.to_bits() {
+                roots_truncate(resolved_idx);
+            } else {
+                let args = eval_args(ctx, &c.args, env_idx);
+                let source = args.first().copied().unwrap_or_else(bridge::undefined);
+                let Some(source) = bridge::read_string(source) else {
+                    roots_truncate(resolved_idx);
+                    return source;
+                };
+                if !ctx.strings_allowed {
+                    bridge::throw_eval_error(
+                        "Code generation from strings disallowed for this context",
+                    );
+                }
+                let result = super::eval_direct_in(
+                    &source,
+                    root_get(ctx.global_idx),
+                    root_get(ctx.intrinsics_idx),
+                    root_get(env_idx),
+                    root_get(ctx.variable_env_idx),
+                    ctx.strings_allowed,
+                    ctx.wasm_allowed,
+                );
+                roots_truncate(resolved_idx);
+                return result;
+            }
+        }
+    }
     match callee.as_ref() {
         // `obj.m(args)` / `obj[k](args)`: route through the runtime's method
         // dispatch so builtin prototypes work and `this` binds to the
@@ -689,17 +802,87 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                             }
                         ));
                     }
+                    let callee_idx = (!ctx.strings_allowed
+                        && (crate::object::js_value_is_heap_object(root_get(obj_idx))
+                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
+                        .then(|| root_push(bridge::get_member(root_get(obj_idx), &name)));
+                    let codegen_blocked = !ctx.strings_allowed
+                        && ((name == "constructor"
+                            && crate::object::value_is_callable(root_get(obj_idx)))
+                            || callee_idx
+                                .is_some_and(|idx| is_string_codegen_callee(ctx, root_get(idx))));
+                    let wasm_codegen_blocked = !ctx.wasm_allowed
+                        && matches!(
+                            name.as_str(),
+                            "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming"
+                        )
+                        && is_wasm_namespace(ctx, root_get(obj_idx));
                     let args = eval_args(ctx, &c.args, env_idx);
-                    let result = bridge::call_method(root_get(obj_idx), &name, &args);
+                    if codegen_blocked {
+                        bridge::throw_eval_error(
+                            "Code generation from strings disallowed for this context",
+                        );
+                    }
+                    if wasm_codegen_blocked
+                        && !(name == "instantiate"
+                            && args.first().is_some_and(|value| {
+                                crate::object::is_registered_wasm_module(*value)
+                            }))
+                    {
+                        let result = bridge::wasm_codegen_rejection(&format!("WebAssembly.{name}"));
+                        roots_truncate(obj_idx);
+                        return result;
+                    }
+                    let receiver = root_get(obj_idx);
+                    let result = callee_idx.map_or_else(
+                        || bridge::call_method(receiver, &name, &args),
+                        |idx| call_with_args(root_get(idx), receiver, &args),
+                    );
+                    let result = attach_realm_static_result(ctx, receiver, &name, result);
                     roots_truncate(obj_idx);
                     result
                 }
                 ast::MemberProp::Computed(comp) => {
                     let key = eval_expr(ctx, &comp.expr, env_idx);
                     let key_idx = root_push(key);
+                    let callee_idx = (!ctx.strings_allowed
+                        && (crate::object::js_value_is_heap_object(root_get(obj_idx))
+                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
+                        .then(|| {
+                            root_push(bridge::get_index(root_get(obj_idx), root_get(key_idx)))
+                        });
+                    let codegen_blocked =
+                        callee_idx.is_some_and(|idx| is_string_codegen_callee(ctx, root_get(idx)));
+                    let method = bridge::read_string(root_get(key_idx)).unwrap_or_default();
+                    let wasm_codegen_blocked = !ctx.wasm_allowed
+                        && matches!(
+                            method.as_str(),
+                            "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming"
+                        )
+                        && is_wasm_namespace(ctx, root_get(obj_idx));
                     let args = eval_args(ctx, &c.args, env_idx);
-                    let result =
-                        bridge::call_method_value(root_get(obj_idx), root_get(key_idx), &args);
+                    if codegen_blocked {
+                        bridge::throw_eval_error(
+                            "Code generation from strings disallowed for this context",
+                        );
+                    }
+                    if wasm_codegen_blocked
+                        && !(method == "instantiate"
+                            && args.first().is_some_and(|value| {
+                                crate::object::is_registered_wasm_module(*value)
+                            }))
+                    {
+                        let result =
+                            bridge::wasm_codegen_rejection(&format!("WebAssembly.{method}"));
+                        roots_truncate(obj_idx);
+                        return result;
+                    }
+                    let receiver = root_get(obj_idx);
+                    let result = callee_idx.map_or_else(
+                        || bridge::call_method_value(receiver, root_get(key_idx), &args),
+                        |idx| call_with_args(root_get(idx), receiver, &args),
+                    );
+                    let result = attach_realm_static_result(ctx, receiver, &method, result);
                     roots_truncate(obj_idx);
                     result
                 }
@@ -710,7 +893,14 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
         other => {
             let callee_value = eval_call_callee(ctx, other, env_idx);
             let callee_idx = root_push(callee_value);
+            let codegen_blocked =
+                !ctx.strings_allowed && is_string_codegen_callee(ctx, root_get(callee_idx));
             let args = eval_args(ctx, &c.args, env_idx);
+            if codegen_blocked {
+                bridge::throw_eval_error(
+                    "Code generation from strings disallowed for this context",
+                );
+            }
             let result = call_with_args(root_get(callee_idx), bridge::undefined(), &args);
             roots_truncate(callee_idx);
             result
@@ -727,7 +917,8 @@ fn eval_call_callee(ctx: &Ctx, e: &ast::Expr, env_idx: usize) -> f64 {
         if let Some(v) = env::lookup(root_get(env_idx), name) {
             return v;
         }
-        let global = bridge::global_lookup(name);
+        let global =
+            bridge::global_lookup(root_get(ctx.global_idx), root_get(ctx.intrinsics_idx), name);
         if !bridge::is_undefined(global) {
             return global;
         }
@@ -782,7 +973,12 @@ fn eval_new(ctx: &Ctx, n: &ast::NewExpr, env_idx: usize) -> f64 {
                 let err =
                     crate::error::js_error_new_kind_with_options(kind, msg, bridge::undefined());
                 roots_truncate(msg_idx);
-                return crate::value::js_nanbox_pointer(err as i64);
+                let value = crate::value::js_nanbox_pointer(err as i64);
+                return bridge::attach_intrinsic_prototype(
+                    value,
+                    root_get(ctx.intrinsics_idx),
+                    name,
+                );
             }
             if name == "RegExp" {
                 let args = eval_args(ctx, args_ast, env_idx);
@@ -805,8 +1001,38 @@ fn eval_new(ctx: &Ctx, n: &ast::NewExpr, env_idx: usize) -> f64 {
     // class the generated code was handed.
     let callee = eval_expr(ctx, &n.callee, env_idx);
     let callee_idx = root_push(callee);
+    let codegen_blocked =
+        !ctx.strings_allowed && is_string_codegen_callee(ctx, root_get(callee_idx));
+    let wasm_codegen_blocked =
+        !ctx.wasm_allowed && is_wasm_module_constructor(ctx, root_get(callee_idx));
     let args = eval_args(ctx, args_ast, env_idx);
+    if codegen_blocked {
+        bridge::throw_eval_error("Code generation from strings disallowed for this context");
+    }
+    if wasm_codegen_blocked {
+        bridge::throw_wasm_codegen_error("WebAssembly.Module");
+    }
     let result = bridge::construct(root_get(callee_idx), &args);
+    let result_idx = root_push(result);
+    let result = [
+        "Object",
+        "Array",
+        "Error",
+        "TypeError",
+        "RangeError",
+        "SyntaxError",
+        "ReferenceError",
+        "Promise",
+    ]
+    .into_iter()
+    .find(|name| {
+        bridge::get_member(root_get(ctx.intrinsics_idx), name).to_bits()
+            == root_get(callee_idx).to_bits()
+    })
+    .map(|name| {
+        bridge::attach_intrinsic_prototype(root_get(result_idx), root_get(ctx.intrinsics_idx), name)
+    })
+    .unwrap_or_else(|| root_get(result_idx));
     roots_truncate(callee_idx);
     result
 }

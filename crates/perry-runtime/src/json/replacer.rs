@@ -378,7 +378,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let obj_root = gc_scope.root_raw_const_ptr(ptr);
     let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = (*obj).field_count;
+    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -958,7 +958,7 @@ pub(crate) unsafe fn stringify_object_pretty(
     }
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = (*obj).field_count;
+    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -1148,7 +1148,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = (*obj).field_count;
+    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as

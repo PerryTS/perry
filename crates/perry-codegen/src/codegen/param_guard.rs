@@ -555,6 +555,49 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
     })
 }
 
+/// A single-node scalar descriptor whose predicate an existing typed-abi
+/// leaf guard already decides EXACTLY (#8079: the interpretive
+/// `js_param_type_guard` costs ~450 instructions per call — descriptor
+/// parse plus a 768-byte `GuardState` init — which measured as 16-34% of
+/// ALL retired instructions on the tree/tree_wide/interp/iso_miss corpus
+/// rows, because every unproven call routes through the public wrapper):
+///
+/// * `OP_NUMBER` (1) = `js_typed_f64_arg_guard` = `is_number || is_int32`
+/// * `OP_INT32` (2) — the validator literally calls `js_typed_i32_arg_guard`
+/// * `OP_BOOLEAN` (3) = `js_typed_i1_arg_guard` = `TAG_TRUE | TAG_FALSE`
+/// * `OP_STRING` (4) = `js_typed_string_arg_guard` = `is_any_string`
+///
+/// The predicate equivalence is what makes this sound: routing (clone vs
+/// generic fallback) is bit-for-bit the decision the validator would have
+/// made. Anything structural — unions, objects, arrays, literals — keeps
+/// the descriptor call. Layout checked exhaustively so a future format
+/// change fails back to the validator instead of misreading bytes.
+pub(crate) fn scalar_descriptor_rep(descriptor: &[u8]) -> Option<super::typed_abi::TypedParamRep> {
+    use super::typed_abi::TypedParamRep;
+    let word = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(
+            descriptor.get(at..at + 4)?.try_into().ok()?,
+        ))
+    };
+    // magic | root | node_count | offsets (node_count+1) | bodies
+    if descriptor.len() != 21
+        || word(0)? != MAGIC
+        || word(4)? != 0
+        || word(8)? != 1
+        || word(12)? != 20
+        || word(16)? != 21
+    {
+        return None;
+    }
+    match descriptor[20] {
+        1 => Some(TypedParamRep::F64),
+        2 => Some(TypedParamRep::I32),
+        3 => Some(TypedParamRep::I1),
+        4 => Some(TypedParamRep::StringRef),
+        _ => None,
+    }
+}
+
 /// LLVM `c"..."` encoding for a binary descriptor plus its sentinel byte.
 pub(crate) fn descriptor_llvm_literal(bytes: &[u8]) -> String {
     let mut out = String::from("c\"");
@@ -573,6 +616,48 @@ pub(crate) fn descriptor_llvm_literal(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (#8079) The four ops the leaf guards decide classify; everything
+    /// structural, literal, truncated, or foreign stays with the validator.
+    /// Built through the real encoder so a layout change flips this red
+    /// instead of silently misclassifying.
+    #[test]
+    fn scalar_descriptor_rep_classifies_exactly_the_leaf_guard_ops() {
+        use super::super::typed_abi::TypedParamRep;
+        let build = |ty: &Type| {
+            descriptor_for_type(
+                ty,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            scalar_descriptor_rep(&build(&Type::Number)),
+            Some(TypedParamRep::F64)
+        );
+        assert_eq!(
+            scalar_descriptor_rep(&build(&Type::Int32)),
+            Some(TypedParamRep::I32)
+        );
+        assert_eq!(
+            scalar_descriptor_rep(&build(&Type::Boolean)),
+            Some(TypedParamRep::I1)
+        );
+        assert_eq!(
+            scalar_descriptor_rep(&build(&Type::String)),
+            Some(TypedParamRep::StringRef)
+        );
+        assert_eq!(
+            scalar_descriptor_rep(&build(&Type::Array(Box::new(Type::Number)))),
+            None
+        );
+        assert_eq!(scalar_descriptor_rep(&build(&Type::Null)), None);
+        assert_eq!(scalar_descriptor_rep(&build(&Type::Number)[..20]), None);
+        assert_eq!(scalar_descriptor_rep(b"PGT1"), None);
+    }
 
     #[test]
     fn recursive_alias_serializes_as_a_finite_graph() {

@@ -631,7 +631,7 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     } else {
         0
     };
-    let field_count = (*obj).field_count as usize;
+    let field_count = crate::object::object_live_slot_count(obj) as usize;
 
     // Serialize field values
     let fields_ptr =

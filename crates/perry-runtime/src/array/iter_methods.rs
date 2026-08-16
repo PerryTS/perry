@@ -1,6 +1,6 @@
 //! Higher-order array methods.
 use super::*;
-use crate::closure::{js_closure_call3, js_closure_call4, ClosureHeader};
+use crate::closure::ClosureHeader;
 use std::ptr;
 
 /// NaN-box an array header pointer as the JS `array` receiver value passed as
@@ -195,6 +195,10 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // The override is a movable `ObjectHeader` held across user callbacks
         // that allocate — root it for the duration of the loop.
         let self_handle = self_override.map(|recv| scope.root_nanbox_f64(recv));
@@ -210,7 +214,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                js_closure_call3(callback, element, i as f64, self_value(&rooted));
+                cb_site.call(callback, element, i as f64, self_value(&rooted));
             }
             return;
         }
@@ -222,7 +226,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
             // source array just like Node.
-            js_closure_call3(callback, element, i as f64, self_value(&rooted));
+            cb_site.call(callback, element, i as f64, self_value(&rooted));
         }
     }
 }
@@ -261,6 +265,10 @@ pub extern "C" fn js_array_map(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // Root the callback closure across the iteration. A callback allocated
         // by a frameless caller (arrow/method — #6081) is reachable ONLY via
         // this raw param + the native stack, which an evacuating minor does NOT
@@ -307,7 +315,7 @@ pub extern "C" fn js_array_map(
             };
             // JS .map() callback receives (element, index, array).
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let mapped = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
             if is_plain {
                 let result = result_arr(&result_rooted);
                 let result_elements =
@@ -363,6 +371,10 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // The callback needs the same root its sibling `js_array_map` gives it
         // (#6081), and for the same reason: a callback allocated by a frameless
         // caller — the arrow in `xs.map(x => …)` — is reachable ONLY through this
@@ -396,7 +408,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                let _ = js_closure_call3(current_callback(), element, i as f64, rooted.receiver());
+                let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             }
             return;
         }
@@ -404,7 +416,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let _ = js_closure_call3(current_callback(), element, i as f64, rooted.receiver());
+            let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
         }
     }
 }
@@ -443,6 +455,10 @@ pub extern "C" fn js_array_filter(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // Root the callback across the loop — see js_array_map / gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
         let _tg = DenseThisGuard::bind_undefined();
@@ -473,7 +489,7 @@ pub extern "C" fn js_array_filter(
                 }
             };
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let keep = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let keep = cb_site.call(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 if is_plain {
@@ -527,6 +543,10 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -536,7 +556,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -583,6 +603,10 @@ pub extern "C" fn js_array_findIndex(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -592,7 +616,7 @@ pub extern "C" fn js_array_findIndex(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -624,6 +648,10 @@ pub extern "C" fn js_array_find_last(
         let length = (*arr).length as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
@@ -632,7 +660,7 @@ pub extern "C" fn js_array_find_last(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -662,6 +690,10 @@ pub extern "C" fn js_array_find_last_index(
         let length = (*arr).length as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
@@ -670,7 +702,7 @@ pub extern "C" fn js_array_find_last_index(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -757,6 +789,10 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -773,7 +809,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
                     None => continue,
                 }
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -816,6 +852,10 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -832,7 +872,7 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
                     None => continue,
                 }
             };
-            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -857,6 +897,10 @@ pub extern "C" fn js_array_flatMap(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // Root the result across callbacks and pushes (a push both allocates
         // — possibly triggering a moving GC — and may reallocate the array).
         let result_rooted = scope.root_nanbox_f64(f64::from_bits(
@@ -879,7 +923,7 @@ pub extern "C" fn js_array_flatMap(
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let mapped = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
             // Root first: detecting a lazy array may materialize it, and a
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
@@ -958,6 +1002,10 @@ pub extern "C" fn js_array_reduce(
         let length = (*arr).length as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall4::resolve(callback);
 
         if length == 0 {
             if has_initial != 0 {
@@ -1005,7 +1053,7 @@ pub extern "C" fn js_array_reduce(
                 continue;
             };
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
-            let next = js_closure_call4(
+            let next = cb_site.call(
                 callback,
                 acc_rooted.get_nanbox_f64(),
                 element,

@@ -1,49 +1,49 @@
 ### Fixed
 
-- **`arguments` inside a class method dropped every argument but the trailing ones (#8040).**
+- **`arguments` in a class method: the remaining call-site shapes after #8082 (#8040).**
   A class method whose body reads `arguments` received an array holding
-  `max(0, argc - declaredParams)` entries instead of all of them:
-  `m(a, b) { return arguments.length }` called as `m(1, 2, 3)` answered `1`, and
-  `arguments[0]` was the *third* argument. Only a method declaring zero
-  parameters — the shape every existing `arguments` test happened to use — was
-  accidentally correct, which is why this survived so long.
+  `max(0, argc - declaredParams)` entries instead of all of them — the
+  `arguments` slot #677 synthesizes is a trailing `is_rest` parameter, exactly
+  how a user `...rest` is spelled, so the compile-time-resolved class-method
+  call sites bundled it from `declared - 1`, the offset a *user* rest wants.
+  #8082 landed the synth-vs-rest split for three of the four affected sites
+  (the guarded direct call and the per-implementor arm in
+  `lower_call/property_get/dynamic_dispatch.rs`, and `StaticMethodCall` in
+  `expr/static_method.rs`). This change carries the remainder:
 
-  Root cause: `arguments`-synthesis (#677) appends a hidden trailing parameter to
-  such a method and marks it `is_rest`, which is exactly how a user `...rest` is
-  spelled. The class-method call sites keyed off that single bit, so they bundled
-  it from `declared - 1` — the offset a *user* rest wants — while the synthesized
-  slot must be filled from argument 0 and marked with
-  `js_array_mark_arguments_object`. The freestanding-function path
-  (`lower_call/func_ref.rs`) has always emitted the correct shape, and
-  `lower_call/property_get/static_dispatch.rs` was fixed for its own slice in
-  #5703. Four sites were not: the guarded direct call and the per-implementor
-  subclass arm (both `lower_call/property_get/dynamic_dispatch.rs` — the second
-  is the one a call made from inside another class method reaches), the
-  `StaticMethodCall` path (`expr/static_method.rs`), and `super.m(…)`
-  (`expr/super_method.rs`), which passed every argument positionally so the
-  callee's trailing array slot received a raw scalar. Runtime dynamic dispatch (`o[name](…)`,
-  `.call`, `.apply`) was already correct, because the runtime method table
-  carries a separate `has_synth_args` flag — so the bug reproduced only through
-  compile-time-resolved calls.
+  * **`super.m(…)`** (`expr/super_method.rs`) did no bundling at all — every
+    argument went positionally, so the parent's trailing array slot received a
+    raw scalar. That also mis-served a plain `super.m(1, 2, 3)` into
+    `m(a, ...rest)`.
+  * **A method with BOTH a user `...rest` and an `arguments` read** declares
+    `[a, rest, arguments]` — TWO trailing array slots bundled from different
+    offsets over the same argument list. `(has_rest, has_synthetic_arguments)`
+    cannot express that (`has_rest` is true for either spelling), so the
+    synth arm won and the rest slot received a scalar:
+    `m(a, ...rest) { arguments }` called as `m(1, 2, 3)` bound `rest` to the
+    number `2`. A new `method_has_user_rest` bit (`codegen/arguments.rs`, read
+    off the defining class's HIR — `arguments_object` is present on the
+    synthesized parameter and on nothing else) sizes the tail at every direct
+    call site: dynamic dispatch (all three arms via `build_direct_method_args`),
+    `StaticMethodCall`, and `super.m(…)`.
+  * **`js_array_mark_arguments_object`** is now emitted over the synthesized
+    bundle at these sites, matching the freestanding-function path
+    (`lower_call/func_ref.rs`) and the #5703 static-dispatch slice — without it
+    the callee's `arguments` is an ordinary Array and fails every
+    arguments-object predicate.
 
-  All four now resolve the trailing-parameter shape from the callee's own HIR
-  (`arguments_object` is present on the synthesized parameter and on nothing
-  else) and emit accordingly, including the case where a method has both a real
-  `...rest` and an `arguments` read — two bundles over the same argument list at
-  different offsets, which previously left the user rest bound to a scalar.
-
-  Found while bringing up a production Next.js App Route. Next.js bundles
+  Found bringing up a production Next.js App Route: Next.js bundles
   OpenTelemetry's `NoopTracer.startActiveSpan`, whose first statement is
-  `if (arguments.length < 2) return;`. Under the conflation that guard fired on
-  every well-formed three-argument call, so `tracer.trace()` returned `undefined`
-  without ever invoking its callback: the route's generated handler resolved
-  having never entered `routeModule.handle`, and the request was answered with an
+  `if (arguments.length < 2) return;` — under the conflation that guard fired
+  on every well-formed three-argument call, so `tracer.trace()` returned
+  `undefined` without invoking its callback and the route answered with an
   empty body.
 
   Regression coverage: `crates/perry-codegen/src/expr/class_method_arguments_object_tests.rs`
-  (IR census on the call site — asserts the array is filled from argument 0 *and*
-  marked, plus the negative that a user `...rest` still bundles only its trailing
-  args and is not marked) and
-  `test-files/test_gap_arguments_in_class_method.ts` (byte-for-byte against Node,
-  the class-method twin of the existing object-literal test, which had asserted
-  this same property since #321).
+  (IR census on the call site — asserts the synthesized array is filled from
+  argument 0 *and* marked, plus the negative that a user `...rest` still
+  bundles only its trailing args and is not marked) and
+  `test-files/test_gap_arguments_in_class_method.ts` (byte-for-byte against
+  Node — instance, static, inherited, async, generator, `super.m(…)`,
+  dynamic/`call`/`apply` control arm, the `startActiveSpan` guard shape, and
+  the rest+`arguments` both-case by value, not just by length).

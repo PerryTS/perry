@@ -461,6 +461,12 @@ pub(super) fn compile_module_entry(
         // `.next/server/**` module path now (before `main` borrows `llmod`); the
         // registration calls go in the block below. `(string_const_name,
         // byte_len, sanitized_prefix)`.
+        // Library entries need the same registry as executables. The host owns
+        // the event loop for a dylib, but `perry_module_init` still owns module
+        // initialization. In particular, a production Next App Route reaches
+        // its webpack chunks through runtime-computed `require(absolutePath)`
+        // calls after `perry_module_init` returns. Omitting these registrations
+        // makes the first dynamic import fail only in the shared-library path.
         let nextjs_path_inits: Vec<(String, usize, String)> = cross_module
             .nextjs_path_init_modules
             .iter()
@@ -630,12 +636,14 @@ pub(super) fn compile_module_entry(
             if !nextjs_path_inits.is_empty() {
                 blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             }
-            for prefix in non_entry_module_prefixes {
-                if cross_module.deferred_module_prefixes.contains(prefix) {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", prefix), &[]);
-            }
+            // #8040: record the path->init addresses BEFORE the eager init
+            // loop below. Recording is pure bookkeeping — "No init runs here,
+            // only the address is recorded" — but a module that performs a
+            // runtime path-require DURING its own eager init (Next's
+            // webpack-runtime loads chunk 2 while initializing) previously hit
+            // an empty init registry and died with MODULE_NOT_FOUND, even
+            // though the chunk was compiled and its init address was about to
+            // be recorded a few instructions later.
             // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
             // module's `__init` address under its absolute path so a runtime
             // `require(absolutePath)` (turbopack page/chunk loading) can trigger
@@ -654,6 +662,12 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
+            }
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                blk.call_void(&format!("{}__init", prefix), &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
@@ -768,6 +782,7 @@ pub(super) fn compile_module_entry(
             class_keys_globals: &cross_module.class_keys_globals,
             class_field_counts: &cross_module.class_field_counts,
             class_init_chains: &cross_module.class_init_chains,
+            class_header_image_globals: &cross_module.class_header_images,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
@@ -799,6 +814,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,
@@ -821,6 +837,7 @@ pub(super) fn compile_module_entry(
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             class_shape_slots: HashMap::new(),
+            class_header_images: HashMap::new(),
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),
@@ -1455,6 +1472,7 @@ pub(super) fn compile_module_entry(
             class_keys_globals: &cross_module.class_keys_globals,
             class_field_counts: &cross_module.class_field_counts,
             class_init_chains: &cross_module.class_init_chains,
+            class_header_image_globals: &cross_module.class_header_images,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
@@ -1486,6 +1504,7 @@ pub(super) fn compile_module_entry(
             imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
             method_param_counts: &cross_module.method_param_counts,
             method_has_rest: &cross_module.method_has_rest,
+            method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             ffi_aliases: &cross_module.ffi_aliases,
@@ -1508,6 +1527,7 @@ pub(super) fn compile_module_entry(
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             class_shape_slots: HashMap::new(),
+            class_header_images: HashMap::new(),
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),

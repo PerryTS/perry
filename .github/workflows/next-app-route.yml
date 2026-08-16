@@ -1,0 +1,78 @@
+name: Next App Route dylib
+
+# NOT a per-PR gate yet, by design. The pinned production graph is 104 modules
+# and one generated chunk alone has taken ~112 min in a single codegen unit, so a
+# `pull_request` trigger on `crates/**` would attach a multi-hour job to nearly
+# every PR. It also cannot pass yet: the computed relative chunk require is still
+# in flight (#8146). Run it on demand and nightly until it is green on `main`,
+# then promote it — a gate that has never been green must not be made required
+# (CLAUDE.md, "a *new* gate has never been green").
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:17 UTC daily, off the hour to avoid the Actions scheduling spike.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # `github.run_id` makes every run its own group. A group that is CONSTANT
+  # across scheduled runs lets GitHub keep at most one pending run and cancel
+  # the rest with zero jobs, so only one scheduled run would ever execute
+  # (#7205, relapsed as #7966) — and a cancelled run is a gate that did not run
+  # (CLAUDE.md, "four ways a gate can be unable to fail", #3).
+  group: next-app-route-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  next-app-route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "4G"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: tests/fixtures/next-app-route/package-lock.json
+
+      - name: Build Perry and provider archives
+        run: >-
+          cargo build --profile perry-dev
+          -p perry
+          -p perry-runtime
+          -p perry-stdlib
+          -p perry-runtime-static
+          -p perry-stdlib-static
+
+      - name: Focused four-store continuation parity
+        env:
+          PERRY_BIN: target/perry-dev/perry
+          PERRY_RUNTIME_DIR: target/perry-dev
+          PERRY_SKIP_BUILD: "1"
+        run: >-
+          ./run_parity_tests.sh
+          --suite node-suite
+          --module async_hooks
+          --filter next-route-continuations
+
+      - name: Production App Route provider gate
+        run: tests/test_next_app_route_dylib.sh

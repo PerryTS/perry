@@ -59,7 +59,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
     module.declare_function("js_object_coerce", DOUBLE, &[DOUBLE]);
     // #1789: stamp a class-expression's heap object as a class object
-    // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
+    // (ShapeObjectKind::Class) so typeof → "function" and
     // new/instanceof read class_id from it.
     module.declare_function("js_object_mark_class", VOID, &[I64]);
     // #6438: pin a per-evaluation class object's own parent edge.
@@ -256,6 +256,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I64, PTR, I64],
     );
+    module.declare_function(
+        "js_native_module_esm_export_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
     // object for `Expr::NativeModuleRef` when it reaches the value-form
     // fallback path (the require-call-result-then-member-access shape
@@ -326,6 +331,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
     module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
+    // #6769: parent linking, emitted in the preamble ahead of the body.
+    module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);

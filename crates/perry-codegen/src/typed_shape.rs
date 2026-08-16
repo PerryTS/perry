@@ -384,6 +384,19 @@ pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> S
         .unwrap_or_else(|| format!("perry_class_shape_id_{}", keys_global_name))
 }
 
+/// #8122: the per-class `<2 x i64>` header-image global paired with a class's
+/// canonical keys global — `[packed GcHeader word | class_id | ShapeId << 32]`,
+/// composed once at module init right after the ShapeId mint, so the inline
+/// `new` path stores an instance's 16-byte header prefix with one vector
+/// store instead of composing it per site (or per call, in a recursive
+/// allocator).
+pub(crate) fn header_image_global_name_from_keys_global(keys_global_name: &str) -> String {
+    keys_global_name
+        .strip_prefix("perry_class_keys_")
+        .map(|suffix| format!("perry_class_header_image_{}", suffix))
+        .unwrap_or_else(|| format!("perry_class_header_image_{}", keys_global_name))
+}
+
 /// Load the immutable ShapeId paired with a class's canonical keys global.
 ///
 /// Cache it in a function-entry alloca: an opaque allocation/runtime call can
@@ -394,16 +407,27 @@ pub(crate) fn load_class_shape_id(
     class_name: &str,
     keys_global_name: &str,
 ) -> String {
-    let shape_slot = if let Some(slot) = ctx.class_shape_slots.get(class_name).cloned() {
-        slot
-    } else {
-        let shape_global = shape_id_global_name_from_keys_global(keys_global_name);
-        let slot = ctx
-            .func
-            .entry_init_load_global(&shape_global, crate::types::I32);
-        ctx.class_shape_slots
-            .insert(class_name.to_string(), slot.clone());
-        slot
-    };
+    let shape_slot = ensure_class_shape_slot(ctx, class_name, keys_global_name);
     ctx.block().load(crate::types::I32, &shape_slot)
+}
+
+/// The function-entry alloca that caches a class's ShapeId global (see
+/// [`load_class_shape_id`]), created on first use. Split out (#8122) so the
+/// inline `new` path can compose its per-function header image from the slot
+/// without emitting a per-site load it does not need.
+pub(crate) fn ensure_class_shape_slot(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class_name: &str,
+    keys_global_name: &str,
+) -> String {
+    if let Some(slot) = ctx.class_shape_slots.get(class_name).cloned() {
+        return slot;
+    }
+    let shape_global = shape_id_global_name_from_keys_global(keys_global_name);
+    let slot = ctx
+        .func
+        .entry_init_load_global(&shape_global, crate::types::I32);
+    ctx.class_shape_slots
+        .insert(class_name.to_string(), slot.clone());
+    slot
 }

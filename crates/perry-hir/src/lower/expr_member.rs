@@ -416,8 +416,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if is_process_obj {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
-                if let Some(expr) = process_metadata_native_property(prop) {
-                    return Ok(expr);
+                if prop != "sourceMapsEnabled"
+                    || matches!(
+                        ctx.lookup_native_module(obj_name),
+                        Some(("process.namespace", None))
+                    )
+                {
+                    if let Some(expr) = process_metadata_native_property(prop) {
+                        return Ok(expr);
+                    }
                 }
                 match prop {
                     "argv" => return Ok(Expr::ProcessArgv),
@@ -621,8 +628,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if inner_is_global_process {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
-                if let Some(expr) = process_metadata_native_property(prop) {
-                    return Ok(expr);
+                if prop != "sourceMapsEnabled" {
+                    if let Some(expr) = process_metadata_native_property(prop) {
+                        return Ok(expr);
+                    }
                 }
                 match prop {
                     "argv" => return Ok(Expr::ProcessArgv),

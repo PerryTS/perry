@@ -766,16 +766,19 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
         }
         let class_id = (*ptr).class_id;
         // #8067 rung 3: every genuine ObjectHeader uses one token domain.
-        // Runtime allocators birth-stamp objects; the synchronization call is
-        // a defensive self-heal for old/synthetic callers and never falls back
-        // to a keys pointer.
-        let mut shape = crate::object::shapes::object_shape_id(ptr);
-        if shape == 0 {
-            shape = crate::object::shapes::synchronize_object_shape_descriptor(
-                ptr as *mut ObjectHeader,
-            );
-        }
-        let shape = shape as usize;
+        //
+        // #8113 REMOVED the defensive self-heal that used to run here. It
+        // called `synchronize_object_shape_descriptor`, which derived the live
+        // inline-slot bound from the header's `field_count` word. That word is
+        // gone, so a self-heal on an UNSTAMPED receiver would now publish a
+        // descriptor claiming a bound of ZERO — silently truncating the
+        // object's traced and writable payload from a read-only observation
+        // path. Missing closed costs a PIC miss; healing wrongly loses fields.
+        //
+        // Nothing is expected to reach here unstamped: every allocator in
+        // `object/alloc.rs` birth-publishes, and the inline-`new` path stamps a
+        // module-init ShapeId.
+        let shape = crate::object::shapes::object_shape_id(ptr) as usize;
         (shape, class_id, gc_type)
     }
 }

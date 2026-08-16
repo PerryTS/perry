@@ -591,6 +591,14 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            buf.push_str(":method_synthetic_arguments=");
+            buf.push_str(
+                &c.method_has_synthetic_arguments
+                    .iter()
+                    .map(|b| if *b { "1" } else { "0" })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             buf.push_str(":static_fields=");
             buf.push_str(&c.static_field_names.join(","));
             buf.push_str(":static_methods=");
@@ -915,6 +923,10 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_LL_SIZE_OPT_MAX_FN_BYTES")
             .as_deref()
             .unwrap_or(""),
+    );
+    h.field(
+        "env_ll_o0_max_fn_bytes",
+        env_var("PERRY_LL_O0_MAX_FN_BYTES").as_deref().unwrap_or(""),
     );
     h.field(
         "env_entry_symbol",

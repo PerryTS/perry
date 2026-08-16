@@ -84,7 +84,7 @@ mod timer_rooting_tests;
 mod typed_shape_bake_tests;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
-mod typed_shape_init;
+pub(crate) mod typed_shape_init;
 mod ui_styling;
 mod ui_tables;
 mod web_storage;

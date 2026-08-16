@@ -779,3 +779,19 @@ test_gap_repsel_element_group_numeric
 test_gap_gc_container_value_rooting
 test_gap_gc_define_properties_key_rooting
 test_gap_gc_define_property_descriptor_rooting
+
+# #8179 (this PR): `dispatch_uint8_buffer_method` — the shared uint8
+# `%TypedArray%.prototype` dispatcher every Buffer-backed `Uint8Array` callback
+# method funnels through — held the receiver address, the NaN-boxed receiver
+# handed to callbacks, `map`'s freshly allocated result buffer,
+# `sort`/`toSorted`'s permuted output and `reduce`'s accumulator in bare Rust
+# locals across `js_closure_call{2,3,4}`, and rooted the callback closure on
+# only ONE of its three entries. The CLOSURE is the live half: it is an
+# ordinary nursery allocation that MOVES, and on two of those
+# three entries the raw parameter was its only reference. Pre-fix this file
+# throws `TypeError: value is not a function` on the shipped default and dies on
+# the FIRST collection under `PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED=7
+# PERRY_GC_PROTECT_FROMSPACE=1`. Callbacks here allocate inside a LOOP on
+# purpose — a back-edge poll is the only safepoint reachable from user JS, so an
+# allocation-free callback makes the whole file pass vacuously.
+test_gap_gc_uint8_buffer_callback_rooting

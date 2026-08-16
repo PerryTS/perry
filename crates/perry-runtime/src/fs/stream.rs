@@ -246,13 +246,15 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
                 return bytes.to_vec();
             }
         }
-        let ptr = extract_string_ptr(v);
-        if ptr.is_null() {
-            return Vec::new();
+        // Both string representations; empty for anything that is not a
+        // string (`extract_string_ptr` is heap-`STRING_TAG` only, #8122).
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        match crate::string::str_bytes_from_jsvalue(v, &mut scratch) {
+            Some((ptr, len)) if !ptr.is_null() => {
+                std::slice::from_raw_parts(ptr, len as usize).to_vec()
+            }
+            _ => Vec::new(),
         }
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data, len).to_vec()
     }
 }
 

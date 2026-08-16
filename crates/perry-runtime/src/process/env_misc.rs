@@ -966,7 +966,7 @@ static KEEP_JS_REMOVEENV: extern "C" fn(*const StringHeader) = js_removeenv;
 // so pin a retained reference edge for the auto-optimize whole-program build.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64) -> f64 =
+static KEEP_JS_MODULE_FIND_PACKAGE_JSON: extern "C" fn(f64, f64, f64) -> f64 =
     js_module_find_package_json;
 // node:module helper-state APIs are codegen-emitted from generated `.o`, so pin
 // retained reference edges for the auto-optimize whole-program build.
@@ -1005,7 +1005,7 @@ static KEEP_JS_MODULE_DYNAMIC_IMPORT_APPLY_HOOKS: extern "C" fn(f64) -> f64 =
     js_module_dynamic_import_apply_hooks;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64) -> f64 = js_module_module_new;
+static KEEP_JS_MODULE_MODULE_NEW: extern "C" fn(f64, f64) -> f64 = js_module_module_new;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_MODULE_FIND_PATH: extern "C" fn(f64, f64, f64) -> f64 = js_module_find_path;

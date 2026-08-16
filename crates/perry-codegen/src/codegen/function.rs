@@ -375,16 +375,25 @@ fn emit_public_spec_function_trampoline(
                 });
             }
             if let Some(descriptor) = descriptor {
-                let raw = blk.call(
-                    I32,
-                    "js_param_type_guard",
-                    &[
-                        (DOUBLE, arg.as_str()),
-                        (PTR, &format!("@{}", descriptor.descriptor_name)),
-                        (I32, &descriptor.descriptor.len().to_string()),
-                    ],
-                );
-                let ok = blk.icmp_ne(I32, &raw, "0");
+                let ok = if let Some(rep) =
+                    super::param_guard::scalar_descriptor_rep(&descriptor.descriptor)
+                {
+                    // (#8079) Scalar proof: the typed-abi leaf guard decides
+                    // the exact same predicate without the interpretive
+                    // validator's per-call descriptor parse + state init.
+                    emit_typed_arg_guard(blk, rep, arg)
+                } else {
+                    let raw = blk.call(
+                        I32,
+                        "js_param_type_guard",
+                        &[
+                            (DOUBLE, arg.as_str()),
+                            (PTR, &format!("@{}", descriptor.descriptor_name)),
+                            (I32, &descriptor.descriptor.len().to_string()),
+                        ],
+                    );
+                    blk.icmp_ne(I32, &raw, "0")
+                };
                 guard = Some(match guard {
                     Some(prev) => blk.and(I1, &prev, &ok),
                     None => ok,
@@ -933,6 +942,7 @@ pub(super) fn compile_function(
         class_keys_globals: &cross_module.class_keys_globals,
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
+        class_header_image_globals: &cross_module.class_header_images,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -964,6 +974,7 @@ pub(super) fn compile_function(
         imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
+        method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         ffi_aliases: &cross_module.ffi_aliases,
@@ -986,6 +997,7 @@ pub(super) fn compile_function(
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
+        class_header_images: HashMap::new(),
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),

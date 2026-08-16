@@ -473,6 +473,20 @@ jobs:
       - name: Immovable-source exemptions must still hold
         run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
 
+      # #8170: the dependency-scale corpus this job runs (added by #8084)
+      # compiles `node_modules/zod`, so it needs the same node setup its
+      # sibling job has. Without these two steps the job dies in setup with
+      # "node_modules/zod/src/index.ts is missing" and never reaches the
+      # checker — which meant the arm covering the SHIPPED lowering
+      # (statepoints are the default on aarch64 and x86-64) reported nothing
+      # at all, while its shadow-frame sibling stayed green and made the gate
+      # look healthy.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Install the npm dependencies the dep corpus compiles
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       # This also puts a matched LLVM 22 `opt` on disk and exports

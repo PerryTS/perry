@@ -3204,11 +3204,14 @@ fn lower_object_array_write_versioned_for(
         plans
     };
     let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-    let header_words = (object_header_size / 8).to_string();
+    // #8113: address inline slots in BYTES rather than dividing the header size
+    // by 8 to get a word index. The quotient is exact today (24/8 and 16/8), but
+    // #8047's ILP32 header is 12 bytes and `12 / 8 == 1` truncates silently.
+    let header_bytes = object_header_size.to_string();
     // `meta` is the LAST ObjectHeader field (a documented invariant of the
     // header layout): a POINTER-WIDTH field at byte offset
-    // (header_size - pointer_size). On ILP32 (arm64_32) the header is 24
-    // bytes with a 4-byte `meta` at offset 20 — neither 8-byte-word-indexable
+    // (header_size - pointer_size). On ILP32 (arm64_32) the header is 16
+    // bytes with a 4-byte `meta` at offset 12 — neither 8-byte-word-indexable
     // nor i64-loadable — so the spill path addresses it by BYTE offset and
     // loads pointer-width, mirroring the `new.rs` allocator's meta store.
     let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
@@ -3258,8 +3261,9 @@ fn lower_object_array_write_versioned_for(
         ctx.current_block = inline_idx;
         let field_ptr = {
             let blk = ctx.block();
-            let field_word = blk.add(I64, &slot, &header_words);
-            blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+            let slot_bytes = blk.shl(I64, &slot, "3");
+            let field_off = blk.add(I64, &slot_bytes, &header_bytes);
+            blk.gep_inbounds(I8, &object_ptr, &[(I64, &field_off)])
         };
         // GC_STORE_AUDIT(POINTER_FREE): finite numeric values only, proven
         // by the entry guard's range analysis.
@@ -3327,8 +3331,9 @@ fn lower_object_array_write_versioned_for(
             ctx.current_block = inline_idx;
             let field_ptr = {
                 let blk = ctx.block();
-                let field_word = blk.add(I64, slot, &header_words);
-                blk.gep_inbounds(I64, &object_ptr, &[(I64, &field_word)])
+                let slot_bytes = blk.shl(I64, slot, "3");
+                let field_off = blk.add(I64, &slot_bytes, &header_bytes);
+                blk.gep_inbounds(I8, &object_ptr, &[(I64, &field_off)])
             };
             // GC_STORE_AUDIT(POINTER_FREE): the versioned loop emits only numeric
             // values into fields proven numeric by the entry guard.

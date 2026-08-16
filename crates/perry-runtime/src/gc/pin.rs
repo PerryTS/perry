@@ -106,7 +106,7 @@ impl Drop for CopyingWalkPhaseGuard {
     }
 }
 
-fn copying_walk_phase() -> Option<&'static str> {
+pub(super) fn copying_walk_phase() -> Option<&'static str> {
     COPYING_WALK_PHASE.with(|c| c.get())
 }
 
@@ -414,7 +414,7 @@ pub(super) fn pinned_young_move_report(
                  is probably innocent: the copier reached a header in memory that used \
                  to hold something else, i.e. a slot that was not rooted across a \
                  collection (#7154 class). Chase THAT first:\n    \
-                 PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 \
+                 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1 \
                  PERRY_GC_PROTECT_FROMSPACE_DEPTH=800\n  \
                  (the default depth of 4 quarantines four retired page-sets; a value \
                  can cross hundreds of collections between its last valid observation \

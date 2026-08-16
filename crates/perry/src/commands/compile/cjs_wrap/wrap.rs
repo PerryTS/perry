@@ -263,7 +263,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // instead keep the synthetic binding and rename it `_lazyreq_N` so the
     // target stays `Deferred` and inits only when the shim's
     // `return _lazyreq_N` runs (i.e. when the function actually calls require).
-    let lazy_specs = function_local_specs(source);
+    let mut lazy_specs = function_local_specs(source);
+    let cyclic_specs = cyclic_require_specs(source, source_path);
+    let parent_sensitive_specs = parent_sensitive_require_specs(source, source_path);
+    lazy_specs.extend(cyclic_specs.iter().cloned());
+    lazy_specs.extend(parent_sensitive_specs.iter().cloned());
 
     let mut import_local_names: Vec<String> = require_specs
         .iter()
@@ -343,6 +347,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let imports = format!(
+        "import {{ createRequire as __perry_cjs_create_require }} from 'node:module';\n{imports}"
+    );
 
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
     // with only Next's vendored copy on disk) leaves its hoisted import
@@ -362,14 +369,64 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .iter()
         .zip(import_local_names.iter())
         .map(|(spec, local)| {
+            let resolved_target =
+                super::super::resolve::resolve_relative_import_path(spec, source_path);
+            let link_child = resolved_target
+                .as_ref()
+                .map(|target| {
+                    format!(
+                        "const child = require.cache[{path:?}]; if (child) {{ if (child.parent === undefined) child.parent = module; if (module.children.indexOf(child) === -1) module.children.push(child); }} ",
+                        path = target.to_string_lossy(),
+                    )
+                })
+                .unwrap_or_default();
+            let needs_runtime_record =
+                cyclic_specs.contains(spec) || parent_sensitive_specs.contains(spec);
+            let runtime_require = if needs_runtime_record {
+                resolved_target
+                    .as_ref()
+                    .map(|target| {
+                        let warnings = if cyclic_specs.contains(spec) {
+                            cyclic_missing_property_names(source, source_path, spec, target)
+                                .into_iter()
+                                .map(|property| {
+                                    format!(
+                                        "if (childBefore && childBefore.loaded === false) process.emitWarning(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
+                                    )
+                                })
+                                .collect::<String>()
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "const childBefore = require.cache[{path:?}]; {warnings}globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {link_child}return required;",
+                            path = target.to_string_lossy(),
+                        )
+                    })
+            } else {
+                None
+            };
+            let required_value = if needs_runtime_record {
+                runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
+            } else {
+                format!("{link_child}return {local};")
+            };
             if require_site_in_try(source, spec) {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
                      throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
-                     \"Cannot find module '{spec}'\"); return {local}; }}"
+                     \"Cannot find module '{spec}'\"); {required_value} }}"
                 )
             } else {
-                format!("        if (specifier === '{}') return {};", spec, local)
+                if needs_runtime_record {
+                    format!("        if (specifier === '{spec}') {{ {required_value} }}")
+                } else if link_child.is_empty() {
+                    format!("        if (specifier === '{spec}') return {local};")
+                } else {
+                    format!(
+                        "        if (specifier === '{spec}') {{ {required_value} }}"
+                    )
+                }
             }
         })
         .collect::<Vec<_>>()
@@ -746,6 +803,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .unwrap_or_default()
     );
     let module_path_literal = format!("{:?}", source_path.to_string_lossy());
+    let module_filename_literal = module_path_literal.clone();
+    let cjs_factory_value = if flat_default_class.is_some() {
+        "undefined"
+    } else {
+        "__perry_cjs_factory"
+    };
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -757,12 +820,30 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // real module ref the same way), so named/default-export resolution stays
     // correct regardless of what the body does to its `module` local.
     const __cjs_module = {{ exports: {{}} }};
-    // Publish the initial object before user code. The runtime exposes it only
-    // to same-thread recursive loads; concurrent first callers wait for the
-    // final registration at the bottom of this wrapper.
+    // #6769: the Node `Module` record surface. Set before user code so a
+    // recursive load of this module observes the same shape Node exposes.
+    __cjs_module.__perry_cjs_record = true;
+    __cjs_module.__perry_cjs_factory = {cjs_factory_value};
+    __cjs_module.id = {module_filename_literal};
+    __cjs_module.path = {module_dir_literal};
+    __cjs_module.filename = {module_filename_literal};
+    __cjs_module.loaded = false;
+    __cjs_module.children = [];
+    __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
+    globalThis.__perry_cjs_pending_parent = undefined;
+    __cjs_module.paths = [{module_dir_literal} + '/node_modules'];
+    __cjs_module.require = undefined;
+    // Node populates `module.parent` before the body evaluates, so link it
+    // here rather than at the tail's registry publication.
+    __perry_link_path_module_parent(__cjs_module);
+    // Publish the initial exports before user code. The runtime exposes them
+    // only to same-thread recursive loads; concurrent first callers wait for
+    // the final record registration at the bottom of this wrapper.
     __perry_register_path_module_partial({module_path_literal}, __cjs_module.exports);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
+    const __perry_cjs_base_require = __perry_cjs_create_require({module_filename_literal});
+    __perry_cjs_base_require.cache[{module_filename_literal}] = __cjs_module;
     function __perry_cjs_require_error(kind, code, message) {{
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
         err.code = code;
@@ -821,15 +902,48 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
-        // Runtime `require(absolutePath.js)` of a module Perry AOT-compiled but
-        // that is only reachable via a runtime-computed path (Next.js / turbopack
-        // load page + chunk modules by a manifest path at request time, not a
-        // static specifier). Resolve it from the path->module registry that each
-        // compiled module self-registers into at init; `undefined` = not
-        // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
+        // Runtime `require(path)` of a module Perry AOT-compiled but that is
+        // only reachable via a computed path. Next's webpack runtime uses both
+        // absolute page paths and relative chunk paths (`./chunks/` + id).
+        // Resolve the latter against this CJS module's directory before probing
+        // the path registry, mirroring Node's per-module `require` binding.
+        // `js_require_path_module` canonicalizes the joined path, so `./` and
+        // `../` segments need no source-level normalization here.
         {{
-            const __perry_path_mod = __perry_require_path_module(specifier);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(specifier)) return __perry_path_mod;
+            // A runtime-COMPUTED *relative* specifier never matches that
+            // registry, which is keyed by absolute source path. Next's
+            // production webpack runtime does exactly this — `.next/server/
+            // webpack-runtime.js` calls `require("./chunks/" + g.u(a))` — so
+            // every lazy chunk missed and the App Route died at startup with
+            // `Cannot find module './chunks/2.js'` even though that chunk WAS
+            // compiled into the image. Statically-known relative specifiers are
+            // already handled by the cases above; only computed ones reach
+            // here, so join them against this module's own directory.
+            //
+            // The `./` prefix is stripped textually rather than left to
+            // `std::fs::canonicalize`: that only normalizes a path that exists
+            // on disk, and registration falls back to the raw string when it
+            // does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
+            // in exactly the deployed case where the sources are absent.
+            var __perry_path_spec = specifier;
+            if (specifier.charCodeAt(0) === 46) {{
+                if (specifier.charCodeAt(1) === 47) {{
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier.slice(2);
+                }} else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {{
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
+                }} else if (specifier === '.' || specifier === '..') {{
+                    // The bare directory specifiers carry no trailing
+                    // separator, so the two prefix tests above miss them —
+                    // yet Node accepts `require('.')` / `require('..')` and
+                    // resolves them through the directory's `index.js` /
+                    // package `main`, which `js_require_path_module` also
+                    // does via its directory-candidate fallback. Without the
+                    // join the key stays a bare `.` and can never hit.
+                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
+                }}
+            }}
+            const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
+            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_path_mod;
         }}
         // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
         // manifests this way: `require(this.middlewareManifestPath)`). Node's
@@ -867,15 +981,23 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         '.json': function(module, filename) {{}},
         '.node': function(module, filename) {{}},
     }};
+    require.cache = __perry_cjs_base_require.cache;
+    require.extensions = __perry_cjs_base_require.extensions;
     require.main = module;"#
+    );
+    let cjs_preamble = format!(
+        "{cjs_preamble}\n    module.require = function moduleRequire(specifier) {{ return require(specifier); }};"
     );
 
     // Wall 54: self-register this compiled module's exports under its absolute
     // source path so a runtime `require(absolutePath.js)` (turbopack/Next.js
     // page+chunk loading) resolves to it. Reuse the exact literal used for the
     // partial publication above so both registry operations have one key.
+    // #6769: the FINAL publication is the module RECORD, not bare exports —
+    // the runtime unwraps `.exports` for generated `require` sites and keeps
+    // the record for `node:module`'s cache/parent/children surface.
     let path_register =
-        format!("__perry_register_path_module({module_path_literal}, __cjs_module.exports);");
+        format!("__cjs_module.loaded = true; __perry_register_path_module({module_path_literal}, __cjs_module);");
     let wrapped = if let Some(flat_class) = &flat_default_class {
         // Issue #4933 — flat emission. Drop the IIFE and run the CommonJS body
         // at ESM module scope: `module.exports = {flat_class}` then resolves to
@@ -909,12 +1031,15 @@ export {{ {flat_class} }};
 {import_aliases}
 {hoisted_class_block}
 const _cjs = (function() {{
+function __perry_cjs_factory() {{
 {cjs_preamble}
 
     {body_for_iife}
 
     {path_register}
     return __cjs_module.exports;
+}}
+return __perry_cjs_factory();
 }})();
 
 {default_export_decl}
@@ -992,6 +1117,124 @@ fn target_node_platform(target: Option<&str>) -> Option<&'static str> {
             }
         }
     }
+}
+
+fn cyclic_require_specs(source: &str, source_path: &Path) -> std::collections::HashSet<String> {
+    let source_key = source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.to_path_buf());
+    extract_require_specifiers(source)
+        .into_iter()
+        .filter(|specifier| {
+            let Some(target) =
+                super::super::resolve::resolve_relative_import_path(specifier, source_path)
+            else {
+                return false;
+            };
+            require_graph_reaches(&target, &source_key, &mut std::collections::HashSet::new())
+        })
+        .collect()
+}
+
+fn parent_sensitive_require_specs(
+    source: &str,
+    source_path: &Path,
+) -> std::collections::HashSet<String> {
+    extract_require_specifiers(source)
+        .into_iter()
+        .filter(|specifier| {
+            super::super::resolve::resolve_relative_import_path(specifier, source_path)
+                .and_then(|target| std::fs::read_to_string(target).ok())
+                .is_some_and(|dependency| dependency.contains("module.parent"))
+        })
+        .collect()
+}
+
+fn cyclic_missing_property_names(
+    source: &str,
+    source_path: &Path,
+    specifier: &str,
+    target_path: &Path,
+) -> Vec<String> {
+    let aliases: Vec<String> = extract_require_aliases_with_ranges(source)
+        .into_iter()
+        .filter(|(_, required, _)| required == specifier)
+        .map(|(alias, _, _)| alias)
+        .collect();
+    if aliases.is_empty() {
+        return Vec::new();
+    }
+    let Ok(target_source) = std::fs::read_to_string(target_path) else {
+        return Vec::new();
+    };
+    let cycle_at = extract_require_specifiers(&target_source)
+        .into_iter()
+        .filter(|required| {
+            super::super::resolve::resolve_relative_import_path(required, target_path).is_some_and(
+                |resolved| {
+                    resolved.canonicalize().unwrap_or(resolved)
+                        == source_path
+                            .canonicalize()
+                            .unwrap_or_else(|_| source_path.to_path_buf())
+                },
+            )
+        })
+        .filter_map(|required| {
+            let single = format!("require('{required}')");
+            let double = format!("require(\"{required}\")");
+            target_source
+                .find(&single)
+                .or_else(|| target_source.find(&double))
+        })
+        .min()
+        .unwrap_or(target_source.len());
+    let assigned_before = regex::Regex::new(
+        r#"(?:^|[^A-Za-z0-9_$])(?:exports|module\.exports)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*="#,
+    )
+    .expect("CJS export assignment regex")
+    .captures_iter(&target_source[..cycle_at])
+    .filter_map(|capture| capture.get(1).map(|name| name.as_str().to_string()))
+    .collect::<std::collections::HashSet<_>>();
+    let masked_source = super::detect::strip_comments_and_strings(source);
+    let mut missing = std::collections::BTreeSet::new();
+    for alias in aliases {
+        let access = regex::Regex::new(&format!(
+            r#"(?:^|[^A-Za-z0-9_$]){}\.([A-Za-z_$][A-Za-z0-9_$]*)"#,
+            regex::escape(&alias)
+        ))
+        .expect("CJS cyclic alias access regex");
+        for capture in access.captures_iter(&masked_source) {
+            if let Some(property) = capture.get(1).map(|name| name.as_str()) {
+                if !assigned_before.contains(property) {
+                    missing.insert(property.to_string());
+                }
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
+fn require_graph_reaches(
+    path: &Path,
+    target: &Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if path == target {
+        return true;
+    }
+    if !visited.insert(path.clone()) {
+        return false;
+    }
+    let Ok(source) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    extract_require_specifiers(&source)
+        .into_iter()
+        .filter_map(|specifier| {
+            super::super::resolve::resolve_relative_import_path(&specifier, &path)
+        })
+        .any(|dependency| require_graph_reaches(&dependency, target, visited))
 }
 
 fn inactive_platform_guarded_requires(

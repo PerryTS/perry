@@ -82,7 +82,11 @@ fn header_word(intact: bool) -> String {
             0
         };
     let word = (size << 32) | (reserved << 16) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
-    format!("store i64 {word},")
+    // #8122: the packed word is no longer a per-site scalar store — it is the
+    // constant lane of the per-class `<2 x i64>` header image composed once at
+    // module init (`insertelement <2 x i64> <i64 WORD, i64 0>, i64 %shape_word,
+    // i32 1`), which every inline `new` of the class stores as one vector.
+    format!("insertelement <2 x i64> <i64 {word}, i64 0>,")
 }
 
 /// The packed word WITH the baked `GC_OBJ_TYPED_LAYOUT_INTACT`.

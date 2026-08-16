@@ -70,6 +70,15 @@ pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
 }
 
+/// Test-only companion to
+/// `prototype_chain::test_swap_array_static_proto_recorded`: swap the summary
+/// byte generated code reads, returning the previous value. Only for a test
+/// that knowingly set it and is putting the process back as it found it.
+#[cfg(test)]
+pub(crate) fn test_swap_array_index_fast_path_invalidated(value: u8) -> u8 {
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.swap(value, Ordering::Relaxed)
+}
+
 /// Record (if `obj` is the canonical `Object.prototype`) that it now carries
 /// an indexed property. Called from the object index-write / numeric
 /// defineProperty paths; cheap (relaxed loads + compare).

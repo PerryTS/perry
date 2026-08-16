@@ -1,6 +1,12 @@
 use super::callable_export_arity_table::native_callable_export_arity;
 use super::*;
-use std::cell::Cell;
+mod module_cjs;
+use module_cjs::attach_module_cjs_constructor_statics;
+pub(crate) use module_cjs::{
+    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
+    module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
+    module_constants_value,
+};
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the
@@ -29,48 +35,90 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     } else {
         export_module_name
     };
+    // Direct named/default `node:module` imports can materialize the callable
+    // without ever constructing a namespace object. Install its registry row
+    // here as well as at codegen import sites so Module's one canonical
+    // closure always receives the prototype/statics attachment.
+    if callable_module_name == "module" {
+        super::super::native_module_registry::js_nm_install_module();
+    }
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
     }
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let ns = js_create_native_module_namespace(
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
         callable_module_name.as_ptr(),
         callable_module_name.len(),
-    );
+    ));
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-    crate::closure::js_closure_set_capture_f64(closure, 0, ns);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
+    let closure = scope.root_raw_mut_ptr(closure);
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
+    });
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_ptr(c, 1, method_bytes.as_ptr() as i64);
+    });
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_ptr(c, 2, method_bytes.len() as i64);
+    });
     let exposed_name = if export_module_name == "fs" {
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
     } else if export_module_name == "http" && property_name == "_connectionListener" {
         "connectionListener"
+    } else if export_module_name == "module" && property_name == "runMain" {
+        "executeUserEntryPoint"
     } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
         property_name
     };
-    set_bound_native_closure_name(closure, exposed_name);
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        set_bound_native_closure_name(c, exposed_name);
+    });
     if let Some(length) = native_callable_export_arity(export_module_name, property_name) {
-        set_builtin_closure_length(closure as usize, length);
+        // Re-read: naming the closure allocates its name string, so the
+        // address above can be stale for the address-keyed length table.
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            set_builtin_closure_length(c as usize, length);
+        });
     }
-    let mut value = crate::value::js_nanbox_pointer(closure as i64);
-    let closure_addr = closure as usize;
+    let value = scope.root_nanbox_f64(closure.with_mut_ptr(
+        |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
+    ));
 
     // Per-module prototype/statics decoration, routed through the attach
     // registry (see `native_module_registry::nm_attach_lookup`): each
     // module's handler is registered by its `js_nm_install_<module>()`, and
     // this path is only reachable through that module's namespace — so a
     // binary links exactly the attach machinery of the modules it imports.
-    if let Some(attach) = super::super::native_module_registry::nm_attach_lookup(export_module_name)
+    if export_module_name == "module" && property_name == "SourceMap" {
+        // A named import can materialize this callable without first lowering
+        // a namespace expression (and therefore before `js_nm_install_module`
+        // registers the optional attach handler). SourceMap's prototype is
+        // intrinsic constructor state, so attach it at the common callable
+        // creation seam instead of relying on that optional registry.
+        crate::process::module_source_map_attach_constructor(crate::value::js_nanbox_get_pointer(
+            value.get_nanbox_f64(),
+        ) as usize);
+    } else if let Some(attach) =
+        super::super::native_module_registry::nm_attach_lookup(export_module_name)
     {
         // SAFETY: registry only ever holds the `nm_attach_*` handlers below.
-        value = unsafe { attach(property_name, value, closure_addr) };
+        unsafe {
+            attach(
+                property_name,
+                value.get_nanbox_f64(),
+                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
+            )
+        };
     }
+
+    let value = value.get_nanbox_f64();
 
     NATIVE_CALLABLE_EXPORTS.with(|c| {
         c.borrow_mut().insert(key, value.to_bits());
@@ -899,142 +947,14 @@ fn native_object_value(obj: *mut ObjectHeader) -> f64 {
 }
 
 fn native_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(native_object_value(obj));
+    let value = scope.root_nanbox_f64(value);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, value);
-}
-
-extern "C" fn module_cjs_extension_noop_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _module: f64,
-    _filename: f64,
-) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-fn module_cjs_extension_function(name: &str) -> f64 {
-    let func_ptr = module_cjs_extension_noop_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    crate::closure::js_register_closure_length(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-    set_bound_native_closure_name(closure, name);
-    crate::object::set_builtin_closure_length(closure as usize, 2);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-fn store_module_cjs_root(slot: &Cell<u64>, value: f64) -> f64 {
-    slot.set(value.to_bits());
-    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
-    value
-}
-
-pub(crate) fn module_cjs_cache_value() -> f64 {
-    MODULE_CJS_CACHE_VALUE.with(|slot| {
-        let bits = slot.get();
-        if bits != 0 {
-            return f64::from_bits(bits);
-        }
-        let obj = crate::object::js_object_alloc_null_proto(0, 0);
-        store_module_cjs_root(slot, native_object_value(obj))
-    })
-}
-
-pub(crate) fn module_cjs_path_cache_value() -> f64 {
-    MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
-        let bits = slot.get();
-        if bits != 0 {
-            return f64::from_bits(bits);
-        }
-        let obj = crate::object::js_object_alloc_null_proto(0, 0);
-        store_module_cjs_root(slot, native_object_value(obj))
-    })
-}
-
-pub(crate) fn module_cjs_extensions_value() -> f64 {
-    MODULE_CJS_EXTENSIONS_VALUE.with(|slot| {
-        let bits = slot.get();
-        if bits != 0 {
-            return f64::from_bits(bits);
-        }
-        let obj = js_object_alloc(0, 3);
-        native_set_field(obj, ".js", module_cjs_extension_function(".js"));
-        native_set_field(obj, ".json", module_cjs_extension_function(".json"));
-        native_set_field(obj, ".node", module_cjs_extension_function(".node"));
-        store_module_cjs_root(slot, native_object_value(obj))
-    })
-}
-
-pub(crate) fn module_cjs_global_paths_value() -> f64 {
-    MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
-        let bits = slot.get();
-        if bits != 0 {
-            return f64::from_bits(bits);
-        }
-
-        let mut paths = Vec::new();
-        if let Some(home) = std::env::var_os("HOME") {
-            let home = std::path::PathBuf::from(home);
-            paths.push(home.join(".node_modules").to_string_lossy().into_owned());
-            paths.push(home.join(".node_libraries").to_string_lossy().into_owned());
-        }
-        let prefix = std::env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_string());
-        paths.push(format!("{prefix}/lib/node"));
-
-        let arr = crate::array::js_array_alloc_with_length(paths.len() as u32);
-        for (i, path) in paths.iter().enumerate() {
-            crate::array::js_array_set_f64(arr, i as u32, native_string_value(path));
-        }
-        store_module_cjs_root(slot, f64::from_bits(JSValue::array_ptr(arr).bits()))
-    })
-}
-
-fn attach_module_cjs_constructor_statics(closure_addr: usize) {
-    crate::closure::closure_set_dynamic_prop(closure_addr, "_cache", module_cjs_cache_value());
-    crate::closure::closure_set_dynamic_prop(
-        closure_addr,
-        "_extensions",
-        module_cjs_extensions_value(),
-    );
-    crate::closure::closure_set_dynamic_prop(
-        closure_addr,
-        "_pathCache",
-        module_cjs_path_cache_value(),
-    );
-    crate::closure::closure_set_dynamic_prop(
-        closure_addr,
-        "globalPaths",
-        module_cjs_global_paths_value(),
-    );
-    for name in [
-        "_findPath",
-        "_initPaths",
-        "_load",
-        "_nodeModulePaths",
-        "_preloadModules",
-        "_resolveFilename",
-        "_resolveLookupPaths",
-    ] {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            name,
-            bound_native_callable_export_value("module", name),
-        );
-    }
-    // `Module.prototype` — Node's require-hook pattern (Next.js):
-    // `const mod = require('module'); const orig = mod.prototype.require;
-    // mod.prototype.require = function(request) {…}`. Expose a plain object
-    // carrying a `require` method so the read+patch round-trips; the patch
-    // is inert under AOT compilation (Perry resolves modules at compile
-    // time), but startup must not throw on the access.
-    let proto = js_object_alloc(0, 1);
-    native_set_field(
-        proto,
-        "require",
-        bound_native_callable_export_value("module", "_load"),
-    );
-    crate::closure::closure_set_dynamic_prop(
-        closure_addr,
-        "prototype",
-        crate::value::js_nanbox_pointer(proto as i64),
+    js_object_set_field_by_name(
+        crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader,
+        key,
+        value.get_nanbox_f64(),
     );
 }
 
@@ -1515,10 +1435,13 @@ pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
 pub(crate) unsafe fn nm_attach_module(
     property_name: &str,
     mut value: f64,
-    closure_addr: usize,
+    _closure_addr: usize,
 ) -> f64 {
     if property_name == "Module" {
-        attach_module_cjs_constructor_statics(closure_addr);
+        value = attach_module_cjs_constructor_statics(value);
+    }
+    if matches!(property_name, "flushCompileCache" | "isBuiltin") {
+        set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);
     }
     value
 }

@@ -8,12 +8,14 @@
 //! - `errors`: the not-callable throw path + #922 circuit breaker
 //! - `validate`: closure-pointer validation (`get_valid_func_ptr`, GC stubs)
 //! - `calln`: per-arity `js_closure_callN` FFI entry points
+//! - `direct`: hoisted per-arity dispatch for callback loops (#8180)
 //! - `value_call`: the dynamic value-call / V8-trampoline / spread bridges
 
 use super::*;
 
 mod bound;
 mod calln;
+mod direct;
 mod errors;
 mod validate;
 mod value_call;
@@ -26,15 +28,14 @@ pub use errors::throw_not_callable;
 
 pub use validate::{clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr};
 
-pub(crate) use calln::{
-    dispatch_registered_call, dispatch_rest_or_declared_arity, resolve_call2_direct,
-};
+pub(crate) use calln::{dispatch_registered_call, dispatch_rest_or_declared_arity};
 pub use calln::{
     js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
     js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2,
     js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7,
     js_closure_call8, js_closure_call9,
 };
+pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
 
 pub use value_call::{
     js_closure_call_apply_with_spread, js_closure_call_array, js_native_call_value,

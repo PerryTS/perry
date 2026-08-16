@@ -194,8 +194,12 @@ thunk!(
     "Web Streams constructors (node:stream/web) require the 'new' operator."
 );
 
-extern "C" fn thunk_vm_create_context(_closure: *const ClosureHeader, sandbox: f64) -> f64 {
-    crate::object::js_vm_create_context(sandbox)
+extern "C" fn thunk_vm_create_context(
+    _closure: *const ClosureHeader,
+    sandbox: f64,
+    options: f64,
+) -> f64 {
+    crate::object::js_vm_create_context(sandbox, options)
 }
 
 // ----- submodule table -----
@@ -205,7 +209,7 @@ static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
     key: "vm",
     exports: &[ExportSpec {
         name: "createContext",
-        thunk: ExportThunk::Fn1(thunk_vm_create_context),
+        thunk: ExportThunk::Fn2(thunk_vm_create_context),
     }],
 };
 

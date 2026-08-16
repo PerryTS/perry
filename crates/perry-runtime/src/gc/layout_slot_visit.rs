@@ -21,13 +21,20 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     // table is updated below.
     let object_shape_facts = if (*header).obj_type == GC_TYPE_OBJECT {
         let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
-        let descriptor = crate::object::shapes::object_shape_descriptor(obj);
+        // #8122: the descriptor `gc_child_slots` resolved for this receiver.
+        // Nothing between that probe and here can allocate or mutate the
+        // shape table, so it is the same value a fresh probe would return.
+        let descriptor = child_slots.object_shape;
         let old_keys = descriptor
             .map(|facts| facts.keys as usize as *mut crate::array::ArrayHeader)
             .unwrap_or((*obj).keys_array);
         let live_inline_slot_count = descriptor
             .map(|facts| facts.live_inline_slot_count)
-            .unwrap_or((*obj).field_count);
+            // #8113: 0, not a second descriptor probe. `unwrap_or` is EAGER,
+            // so re-deriving the bound here cost a whole extra shape-table
+            // lookup on every call — and the bound has no other source now, so
+            // the fallback could only ever have returned 0 anyway.
+            .unwrap_or(0);
         if old_keys.is_null() {
             Some((obj, 0, 0, live_inline_slot_count))
         } else if crate::value::addr_class::try_read_tracked_gc_header(old_keys as usize)

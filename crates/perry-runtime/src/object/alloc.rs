@@ -167,10 +167,8 @@ pub extern "C" fn js_object_alloc_with_parent(
 
     unsafe {
         // Initialize header
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
-        (*ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
@@ -185,7 +183,8 @@ pub extern "C" fn js_object_alloc_with_parent(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
+        // #8113: the birth live-slot bound is published here and nowhere else.
+        crate::object::shapes::birth_publish_object_shape(ptr, field_count);
 
         ptr
     }
@@ -205,16 +204,15 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
 
     unsafe {
         // Initialize header only - fields left uninitialized for constructor to fill
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
-        (*ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
+        // #8113: the birth live-slot bound is published here and nowhere else.
+        crate::object::shapes::birth_publish_object_shape(ptr, field_count);
     }
 
     ptr
@@ -240,16 +238,15 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
-        (*ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
         (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        crate::object::shapes::synchronize_object_shape_descriptor(ptr);
+        // #8113: the birth live-slot bound is published here and nowhere else.
+        crate::object::shapes::birth_publish_object_shape(ptr, field_count);
     }
 
     ptr
@@ -270,12 +267,15 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
 /// the `arena_alloc_gc` call — into the user's `new ClassName()`
 /// site, eliminating function-call overhead from the hot loop.
 #[inline]
+/// Returns the header plus the BIRTH live inline-slot bound the allocation was
+/// sized for. #8113: the header no longer carries a `field_count` word, so the
+/// widened bound this computes has to travel back to the caller that stamps it.
 fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
     keys_array: *mut ArrayHeader,
-) -> *mut ObjectHeader {
+) -> (*mut ObjectHeader, u32) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
@@ -297,13 +297,13 @@ fn object_alloc_class_inline_keys_impl(
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
-        (*ptr).field_count = logical_field_count as u32;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
-        set_object_keys_array(ptr, keys_array);
+        // #8113: the birth live-slot bound is a PARAMETER now — it used to be
+        // read back out of the `(*ptr).field_count` store that stood here.
+        set_object_keys_array_with_live(ptr, keys_array, logical_field_count as u32);
 
         // PerryTS/perry#4717: initialize ALL `max(field_count, 8)` field slots to
         // `undefined`, mirroring `js_object_alloc_with_parent`. The arena hands back
@@ -321,7 +321,7 @@ fn object_alloc_class_inline_keys_impl(
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
-    ptr
+    (ptr, logical_field_count as u32)
 }
 
 /// Compatibility entry point for runtime callers that do not have a
@@ -341,7 +341,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
-    let ptr =
+    let (ptr, birth_slots) =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
     unsafe {
         let key_count = if keys_array.is_null() {
@@ -353,7 +353,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
             keys_array as *const ArrayHeader,
             key_count,
         );
-        crate::object::shapes::birth_stamp_object_shape(ptr, id);
+        crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots);
     }
     ptr
 }
@@ -374,10 +374,10 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> *mut ObjectHeader {
-    let ptr =
+    let (ptr, birth_slots) =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
     unsafe {
-        crate::object::shapes::birth_stamp_object_shape(ptr, shape_id);
+        crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
     }
     ptr
 }
@@ -494,10 +494,8 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
-        (*ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
@@ -544,14 +542,14 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     };
 
     unsafe {
-        set_object_keys_array(ptr, keys_arr);
+        set_object_keys_array_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
         // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
         // and left this one lazily self-healing, which is a SPLIT population
         // for every class that lands here — and a split population is a
         // permanent PIC miss, not a slow start. See
         // `shapes::birth_stamp_object_shape`.
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
     remember_class_keys_array(class_id, field_count, keys_arr);
     ptr
@@ -663,10 +661,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     let total_size = header_size + fields_size;
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     unsafe {
-        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
-        (*ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
@@ -674,11 +670,11 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
-        set_object_keys_array(ptr, merged_arr);
+        set_object_keys_array_with_live(ptr, merged_arr, field_count);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // The dynamically-parented subclass shape needs the same birth stamp
         // as every other class instance, or its sites split the same way.
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id);
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
     remember_class_keys_array(class_id, field_count, merged_arr);
     ptr
@@ -715,12 +711,8 @@ pub extern "C" fn js_object_alloc_with_shape(
     let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
-        (*obj_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*obj_ptr).class_id = 0;
         (*obj_ptr).parent_class_id = 0;
-        // field_count tracks the logical number of fields; extra allocated slots
-        // are available for dynamic property growth via js_object_set_field_by_name
-        (*obj_ptr).field_count = field_count;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*obj_ptr).meta = ptr::null_mut();
 
@@ -780,12 +772,14 @@ pub extern "C" fn js_object_alloc_with_shape(
 
     unsafe {
         let obj_ptr = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        set_object_keys_array(obj_ptr, keys_arr);
+        set_object_keys_array_with_live(obj_ptr, keys_arr, field_count);
         // #6804: birth-stamp the runtime ShapeId (see `ShapeCacheEntry`) —
         // newborn literals carry their stable identity immediately, so
         // typed_feedback tokens and the id-keyed FIELD_CACHE never see a
         // pre-stamp window for shape-cached objects.
-        crate::object::shapes::birth_stamp_object_shape(obj_ptr, runtime_shape_id);
+        // #8113: `field_count` is the LOGICAL live-slot bound; the extra
+        // physical slots above it stay available for dynamic growth.
+        crate::object::shapes::birth_stamp_object_shape(obj_ptr, runtime_shape_id, field_count);
     }
 
     obj_handle.get_raw_mut_ptr::<ObjectHeader>()
@@ -845,10 +839,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
         let total_size = header_size + phys_slots as usize * 8;
         let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
-        (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*new_ptr).class_id = 0;
         (*new_ptr).parent_class_id = 0;
-        (*new_ptr).field_count = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*new_ptr).meta = ptr::null_mut();
         // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
@@ -874,7 +866,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     }
 
     let src_ptr = src_raw as *const ObjectHeader;
-    let src_field_count = (*src_ptr).field_count;
+    let src_field_count = crate::object::object_live_slot_count(src_ptr);
 
     // Physical slot capacity: src_field_count + extra_count, but at least max(fc, 8) to match
     // js_object_set_field's alloc_limit check. Extra slots are scratch space for subsequent
@@ -885,12 +877,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     );
     let total_size = header_size + phys_slots as usize * 8;
     let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
-    (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
     (*new_ptr).class_id = 0;
     (*new_ptr).parent_class_id = 0;
-    // Logical field count starts at src's count. js_object_set_field_by_name bumps it when
-    // appending new keys.
-    (*new_ptr).field_count = src_field_count;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
     (*new_ptr).meta = ptr::null_mut();
     // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
@@ -928,6 +916,13 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         ptr::write(dst_fields.add(i), crate::value::TAG_UNDEFINED);
     }
     rebuild_object_field_layout(new_ptr, src_field_count as usize);
+
+    // #8113: publish the clone's live inline-slot bound BEFORE the first
+    // allocation below. `gc_field_slot_range` reads the bound from the ShapeId
+    // descriptor now, and everything from the arena allocation above to here is
+    // allocation-free, so this closes the window in which the copied
+    // pointer-bearing slots would be invisible to tracing (#7154/#7164).
+    crate::object::shapes::birth_publish_object_shape(new_ptr, src_field_count);
 
     // Build keys array: copy ONLY src keys. Static keys are NOT added here — codegen uses
     // js_object_set_field_by_name for each static prop, which appends new keys via
@@ -1025,7 +1020,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         return;
     }
     let key_count = crate::array::js_array_length(src_keys) as usize;
-    let src_field_count = (*src).field_count as usize;
+    let src_field_count = crate::object::object_live_slot_count(src) as usize;
     let alloc_limit = std::cmp::max(src_field_count, crate::object::INLINE_SLOT_FLOOR);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let src_fields = (src as *const u8).add(header_size) as *const u64;

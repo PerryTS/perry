@@ -523,6 +523,7 @@ fn is_uncallable_builtin_super_parent(name: &str) -> bool {
             | "Set"
             | "WeakMap"
             | "WeakSet"
+            | "EventTarget"
             | "Array"
             | "ArrayBuffer"
             | "SharedArrayBuffer"
@@ -560,6 +561,7 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
         "Set",
         "WeakMap",
         "WeakSet",
+        "EventTarget",
         "Array",
         "ArrayBuffer",
         "DataView",

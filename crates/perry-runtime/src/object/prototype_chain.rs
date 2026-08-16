@@ -55,7 +55,9 @@ crate::perry_thread_local! {
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 
-struct PrototypeResolutionGuard;
+struct PrototypeResolutionGuard {
+    depth_before: usize,
+}
 
 impl PrototypeResolutionGuard {
     fn enter(owner: usize) -> Option<Self> {
@@ -65,9 +67,10 @@ impl PrototypeResolutionGuard {
             if stack.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || stack.contains(&owner_bits) {
                 return None;
             }
+            let depth_before = stack.len();
             crate::gc::runtime_write_barrier_root_nanbox(owner_bits);
             stack.push(owner_bits);
-            Some(Self)
+            Some(Self { depth_before })
         })
     }
 }
@@ -75,7 +78,13 @@ impl PrototypeResolutionGuard {
 impl Drop for PrototypeResolutionGuard {
     fn drop(&mut self) {
         PROTOTYPE_RESOLUTION_STACK.with(|stack| {
-            stack.borrow_mut().pop();
+            let mut stack = stack.borrow_mut();
+            // js_throw restores this stack before choosing the direct or
+            // system-unwinder transport. Cleanup after that restore must not
+            // pop a still-live outer resolution entry.
+            if stack.len() > self.depth_before {
+                stack.truncate(self.depth_before);
+            }
         });
     }
 }
@@ -541,6 +550,23 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     }
 }
 
+/// Test-only: swap the process-wide "a REAL array somewhere has a custom
+/// `[[Prototype]]`" latch, returning the previous value.
+///
+/// The latch is one-way in production and deliberately so. But a unit test
+/// that legitimately retargets a real array's prototype latches it for the
+/// whole binary and stands `plain_array_index_guard` down for every later
+/// typed-feedback / proxy guard test in the same process — the hazard
+/// `gc::tests::dead_owner_side_tables` documents inline. Once that test's
+/// array is unreachable the latch's claim is no longer TRUE, which is the
+/// same correction #7737 made for `OBJECT_PROTOTYPES_NONEMPTY`. Such a test
+/// restores what it found; see `ArrayPrototypeLatchGuard` in
+/// `dyn_eval/tests.rs`.
+#[cfg(test)]
+pub(crate) fn test_swap_array_static_proto_recorded(value: bool) -> bool {
+    ARRAY_TARGET_PROTO_RECORDED.swap(value, Ordering::Relaxed)
+}
+
 #[cfg(test)]
 pub(crate) fn test_prototype_registry_latch_armed() -> bool {
     OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
@@ -580,6 +606,22 @@ mod tests {
         std::mem::forget(first);
         std::mem::forget(second);
         crate::exception::test_unwind_innermost_shadow_restore();
+        crate::exception::js_try_end();
+
+        assert_eq!(resolution_stack_savepoint(), base_depth);
+    }
+
+    #[test]
+    fn system_unwind_drop_is_idempotent_after_resolution_restore() {
+        let base_depth = resolution_stack_savepoint();
+        let _jump_buffer = crate::exception::js_try_push();
+        let first = PrototypeResolutionGuard::enter(usize::MAX - 1).unwrap();
+        let second = PrototypeResolutionGuard::enter(usize::MAX).unwrap();
+        assert_eq!(resolution_stack_savepoint(), base_depth + 2);
+
+        crate::exception::test_unwind_innermost_shadow_restore();
+        drop(second);
+        drop(first);
         crate::exception::js_try_end();
 
         assert_eq!(resolution_stack_savepoint(), base_depth);

@@ -383,14 +383,18 @@ pub extern "C" fn js_map_set_subclass_init(this: f64, kind: i32, iterable: f64) 
 /// entry points.
 ///
 /// These are *sabotage* tests, not smoke tests: each one first asserts that the
-/// header byte the pre-fix code would have misread is still sitting there
-/// (`object_type == 1` at `MapHeader.size`'s offset), and only then that the
-/// entry point returns the resolved answer instead. A green run therefore
-/// proves the redirect fired, not merely that nothing crashed.
+/// header word the pre-fix code would have misread is still sitting there at
+/// `MapHeader.size`'s offset, and only then that the entry point returns the
+/// resolved answer instead. A green run therefore proves the redirect fired,
+/// not merely that nothing crashed.
+///
+/// #8113 moved which word that is: `ObjectHeader::object_type` is gone, so
+/// offset 0 — `MapHeader.size` / `SetHeader.size` — is now `class_id`. The
+/// misread value changed from a constant 1 to the receiver's class id; the
+/// hazard, and therefore the sabotage, is identical.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::OBJECT_TYPE_REGULAR;
     use crate::object::js_object_alloc;
 
     fn boxed(obj: *mut ObjectHeader) -> f64 {
@@ -456,14 +460,14 @@ mod tests {
         assert_ne!(backing as usize, obj as usize);
 
         // The pre-fix hazard, still present in the bytes: `MapHeader.size`
-        // overlays `ObjectHeader.object_type`, so `js_map_size` used to report
-        // 1 for an EMPTY subclass instance and `MapHeader.entries` was
-        // `parent_class_id ‖ field_count`.
-        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        // overlays `ObjectHeader.class_id` (#8113), so `js_map_size` used to
+        // report the class id for an EMPTY subclass instance and
+        // `MapHeader.entries` was the shape word.
+        assert_eq!(unsafe { (*obj).class_id }, 9001);
         assert_eq!(
             js_map_size_of(obj),
             0,
-            "an empty Map subclass instance must report size 0, not object_type"
+            "an empty Map subclass instance must report size 0, not class_id"
         );
 
         // Writes land in the backing; the receiver is what comes back.
@@ -480,8 +484,8 @@ mod tests {
         );
         // The instance header is untouched — no forged-pointer store landed in
         // it, and it is still an ordinary object.
-        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
         assert_eq!(unsafe { (*obj).class_id }, 9001);
+        assert!(unsafe { crate::object::object_is_regular(obj) });
     }
 
     #[test]
@@ -492,11 +496,11 @@ mod tests {
             _ => panic!("super() should have installed a Set backing"),
         };
         assert_ne!(backing as usize, obj as usize);
-        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(unsafe { (*obj).class_id }, 9002);
         assert_eq!(
             crate::set::js_set_size(obj as *const crate::set::SetHeader),
             0,
-            "an empty Set subclass instance must report size 0, not object_type"
+            "an empty Set subclass instance must report size 0, not class_id"
         );
 
         let returned = crate::set::js_set_add(obj as *mut crate::set::SetHeader, 7.0);
@@ -534,9 +538,9 @@ mod tests {
         );
 
         // Pre-fix these read the ObjectHeader as a MapHeader: `size` was
-        // `object_type` (= 1) and the very next `.set()` stored through
-        // `parent_class_id ‖ field_count`.
-        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        // `class_id` (#8113; `object_type` before that) and the very next
+        // `.set()` stored through the shape word.
+        assert_eq!(unsafe { (*obj).class_id }, 9003);
         assert_eq!(js_map_size_of(obj), 0);
         assert_eq!(
             crate::map::js_map_get(obj as *const crate::map::MapHeader, 1.0).to_bits(),
@@ -555,9 +559,11 @@ mod tests {
         crate::set::js_set_clear(obj as *mut crate::set::SetHeader);
 
         // Nothing wrote into the object's header.
-        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
         assert_eq!(unsafe { (*obj).class_id }, 9003);
-        assert_eq!(unsafe { (*obj).field_count }, 3);
+        assert!(crate::object::shapes::is_shape_id(unsafe {
+            (*obj).parent_class_id
+        }));
+        assert_eq!(unsafe { crate::object::object_live_slot_count(obj) }, 3);
     }
 
     fn js_map_size_of(obj: *mut ObjectHeader) -> u32 {

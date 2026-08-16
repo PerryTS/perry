@@ -20,6 +20,10 @@
 //! functions in this module.
 
 mod accessors;
+#[cfg(test)]
+pub(crate) use accessors::{
+    test_seed_symbol_accessor_property, test_symbol_accessor_property_count,
+};
 mod constructors;
 mod gc_roots;
 mod get;
@@ -370,8 +374,10 @@ static SYMBOL_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
 /// **`false` is exact** — no symbol reads `false` — while `true` is merely
 /// "ask the registry". A non-symbol whose first word happens to equal
 /// `SYMBOL_MAGIC` (a `StringHeader` would need `utf16_len == 0x5359_4D42`, i.e.
-/// a 2.8 GB string; an `ObjectHeader`'s `object_type` is a small tag) simply
-/// pays the old probe and gets the old, correct answer.
+/// a 2.8 GB string; an `ObjectHeader`'s first word is `class_id`, and ids are
+/// handed out from 1 — #8113 deleted the `object_type` tag that used to sit
+/// there, which does not change this argument) simply pays the old probe and
+/// gets the old, correct answer.
 ///
 /// # Safety
 /// `ptr` must be readable for 4 bytes. Every caller is one that already
@@ -527,6 +533,21 @@ per_test_global! {
 /// are never pruned).
 pub(crate) fn prune_dead_symbol_property_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
     let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    // #8195: the accessor table is keyed by the SAME owner address and was the
+    // one of the three not pruned here. Take its verdicts first, into the same
+    // memo, so all three tables agree about every owner within one pass.
+    {
+        let verdicts = std::cell::RefCell::new(&mut verdicts);
+        accessors::prune_dead_symbol_accessor_owners(&|owner| {
+            let mut verdicts = verdicts.borrow_mut();
+            if let Some(&known) = verdicts.get(&owner) {
+                return known;
+            }
+            let dead = is_dead_owner(owner);
+            verdicts.insert(owner, dead);
+            dead
+        });
+    }
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if let Some(map) = guard.as_mut() {

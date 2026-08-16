@@ -648,13 +648,21 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
     /// the step dispatch. This bounds the worst-case loop at
     /// `ASYNC_STEP_REENTRY_BOUND` iterations instead of unbounded.
     pub(crate) static ASYNC_STEP_GUARD: std::cell::Cell<AsyncStepGuard>
-        = const { std::cell::Cell::new(AsyncStepGuard { last_closure: 0, consecutive_error_count: 0 }) };
+        = const { std::cell::Cell::new(AsyncStepGuard { consecutive_error_count: 0 }) };
 }
 
 /// Defensive guard state for the async step driver. See `ASYNC_STEP_GUARD`.
+///
+/// #8193: this used to carry a `last_closure: usize` — the address of the
+/// closure that took the last erroring step. The same-closure check that read
+/// it was deleted when #712/#921/#922 showed a runaway loop ALTERNATES between
+/// two closures, so the field became write-only. It was not inert, though: it
+/// was a raw heap address that `scan_promise_roots_mut` REKEYED without
+/// marking, and nothing pruned it when the closure died — the #8040 shape (see
+/// `gc::dead_owner`). The fix for state nobody reads is to delete it, not to
+/// maintain it correctly.
 #[derive(Copy, Clone)]
 pub(crate) struct AsyncStepGuard {
-    pub last_closure: usize,
     pub consecutive_error_count: u32,
 }
 

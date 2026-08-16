@@ -120,6 +120,15 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "arming the latch, to prove the dynamic move_young guard catches an "
         "incomplete latch. It must stay a raw write or it tests nothing.",
     ),
+    (
+        "crates/perry-runtime/src/gc/tests/forwarding_target_validation.rs",
+        "(*fake_header).gc_flags = 0x86;",
+        "#8174 plants the RECYCLED BYTES #8040 observed at a dead side-table "
+        "key, verbatim, and reads them as a GcHeader. 0x86 happens to carry "
+        "bit 2, but nothing here is pinning anything: the address is payload "
+        "interior of a live allocation and there is no object at it. Writing "
+        "the bytes as named flags would be a lie about what was measured.",
+    ),
 ]
 
 # Floor: the tree currently carries ~80 `GC_FLAG_PINNED` tokens. A regex that

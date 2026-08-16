@@ -564,8 +564,7 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
             b"Function.prototype.toString requires that 'this' be a Function",
         );
     }
-    let func_ptr = unsafe { (*(raw as *const crate::closure::ClosureHeader)).func_ptr as usize };
-    let s = crate::builtins::function_source_for_func_ptr(func_ptr);
+    let s = crate::node_vm::function_source_for_closure(raw);
     let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(JSValue::string_ptr(str_ptr).bits())
 }

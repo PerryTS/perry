@@ -1,7 +1,7 @@
 //! Array.prototype.reduceRight.
 use super::*;
 use crate::array::throw_reduce_of_empty;
-use crate::closure::{js_closure_call4, ClosureHeader};
+use crate::closure::ClosureHeader;
 
 #[inline(always)]
 unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
@@ -101,6 +101,10 @@ pub extern "C" fn js_array_reduce_right(
 
         // Root the accumulator too: it can hold a heap value while a GC runs
         // between iterations.
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall4::resolve(callback);
         let acc_rooted = scope.root_nanbox_f64(accumulator);
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
@@ -108,7 +112,7 @@ pub extern "C" fn js_array_reduce_right(
                     continue;
                 };
                 // Spec callback `(accumulator, currentValue, currentIndex, array)`.
-                let next = js_closure_call4(
+                let next = cb_site.call(
                     callback,
                     acc_rooted.get_nanbox_f64(),
                     element,

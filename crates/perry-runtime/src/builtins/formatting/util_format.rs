@@ -93,7 +93,7 @@ unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usiz
         false
     } else {
         let keys_len = (*keys_arr).length;
-        let num_fields = (*obj).field_count;
+        let num_fields = crate::object::object_live_slot_count(obj);
         let fields_ptr = ptr.add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
         let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
         (0..keys_len).any(|f| {

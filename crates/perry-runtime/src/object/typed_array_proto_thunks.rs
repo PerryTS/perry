@@ -539,28 +539,184 @@ fn validate_comparator(args: &[f64]) -> *const crate::closure::ClosureHeader {
     }
 }
 
+/// A Buffer-backed `Uint8Array` receiver (or `map`/`toSorted` result) kept
+/// LIVE for the duration of a user-callback loop.
+///
+/// `dispatch_uint8_buffer_method` runs user code with the receiver reachable
+/// only through a raw `usize` parameter and the native stack, which an
+/// evacuating minor does not scan. `array::buffer_receiver_dispatch` roots it
+/// at the boundary; the `%TypedArray%.prototype` thunk and
+/// `dispatch_buffer_method`'s catch-all — the other two entries — do not, so
+/// the root belongs here, where all three get it.
+///
+/// # Why the ADDRESS is read once per dispatch, not once per element
+///
+/// A raw address held across a call is normally a stale copy
+/// (`docs/src/internals/gc-rooting-invariant.md`). A Buffer is the documented
+/// exception: `buffer_alloc` allocates it with `arena_alloc_gc_old` and sets
+/// `GC_FLAG_TENURED` (`buffer/header.rs`) — the same old-arena space
+/// `typed_array_alloc` describes as "non-movable space: raw data pointers are
+/// handed out". Every `%TypedArray%` sibling in `typedarray/iterate.rs` and
+/// `typedarray/transform.rs` relies on exactly that invariant and holds its
+/// `ta` / `recv` in a plain local across callbacks; doing something different
+/// here would be inconsistent without being safer.
+///
+/// The one collector arm that relocates an old-arena page is old-page defrag,
+/// and it is opt-in (`PERRY_GC_OLD_DEFRAG=1`, `gc/oldgen_defrag.rs`,
+/// deliberately default-off until a fragmentation workload exists that can
+/// exercise it). Making that arm safe is a TREE-WIDE property of every holder
+/// of an old-arena raw address, not something one dispatcher can establish —
+/// so this type buys liveness plus a single post-validation read, and the
+/// invariant is named rather than re-checked 2.6M times per `forEach`.
+/// Re-reading it per element measured **+19 %** on a `Uint8Array`
+/// forEach/map/reduce benchmark, for a knob that is off.
+///
+/// The callback closure below is the opposite case and IS re-read per element:
+/// it genuinely moves.
+struct RootedUint8Buffer<'s> {
+    handle: crate::gc::RuntimeHandle<'s>,
+}
+
+impl<'s> RootedUint8Buffer<'s> {
+    #[inline]
+    fn new(scope: &'s crate::gc::RuntimeHandleScope, addr: usize) -> Self {
+        Self {
+            handle: scope.root_nanbox_f64(pointer_value(addr)),
+        }
+    }
+
+    /// The address and the receiver value from ONE handle read.
+    ///
+    /// Taken after `validate_callback` (which allocates on its throw path) and
+    /// before the loop, so it is a post-allocation read. On Darwin a
+    /// `perry_thread_local!` access is a `tlv_get_addr` CALL, which is why
+    /// this is one read and not two.
+    #[inline]
+    fn live(&self) -> (usize, f64) {
+        let value = self.handle.get_nanbox_f64();
+        (
+            (value.to_bits() & crate::value::POINTER_MASK) as usize,
+            value,
+        )
+    }
+}
+
+/// A callback closure rooted for the duration of a loop that invokes it once
+/// per element, with its address RE-READ from the root before every call.
+///
+/// **This is the live half of #8179.** A closure is an ordinary nursery
+/// allocation (`GC_TYPE_CLOSURE`, `GcAllocationPolicy::ArenaOrMalloc`, with a
+/// `GcMoveHookKind::ClosureDynamicProps` move hook — it both moves and dies),
+/// and a callback handed in by a frameless caller — the arrow in
+/// `Uint8Array.prototype.map.call(u, v => v + 1)` — is reachable ONLY through
+/// a raw parameter plus the native stack, which an evacuating minor does not
+/// scan. `js_array_map` has carried the same root since gh #6206 / #6081; this
+/// dispatcher had it on one of its three entries.
+///
+/// `test-files/test_gap_gc_uint8_buffer_callback_rooting.ts` reproduces it on
+/// the SHIPPED DEFAULT (`TypeError: value is not a function`, exit 1) and,
+/// under `PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED=7
+/// PERRY_GC_PROTECT_FROMSPACE=1`, faults precisely — on the FIRST scheduled
+/// collection:
+///
+/// ```text
+/// [gc-fromspace-protect] FAULT: signal 10 at 0x2454161058c
+///   last-known object: user_ptr=0x24541610580 obj_type=4 size=24
+/// [gc-schedule] FAILURE (signal 10) under seed=7
+/// [gc-schedule]   safepoints=1 scheduled_collections=1
+/// ```
+///
+/// `obj_type=4` is `GC_TYPE_CLOSURE`, and the faulting address is
+/// `user_ptr + 12` — `CLOSURE_TYPE_TAG_OFFSET`, i.e. `get_valid_func_ptr`'s
+/// `CLOSURE_MAGIC` probe reading a retired from-space closure header. After
+/// the fix the same seed runs to completion with the instrument's own liveness
+/// verdict showing the subject was live: `safepoints=5306
+/// scheduled_collections=5306 copying_minors=5306 moved_objects=25760`.
+
+/// #8180: each type also carries the closure's dispatch strategy, resolved
+/// ONCE for the whole loop (`closure/dispatch/direct.rs`) instead of
+/// re-derived per element by `js_closure_callN`.
+macro_rules! rooted_callback {
+    ($name:ident, $site:ident, $($arg:ident),+) => {
+        struct $name<'s> {
+            handle: crate::gc::RuntimeHandle<'s>,
+            site: crate::closure::$site,
+        }
+
+        impl<'s> $name<'s> {
+            #[inline]
+            fn new(
+                scope: &'s crate::gc::RuntimeHandleScope,
+                callback: *const crate::closure::ClosureHeader,
+            ) -> Self {
+                Self {
+                    handle: scope.root_raw_const_ptr(callback),
+                    site: crate::closure::$site::resolve(callback),
+                }
+            }
+
+            /// `with_const_ptr`, not a bare `get_raw_const_ptr`: the pointer is
+            /// an ARGUMENT to a C-ABI call, a position `across_*` cannot
+            /// express (it hands the address back only AFTER the call returns).
+            ///
+            /// The pre-call address is never bound across a call either way —
+            /// the handle is re-read on EVERY iteration, immediately before the
+            /// pointer is consumed, and the root is a `RawTagged` slot that
+            /// `scan_runtime_handle_roots_mut` both marks and REWRITES. So a
+            /// collection during call `i` is reflected in the address call
+            /// `i + 1` uses, which is precisely the ordering `across_*` exists
+            /// to enforce. The resolved `site` needs no such treatment: it is a
+            /// static CODE address, which relocation does not change.
+            #[inline]
+            fn call(&self, $($arg: f64),+) -> f64 {
+                self.handle
+                    .with_const_ptr::<crate::closure::ClosureHeader, _>(|cb| {
+                        self.site.call(cb, $($arg),+)
+                    })
+            }
+        }
+    };
+}
+
+rooted_callback!(RootedCallback2, DirectCall2, arg0, arg1);
+rooted_callback!(RootedCallback3, DirectCall3, arg0, arg1, arg2);
+rooted_callback!(RootedCallback4, DirectCall4, arg0, arg1, arg2, arg3);
+
 pub(crate) unsafe fn dispatch_uint8_buffer_method(
     addr: usize,
     method: &str,
     args: &[f64],
 ) -> Option<f64> {
     let len = uint8_len(addr);
-    let receiver = pointer_value(addr);
-    let mut args_ptr = std::ptr::null();
-    if !args.is_empty() {
-        args_ptr = args.as_ptr();
-    }
+    // Root the receiver for the whole dispatch. Its ADDRESS is then taken from
+    // the root once per arm — after the callback validation, before the loop —
+    // rather than being carried in from the parameter; see `RootedUint8Buffer`
+    // for why once-per-arm and not once-per-element.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = RootedUint8Buffer::new(&scope, addr);
+    // Shadow the raw parameter: nothing below may reach the receiver except
+    // through the rooted handle.
+    #[allow(unused_variables, clippy::let_unit_value)]
+    let addr = ();
 
     let result = match method {
-        "set" => super::dispatch_buffer_method(addr, method, args_ptr, args.len()),
+        "set" => {
+            let mut args_ptr = std::ptr::null();
+            if !args.is_empty() {
+                args_ptr = args.as_ptr();
+            }
+            let (addr, _) = recv.live();
+            super::dispatch_buffer_method(addr, method, args_ptr, args.len())
+        }
         "at" => match uint8_at_index(args, len) {
-            Some(index) => uint8_get(addr, index) as f64,
+            Some(index) => uint8_get(recv.live().0, index) as f64,
             None => undefined(),
         },
-        "entries" | "keys" | "values" => uint8_iterator(addr, method),
+        "entries" | "keys" | "values" => uint8_iterator(recv.live().0, method),
         "slice" | "subarray" => {
             let start = uint8_relative_index_arg(args, 0, len, 0);
             let end = uint8_relative_index_arg(args, 1, len, len);
+            let (addr, _) = recv.live();
             let result = crate::buffer::js_buffer_slice(
                 addr as *mut crate::buffer::BufferHeader,
                 start as i32,
@@ -576,6 +732,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             let from = uint8_relative_index_arg(args, 1, len, 0);
             let final_ = uint8_relative_index_arg(args, 2, len, len);
             let count = final_.saturating_sub(from).min(len.saturating_sub(to));
+            let (addr, receiver) = recv.live();
             if count > 0 {
                 let block: Vec<u8> = (0..count).map(|i| uint8_get(addr, from + i)).collect();
                 for (i, value) in block.into_iter().enumerate() {
@@ -585,45 +742,54 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             receiver
         }
         "fill" => {
+            // `to_uint8` runs ToNumber, which fires a user `valueOf` on an
+            // object argument — so it is a collection point, and it is
+            // sequenced BEFORE the `recv.live()` read on purpose.
             let value = to_uint8(arg_or_undefined(args, 0));
             let start = uint8_relative_index_arg(args, 1, len, 0);
             let end = uint8_relative_index_arg(args, 2, len, len);
+            let (addr, receiver) = recv.live();
             for i in start..end {
                 uint8_set(addr, i, value);
             }
             receiver
         }
         "map" => {
-            let cb = validate_callback(args);
-            let out = uint8_alloc_like(addr, len);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            // `uint8_alloc_like` allocates, so the receiver read is
+            // sequenced AFTER it.
+            let out = uint8_alloc_like(recv.live().0, len) as usize;
+            let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
-                let mapped = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
-                uint8_set(out as usize, i, to_uint8(mapped));
+                let mapped = cb.call(value, i as f64, receiver);
+                uint8_set(out, i, to_uint8(mapped));
             }
-            pointer_value(out as usize)
+            pointer_value(out)
         }
         "filter" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             let mut kept = Vec::new();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
-                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let keep = cb.call(value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) != 0 {
                     kept.push(value as u8);
                 }
             }
-            let out = uint8_alloc_like(addr, kept.len());
+            let out = uint8_alloc_like(recv.live().0, kept.len());
             for (i, value) in kept.into_iter().enumerate() {
                 uint8_set(out as usize, i, value);
             }
             pointer_value(out as usize)
         }
         "every" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
-                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let keep = cb.call(value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) == 0 {
                     return Some(bool_value(false));
                 }
@@ -631,10 +797,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             bool_value(true)
         }
         "some" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
-                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let keep = cb.call(value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) != 0 {
                     return Some(bool_value(true));
                 }
@@ -647,7 +814,8 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
         // node: `2`). Its sibling `findLastIndex` was already served below,
         // which is why the hole survived: the two are always cited together.
         "find" | "findLast" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "find" {
                 Box::new(0..len)
             } else {
@@ -655,7 +823,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             };
             for i in indexes {
                 let value = uint8_get(addr, i) as f64;
-                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let keep = cb.call(value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) != 0 {
                     return Some(value);
                 }
@@ -663,7 +831,8 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             undefined()
         }
         "findIndex" | "findLastIndex" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "findIndex" {
                 Box::new(0..len)
             } else {
@@ -671,7 +840,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             };
             for i in indexes {
                 let value = uint8_get(addr, i) as f64;
-                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let keep = cb.call(value, i as f64, receiver);
                 if crate::value::js_is_truthy(keep) != 0 {
                     return Some(i as f64);
                 }
@@ -679,48 +848,59 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             -1.0
         }
         "forEach" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
-                let _ = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                let _ = cb.call(value, i as f64, receiver);
             }
             undefined()
         }
-        "includes" => uint8_includes(addr, args),
-        "indexOf" => uint8_index_of(addr, args),
-        "lastIndexOf" => uint8_last_index_of(addr, args),
-        "join" => uint8_join(addr, arg_or_undefined(args, 0)),
-        "toLocaleString" => uint8_join(addr, undefined()),
+        "includes" => uint8_includes(recv.live().0, args),
+        "indexOf" => uint8_index_of(recv.live().0, args),
+        "lastIndexOf" => uint8_last_index_of(recv.live().0, args),
+        "join" => uint8_join(recv.live().0, arg_or_undefined(args, 0)),
+        "toLocaleString" => uint8_join(recv.live().0, undefined()),
         "reduce" | "reduceRight" => {
-            let cb = validate_callback(args);
+            let cb = RootedCallback4::new(&scope, validate_callback(args));
             if len == 0 && args.len() < 2 {
                 crate::array::throw_reduce_of_empty();
             }
             let reverse = method == "reduceRight";
-            let (mut accumulator, indexes): (f64, Box<dyn Iterator<Item = usize>>) =
-                if args.len() >= 2 {
-                    let iter: Box<dyn Iterator<Item = usize>> = if reverse {
-                        Box::new((0..len).rev())
-                    } else {
-                        Box::new(0..len)
-                    };
-                    (args[1], iter)
-                } else if reverse {
-                    (
-                        uint8_get(addr, len - 1) as f64,
-                        Box::new((0..len - 1).rev()),
-                    )
+            let (addr, receiver) = recv.live();
+            let (accumulator, indexes): (f64, Box<dyn Iterator<Item = usize>>) = if args.len() >= 2
+            {
+                let iter: Box<dyn Iterator<Item = usize>> = if reverse {
+                    Box::new((0..len).rev())
                 } else {
-                    (uint8_get(addr, 0) as f64, Box::new(1..len))
+                    Box::new(0..len)
                 };
+                (args[1], iter)
+            } else if reverse {
+                (
+                    uint8_get(addr, len - 1) as f64,
+                    Box::new((0..len - 1).rev()),
+                )
+            } else {
+                (uint8_get(addr, 0) as f64, Box::new(1..len))
+            };
+            // The accumulator is the one value in this dispatcher that is
+            // routinely a NURSERY object: a string/object/array seed, or a
+            // fresh one returned by every callback. Held in a Rust local it is
+            // a pre-move NaN-boxed address that an evacuating minor rewrites
+            // nowhere. `js_array_reduce` (array/iter_methods.rs) has rooted its
+            // accumulator since the 2026-07-02 audit; the Buffer-receiver
+            // reduce and both TypedArray reduces never did.
+            let acc = scope.root_nanbox_f64(accumulator);
             for i in indexes {
                 let value = uint8_get(addr, i) as f64;
-                accumulator =
-                    crate::closure::js_closure_call4(cb, accumulator, value, i as f64, receiver);
+                let next = cb.call(acc.get_nanbox_f64(), value, i as f64, receiver);
+                acc.set_nanbox_f64(next);
             }
-            accumulator
+            acc.get_nanbox_f64()
         }
         "reverse" => {
+            let (addr, receiver) = recv.live();
             if len > 1 {
                 let mut i = 0usize;
                 let mut j = len - 1;
@@ -737,6 +917,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
         }
         "sort" | "toSorted" => {
             let cmp = validate_comparator(args);
+            let (addr, receiver) = recv.live();
             let out_addr = if method == "sort" {
                 addr
             } else {
@@ -746,8 +927,9 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             if cmp.is_null() {
                 values.sort_unstable();
             } else {
+                let cmp = RootedCallback2::new(&scope, cmp);
                 values.sort_by(|a, b| {
-                    let r = crate::closure::js_closure_call2(cmp, *a as f64, *b as f64);
+                    let r = cmp.call(*a as f64, *b as f64);
                     if r < 0.0 {
                         std::cmp::Ordering::Less
                     } else if r > 0.0 {
@@ -767,13 +949,14 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             }
         }
         "toReversed" => {
-            let out = uint8_alloc_like(addr, len);
+            let out = uint8_alloc_like(recv.live().0, len);
+            let (addr, _) = recv.live();
             for i in 0..len {
                 uint8_set(out as usize, i, uint8_get(addr, len - 1 - i));
             }
             pointer_value(out as usize)
         }
-        "with" => uint8_with(addr, args),
+        "with" => uint8_with(recv.live().0, args),
         _ => return None,
     };
     Some(result)

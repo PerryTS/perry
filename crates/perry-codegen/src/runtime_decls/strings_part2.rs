@@ -887,6 +887,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // (returned wrapped in `js_promise_resolved`). See
     // `crates/perry-runtime/src/object.rs::js_create_namespace`.
     module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR]);
+    module.declare_function("js_finalize_namespace", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
     module.declare_function("js_promise_finally", I64, &[I64, I64]);

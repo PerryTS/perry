@@ -126,6 +126,89 @@ fn copying_minor_feeds_the_object_denomination_census() {
     );
 }
 
+/// #8122: BEFORE any copying minor has run, once the young generation is
+/// half-way to the base cap, one header walk seeds the object denomination
+/// with the mean size of what was actually allocated — so the FIRST minor is
+/// object-denominated too, and a smaller representation stops buying the
+/// collector a bigger first trace.
+///
+/// ★ The discriminating quantities: (1) the seeded mean equals the mean of
+/// THIS nursery's headers, computed independently here from the same objects,
+/// and differs from the 72 B seed; (2) the effective cap has already moved
+/// with it, before a single collection; (3) the walk is one-shot — allocating
+/// a different population afterwards leaves the seed untouched.
+#[test]
+fn allocation_census_seeds_the_first_cap_before_any_minor() {
+    let _guard = CopyingNurseryTestGuard::new(SLOTS);
+    // Pin the shipped (moving) pacing so `young_scavenge_cap_due` — the probe's
+    // caller — is live rather than inheriting the process default; and keep the
+    // automatic triggers out so nothing collects under the fixture.
+    let _pacing = crate::gc::policy::force_moving_gc_pacing();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let base = crate::gc::policy::gc_scavenge_nursery_cap_bytes();
+    assert_eq!(
+        crate::gc::tenuring::mean_surviving_object_bytes(),
+        crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES,
+        "guard must start every test at the calibration seed"
+    );
+    assert!(!crate::gc::tenuring::object_census_seeded_for_test());
+
+    // Fill Eden past half the base cap with two-field object literals — the
+    // representation whose shrink motivated this. Unrooted is fine: nothing
+    // collects here, and an allocation census counts dead objects too.
+    let (mut allocated_bytes, mut allocated_objects) = (0usize, 0usize);
+    while crate::arena::copying_from_space_in_use_bytes() < base / 2 + 64 * 1024 {
+        for _ in 0..1024 {
+            let obj = crate::object::js_object_alloc(0, 2);
+            let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
+                .expect("fresh literal has a GcHeader");
+            allocated_bytes += header.size as usize;
+            allocated_objects += 1;
+        }
+    }
+    let expected_mean = allocated_bytes / allocated_objects;
+    assert!(
+        expected_mean < crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES,
+        "fixture must exercise the SCALING arm (mean {expected_mean} B)"
+    );
+
+    // The probe runs from the cap-dueness check the block allocator drives.
+    let _ = crate::gc::policy::young_scavenge_cap_due();
+    assert!(
+        crate::gc::tenuring::object_census_seeded_for_test(),
+        "half-way to the base cap the allocation census must have run"
+    );
+    let seeded = crate::gc::tenuring::mean_surviving_object_bytes();
+    // The nursery may hold a few pre-existing objects from the guard's own
+    // setup; allow the mean to differ from the literal-only figure by one
+    // byte of rounding, but it must be THIS population's size, not the seed.
+    assert!(
+        seeded.abs_diff(expected_mean) <= 1,
+        "seed must be the allocated population's mean: {seeded} B vs {expected_mean} B"
+    );
+    assert_ne!(
+        seeded,
+        crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES
+    );
+    // ...and the first cap already reflects it — before any collection.
+    assert_eq!(
+        crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
+        base * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded) / 1000
+    );
+
+    // One-shot: a different population allocated afterwards does not move
+    // the seed (the collector's survivor census owns it from here on).
+    for _ in 0..4096 {
+        let _ = crate::object::js_object_alloc(0, 8);
+    }
+    let _ = crate::gc::policy::young_scavenge_cap_due();
+    assert_eq!(
+        crate::gc::tenuring::mean_surviving_object_bytes(),
+        seeded,
+        "the allocation walk is paid at most once per process"
+    );
+}
+
 #[test]
 fn quiet_cycles_restore_power_on_threshold_debounced() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);

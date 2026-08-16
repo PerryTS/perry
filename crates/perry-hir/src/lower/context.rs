@@ -110,6 +110,7 @@ impl LoweringContext {
             ui_widget_type_aliases: HashMap::new(),
             deferred_unknown_native_imports: HashMap::new(),
             current_class: None,
+            current_class_scope_depth: None,
             current_class_inner_name: None,
             pending_class_inner_name: None,
             current_class_member_is_static: false,
@@ -925,6 +926,41 @@ impl LoweringContext {
             .filter(|&&mark| mark <= pos)
             .count();
         Some(depth)
+    }
+
+    /// Does a `class <name>` declared in (or lexically enclosing) the body
+    /// being lowered SHADOW every same-named local binding currently visible?
+    ///
+    /// This is the JS nearest-binding rule for the three-way race between a
+    /// class declaration, an outer-scope local of the same name, and a
+    /// sibling-scope class whose name lingers in the inherited
+    /// `forward_class_names` set:
+    ///
+    ///   * a local declared in the CURRENT scope (a param/`var`/`let` next to
+    ///     the reference) always wins — the class cannot be nearer than that;
+    ///   * otherwise the binding at the GREATER scope depth wins, so a class
+    ///     declared inside a nested factory beats a module-scope `var` of the
+    ///     same name, while a module-scope class loses to a factory-local.
+    ///
+    /// Single source of truth for the ident-read arm (`arm_ident.rs`) and the
+    /// `new <Ident>` arm (`expr_new.rs`), which disagreed before #8040: the
+    /// read resolved to the class while `new` still rerouted through the outer
+    /// local's slot.
+    pub(crate) fn forward_class_shadows_local(&self, name: &str) -> bool {
+        if !self.forward_class_names.contains(name) {
+            return false;
+        }
+        if self.lookup_local_in_current_scope(name).is_some() {
+            return false;
+        }
+        match (
+            self.local_decl_scope_depth(name),
+            self.forward_class_decl_depth.get(name).copied(),
+        ) {
+            (None, _) => true,       // no local at all: the class wins
+            (Some(_), None) => true, // depth unknown: keep prior behavior
+            (Some(local_depth), Some(class_depth)) => class_depth > local_depth,
+        }
     }
 
     /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a

@@ -274,13 +274,15 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
 
-        // ObjectHeader: class_id @4 and authoritative ShapeId @8. Matching
-        // the immutable descriptor proves the live-slot bound and key order.
-        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+        // ObjectHeader: class_id @0 and authoritative ShapeId @4 (#8113 — the
+        // two leading offsets moved down 4 when `object_type` was deleted).
+        // Matching the immutable descriptor proves the live-slot bound and key
+        // order.
+        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "0")]);
         let class_id = blk.load(I32, &cid_ptr);
         let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
 
-        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
         let shape_id = blk.load(I32, &sid_ptr);
         let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 
@@ -395,9 +397,9 @@ pub(crate) fn emit_proven_shape_recheck(
     let latched = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_OR_DESCRIPTORS);
     let unlatched = blk.icmp_eq(I16, &latched, "0");
 
-    // `class_id` @4 was already matched by the tower. ShapeId @8 proves the
-    // exact immutable layout and receiver-kind descriptor.
-    let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+    // `class_id` @0 was already matched by the tower. ShapeId @4 proves the
+    // exact immutable layout and receiver-kind descriptor (#8113 offsets).
+    let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
     let shape_id = blk.load(I32, &sid_ptr);
     let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 
@@ -491,12 +493,12 @@ pub(crate) fn emit_class_field_inline_precheck(
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
 
-        // ObjectHeader: class_id @4, authoritative ShapeId @8.
-        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+        // ObjectHeader: class_id @0, authoritative ShapeId @4 (#8113).
+        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "0")]);
         let class_id = blk.load(I32, &cid_ptr);
         let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
 
-        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "8")]);
+        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
         let shape_id = blk.load(I32, &sid_ptr);
         let sid_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
 

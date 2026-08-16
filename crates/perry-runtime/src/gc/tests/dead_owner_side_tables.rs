@@ -80,10 +80,10 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
         std::mem::size_of::<crate::object::ObjectHeader>(),
         GC_TYPE_OBJECT,
     ) as *mut crate::object::ObjectHeader;
-    (*obj).object_type = 1;
     (*obj).class_id = 0;
+    // #8113: zero live slots, so no descriptor is needed — the derived bound
+    // for an unstamped receiver is 0, which is the right answer here.
     (*obj).parent_class_id = 0;
-    (*obj).field_count = 0;
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     obj
@@ -1248,6 +1248,383 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
         Some(crate::value::TAG_NULL),
         "a live (rooted) owner's meta record — and its explicit-null \
          prototype — must survive a full collection"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+// ── FUNCTION_CLASS_IDS (#8040) ──────────────────────────────────────────────
+//
+// The synthetic-class table is keyed by a function value's NaN-boxed closure
+// ADDRESS, and — unlike every other table in this file — it is *rekeyed* when
+// its key object moves (`scan_function_class_id_keys_mut`). So a key that
+// outlives its closure does not merely leak: the next collection follows the
+// forwarding pointer of whatever object now occupies the address and rebinds
+// the class id onto it.
+
+fn alloc_nursery_test_closure() -> usize {
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        8,
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    ptr as usize
+}
+
+#[test]
+fn test_dead_function_class_id_key_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::test_clear_class_side_table_roots();
+
+    let addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8040);
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(addr))),
+        0x8200_8040,
+        "test premise: the synthetic class id must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8040),
+        0,
+        "a dead closure's FUNCTION_CLASS_IDS key must be pruned"
+    );
+}
+
+#[test]
+fn test_live_function_class_id_key_survives_and_is_rekeyed_on_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let addr = alloc_nursery_test_closure();
+    js_shadow_slot_set(0, ptr_bits(addr));
+    crate::object::test_seed_function_class_id_key(ptr_bits(addr), 0x8200_8041);
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(moved, ptr_bits(addr), "test premise: the closure must move");
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(0x8200_8041),
+        moved,
+        "a LIVE closure's key must be rekeyed to its new address, not pruned"
+    );
+}
+
+/// The #8040 shape, end to end: a dead key that survives one collection is
+/// re-pointed at the next tenant of its address, and the collection after that
+/// follows THAT object's forwarding pointer.
+#[test]
+fn test_dead_function_class_id_key_cannot_follow_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_addr = alloc_nursery_test_closure();
+    crate::object::test_seed_function_class_id_key(ptr_bits(dead_addr), 0x8200_8042);
+
+    let _ = gc_collect_minor();
+
+    let replacement = alloc_nursery_test_closure();
+    assert_eq!(
+        replacement, dead_addr,
+        "test premise: the copied-minor Eden reset must reuse the exact address"
+    );
+    js_shadow_slot_set(0, ptr_bits(replacement));
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(ptr_bits(replacement))),
+        0,
+        "an unrelated closure allocated at the recycled address must not inherit \
+         the dead function's synthetic class id"
+    );
+
+    let _ = gc_collect_minor();
+
+    let moved = js_shadow_slot_get(0);
+    assert_ne!(
+        moved,
+        ptr_bits(replacement),
+        "test premise: the replacement must move"
+    );
+    assert_eq!(
+        crate::object::function_class_id(f64::from_bits(moved)),
+        0,
+        "and the stale key must not have been REKEYED onto the replacement's new \
+         address by the metadata rewrite pass"
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_count(),
+        0,
+        "no FUNCTION_CLASS_IDS entry may outlive its closure"
+    );
+}
+
+// ── The four tables the #8174 audit found REKEYED with no death story ───────
+//
+// #8168 wired `FUNCTION_CLASS_IDS` into the fan-out above. The registry gate
+// that came with #8174 (`scripts/gc_rekeyed_key_tables.py`) then enumerated
+// every `visit_metadata_*` site in the tree and asked the same question of each
+// — and found four more tables with no prune and no rooting, plus a fifth
+// (`SYMBOL_ACCESSOR_PROPERTIES`) whose sibling tables were pruned while it was
+// not. Each is the same hazard: the key is rewritten if the object moves and
+// deliberately not marked, so it can go stale, and a stale key on a REKEYED
+// table is followed into recycled bytes.
+//
+// Every case below asserts the prune FIRES (a dead owner's entry is gone) and
+// is paired with the inverse (a live owner's entry is not), because a prune
+// that drops live entries is a worse bug than the one it fixes.
+
+fn alloc_nursery_test_object_addr() -> usize {
+    let (obj, _) = unsafe { alloc_nursery_test_object(0) };
+    obj as usize
+}
+
+/// #8190. `CONSOLE_INSTANCES` is keyed by a `new console.Console(...)`
+/// instance's heap address and rekeyed by
+/// `scan_console_log_singleton_roots_mut`.
+#[test]
+fn test_dead_console_instance_owner_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let dead = alloc_nursery_test_object_addr();
+    crate::builtins::test_seed_console_instance(dead);
+    assert_eq!(
+        crate::builtins::test_console_instance_count(),
+        1,
+        "test premise: the instance entry must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::builtins::test_console_instance_count(),
+        0,
+        "a dead console instance's CONSOLE_INSTANCES entry must be pruned"
+    );
+}
+
+#[test]
+fn test_live_console_instance_owner_survives_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let live = alloc_nursery_test_object_addr();
+    js_shadow_slot_set(0, ptr_bits(live));
+    crate::builtins::test_seed_console_instance(live);
+
+    full_gc();
+
+    assert_eq!(
+        crate::builtins::test_console_instance_count(),
+        1,
+        "a ROOTED console instance's entry must survive — a prune that drops \
+         live entries is worse than the stale key it removes"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+/// #8191. `BOXED_PRIMITIVE_PAYLOADS` is keyed by a boxed `Number`/`String`/…
+/// wrapper's `ObjectHeader` address and rekeyed by
+/// `scan_boxed_primitive_payload_roots_mut`.
+#[test]
+fn test_dead_boxed_primitive_payload_owner_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let dead = alloc_nursery_test_object_addr();
+    crate::builtins::test_seed_boxed_primitive_payload(dead, 42f64.to_bits());
+    assert_eq!(
+        crate::builtins::test_boxed_primitive_payload_count(),
+        1,
+        "test premise: the payload entry must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::builtins::test_boxed_primitive_payload_count(),
+        0,
+        "a dead wrapper's BOXED_PRIMITIVE_PAYLOADS entry must be pruned"
+    );
+}
+
+#[test]
+fn test_live_boxed_primitive_payload_owner_survives_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let live = alloc_nursery_test_object_addr();
+    js_shadow_slot_set(0, ptr_bits(live));
+    crate::builtins::test_seed_boxed_primitive_payload(live, 42f64.to_bits());
+
+    full_gc();
+
+    assert_eq!(
+        crate::builtins::test_boxed_primitive_payload_count(),
+        1,
+        "a ROOTED wrapper's payload entry must survive"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+/// #8192. A transition-cache entry carries TWO metadata-only keys — the
+/// pre-transition `keys_array` and the interned property-name string — while
+/// only `next_keys` is a strong root. Either weak half dying is enough to make
+/// the entry's rekey read recycled bytes, so either is enough to drop it.
+#[test]
+fn test_dead_transition_cache_prev_keys_pruned_on_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+
+    // `next_keys` is a strong root of the entry and must stay live, or the test
+    // would be measuring the wrong pointer. It goes in OLD-GEN on purpose:
+    // arena block reset is all-or-nothing, so a reachable neighbour in
+    // `dead_prev`'s own nursery block would force-MARK it (#7975,
+    // `mark_block_persisting_arena_objects`) and the prune would correctly
+    // decline — the test would then blame the prune for something it got right.
+    let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
+    js_shadow_slot_set(0, ptr_bits(next_keys));
+    crate::arena::arena_reset_all_blocks_to_zero();
+    let dead_prev = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+
+    let occupancy_before = crate::object::test_transition_cache_occupancy();
+    crate::object::test_seed_transition_cache_entry(dead_prev, 0, next_keys);
+    assert_eq!(
+        crate::object::test_transition_cache_occupancy(),
+        occupancy_before + 1,
+        "test premise: the transition entry must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_transition_cache_occupancy(),
+        occupancy_before,
+        "a transition entry whose prev_keys array died must be dropped, not \
+         rekeyed out of the bytes that replaced it"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+#[test]
+fn test_live_transition_cache_entry_survives_full_gc() {
+    // Two shadow slots: both halves of the entry have to be rooted.
+    let _guard = CopyingNurseryTestGuard::new(2);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+
+    let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
+    let live_prev = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+    js_shadow_slot_set(0, ptr_bits(next_keys));
+    js_shadow_slot_set(1, ptr_bits(live_prev));
+
+    let occupancy_before = crate::object::test_transition_cache_occupancy();
+    crate::object::test_seed_transition_cache_entry(live_prev, 0, next_keys);
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_transition_cache_occupancy(),
+        occupancy_before + 1,
+        "an entry whose prev_keys array is still ROOTED must survive"
+    );
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}
+
+/// #8194. `REFLECT_METADATA`'s key carries the decorator target's NaN-boxed
+/// bits, rekeyed by `rewrite_metadata_target_bits`. Only `Reflect.deleteMetadata`
+/// ever removed an entry, so an unreachable target left its address behind.
+#[test]
+fn test_dead_reflect_metadata_target_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let len_before = crate::proxy::test_reflect_metadata_len();
+    let dead = alloc_nursery_test_object_addr();
+    crate::proxy::test_seed_reflect_metadata(ptr_bits(dead), "design:type");
+    assert_eq!(
+        crate::proxy::test_reflect_metadata_len(),
+        len_before + 1,
+        "test premise: the metadata entry must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::proxy::test_reflect_metadata_len(),
+        len_before,
+        "a dead decorator target's REFLECT_METADATA entry must be pruned"
+    );
+}
+
+#[test]
+fn test_live_reflect_metadata_target_survives_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let len_before = crate::proxy::test_reflect_metadata_len();
+    let live = alloc_nursery_test_object_addr();
+    js_shadow_slot_set(0, ptr_bits(live));
+    crate::proxy::test_seed_reflect_metadata(ptr_bits(live), "design:type");
+
+    full_gc();
+
+    assert_eq!(
+        crate::proxy::test_reflect_metadata_len(),
+        len_before + 1,
+        "a ROOTED decorator target's metadata entry must survive"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+/// #8195. The accessor table shares its owner key with `SYMBOL_PROPERTIES` and
+/// `SYMBOL_PROPERTY_ATTRS`, both of which `prune_dead_symbol_property_owners`
+/// has pruned since the 2026-07-09 audit. It was the one left out, which also
+/// made every accessor closure it held immortal.
+#[test]
+fn test_dead_symbol_accessor_owner_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let count_before = crate::symbol::test_symbol_accessor_property_count();
+    let dead = alloc_nursery_test_object_addr();
+    crate::symbol::test_seed_symbol_accessor_property(
+        dead,
+        0x8195_0001,
+        crate::value::TAG_UNDEFINED,
+    );
+    assert_eq!(
+        crate::symbol::test_symbol_accessor_property_count(),
+        count_before + 1,
+        "test premise: the accessor descriptor must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::symbol::test_symbol_accessor_property_count(),
+        count_before,
+        "a dead owner's SYMBOL_ACCESSOR_PROPERTIES entry must be pruned"
+    );
+}
+
+#[test]
+fn test_live_symbol_accessor_owner_survives_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let count_before = crate::symbol::test_symbol_accessor_property_count();
+    let live = alloc_nursery_test_object_addr();
+    js_shadow_slot_set(0, ptr_bits(live));
+    crate::symbol::test_seed_symbol_accessor_property(
+        live,
+        0x8195_0002,
+        crate::value::TAG_UNDEFINED,
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::symbol::test_symbol_accessor_property_count(),
+        count_before + 1,
+        "a ROOTED owner's accessor descriptor must survive"
     );
     js_shadow_slot_set(0, 0);
 }

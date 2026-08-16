@@ -813,7 +813,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     } else {
                         0
                     };
-                    if key_count > (*src_obj).field_count as usize {
+                    if key_count > crate::object::object_live_slot_count(src_obj) as usize {
                         let scope = crate::gc::RuntimeHandleScope::new();
                         let src_handle = scope.root_raw_const_ptr(src_obj);
                         let new_obj = crate::object::js_object_alloc(0, key_count as u32);
@@ -856,7 +856,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     let cloned_obj =
                         crate::object::js_object_clone_with_extra(value, 0, std::ptr::null(), 0);
                     if !cloned_obj.is_null() && (cloned_obj as usize) > 0x10000 {
-                        let field_count = (*cloned_obj).field_count;
+                        let field_count = crate::object::object_live_slot_count(cloned_obj);
                         let fields = (cloned_obj as *mut u8)
                             .add(std::mem::size_of::<crate::object::ObjectHeader>())
                             as *mut f64;

@@ -847,8 +847,14 @@ pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
 /// were a real ArrayHeader (reading `(*arr).length` + the inline element
 /// buffer). When the receiver is a plain object, `clean_arr_ptr` either nulls
 /// it (TypeError downstream) or — if the object's first u32s happen to pass the
-/// length<=capacity sanity bound — reads the `ObjectHeader` field_count / inline
+/// length<=capacity sanity bound — reads the `ObjectHeader`'s words / inline
 /// f64 slots as garbage elements (e.g. `8.48e-314`).
+///
+/// #8113 made that sanity bound WEAKER, not stronger: with `object_type` gone,
+/// `length` aliases `class_id` and `capacity` aliases the ShapeId word, so a
+/// plain object literal (`class_id == 0`) trivially satisfies
+/// `length <= capacity`. The bound was never the defense — the GC-header
+/// `obj_type` test below is — but do not reintroduce a caller that leans on it.
 ///
 /// This helper detects the array-like case via the GC header `obj_type`
 /// (`GC_TYPE_OBJECT` == plain object) and materializes it into a real array via

@@ -428,9 +428,9 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // `Array.from({length: N, 0: ..., 1: ...})` (array-like object) per
     // ECMA-262 §23.1.2.1 step 8: read `.length`, then for each index
     // 0..length read `obj[i]` (missing slots → undefined). Pre-fix this
-    // fell through to the array-memcpy path which read ObjectHeader's
-    // `field_count` u32 as `length` and the inline f64 slots as elements
-    // — garbage. Detect via `GC_TYPE_OBJECT`.
+    // fell through to the array-memcpy path which read an `ObjectHeader` word
+    // as `length` (`class_id` since #8113) and the inline f64 slots as
+    // elements — garbage. Detect via `GC_TYPE_OBJECT`.
     if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let obj_type = unsafe {
             let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)

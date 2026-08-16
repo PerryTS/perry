@@ -117,12 +117,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // an array there, and a raw positional scalar landed in it instead —
             // `super.m(1, 2, 3)` into `m(a, b) { arguments }` bound `arguments`
             // to the number 3.
-            let (synth, user_rest) = resolved_owner
+            // The synth bit comes off the metadata maps, which also cover a
+            // parent this module has no HIR for (an imported class). The
+            // user-rest bit is read off the class HIR where available
+            // (`method_has_user_rest`); for the HIR-less parent, a rest-shaped
+            // param that is NOT the synthesized slot can only be a user rest.
+            let owner_key = resolved_owner
                 .as_deref()
-                .map(|owner| {
-                    crate::codegen::arguments::resolve_method_trailing_shape(ctx, owner, method)
+                .map(|owner| (owner.to_string(), method.clone()));
+            let synth = owner_key
+                .as_ref()
+                .map(|key| {
+                    ctx.method_has_synthetic_arguments
+                        .get(key)
+                        .copied()
+                        .unwrap_or(false)
                 })
-                .unwrap_or((false, false));
+                .unwrap_or(false);
+            let has_rest = owner_key
+                .as_ref()
+                .map(|key| ctx.method_has_rest.get(key).copied().unwrap_or(false))
+                .unwrap_or(false);
+            let user_rest = resolved_owner
+                .as_deref()
+                .map(|owner| crate::codegen::arguments::method_has_user_rest(ctx, owner, method))
+                .unwrap_or(false)
+                || (has_rest && !synth);
             if synth || user_rest {
                 let declared = resolved_owner
                     .as_deref()

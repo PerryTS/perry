@@ -103,10 +103,8 @@ fn alloc_tracked_test_object() -> *mut crate::object::ObjectHeader {
     let child =
         gc_malloc(header_size + fields_size, GC_TYPE_OBJECT) as *mut crate::object::ObjectHeader;
     unsafe {
-        (*child).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*child).class_id = 0;
         (*child).parent_class_id = 0;
-        (*child).field_count = 0;
         (*child).keys_array = std::ptr::null_mut();
         (*child).meta = std::ptr::null_mut();
         let fields_ptr = (child as *mut u8).add(header_size) as *mut crate::JSValue;
@@ -932,10 +930,19 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
     );
     unsafe {
         let obj = child as *mut crate::object::ObjectHeader;
+        // #8113: `object_type == 1` (the old canary at offset 0) is gone. The
+        // shape word replaces it and is a STRONGER canary: the overflow store
+        // above published a ShapeId into it, so it holds a value in a narrow
+        // 2^30-wide range that arbitrary recycled bytes would not land in.
         assert_eq!(
-            (*obj).object_type,
-            1,
+            (*obj).class_id,
+            0,
             "gap-born child payload clobbered after sweep"
+        );
+        assert!(
+            crate::object::shapes::is_shape_id((*obj).parent_class_id),
+            "gap-born child payload clobbered after sweep: shape word is {:#x}",
+            (*obj).parent_class_id
         );
     }
     crate::object::test_clear_overflow_fields_root();

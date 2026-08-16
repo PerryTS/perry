@@ -836,7 +836,7 @@ pub extern "C" fn js_class_field_get_ic(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     site_id: u64,
     object: f64,
     method_name_ptr: *const i8,
@@ -886,7 +886,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_by_id(
     site_id: u64,
     object: f64,
     method_id: i64,
@@ -909,7 +909,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
     site_id: u64,
     object: f64,
     method_name_ptr: *const i8,
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply_by_id(
+pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply_by_id(
     site_id: u64,
     object: f64,
     method_id: i64,
@@ -1055,14 +1055,22 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
         return 0;
     }
     let obj = object_addr as *const ObjectHeader;
-    if !crate::object::object_is_regular(obj) {
+    // #8122: ONE shape-table probe. `object_is_regular` re-derived the GcHeader
+    // this function has already validated (kind + not forwarded) and probed
+    // for the kind; `object_shape_id` then probed again to prove the stamp
+    // resolves. One descriptor read answers both, and the header stamp is the
+    // id once it has resolved.
+    let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+        return 0;
+    };
+    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
         return 0;
     }
     let class_id = (*obj).class_id;
     if class_id == 0 {
         return 0;
     }
-    let shape_id = crate::object::shapes::object_shape_id(obj);
+    let shape_id = crate::object::shapes::object_shape_stamp(obj);
     if shape_id == 0 {
         return 0;
     }

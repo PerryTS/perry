@@ -531,6 +531,18 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
     let is_pointer = top16 == 0x7FFD || (top16 == 0 && bits > 0x10000);
     if is_pointer {
         let ptr = (bits & POINTER_MASK) as usize;
+        // `arguments` is an ordinary ObjectHeader backed by the arguments
+        // registry, not a GC_TYPE_ARRAY. Reading it through the generic object
+        // field path below loses its indexed bindings, so
+        // `Reflect.apply(target, thisArg, arguments)` constructed an empty
+        // argument list. Next 16's ProxyTracer forwards startActiveSpan with
+        // exactly that shape; its callback was consequently never invoked and
+        // the production App Route request remained pending (#8036).
+        if let Some(values) = unsafe {
+            crate::object::arguments_object_to_vec(ptr as *const crate::object::ObjectHeader)
+        } {
+            return values;
+        }
         // #7531: `value` is `argumentsList` from `Reflect.apply(target,
         // thisArg, argumentsList)` / `Reflect.construct` -- caller-supplied,
         // so it can be a fetch/zlib/proxy/common-registry handle id under
@@ -1513,7 +1525,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             let interned = crate::object::interned_key_ptr(key_ptr);
                             // #6595: a per-evaluation CLASS OBJECT (what a
                             // capture-carrying class materializes as,
-                            // `object_type == OBJECT_TYPE_CLASS`) shares its
+                            // `ShapeObjectKind::Class`) shares its
                             // template cid with its instances, and its own-data
                             // writes must reach the #6530
                             // `mirror_class_object_static_write` hook in
@@ -1530,8 +1542,17 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                     addr,
                                 )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
-                                && (*(addr as *const crate::ObjectHeader)).object_type
-                                    == crate::error::OBJECT_TYPE_REGULAR
+                                // #8113: this asks for ORDINARY specifically —
+                                // it must stay FALSE for a class object or
+                                // #6595 reopens. `object_is_regular` is exactly
+                                // `descriptor.object_kind == Ordinary` since
+                                // #8086, so it is the same predicate the
+                                // deleted `object_type == OBJECT_TYPE_REGULAR`
+                                // word expressed, not the weaker
+                                // "is an ObjectHeader" test.
+                                && crate::object::object_is_regular(
+                                    addr as *const crate::ObjectHeader,
+                                )
                                 && interned != 0;
                             let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(class_id, interned)
@@ -1948,6 +1969,48 @@ static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
+
+/// #8194: death pruning for `REFLECT_METADATA`.
+///
+/// The key carries the decorator target's NaN-boxed bits, and
+/// `rewrite_metadata_target_bits` **rekeys** them when the target moves.
+/// Entries were removed only by `Reflect.deleteMetadata`, so a target that
+/// simply became unreachable left its address in the key — the #8040 shape,
+/// because the next rewrite pass reads whatever the arena put there.
+///
+/// Non-`POINTER_TAG` keys (class refs, primitives) and handle-band ids are
+/// left alone: they are not heap addresses, and the `gc::dead_owner` probes
+/// decline to attribute them anyway.
+pub(crate) fn prune_dead_reflect_metadata_targets(is_dead_owner: &dyn Fn(usize) -> bool) {
+    REFLECT_METADATA.with(|store| {
+        store.borrow_mut().retain(|key, _| {
+            if (key.target_bits & !POINTER_MASK) != POINTER_TAG {
+                return true;
+            }
+            let addr = (key.target_bits & POINTER_MASK) as usize;
+            addr == 0 || !is_dead_owner(addr)
+        });
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_reflect_metadata_len() -> usize {
+    REFLECT_METADATA.with(|store| store.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_reflect_metadata(target_bits: u64, key: &str) {
+    REFLECT_METADATA.with(|store| {
+        store.borrow_mut().insert(
+            MetadataKey {
+                target_bits,
+                key: key.to_string(),
+                property_key: None,
+            },
+            f64::from_bits(TAG_UNDEFINED),
+        );
+    });
+}
 
 /// Rewrite a `REFLECT_METADATA` key's POINTER-tagged target bits during the
 /// GC metadata-rewrite phase; non-pointer targets (class refs, primitives)
@@ -2536,6 +2599,24 @@ mod tests {
                 "{addr:#x} must not be misread as a live Array"
             );
         }
+    }
+
+    #[test]
+    fn create_list_from_array_like_unpacks_arguments_objects() {
+        let raw = crate::array::js_array_alloc(3);
+        let raw = crate::array::js_array_push_f64(raw, 11.0);
+        let raw = crate::array::js_array_push_f64(raw, 22.0);
+        let raw = crate::array::js_array_push_f64(raw, 33.0);
+        let raw_args = crate::value::js_nanbox_pointer(raw as i64);
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let arguments = crate::object::js_arguments_object_alloc(raw_args, undefined, 0);
+        let boxed_arguments = crate::value::js_nanbox_pointer(arguments as i64);
+
+        assert_eq!(
+            create_list_from_array_like(boxed_arguments),
+            vec![11.0, 22.0, 33.0],
+            "Reflect.apply must preserve every entry from a real arguments object"
+        );
     }
 
     /// #7531: `raw_ptr_from_value` feeds `array_ptr_from_value`, which derefs

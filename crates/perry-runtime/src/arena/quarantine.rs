@@ -835,6 +835,10 @@ extern "C" fn fromspace_fault_handler(
             out.str("\n  The faulting instruction IS the stale use. Backtrace:\n");
             out.flush();
             emit_native_backtrace();
+            report_stale_address_holders(
+                addr,
+                entry.map(|(user_offset, _, _)| base + user_offset as usize),
+            );
         }
         None => {
             out.str("\n[gc-fromspace-protect] signal ");
@@ -874,6 +878,141 @@ fn emit_native_backtrace() {
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 fn emit_native_backtrace() {}
+
+/// Name the objects that still HOLD the stale address, not just the frame that
+/// dereferenced it (#8082).
+///
+/// The backtrace above answers "who used it"; that is the consumer, and for a
+/// value read out of a table one instruction earlier the consumer is never the
+/// bug. This answers "who kept it": a whole-heap sweep for any live word that
+/// decodes to the faulting address — or to the user pointer of the object that
+/// used to live there — printed as `owner=… obj_type=… +offset`. A holder that
+/// appears here is a slot the rewrite pass did not reach, which is exactly the
+/// class this instrument exists to find.
+///
+/// Off unless `PERRY_GC_PROTECT_FROMSPACE_HOLDERS=1`, because it walks the
+/// whole heap from a signal handler: it takes no locks it can block on (the
+/// cursor is rebuilt from block metadata) but it is emphatically a debug path,
+/// and the fault report above is already useful without it.
+#[cfg(unix)]
+fn report_stale_address_holders(fault_addr: usize, object_user_ptr: Option<usize>) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_PROTECT_FROMSPACE_HOLDERS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    }) {
+        return;
+    }
+
+    let mut out = FaultWriter::new();
+    out.str("\n  Holders still naming this address (whole-heap sweep):\n");
+    out.flush();
+
+    // Match the faulting word itself and the object's base: a stale reference
+    // usually names the object, while the fault lands on whatever field the
+    // consumer read.
+    let targets = [Some(fault_addr), object_user_ptr];
+    let mut found = 0usize;
+    const MAX_REPORTED: usize = 16;
+
+    // Snapshot the quarantined ranges once: those pages are PROT_NONE, and
+    // reading one from inside this handler would fault recursively. `try_lock`
+    // for the same reason the census lookup above uses it — never block here.
+    let mut ranges = [(0usize, 0usize); 64];
+    let mut range_count = 0usize;
+    if let Ok(sets) = REGISTRY.try_lock() {
+        'outer: for set in sets.iter() {
+            for block in set.blocks.iter() {
+                if range_count == ranges.len() {
+                    break 'outer;
+                }
+                ranges[range_count] = (block.data as usize, block.data as usize + block.size);
+                range_count += 1;
+            }
+        }
+    }
+    let quarantined = |addr: usize| {
+        ranges[..range_count]
+            .iter()
+            .any(|(lo, hi)| addr >= *lo && addr < *hi)
+    };
+
+    // Bounded, because this runs inside a signal handler and the whole point
+    // is to reach the re-fault below with a report in hand. An unbounded walk
+    // of a large heap can outlive the crash reporter or a CI timeout, turning
+    // a precise fault into no output at all. A budget that runs out is
+    // reported as such — "swept N objects, budget exhausted" is a different
+    // statement from "no holder", and conflating them is how an instrument
+    // starts lying.
+    const SWEEP_BUDGET: usize = 4_000_000;
+    let mut cursor = crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::Address);
+    let mut budget = SWEEP_BUDGET;
+    let mut swept = 0usize;
+    while let Some((user, size)) = cursor.next_budgeted(&mut budget) {
+        swept += 1;
+        if found >= MAX_REPORTED {
+            break;
+        }
+        let user_addr = user as usize;
+        if quarantined(user_addr) {
+            continue;
+        }
+        let words = size / 8;
+        for i in 0..words {
+            // SAFETY: `user`/`size` come from the arena census, which the
+            // cursor derived from live block metadata.
+            let bits = unsafe { (user as *const u64).add(i).read() };
+            let candidate = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+            let plain = bits as usize;
+            let hit = targets
+                .iter()
+                .flatten()
+                .any(|t| candidate == *t || plain == *t);
+            if !hit {
+                continue;
+            }
+            // The sanctioned probe rather than a bare cast: it rejects
+            // handle-band and small-buffer-slab addresses, which carry no
+            // header at all, before any dereference.
+            // SAFETY: `user_addr` came from the arena census.
+            let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(user_addr) }
+                .map(|header| header.obj_type);
+            out.str("    owner=");
+            out.hex(user_addr);
+            out.str(" obj_type=");
+            out.dec(obj_type.unwrap_or(0xFF) as u64);
+            out.str(" size=");
+            out.dec(size as u64);
+            out.str(" +");
+            out.dec((i * 8) as u64);
+            out.str(if bits >> 48 == 0 {
+                " bare\n"
+            } else {
+                " nanbox\n"
+            });
+            out.flush();
+            found += 1;
+            break;
+        }
+    }
+
+    if budget == 0 {
+        out.str("    (sweep did NOT finish — budget exhausted after ");
+        out.dec(swept as u64);
+        out.str(" objects; this is not evidence of absence)\n");
+    } else if found == 0 {
+        out.str("    (none in ");
+        out.dec(swept as u64);
+        out.str(" objects — the holder is outside the arena: a runtime side\n     table, an FFI structure, or a register/stack slot)\n");
+    }
+    out.flush();
+}
+
+#[cfg(not(unix))]
+fn report_stale_address_holders(_fault_addr: usize, _object_user_ptr: Option<usize>) {}
 
 #[cfg(test)]
 mod census_tests {

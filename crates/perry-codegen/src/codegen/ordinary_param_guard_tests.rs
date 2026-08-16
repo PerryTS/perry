@@ -304,8 +304,20 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
         .expect("LLVM IR is UTF-8");
     let public = function_ir(&ir, "@perry_fn_ordinary_param_guard_async_ts__renderAsync(");
-    assert!(public.contains("call i32 @js_param_type_guard("));
-    assert_eq!(public.matches("call i32 @js_param_type_guard(").count(), 2);
+    // (#8079) Scalar descriptors are decided by the typed-abi leaf guards —
+    // same predicate, none of the interpretive validator's per-call cost.
+    // The interpretive validator must not appear for a string/number tuple.
+    assert!(!public.contains("call i32 @js_param_type_guard("));
+    assert_eq!(
+        public
+            .matches("call i32 @js_typed_string_arg_guard(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        public.matches("call i32 @js_typed_f64_arg_guard(").count(),
+        1
+    );
     assert!(public.contains("$spec_b_b("));
     assert!(public.contains("$generic("));
     let specialized = function_ir(&ir, "renderAsync$spec_b_b(");

@@ -713,8 +713,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Issue #649: PropertyGet on a native-module reference (`fs`,
             // `os`, `crypto`, `path`, ...). `NativeModuleRef` lowers to a
             // literal `0.0`, so the generic PropertyGet path can't see the
-            // namespace. Short-circuit to `js_native_module_property_by_name`
-            // which consults the constants dispatcher directly. For chained
+            // namespace. Short-circuit to the snapshot-backed ESM export
+            // lookup, which consults the constants dispatcher on first read
+            // and is refreshed by `syncBuiltinESMExports`. For chained
             // access like `fs.constants.F_OK` only the inner read fires
             // here — `constants` returns a real NATIVE_MODULE_CLASS_ID
             // ObjectHeader, and the outer PropertyGet routes through
@@ -757,11 +758,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(nanbox_string_inline(blk, &handle));
                 }
                 let mod_idx = ctx.strings.intern(module_name);
-                let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
-                let mod_len_str = module_name.len().to_string();
                 let prop_idx = ctx.strings.intern(property);
-                let prop_bytes_global = format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
-                let prop_len_str = property.len().to_string();
                 // The value read of a native-module callable export (`const f =
                 // util.inherits`) mints a BOUND_METHOD closure that, when invoked
                 // indirectly, dispatches through the per-module `NM_DISPATCH_REGISTRY`
@@ -776,15 +773,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
                     ctx.block().call_void(install_sym, &[]);
                 }
+                if module_name == "fs" && property == "promises" {
+                    let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+                    let prop_bytes_global =
+                        format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_module_property_by_name",
+                        &[
+                            (PTR, &mod_bytes_global),
+                            (I64, &module_name.len().to_string()),
+                            (PTR, &prop_bytes_global),
+                            (I64, &property.len().to_string()),
+                        ],
+                    ));
+                }
+                let mod_handle_global = format!("@{}", ctx.strings.entry(mod_idx).handle_global);
+                let prop_handle_global = format!("@{}", ctx.strings.entry(prop_idx).handle_global);
+                let blk = ctx.block();
+                let module_value = blk.load(DOUBLE, &mod_handle_global);
+                let property_value = blk.load(DOUBLE, &prop_handle_global);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_native_module_property_by_name",
-                    &[
-                        (PTR, &mod_bytes_global),
-                        (I64, &mod_len_str),
-                        (PTR, &prop_bytes_global),
-                        (I64, &prop_len_str),
-                    ],
+                    "js_native_module_esm_export_value",
+                    &[(DOUBLE, &module_value), (DOUBLE, &property_value)],
                 ));
             }
             // Cross-module static field access. When `Base` is an imported
@@ -1436,11 +1448,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `js_object_get_field_by_name_f64` runtime helper which
                 // hashes the property name + walks the keys array. The
                 // ObjectHeader layout (`#[repr(C)]` in
-                // `crates/perry-runtime/src/object.rs:591`) is 24 bytes
-                // followed by the inline field array of f64-sized slots:
+                // `crates/perry-runtime/src/object/mod.rs`) is 24 bytes on
+                // LP64 / 16 on ILP32 (#8113) followed by the inline field
+                // array of f64-sized slots:
                 //
-                //   offset  0..24:  ObjectHeader (object_type, class_id,
-                //                   parent_class_id, field_count, keys_array)
+                //   offset  0..24:  ObjectHeader (class_id, parent_class_id
+                //                   [= ShapeId], keys_array, meta)
                 //   offset 24..32:  field 0
                 //   offset 32..40:  field 1
                 //   ...
@@ -1722,8 +1735,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.current_block = fast_idx;
                         // arm64_32 watchOS: the object fields region begins at
                         // `size_of::<ObjectHeader>()` past the user pointer — 24 on
-                        // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is 4
-                        // bytes there). A hardcoded 24 reads every class field 4 bytes
+                        // 64-bit, 16 on ILP32 since #8113 (both trailing pointers are
+                        // 4 bytes there). A hardcoded 24 reads every class field 8 bytes
                         // off on a 32-bit watch, so this inline class-field load
                         // disagreed with the generic-PIC load / runtime setter (both
                         // target-aware) and typed-object string fields came back as

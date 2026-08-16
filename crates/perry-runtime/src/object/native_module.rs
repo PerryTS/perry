@@ -29,8 +29,9 @@ pub(crate) use callable_exports::{
     bound_native_callable_value_arity, buffer_constructor_value,
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
-    is_buffer_constructor_value, is_cluster_emitter_method, module_cjs_cache_value,
-    module_cjs_extensions_value, module_cjs_global_paths_value, module_cjs_path_cache_value,
+    is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
+    module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
+    module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
     native_string_value, scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
     set_builtin_closure_length, set_builtin_closure_non_constructable,
     sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
@@ -69,6 +70,9 @@ crate::perry_thread_local! {
     pub(crate) static MODULE_CJS_EXTENSIONS_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static MODULE_CJS_PATH_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static MODULE_CJS_GLOBAL_PATHS_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_CJS_PROTOTYPE_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_BUILTIN_MODULES_VALUE: Cell<u64> = const { Cell::new(0) };
+    pub(crate) static MODULE_CONSTANTS_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     /// User overrides of native-module namespace properties, keyed
@@ -77,6 +81,8 @@ crate::perry_thread_local! {
     /// `require('node:timers').setImmediate = patched` must store and win
     /// subsequent property reads instead of throwing read-only.
     static NATIVE_NAMESPACE_PROP_OVERRIDES: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+    static NATIVE_ESM_EXPORT_VALUES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
 }
 
@@ -109,8 +115,18 @@ fn bound_native_method_length(name: &str) -> Option<u32> {
 }
 
 #[no_mangle]
-pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
-    crate::node_vm::create_context(sandbox)
+pub extern "C" fn js_vm_create_context(sandbox: f64, options: f64) -> f64 {
+    crate::node_vm::create_context(sandbox, options)
+}
+
+#[no_mangle]
+pub extern "C" fn js_vm_create_script_branded(code: f64, options: f64) -> f64 {
+    crate::node_vm::dispatch_vm_method(
+        "createScript",
+        code,
+        options,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    )
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -121,6 +137,12 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     NATIVE_NAMESPACE_PROP_OVERRIDES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    NATIVE_ESM_EXPORT_VALUES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
@@ -217,6 +239,27 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     });
     MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_PROTOTYPE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_BUILTIN_MODULES_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CONSTANTS_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
             visitor.visit_nanbox_u64_slot(&mut value_bits);
@@ -469,6 +512,9 @@ pub extern "C" fn js_create_native_module_namespace(
 
     // Return as NaN-boxed pointer
     let value = crate::value::js_nanbox_pointer(obj as i64);
+    if module_name == "module" {
+        crate::object::js_object_seal(value);
+    }
     if should_cache_native_module_namespace(module_name) {
         NATIVE_MODULE_NAMESPACES.with(|cache| {
             cache
@@ -756,6 +802,22 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    native_module_property_by_name_impl(
+        module_name_ptr,
+        module_name_len,
+        property_name_ptr,
+        property_name_len,
+        true,
+    )
+}
+
+unsafe fn native_module_property_by_name_impl(
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    consult_overrides: bool,
+) -> f64 {
     // Codegen NativeModuleRef fast path — can mint native-module-backed
     // values without a namespace object; the vtable must be live for the
     // generic paths that later touch them.
@@ -776,8 +838,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     // `vt_get_own_field`, which the generic object-by-name read path uses; the
     // codegen `NativeModuleRef` fast-path landed here without consulting the
     // side-table, so writes via `PutValueSet` didn't round-trip on reads.
-    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
-        return value;
+    if consult_overrides {
+        if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+            return value;
+        }
     }
     if module_name == "process.namespace" && property_name == "default" {
         return cjs_default_export_value("process")
@@ -905,6 +969,90 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if js_val.to_bits() != crate::value::TAG_UNDEFINED {
         return js_val;
     }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn native_module_string_arg(value: f64) -> Option<String> {
+    let value = JSValue::from_bits(value.to_bits());
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = unsafe { crate::string::js_string_key_bytes(value, &mut sso) }?;
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Snapshot-backed value used for named ESM imports from builtins. CommonJS
+/// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
+#[no_mangle]
+pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
+    let Some(module) = native_module_string_arg(module) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let Some(property) = native_module_string_arg(property) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let module = normalize_native_module_alias(&module).to_string();
+    let key = format!("{module}\0{property}");
+    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
+        return f64::from_bits(bits);
+    }
+    let value = unsafe {
+        native_module_property_by_name_impl(
+            module.as_ptr(),
+            module.len(),
+            property.as_ptr(),
+            property.len(),
+            false,
+        )
+    };
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        return value;
+    }
+    NATIVE_ESM_EXPORT_VALUES.with(|values| {
+        values.borrow_mut().insert(key, value.to_bits());
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    value
+}
+
+pub(crate) fn module_constructor_identity_value() -> f64 {
+    const KEY: &str = "module\0Module";
+    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(KEY).copied()) {
+        return f64::from_bits(bits);
+    }
+    if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|values| values.borrow().get(KEY).copied()) {
+        return f64::from_bits(bits);
+    }
+    bound_native_callable_export_value("module", "Module")
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_sync_builtin_esm_exports() -> f64 {
+    let keys =
+        NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().keys().cloned().collect::<Vec<_>>());
+    for key in keys {
+        let Some((module, property)) = key.split_once('\0') else {
+            continue;
+        };
+        let value = unsafe {
+            native_module_property_by_name_impl(
+                module.as_ptr(),
+                module.len(),
+                property.as_ptr(),
+                property.len(),
+                true,
+            )
+        };
+        NATIVE_ESM_EXPORT_VALUES.with(|values| {
+            values.borrow_mut().insert(key.clone(), value.to_bits());
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub extern "C" fn js_module_run_main() -> f64 {
+    // Perry's AOT entry point has already run before JavaScript can call this
+    // compatibility export, so there is no unevaluated main module to dispatch.
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -1135,6 +1283,25 @@ pub extern "C" fn js_class_method_bind_by_id(instance: f64, method_id: i64) -> f
 #[used]
 static KEEP_CLASS_METHOD_BIND_BY_ID: extern "C" fn(f64, i64) -> f64 = js_class_method_bind_by_id;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static TEST_BOUND_METHOD_MOVE: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_collect_bound_method_after_capture_init() {
+    TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT.with(|armed| armed.set(true));
+    TEST_BOUND_METHOD_MOVE.with(|trace| trace.set((0, 0)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_take_bound_method_move() -> (usize, usize) {
+    TEST_BOUND_METHOD_MOVE.with(|trace| trace.replace((0, 0)))
+}
+
 /// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
 /// named method, stamping its `.name`/`.length`. This is the raw builder used
 /// by both `js_class_method_bind` (after its canonical-identity short-circuit)
@@ -1146,18 +1313,56 @@ pub(crate) fn build_bound_method_closure(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
-    crate::closure::js_closure_set_capture_f64(closure, 0, instance);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    // `js_closure_alloc` can collect before it returns, so keep the receiver
+    // live across that allocation. The metadata installation below allocates a
+    // string for `.name` and can collect again; keep the newly-created closure
+    // in an outer handle and reload it after every such call. Without the outer
+    // handle, `set_bound_native_closure_name` protected the closure only inside
+    // its own scope and this function could return the now-forwarded from-space
+    // address. A caller such as Next's Reflect.get adapter observes that stale
+    // method value at an immediately-following `typeof` check (#8036).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance_handle = scope.root_nanbox_f64(instance);
+    let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::closure::BOUND_METHOD_FUNC_PTR,
+        3,
+    ));
+    // Capture-slot writes are scoped arguments to non-allocating stores, so
+    // the address cannot go stale inside the call. Each value is read from its
+    // own handle first, exactly as before.
+    let instance_value = instance_handle.get_nanbox_f64();
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::closure::js_closure_set_capture_f64(closure, 0, instance_value);
+        crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+    });
+    #[cfg(test)]
+    TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT.with(|armed| {
+        if armed.replace(false) {
+            let before = closure_handle
+                .with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| closure as usize);
+            // The reload IS the subject of this hook: `across_mut` hands back
+            // the post-collection address without ever binding a pre-call one.
+            let (_, after) = closure_handle
+                .across_mut::<crate::closure::ClosureHeader, _>(crate::gc::gc_collect_minor);
+            let after = after as usize;
+            TEST_BOUND_METHOD_MOVE.with(|trace| trace.set((before, after)));
+        }
+    });
     if !method_name_ptr.is_null() && method_name_len > 0 {
         if let Ok(name) = unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
-            set_bound_native_closure_name(closure, name);
+            closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                set_bound_native_closure_name(closure, name)
+            });
             if let Some(length) = bound_native_method_length(name) {
-                set_builtin_closure_length(closure as usize, length);
-            } else if let Some(class_id) = class_id_from_method_receiver(instance) {
+                closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                    set_builtin_closure_length(closure as usize, length)
+                });
+            } else if let Some(class_id) =
+                class_id_from_method_receiver(instance_handle.get_nanbox_f64())
+            {
                 // User class method bound as a value (`C.prototype.m`, `c.m`):
                 // stamp its spec `.length` from the registered param count so
                 // `C.prototype.m.length` reflects the declared arity instead of
@@ -1165,12 +1370,16 @@ pub(crate) fn build_bound_method_closure(
                 if let Some(length) =
                     super::class_registry::class_method_bind_length(class_id, name)
                 {
-                    set_builtin_closure_length(closure as usize, length);
+                    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                        set_builtin_closure_length(closure as usize, length)
+                    });
                 }
             }
         }
     }
-    crate::value::js_nanbox_pointer(closure as i64)
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// #6173: sentinel "method name" installed in the name-capture slots (1, 2) of
@@ -1209,31 +1418,47 @@ pub(crate) fn build_symbol_bound_method_closure(
     has_rest: bool,
     is_static: bool,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 5);
-    if closure.is_null() {
+    // The allocation itself is a safepoint. Keep the receiver current before
+    // storing it into the freshly allocated closure.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::closure::BOUND_METHOD_FUNC_PTR,
+        5,
+    ));
+    if closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|c| c.is_null()) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_closure_set_capture_f64(closure, 0, receiver);
-    crate::closure::js_closure_set_capture_ptr(
-        closure,
-        1,
-        SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
-    );
-    crate::closure::js_closure_set_capture_ptr(closure, 2, SYMBOL_BOUND_METHOD_NAME.len() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
+    let receiver_value = receiver_handle.get_nanbox_f64();
     let meta: i64 = (param_count as i64) | ((has_rest as i64) << 32) | ((is_static as i64) << 33);
-    crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::closure::js_closure_set_capture_f64(closure, 0, receiver_value);
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            1,
+            SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            2,
+            SYMBOL_BOUND_METHOD_NAME.len() as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+    });
     // Spec `.length` = declared params minus a trailing rest param.
-    set_builtin_closure_length(
-        closure as usize,
-        if has_rest {
-            param_count.saturating_sub(1)
-        } else {
-            param_count
-        },
-    );
-    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
-    crate::value::js_nanbox_pointer(closure as i64)
+    let spec_length = if has_rest {
+        param_count.saturating_sub(1)
+    } else {
+        param_count
+    };
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        set_builtin_closure_length(closure as usize, spec_length);
+        crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// Resolve the owning class id for a `js_class_method_bind` receiver: a class
@@ -1347,7 +1572,7 @@ pub(super) fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
             }
             // #7563: the closure guard above fixed ONE instance of that type
             // confusion; a bare `(*obj).class_id` read has it for every other
-            // non-object allocation too. `ObjectHeader` is `{ object_type: u32,
+            // non-object allocation too. `ObjectHeader` is `{ class_id: u32,
             // class_id: u32, … }` while `ArrayHeader` is `{ length: u32,
             // capacity: u32 }`, so the `class_id` slot of an ARRAY overlays its
             // **capacity** — an N-capacity array literal was read back as

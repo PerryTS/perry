@@ -190,6 +190,8 @@ struct EhFrameImage {
     bytes: &'static [u8],
     /// Runtime address of `__text` (BaseAddresses wants it for pc-rel).
     text_addr: u64,
+    /// First address past `__text`; used to select the owning image for a PC.
+    text_end: u64,
     /// Sorted (function_start, function_end, fde_offset) index, built once.
     fde_index: Vec<(u64, u64, gimli::EhFrameOffset)>,
     /// Image load address (mach header) — compact-unwind offsets are
@@ -203,6 +205,9 @@ struct EhFrameImage {
     compact_index: Vec<(u64, u32)>,
     /// Sorted (function_addr, lsda_addr) from the LSDA index arrays.
     lsda_index: Vec<(u64, u64)>,
+    /// Runtime addresses of the indirect personality slots in compact-unwind
+    /// index order (encoding values use one-based indices).
+    personality_slots: Vec<u64>,
 }
 
 // arm64 compact-unwind encoding (mach-o/compact_unwind_encoding.h).
@@ -210,6 +215,8 @@ const CU_MODE_MASK: u32 = 0x0F00_0000;
 const CU_MODE_FRAMELESS: u32 = 0x0200_0000;
 const CU_MODE_DWARF: u32 = 0x0300_0000;
 const CU_MODE_FRAME: u32 = 0x0400_0000;
+const CU_PERSONALITY_MASK: u32 = 0x3000_0000;
+const CU_PERSONALITY_SHIFT: u32 = 28;
 const CU_DWARF_SECTION_OFFSET: u32 = 0x00FF_FFFF;
 const CU_FRAMELESS_STACK_SIZE_MASK: u32 = 0x00FF_F000;
 /// (mask bit, first tracked idx of the pair). d-pairs advance the save
@@ -224,71 +231,217 @@ const CU_D_PAIRS: [(u32, usize); 4] = [
 
 /// Parse `__unwind_info` into flat sorted (function, encoding) + LSDA
 /// indexes. Mirrors the layout libunwind's UnwindCursor reads.
-fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, u64)>) {
-    let u32at =
-        |off: usize| -> u32 { u32::from_le_bytes(ui[off..off + 4].try_into().unwrap_or([0; 4])) };
-    let u16at =
-        |off: usize| -> u16 { u16::from_le_bytes(ui[off..off + 2].try_into().unwrap_or([0; 2])) };
-    let mut funcs = Vec::new();
-    let mut lsdas = Vec::new();
-    if ui.len() < 28 || u32at(0) != 1 {
-        return (funcs, lsdas);
+fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>) {
+    fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+        let end = offset.checked_add(2)?;
+        Some(u16::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
     }
-    let common_off = u32at(4) as usize;
-    let common_count = u32at(8) as usize;
-    let index_off = u32at(20) as usize;
-    let index_count = u32at(24) as usize;
-    let common: Vec<u32> = (0..common_count)
-        .map(|i| u32at(common_off + 4 * i))
-        .collect();
-    for i in 0..index_count.saturating_sub(1) {
-        let entry = index_off + 12 * i;
-        let page_off = u32at(entry + 4) as usize;
-        let lsda_start = u32at(entry + 8) as usize;
-        let lsda_end = u32at(index_off + 12 * (i + 1) + 8) as usize;
-        let mut off = lsda_start;
-        while off + 8 <= lsda_end {
-            lsdas.push((
-                image_base + u32at(off) as u64,
-                image_base + u32at(off + 4) as u64,
-            ));
-            off += 8;
-        }
-        if page_off == 0 {
-            continue;
-        }
-        let kind = u32at(page_off);
-        if kind == 2 {
-            let e_off = u16at(page_off + 4) as usize;
-            let count = u16at(page_off + 6) as usize;
-            for e in 0..count {
-                let at = page_off + e_off + 8 * e;
-                funcs.push((image_base + u32at(at) as u64, u32at(at + 4)));
-            }
-        } else if kind == 3 {
-            let fn_base = u32at(entry) as u64;
-            let e_off = u16at(page_off + 4) as usize;
-            let count = u16at(page_off + 6) as usize;
-            let enc_off = u16at(page_off + 8) as usize;
-            for e in 0..count {
-                let raw = u32at(page_off + e_off + 4 * e);
-                let idx = (raw >> 24) as usize;
-                let enc = if idx < common.len() {
-                    common[idx]
-                } else {
-                    u32at(page_off + enc_off + 4 * (idx - common.len()))
-                };
-                funcs.push((image_base + fn_base + (raw & 0x00FF_FFFF) as u64, enc));
-            }
-        }
+
+    fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+        let end = offset.checked_add(4)?;
+        Some(u32::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
     }
-    funcs.sort_unstable_by_key(|e| e.0);
-    lsdas.sort_unstable_by_key(|e| e.0);
-    (funcs, lsdas)
+
+    fn table_range(
+        bytes_len: usize,
+        offset: usize,
+        count: usize,
+        width: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let byte_len = count.checked_mul(width)?;
+        let end = offset.checked_add(byte_len)?;
+        (end <= bytes_len).then_some(offset..end)
+    }
+
+    // Every offset and count below comes from an untrusted Mach-O section.
+    // Parse transactionally: any invalid range discards all three indexes
+    // rather than publishing a valid-looking prefix from malformed metadata.
+    (|| -> Option<(Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>)> {
+        if ui.len() < 28 || read_u32(ui, 0)? != 1 {
+            return None;
+        }
+        let common_off = read_u32(ui, 4)? as usize;
+        let common_count = read_u32(ui, 8)? as usize;
+        let personality_off = read_u32(ui, 12)? as usize;
+        let personality_count = read_u32(ui, 16)? as usize;
+        let index_off = read_u32(ui, 20)? as usize;
+        let index_count = read_u32(ui, 24)? as usize;
+
+        let common_range = table_range(ui.len(), common_off, common_count, 4)?;
+        let mut common = Vec::with_capacity(common_count);
+        for offset in common_range.step_by(4) {
+            common.push(read_u32(ui, offset)?);
+        }
+
+        let personality_range = table_range(ui.len(), personality_off, personality_count, 4)?;
+        let mut personalities = Vec::with_capacity(personality_count);
+        // Each entry is an image-relative address of a GOT slot. The slot is
+        // rebound by dyld and contains the callable personality address.
+        for offset in personality_range.step_by(4) {
+            personalities.push(image_base.checked_add(read_u32(ui, offset)? as u64)?);
+        }
+
+        table_range(ui.len(), index_off, index_count, 12)?;
+        let mut funcs = Vec::new();
+        let mut lsdas = Vec::new();
+        for i in 0..index_count.saturating_sub(1) {
+            let entry = index_off.checked_add(i.checked_mul(12)?)?;
+            let next_entry = index_off.checked_add((i + 1).checked_mul(12)?)?;
+            let page_off = read_u32(ui, entry.checked_add(4)?)? as usize;
+            let lsda_start = read_u32(ui, entry.checked_add(8)?)? as usize;
+            let lsda_end = read_u32(ui, next_entry.checked_add(8)?)? as usize;
+            let lsda_len = lsda_end.checked_sub(lsda_start)?;
+            if lsda_len % 8 != 0 {
+                return None;
+            }
+            let lsda_range = table_range(ui.len(), lsda_start, lsda_len / 8, 8)?;
+            for offset in lsda_range.step_by(8) {
+                lsdas.push((
+                    image_base.checked_add(read_u32(ui, offset)? as u64)?,
+                    image_base.checked_add(read_u32(ui, offset.checked_add(4)?)? as u64)?,
+                ));
+            }
+
+            if page_off == 0 {
+                continue;
+            }
+            let kind = read_u32(ui, page_off)?;
+            match kind {
+                2 => {
+                    table_range(ui.len(), page_off, 1, 8)?;
+                    let entries_field = page_off.checked_add(4)?;
+                    let count_field = page_off.checked_add(6)?;
+                    let entries_offset =
+                        page_off.checked_add(read_u16(ui, entries_field)? as usize)?;
+                    let count = read_u16(ui, count_field)? as usize;
+                    let entries = table_range(ui.len(), entries_offset, count, 8)?;
+                    for offset in entries.step_by(8) {
+                        funcs.push((
+                            image_base.checked_add(read_u32(ui, offset)? as u64)?,
+                            read_u32(ui, offset.checked_add(4)?)?,
+                        ));
+                    }
+                }
+                3 => {
+                    table_range(ui.len(), page_off, 1, 12)?;
+                    let fn_base = read_u32(ui, entry)? as u64;
+                    let entries_field = page_off.checked_add(4)?;
+                    let entry_count_field = page_off.checked_add(6)?;
+                    let encodings_field = page_off.checked_add(8)?;
+                    let encoding_count_field = page_off.checked_add(10)?;
+                    let entries_offset =
+                        page_off.checked_add(read_u16(ui, entries_field)? as usize)?;
+                    let entry_count = read_u16(ui, entry_count_field)? as usize;
+                    let encodings_offset =
+                        page_off.checked_add(read_u16(ui, encodings_field)? as usize)?;
+                    let encoding_count = read_u16(ui, encoding_count_field)? as usize;
+                    let entries = table_range(ui.len(), entries_offset, entry_count, 4)?;
+                    let encodings = table_range(ui.len(), encodings_offset, encoding_count, 4)?;
+                    for offset in entries.step_by(4) {
+                        let raw = read_u32(ui, offset)?;
+                        let idx = (raw >> 24) as usize;
+                        let enc = if idx < common.len() {
+                            common[idx]
+                        } else {
+                            let local_idx = idx.checked_sub(common.len())?;
+                            if local_idx >= encoding_count {
+                                return None;
+                            }
+                            read_u32(ui, encodings.start.checked_add(local_idx.checked_mul(4)?)?)?
+                        };
+                        let function_offset = fn_base.checked_add((raw & 0x00FF_FFFF) as u64)?;
+                        funcs.push((image_base.checked_add(function_offset)?, enc));
+                    }
+                }
+                _ => return None,
+            }
+        }
+        funcs.sort_unstable_by_key(|entry| entry.0);
+        lsdas.sort_unstable_by_key(|entry| entry.0);
+        Some((funcs, lsdas, personalities))
+    })()
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod unwind_info_tests {
+    use super::parse_unwind_info;
+
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn assert_empty(parsed: (Vec<(u64, u32)>, Vec<(u64, u64)>, Vec<u64>)) {
+        assert!(parsed.0.is_empty());
+        assert!(parsed.1.is_empty());
+        assert!(parsed.2.is_empty());
+    }
+
+    fn regular_page() -> Vec<u8> {
+        let mut bytes = vec![0; 68];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, 28); // common encodings, empty
+        put_u32(&mut bytes, 12, 28); // personalities, empty
+        put_u32(&mut bytes, 20, 28); // two first-level entries
+        put_u32(&mut bytes, 24, 2);
+        put_u32(&mut bytes, 32, 52); // regular second-level page
+        put_u32(&mut bytes, 36, 52); // empty LSDA range
+        put_u32(&mut bytes, 48, 52);
+        put_u32(&mut bytes, 52, 2); // regular page kind
+        put_u16(&mut bytes, 56, 8); // entries start after header
+        put_u16(&mut bytes, 58, 1);
+        put_u32(&mut bytes, 60, 0x10);
+        put_u32(&mut bytes, 64, 0x0400_0000);
+        bytes
+    }
+
+    #[test]
+    fn parses_a_valid_regular_page() {
+        let parsed = parse_unwind_info(&regular_page(), 0x1000);
+        assert_eq!(parsed.0, vec![(0x1010, 0x0400_0000)]);
+        assert!(parsed.1.is_empty());
+        assert!(parsed.2.is_empty());
+    }
+
+    #[test]
+    fn rejects_overflowing_header_table_ranges() {
+        let mut bytes = vec![0; 28];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, u32::MAX);
+        put_u32(&mut bytes, 8, u32::MAX);
+        assert_empty(parse_unwind_info(&bytes, 0));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_first_level_index() {
+        let mut bytes = vec![0; 40];
+        put_u32(&mut bytes, 0, 1);
+        put_u32(&mut bytes, 4, 28);
+        put_u32(&mut bytes, 12, 28);
+        put_u32(&mut bytes, 20, 28);
+        put_u32(&mut bytes, 24, 2);
+        assert_empty(parse_unwind_info(&bytes, 0));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_lsda_and_page_ranges_transactionally() {
+        let mut bad_lsda = regular_page();
+        put_u32(&mut bad_lsda, 36, 80);
+        put_u32(&mut bad_lsda, 48, 88);
+        assert_empty(parse_unwind_info(&bad_lsda, 0));
+
+        let mut bad_page = regular_page();
+        put_u16(&mut bad_page, 58, 2);
+        assert_empty(parse_unwind_info(&bad_page, 0));
+    }
 }
 
 #[cfg(target_os = "macos")]
-fn find_eh_frame_image() -> Option<EhFrameImage> {
+fn find_eh_frame_images() -> Vec<EhFrameImage> {
     use core::ffi::{c_char, c_ulong};
     unsafe extern "C" {
         fn _dyld_image_count() -> u32;
@@ -300,28 +453,28 @@ fn find_eh_frame_image() -> Option<EhFrameImage> {
             size: *mut c_ulong,
         ) -> *mut u8;
     }
-    // The main executable: generated code AND the runtime staticlib both
-    // live there. dladdr on one of our own functions pins the right image.
-    let probe = capture_here as *const ();
-    let mut info: libc::Dl_info = unsafe { core::mem::zeroed() };
-    if unsafe { libc::dladdr(probe as *const _, &mut info) } == 0 {
-        return None;
-    }
+    // Generated code, the runtime, and stdlib can be separate eagerly-loaded
+    // images. Index every currently loaded image so a walk can cross those
+    // boundaries and still select the CFI/LSDA belonging to each PC.
+    let mut images = Vec::new();
     let n = unsafe { _dyld_image_count() };
     for i in 0..n {
         let hdr = unsafe { _dyld_get_image_header(i) };
-        if hdr as usize != info.dli_fbase as usize {
+        if hdr.is_null() {
             continue;
         }
         let mut size: core::ffi::c_ulong = 0;
         let eh =
             unsafe { getsectiondata(hdr, c"__TEXT".as_ptr(), c"__eh_frame".as_ptr(), &mut size) };
         if eh.is_null() || size == 0 {
-            return None;
+            continue;
         }
         let mut tsize: core::ffi::c_ulong = 0;
         let text =
             unsafe { getsectiondata(hdr, c"__TEXT".as_ptr(), c"__text".as_ptr(), &mut tsize) };
+        if text.is_null() || tsize == 0 {
+            continue;
+        }
         let mut usize_: core::ffi::c_ulong = 0;
         let ui = unsafe {
             getsectiondata(
@@ -332,31 +485,33 @@ fn find_eh_frame_image() -> Option<EhFrameImage> {
             )
         };
         let bytes = unsafe { core::slice::from_raw_parts(eh as *const u8, size as usize) };
-        let (compact_index, lsda_index) = if ui.is_null() || usize_ == 0 {
-            (Vec::new(), Vec::new())
+        let (compact_index, lsda_index, personality_slots) = if ui.is_null() || usize_ == 0 {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             let ui_bytes = unsafe { core::slice::from_raw_parts(ui as *const u8, usize_ as usize) };
             parse_unwind_info(ui_bytes, hdr as u64)
         };
-        return Some(EhFrameImage {
+        images.push(EhFrameImage {
             eh_frame_addr: eh as u64,
             bytes,
             text_addr: text as u64,
+            text_end: (text as u64).saturating_add(tsize as u64),
             fde_index: Vec::new(),
             image_base: hdr as u64,
             compact_index,
             lsda_index,
+            personality_slots,
         });
     }
-    None
+    images
 }
 
 #[cfg(not(target_os = "macos"))]
-fn find_eh_frame_image() -> Option<EhFrameImage> {
+fn find_eh_frame_images() -> Vec<EhFrameImage> {
     // Linux: dl_iterate_phdr + PT_GNU_EH_FRAME. Lands with the Linux CI
     // arm; until then the walker reports unavailable and the system
     // unwinder carries all throws.
-    None
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -382,10 +537,14 @@ fn diag_decline(pc: u64, why: &str) -> Option<StepRow> {
     None
 }
 
-pub(crate) struct Walker {
+struct WalkerImage {
     image: EhFrameImage,
     eh_frame: EhFrame<gimli::EndianSlice<'static, NativeEndian>>,
     bases: BaseAddresses,
+}
+
+pub(crate) struct Walker {
+    images: Vec<WalkerImage>,
     rows: HashMap<u64, Option<StepRow>>,
 }
 
@@ -394,31 +553,39 @@ static WALKER: OnceLock<Option<Mutex<Walker>>> = OnceLock::new();
 fn walker() -> Option<&'static Mutex<Walker>> {
     WALKER
         .get_or_init(|| {
-            let mut image = find_eh_frame_image()?;
-            let eh_frame = EhFrame::new(image.bytes, NativeEndian);
-            let bases = BaseAddresses::default()
-                .set_eh_frame(image.eh_frame_addr)
-                .set_text(image.text_addr);
-            // Index every FDE once: (start, end, offset), sorted by start.
-            let mut entries = eh_frame.entries(&bases);
-            let mut index = Vec::new();
-            while let Ok(Some(entry)) = entries.next() {
-                if let gimli::CieOrFde::Fde(partial) = entry {
-                    if let Ok(fde) = partial.parse(EhFrame::cie_from_offset) {
-                        index.push((
-                            fde.initial_address(),
-                            fde.initial_address() + fde.len(),
-                            fde.offset().into(),
-                        ));
+            let mut images = Vec::new();
+            for mut image in find_eh_frame_images() {
+                let eh_frame = EhFrame::new(image.bytes, NativeEndian);
+                let bases = BaseAddresses::default()
+                    .set_eh_frame(image.eh_frame_addr)
+                    .set_text(image.text_addr);
+                // Index every FDE once: (start, end, offset), sorted by start.
+                let mut entries = eh_frame.entries(&bases);
+                let mut index = Vec::new();
+                while let Ok(Some(entry)) = entries.next() {
+                    if let gimli::CieOrFde::Fde(partial) = entry {
+                        if let Ok(fde) = partial.parse(EhFrame::cie_from_offset) {
+                            index.push((
+                                fde.initial_address(),
+                                fde.initial_address() + fde.len(),
+                                fde.offset().into(),
+                            ));
+                        }
                     }
                 }
+                index.sort_unstable_by_key(|e| e.0);
+                image.fde_index = index;
+                images.push(WalkerImage {
+                    image,
+                    eh_frame,
+                    bases,
+                });
             }
-            index.sort_unstable_by_key(|e| e.0);
-            image.fde_index = index;
+            if images.is_empty() {
+                return None;
+            }
             Some(Mutex::new(Walker {
-                image,
-                eh_frame,
-                bases,
+                images,
                 rows: HashMap::new(),
             }))
         })
@@ -426,6 +593,12 @@ fn walker() -> Option<&'static Mutex<Walker>> {
 }
 
 impl Walker {
+    fn image_for(&self, pc: u64) -> Option<&WalkerImage> {
+        self.images
+            .iter()
+            .find(|image| pc >= image.image.text_addr && pc < image.image.text_end)
+    }
+
     /// Decode (or fetch cached) the step row covering `pc`.
     fn row_for(&mut self, pc: u64) -> Option<StepRow> {
         if let Some(cached) = self.rows.get(&pc) {
@@ -436,6 +609,12 @@ impl Walker {
         row
     }
 
+    fn decode_row(&self, pc: u64) -> Option<StepRow> {
+        self.image_for(pc)?.decode_row(pc)
+    }
+}
+
+impl WalkerImage {
     fn decode_row(&self, pc: u64) -> Option<StepRow> {
         // Compact unwind is authoritative on macOS: FRAME/FRAMELESS
         // functions have no .eh_frame FDE at all, and DWARF-mode entries
@@ -560,7 +739,9 @@ impl Walker {
             reloads,
         })
     }
+}
 
+impl Walker {
     /// Step one frame: given the register state AT `regs.pc`, produce the
     /// caller's state. None = undecodable (caller falls back).
     pub(crate) fn step(&mut self, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs> {
@@ -669,6 +850,24 @@ thread_local! {
 impl Walker {
     /// LSDA pointer + function start for the FDE covering `pc`, if any.
     fn lsda_for(&self, pc: u64) -> Option<(u64, u64)> {
+        self.image_for(pc)?.lsda_for(pc)
+    }
+}
+
+impl WalkerImage {
+    fn is_perry_personality(&self, encoding: u32) -> bool {
+        let index = ((encoding & CU_PERSONALITY_MASK) >> CU_PERSONALITY_SHIFT) as usize;
+        let Some(&slot) = index
+            .checked_sub(1)
+            .and_then(|index| self.image.personality_slots.get(index))
+        else {
+            return false;
+        };
+        let resolved = unsafe { core::ptr::read(slot as *const usize) };
+        resolved == crate::eh::perry_eh_personality as *const () as usize
+    }
+
+    fn lsda_for(&self, pc: u64) -> Option<(u64, u64)> {
         // On macOS the compact-unwind LSDA index is authoritative: it
         // covers FRAME/FRAMELESS `try` functions, which have no FDE at all
         // (89% of our functions are DWARF-mode, but the try-containing
@@ -679,7 +878,13 @@ impl Walker {
             if pos == 0 {
                 return None;
             }
-            let fstart = ci[pos - 1].0;
+            let (fstart, encoding) = ci[pos - 1];
+            // Other languages also use non-zero LSDA actions for termination
+            // shims and catches. Only Perry's personality describes a JS
+            // handler that the single-phase transport may enter directly.
+            if !self.is_perry_personality(encoding) {
+                return None;
+            }
             let li = &self.image.lsda_index;
             let lpos = li.partition_point(|e| e.0 <= fstart);
             if lpos == 0 {
@@ -706,6 +911,13 @@ impl Walker {
             .eh_frame
             .fde_from_offset(&self.bases, offset, EhFrame::cie_from_offset)
             .ok()?;
+        let personality = match fde.personality()? {
+            gimli::Pointer::Direct(address) => address as usize,
+            gimli::Pointer::Indirect(slot) => unsafe { core::ptr::read(slot as *const usize) },
+        };
+        if personality != crate::eh::perry_eh_personality as *const () as usize {
+            return None;
+        }
         match fde.lsda() {
             Some(gimli::Pointer::Direct(addr)) => Some((addr, start)),
             _ => None,

@@ -29,6 +29,10 @@ pub extern "C" fn js_typed_array_map(
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // 23.2.3.20 step 5: A is TypedArraySpeciesCreate(O, « len ») — BEFORE
         // the callback loop (so a throwing constructor/@@species getter aborts
         // before any callback runs).
@@ -39,7 +43,7 @@ pub extern "C" fn js_typed_array_map(
         };
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             crate::typedarray_props::species_result_store(result_addr, i, r);
         }
         species::result_as_ptr(result)
@@ -61,13 +65,17 @@ pub extern "C" fn js_typed_array_filter(
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         // 23.2.3.10: the callback runs for every element FIRST (collecting the
         // kept values), THEN A = TypedArraySpeciesCreate(O, « captured »). The
         // @@species getter is therefore observed after all callbacks.
         let mut kept: Vec<f64> = Vec::new();
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 kept.push(v);
             }
@@ -97,9 +105,13 @@ pub extern "C" fn js_typed_array_every(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) == 0 {
                 return f64::from_bits(crate::value::TAG_FALSE);
             }
@@ -121,9 +133,13 @@ pub extern "C" fn js_typed_array_some(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return f64::from_bits(crate::value::TAG_TRUE);
             }
@@ -143,9 +159,13 @@ pub extern "C" fn js_typed_array_for_each(
         unsafe {
             let len = (*ta).length as usize;
             let recv = ta_receiver_value(ta);
+            // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+            // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+            // exactly one.
+            let cb_site = crate::closure::DirectCall3::resolve(callback);
             for i in 0..len {
                 let v = load_at(ta, i);
-                let _ = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+                let _ = cb_site.call(callback, v, i as f64, recv);
             }
         }
     }
@@ -165,9 +185,13 @@ pub extern "C" fn js_typed_array_find(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -189,9 +213,13 @@ pub extern "C" fn js_typed_array_find_index(
     unsafe {
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
+            let r = cb_site.call(callback, v, i as f64, recv);
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }
@@ -228,17 +256,34 @@ pub extern "C" fn js_typed_array_reduce(
             crate::array::throw_reduce_of_empty();
         }
         let recv = ta_receiver_value(ta);
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall4::resolve(callback);
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, 0)
         } else {
             (load_at(ta, 0), 1)
         };
+        // #8179: root the accumulator. It is the one value in these loops
+        // that is routinely a NURSERY object — a string/object/array seed, or
+        // a fresh one returned by every callback — and a bare Rust local
+        // holding a NaN-boxed pre-move address is a copy the collector cannot
+        // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
+        // accumulator since the 2026-07-02 audit; the TypedArray siblings and
+        // the Buffer-receiver dispatcher never did.
+        //
+        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
+        // places every TypedArray in the old arena as TENURED, documented
+        // there as non-movable because raw data pointers are handed out.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let acc = scope.root_nanbox_f64(accumulator);
         for i in start_idx..len {
             let v = load_at(ta, i);
-            accumulator =
-                crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+            let next = cb_site.call(callback, acc.get_nanbox_f64(), v, i as f64, recv);
+            acc.set_nanbox_f64(next);
         }
-        accumulator
+        acc.get_nanbox_f64()
     }
 }
 
@@ -267,18 +312,35 @@ pub extern "C" fn js_typed_array_reduce_right(
             crate::array::throw_reduce_of_empty();
         }
         let recv = ta_receiver_value(ta);
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        // #8180: resolve the callback's dispatch ONCE. It is invariant for a
+        // fixed closure (see closure/dispatch/direct.rs), and this loop calls
+        // exactly one.
+        let cb_site = crate::closure::DirectCall4::resolve(callback);
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, len)
         } else {
             (load_at(ta, len - 1), len - 1)
         };
+        // #8179: root the accumulator. It is the one value in these loops
+        // that is routinely a NURSERY object — a string/object/array seed, or
+        // a fresh one returned by every callback — and a bare Rust local
+        // holding a NaN-boxed pre-move address is a copy the collector cannot
+        // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
+        // accumulator since the 2026-07-02 audit; the TypedArray siblings and
+        // the Buffer-receiver dispatcher never did.
+        //
+        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
+        // places every TypedArray in the old arena as TENURED, documented
+        // there as non-movable because raw data pointers are handed out.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let acc = scope.root_nanbox_f64(accumulator);
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
                 let v = load_at(ta, i);
-                accumulator =
-                    crate::closure::js_closure_call4(callback, accumulator, v, i as f64, recv);
+                let next = cb_site.call(callback, acc.get_nanbox_f64(), v, i as f64, recv);
+                acc.set_nanbox_f64(next);
             }
         }
-        accumulator
+        acc.get_nanbox_f64()
     }
 }

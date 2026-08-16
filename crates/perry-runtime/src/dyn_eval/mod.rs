@@ -68,6 +68,8 @@ pub(crate) struct InterpFn {
     /// `var` names hoisted to the function scope (prepass, excludes nested
     /// function bodies).
     pub hoisted_vars: Vec<String>,
+    /// Whether assignments in this function use strict PutValue semantics.
+    pub strict: bool,
 }
 
 pub(crate) enum InterpBody {
@@ -194,7 +196,8 @@ pub(crate) fn lookup_fn(id: u32) -> Option<Rc<InterpFn>> {
 /// minor ineligible. The consequence is not that the interpreter is safe; it
 /// is that the interpreter is **untestable**:
 ///
-///  * `PERRY_GC_ZEAL` forces collection at safepoints, and there are none here;
+///  * `PERRY_GC_SCHEDULE_RATE` forces collection at safepoints, and there are
+///    none here;
 ///  * `PERRY_GC_SCHEDULE_SEED` selects safepoints, and there are none here;
 ///  * `gc_root_dominance_check.py` reads emitted LLVM IR, and there is none
 ///    here.
@@ -344,6 +347,208 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
 ///   * TypeError naming the construct when the source parses but uses
 ///     something outside the interpreter subset.
 pub fn dyn_function_from_strings(args: &[String]) -> f64 {
+    let fn_id = prepare_function_args(args);
+    // Preserve Function-constructor semantics: each instance owns a private
+    // sloppy-assignment root, while universal globals resolve in this realm.
+    let global = crate::object::js_get_global_this();
+    let root_env = env::env_new_root();
+    let root_idx = root_push(root_env);
+    let closure =
+        interp::alloc_interp_closure(fn_id, root_get(root_idx), None, global, global, true, true);
+    roots_truncate(root_idx);
+    closure
+}
+
+/// Build a persistent script lexical environment over a live global/object
+/// environment chain. The last `object_envs` entry has highest precedence.
+pub(crate) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
+    let chain = object_environment_chain(global, object_envs);
+    let chain_idx = root_push(chain);
+    let lexical = env::env_new(root_get(chain_idx));
+    roots_truncate(chain_idx);
+    lexical
+}
+
+pub(crate) fn script_binding(lexical_env: f64, name: &str) -> f64 {
+    env::lookup(lexical_env, name).unwrap_or_else(bridge::undefined)
+}
+
+/// Compile a Function-constructor body against a selected global and live
+/// context-extension objects. Parameter/local bindings still win; then
+/// object_envs are searched from last to first; the global is last.
+#[cfg(test)]
+pub(crate) fn function_from_strings_in(
+    args: &[String],
+    global_this: f64,
+    intrinsics: f64,
+    object_envs: &[f64],
+) -> f64 {
+    function_from_strings_in_with_codegen(args, global_this, intrinsics, object_envs, true, true)
+}
+
+pub(crate) fn function_from_strings_in_with_codegen(
+    args: &[String],
+    global_this: f64,
+    intrinsics: f64,
+    object_envs: &[f64],
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
+    let base = roots_len();
+    let global_idx = root_push(global_this);
+    let intrinsics_idx = root_push(intrinsics);
+    let object_env_idxs = object_envs
+        .iter()
+        .copied()
+        .map(root_push)
+        .collect::<Vec<_>>();
+    let fn_id = prepare_function_args(args);
+    let rooted_object_envs = object_env_idxs
+        .iter()
+        .map(|&idx| root_get(idx))
+        .collect::<Vec<_>>();
+    let chain = object_environment_chain(root_get(global_idx), &rooted_object_envs);
+    let chain_idx = root_push(chain);
+    let closure = interp::alloc_interp_closure(
+        fn_id,
+        root_get(chain_idx),
+        None,
+        root_get(global_idx),
+        root_get(intrinsics_idx),
+        strings_allowed,
+        wasm_allowed,
+    );
+    roots_truncate(base);
+    closure
+}
+
+/// Parse and execute script/global code with a selected global and persistent
+/// lexical environment. Syntax errors use the shared SWC parser diagnostic;
+/// unsupported runtime constructs keep dyn_eval's precise TypeError path.
+pub(crate) fn eval_script_in(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    lexical_env: f64,
+) -> f64 {
+    eval_script_in_with_codegen(source, global_this, intrinsics, lexical_env, true, true)
+}
+
+pub(crate) fn eval_script_in_with_codegen(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    lexical_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
+    let base = roots_len();
+    let global_idx = root_push(global_this);
+    let intrinsics_idx = root_push(intrinsics);
+    let env_idx = root_push(lexical_env);
+    let statements = parse_script_statements(source);
+    let variable_env_idx = root_push(env::variable_environment(root_get(env_idx)));
+    let ret_idx = root_push(bridge::undefined());
+    let ctx = interp::Ctx {
+        this_idx: global_idx,
+        ret_idx,
+        global_idx,
+        intrinsics_idx,
+        variable_env_idx,
+        strict: interp::has_use_strict_directive(&statements),
+        strings_allowed,
+        wasm_allowed,
+    };
+    let _ = interp::exec_script_stmts(&ctx, &statements, env_idx);
+    let result = root_get(ret_idx);
+    roots_truncate(base);
+    result
+}
+
+pub(crate) fn eval_direct_in(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    caller_env: f64,
+    caller_variable_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
+    let base = roots_len();
+    let global_idx = root_push(global_this);
+    let intrinsics_idx = root_push(intrinsics);
+    let caller_env_idx = root_push(caller_env);
+    let caller_variable_env_idx = root_push(caller_variable_env);
+    let statements = parse_script_statements(source);
+    let strict = interp::has_use_strict_directive(&statements);
+    let lexical_env_idx = root_push(env::env_new(root_get(caller_env_idx)));
+    let ret_idx = root_push(bridge::undefined());
+    let variable_env_idx = if strict {
+        lexical_env_idx
+    } else {
+        caller_variable_env_idx
+    };
+    let ctx = interp::Ctx {
+        this_idx: global_idx,
+        ret_idx,
+        global_idx,
+        intrinsics_idx,
+        variable_env_idx,
+        strict,
+        strings_allowed,
+        wasm_allowed,
+    };
+    let _ = interp::exec_direct_eval_stmts(&ctx, &statements, lexical_env_idx, variable_env_idx);
+    let result = root_get(ret_idx);
+    roots_truncate(base);
+    result
+}
+
+fn parse_script_statements(source: &str) -> Vec<ast::Stmt> {
+    let mut cache = perry_diagnostics_cache();
+    let parsed =
+        perry_parser::parse_typescript_with_cache(source, "perry-vm-script.cjs", &mut cache)
+            .unwrap_or_else(|e| {
+                bridge::throw_syntax_error(&format!("invalid node:vm script source: {e}"))
+            });
+    parsed
+        .module
+        .body
+        .into_iter()
+        .map(|item| match item {
+            ast::ModuleItem::Stmt(stmt) => stmt,
+            ast::ModuleItem::ModuleDecl(_) => {
+                bridge::throw_syntax_error("module syntax is not valid in a vm.Script")
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn validate_script_source(source: &str) -> f64 {
+    let _ = parse_script_statements(source);
+    bridge::undefined()
+}
+
+fn object_environment_chain(global: f64, object_envs: &[f64]) -> f64 {
+    let base = roots_len();
+    let global_idx = root_push(global);
+    let object_idxs = object_envs
+        .iter()
+        .copied()
+        .map(root_push)
+        .collect::<Vec<_>>();
+    let root = env::env_new_object(None, root_get(global_idx));
+    let env_idx = root_push(root);
+    for &object_idx in &object_idxs {
+        let next = env::env_new_object(Some(root_get(env_idx)), root_get(object_idx));
+        root_set(env_idx, next);
+    }
+    let result = root_get(env_idx);
+    roots_truncate(base);
+    result
+}
+
+fn prepare_function_args(args: &[String]) -> u32 {
     let (params, body) = match args.split_last() {
         Some((body, params)) => (params.join(","), body.as_str()),
         None => (String::new(), ""),
@@ -377,14 +582,7 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
             }
         }
     };
-    // The instance's root environment: undeclared-assignment target (sloppy
-    // implicit "globals" scoped to this Function instance) and the parent of
-    // every call scope.
-    let root_env = env::env_new_root();
-    let root_idx = root_push(root_env);
-    let closure = interp::alloc_interp_closure(fn_id, root_get(root_idx), None);
-    roots_truncate(root_idx);
-    closure
+    fn_id
 }
 
 /// Parse an assembled `(function anonymous(…){…})` source, reject
@@ -418,6 +616,7 @@ fn prepare_source(source: &str) -> u32 {
     let interp_fn = interp::build_interp_fn(
         func.params.into_iter().map(|p| p.pat).collect(),
         InterpBody::Block(func.body.map(|b| b.stmts).unwrap_or_default()),
+        false,
     );
     register_fn(interp_fn)
 }

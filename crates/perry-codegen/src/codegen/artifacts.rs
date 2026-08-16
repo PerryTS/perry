@@ -89,6 +89,9 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub closure_arrow_functions: &'a std::collections::HashSet<u32>,
     pub closures: &'a [(perry_hir::types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
+    /// #8122: keys global → (class id, packed GcHeader word) for the classes
+    /// whose inline-`new` header image module init must compose.
+    pub class_header_image_inits: &'a std::collections::HashMap<String, (u32, u64)>,
     pub imported_class_stubs: &'a [perry_hir::Class],
     pub cross_module: &'a CrossModuleCtx,
 }
@@ -211,6 +214,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_arrow_functions,
         closures,
         class_keys_init_data,
+        class_header_image_inits,
         imported_class_stubs,
         cross_module,
     } = c;
@@ -1972,6 +1976,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         strings,
         module_prefix,
         class_keys_init_data,
+        class_header_image_inits,
         class_ids,
         class_table,
         &hir.class_display_names,

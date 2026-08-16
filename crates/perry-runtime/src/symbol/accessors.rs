@@ -35,6 +35,43 @@ pub(super) fn clear_all_symbol_accessor_properties_for_object(obj_key: usize) {
     }
 }
 
+/// #8195: death pruning for `SYMBOL_ACCESSOR_PROPERTIES`, called from
+/// `symbol::prune_dead_symbol_property_owners` so all three symbol tables
+/// share one deadness verdict per owner.
+///
+/// The `sym_key` half of the key is a strong root
+/// (`scan_symbol_accessor_roots_mut`'s `visit_usize_slot`); the OWNER half is
+/// metadata-only and rekeyed, so it can go stale. Until now the only bulk
+/// removal was `clear_all_symbol_accessor_properties_for_object`, reached
+/// solely from the handle-recycle path — never for a plain heap object. Two
+/// consequences, both closed here: the accessor closures held in the
+/// descriptor were immortal, and the dead owner address survived into the next
+/// cycle's rewrite pass (#8040's shape; see `gc::dead_owner`).
+pub(super) fn prune_dead_symbol_accessor_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    if let Some(map) = guard.as_mut() {
+        map.retain(|(owner, _), _| !is_dead_owner(*owner));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_accessor_property_count() -> usize {
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    guard.as_ref().map_or(0, |map| map.len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_symbol_accessor_property(obj_key: usize, sym_key: usize, get_bits: u64) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
+    guard.get_or_insert_with(HashMap::new).insert(
+        (obj_key, sym_key),
+        SymbolAccessorDescriptor {
+            get: get_bits,
+            set: TAG_UNDEFINED,
+        },
+    );
+}
+
 pub(crate) unsafe fn set_symbol_accessor_property(
     obj_f64: f64,
     sym_f64: f64,

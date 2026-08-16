@@ -46,6 +46,21 @@ class Base {
     return `args=${arguments.length} rest=${rest.length}`;
   }
 
+  // (4b) the same shape, by VALUE not just by length: `rest` must be a real
+  // array of the trailing args while `arguments` holds every one — a
+  // resolution that hands the rest slot a scalar (or the full list) fails
+  // this line even where the lengths happen to agree.
+  bothIdx(a: number, ...rest: number[]) {
+    return [
+      a,
+      rest.length,
+      arguments.length,
+      arguments[0],
+      arguments[1],
+      arguments[2],
+    ].join(",");
+  }
+
   // (5) async methods lower through the async-to-generator transform, which
   // rewrites the body's locals — the synthesized param has to survive it.
   async asy(a: number, b: number) {
@@ -89,6 +104,7 @@ console.log("(2) four(1,2,3):", (b as any).four(1, 2, 3));
 console.log("(2) four(1..6):", (b as any).four(1, 2, 3, 4, 5, 6));
 console.log("(3) idx(7,8,9):", (b as any).idx(7, 8, 9));
 console.log("(4) both(1,2,3):", (b as any).both(1, 2, 3));
+console.log("(4b) bothIdx(1,2,3):", (b as any).bothIdx(1, 2, 3));
 console.log("(6) Base.stat(1,2,3):", (Base as any).stat(1, 2, 3));
 console.log("(7) Derived.two(1,2,3):", (new Derived() as any).two(1, 2, 3));
 

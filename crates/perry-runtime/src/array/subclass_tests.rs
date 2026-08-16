@@ -3,11 +3,19 @@
 //!
 //! Every test here is **sabotage-shaped**: it first asserts that the bytes the
 //! pre-fix code misread are *still sitting there* — an `ObjectHeader` read as
-//! an `ArrayHeader` yields `length == object_type == 1` and
-//! `capacity == class_id`, both of which sail through `clean_arr_ptr`'s
-//! length/capacity sanity check — and only then that the entry point refuses
-//! or resolves it. A green run therefore proves the brand check FIRED, not that
-//! the receiver happened to look invalid for some unrelated reason.
+//! an `ArrayHeader` yields a `(length, capacity)` pair that sails through
+//! `clean_arr_ptr`'s length/capacity sanity check — and only then that the
+//! entry point refuses or resolves it. A green run therefore proves the brand
+//! check FIRED, not that the receiver happened to look invalid for some
+//! unrelated reason.
+//!
+//! #8113 MOVED the overlay. `ObjectHeader::object_type` is gone, so
+//! `ArrayHeader.length` now aliases `class_id` and `capacity` aliases the shape
+//! word. That makes the class ids used here load-bearing: the pre-fix sanity
+//! check is `length <= capacity && length <= 100M`, and `length` is the class
+//! id, so every fixture below uses an id under 100,000,000. A larger id would
+//! fail that check for an unrelated reason and silently turn these tests
+//! vacuous — which is exactly the failure mode the module is written to avoid.
 
 use super::subclass::{
     array_object_receiver, is_array_subclass_class_id, raw_receiver_is_heap_object,
@@ -23,24 +31,29 @@ fn as_array_header(obj: *mut ObjectHeader) -> *const ArrayHeader {
 }
 
 /// The overlay that makes this bug possible, pinned. If `ObjectHeader` ever
-/// stops starting with `object_type: u32, class_id: u32`, the misread this
+/// stops starting with `class_id: u32, parent_class_id: u32`, the misread this
 /// whole family defends against changes shape and these tests must be revisited.
 #[test]
 fn object_header_still_overlays_array_header_length_and_capacity() {
-    let class_id = 0x7574_0001;
+    let class_id = 0x0074_0001;
     let obj = js_object_alloc(class_id, 2);
     assert!(!obj.is_null());
     let hdr = as_array_header(obj);
     unsafe {
         assert_eq!(
             (*hdr).length,
-            1,
-            "ArrayHeader.length must still alias ObjectHeader.object_type (= 1)"
+            class_id,
+            "#8113: ArrayHeader.length must alias ObjectHeader.class_id"
         );
         assert_eq!(
             (*hdr).capacity,
-            class_id,
-            "ArrayHeader.capacity must still alias ObjectHeader.class_id"
+            (*obj).parent_class_id,
+            "#8113: ArrayHeader.capacity must alias the ObjectHeader shape word"
+        );
+        assert!(
+            crate::object::shapes::is_shape_id((*obj).parent_class_id),
+            "test premise: a birth-stamped object carries a ShapeId in word 1, \
+             which is what keeps the forged capacity above the forged length"
         );
         // The sanity check `clean_arr_ptr` applied BEFORE the fix: `length <=
         // capacity && length <= 100M`. Both hold, which is precisely why the
@@ -52,7 +65,7 @@ fn object_header_still_overlays_array_header_length_and_capacity() {
 
 #[test]
 fn clean_arr_ptr_refuses_a_plain_object_receiver() {
-    let obj = js_object_alloc(0x7574_0002, 2);
+    let obj = js_object_alloc(0x0074_0002, 2);
     let hdr = as_array_header(obj);
     unsafe {
         // Sabotage precondition: the forged (length, capacity) pair is still
@@ -88,7 +101,7 @@ fn a_genuine_array_takes_the_fast_path_and_is_never_redirected() {
 
 #[test]
 fn array_object_receiver_admits_an_array_subclass_instance() {
-    let class_id = 0x7574_0003;
+    let class_id = 0x0074_0003;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     assert!(
         is_array_subclass_class_id(class_id),
@@ -97,9 +110,11 @@ fn array_object_receiver_admits_an_array_subclass_instance() {
     let obj = js_object_alloc(class_id, 2);
     let hdr = as_array_header(obj);
     unsafe {
-        // Sabotage precondition: the misread is still available.
-        assert_eq!((*hdr).length, 1);
-        assert_eq!((*hdr).capacity, class_id);
+        // Sabotage precondition: the misread is still available (#8113 overlay).
+        assert_eq!((*hdr).length, class_id);
+        assert_eq!((*hdr).capacity, (*obj).parent_class_id);
+        assert!((*hdr).length <= (*hdr).capacity);
+        assert!((*hdr).length <= 100_000_000);
     }
     assert!(
         raw_receiver_is_heap_object(hdr),
@@ -118,8 +133,8 @@ fn array_object_receiver_admits_an_array_subclass_instance() {
 
 #[test]
 fn array_object_receiver_rejects_an_ordinary_class_instance() {
-    let class_id = 0x7574_0004;
-    crate::object::js_register_class_parent(class_id, 0x7574_0005);
+    let class_id = 0x0074_0004;
+    crate::object::js_register_class_parent(class_id, 0x0074_0005);
     assert!(!is_array_subclass_class_id(class_id));
     let obj = js_object_alloc(class_id, 2);
     assert!(

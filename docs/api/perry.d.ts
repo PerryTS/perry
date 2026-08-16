@@ -4249,7 +4249,7 @@ declare module "vm" {
   /** stdlib */
   export function compileFunction(...args: any[]): any;
   /** stdlib */
-  export function createContext(p0: any): any;
+  export function createContext(contextObject?: any, options?: any): any;
   /** stdlib */
   export function createScript(...args: any[]): any;
   /** stdlib */

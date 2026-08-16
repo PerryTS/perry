@@ -348,7 +348,40 @@ fn payload_preview(r: &FromSpaceRef) -> String {
     let payload = (r.owner_header + GC_HEADER_SIZE) as *const u64;
     let stale_word = r.slot_offset / 8;
     let words = stale_word.saturating_add(3).min(24);
-    let mut out = String::from("\n    payload:");
+    let mut out = String::new();
+    // Owner and target headers, and for an array owner its length/capacity.
+    // "Which array is this, and what did it point at?" is what turns an
+    // offending address into a code path — and it is what showed the bulk of
+    // this instrument's offenders to be dead old-gen residue (an unmarked old
+    // object holding pre-move words no minor must rewrite) rather than live
+    // misses, after those counts had already produced one wrong root cause.
+    // SAFETY: the heap is intact here — post-rewrite, pre-flip — and both
+    // headers come from addresses the scan already walked.
+    unsafe {
+        let owner = r.owner_header as *const GcHeader;
+        out.push_str(&format!(
+            "\n    owner_hdr: obj_type={} size={} flags={:#x}",
+            (*owner).obj_type,
+            (*owner).size,
+            (*owner).gc_flags
+        ));
+        if (*owner).obj_type == crate::gc::GC_TYPE_ARRAY {
+            let arr = (r.owner_header + GC_HEADER_SIZE) as *const crate::array::ArrayHeader;
+            out.push_str(&format!(
+                " array_len={} capacity={}",
+                (*arr).length,
+                (*arr).capacity
+            ));
+        }
+        let target = (r.target - GC_HEADER_SIZE) as *const GcHeader;
+        out.push_str(&format!(
+            "\n    target_hdr: obj_type={} size={} flags={:#x}",
+            (*target).obj_type,
+            (*target).size,
+            (*target).gc_flags
+        ));
+    }
+    out.push_str("\n    payload:");
     for i in 0..words {
         let w = unsafe { payload.add(i).read() };
         let kind = match w >> 48 {

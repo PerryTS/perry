@@ -237,16 +237,30 @@ pub(crate) fn is_fs_filehandle_value(value: f64) -> bool {
     object_class_id(value) == Some(CLASS_ID_FS_FILEHANDLE)
 }
 
-/// Extract a string pointer from a NaN-boxed f64 value
-/// Handles both NaN-boxed strings (with STRING_TAG) and raw pointers.
-/// Returns null for invalid/small pointers (e.g. from TAG_UNDEFINED extraction).
+/// Extract a heap string pointer from a NaN-boxed f64 value.
+///
+/// Returns a pointer ONLY for a `STRING_TAG` value; null for everything else,
+/// including `SHORT_STRING_TAG` (its payload is inline bytes, not a pointer —
+/// callers that want those go through `str_bytes_from_jsvalue`) and every
+/// non-string NaN-box.
+///
+/// # Why the tag test is load-bearing (#8122)
+///
+/// This used to accept ANY non-finite value with a plausible payload, so
+/// `string_value(options)` in `mkdir_mode_from_options` read a `StringHeader`
+/// off the OPTIONS OBJECT: `byte_len` at +4 aliased `ObjectHeader::class_id`,
+/// which for an object literal is a small number, so the misread was a
+/// harmless one-byte garbage string that `parse_mode_string` rejected. #8113
+/// moved the ShapeId to +4 (`0x8000_0000` and up), the same misread became a
+/// 2 GB `from_utf8_lossy`, and every `fs.mkdirSync(dir, { recursive: true })`
+/// segfaulted (`test_gap_fs_fd_2749` and both `fs_errprop` gap tests). A
+/// pointer read must be preceded by the tag that says what it points at.
 #[inline]
 fn extract_string_ptr(value: f64) -> *const StringHeader {
-    if value.is_finite() {
+    let bits = value.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::STRING_TAG {
         return std::ptr::null();
     }
-    let bits = value.to_bits();
-    // Mask off the tag bits to get the raw pointer
     let ptr = (bits & POINTER_MASK) as usize;
     if ptr < 0x1000 {
         std::ptr::null()
@@ -270,7 +284,7 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
                 bits as usize
             };
             if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
-                || !extract_string_ptr(value).is_null()
+                || crate::value::JSValue::from_bits(bits).is_any_string()
             {
                 return None;
             }
@@ -285,13 +299,17 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
 /// Read a file synchronously and return its contents as a string
 /// Returns null pointer on error
 /// Accepts NaN-boxed string path
+// These readFileSync entry points intentionally throw on I/O failure. They
+// must permit the generated landingpad transport to cross their Rust FFI
+// frames so Node-style `try { readFileSync(optional) } catch { ... }` works
+// when runtime and application live in separate dynamic images.
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
+pub extern "C-unwind" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
     js_fs_read_file_sync_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_sync_options(
+pub extern "C-unwind" fn js_fs_read_file_sync_options(
     path_value: f64,
     options_value: f64,
 ) -> *mut StringHeader {
@@ -379,7 +397,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
 }
 
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_dispatch(path_value: f64, options_value: f64) -> f64 {
+pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value: f64) -> f64 {
     if read_file_encoding(options_value).is_some() {
         let str_ptr = js_fs_read_file_sync_options(path_value, options_value);
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
@@ -1181,14 +1199,15 @@ pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) ->
 }
 
 fn string_value(value: f64) -> Option<String> {
+    // Both string representations (heap `STRING_TAG` and inline
+    // `SHORT_STRING_TAG`); `None` for anything that is not a string.
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, len) = crate::string::str_bytes_from_jsvalue(value, &mut scratch)?;
+    if ptr.is_null() {
+        return None;
+    }
     unsafe {
-        let ptr = extract_string_ptr(value);
-        if ptr.is_null() {
-            return None;
-        }
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned())
+        Some(String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len as usize)).into_owned())
     }
 }
 

@@ -239,7 +239,7 @@ fn typed_read_back(ta: *mut ArrayHeader, len: usize) -> Vec<f64> {
 
 /// A two-argument comparator closure, built the way `array/tests.rs` builds
 /// its `map` callback: a bare `extern "C"` function behind a capture-less
-/// `ClosureHeader`, which is what `resolve_call2_direct` expects.
+/// `ClosureHeader`, which is what `DirectCall2::resolve` expects.
 extern "C" fn descending_cmp(
     _closure: *const crate::closure::ClosureHeader,
     a: f64,

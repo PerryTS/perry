@@ -844,7 +844,9 @@ fn extract_no_server(opts_f64: f64) -> bool {
         return false;
     }
     unsafe {
-        let n = (*ptr).field_count;
+        // #8113: the header's `field_count` word is gone; the live inline-slot
+        // bound comes from the runtime accessor.
+        let n = perry_ffi::js_object_live_slot_count(ptr);
         let mut saw_true = false;
         let mut saw_positive_port = false;
         for i in 0..n {

@@ -1235,13 +1235,13 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             native_abi,
             "KEEP_JS_NATIVE_CALL_METHOD_BY_ID",
-            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C\" fn(f64, i64, *const f64, usize) -> f64",
+            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C-unwind\" fn(",
             "js_native_call_method_by_id",
         ),
         (
             native_abi,
             "KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID",
-            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C\" fn(f64, i64, i64) -> f64",
+            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C-unwind\" fn(f64, i64, i64) -> f64",
             "js_native_call_method_apply_by_id",
         ),
         (
@@ -1535,13 +1535,13 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             trace,
             "static K30",
-            "static K30: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
+            "static K30: unsafe extern \"C-unwind\" fn(u64, f64, i64, *const f64, usize) -> f64",
             "js_typed_feedback_native_call_method_by_id",
         ),
         (
             trace,
             "static K31",
-            "static K31: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
+            "static K31: unsafe extern \"C-unwind\" fn(u64, f64, i64, i64) -> f64",
             "js_typed_feedback_native_call_method_apply_by_id",
         ),
     ] {
@@ -1691,14 +1691,12 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
     let class_id = 0x7EED_8067;
     let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
     let expected_shape_id = shape_id(obj);
-    let original_field_count = unsafe { (*obj).field_count };
 
     unsafe {
-        // These are ABI mirrors retained until the later header-shrink issue.
-        // An authoritative guard must not consult either one.
+        // `keys_array` is the last ABI mirror (#8113 deleted `field_count`;
+        // #8047 removes this one). An authoritative guard must not consult it.
         // GC_STORE_AUDIT(POINTER_FREE): test sabotage removes the compatibility edge by storing null.
         (*obj).keys_array = std::ptr::null_mut();
-        (*obj).field_count = 0;
     }
     let passed = js_typed_feedback_class_field_get_guard(
         8067,
@@ -1717,7 +1715,6 @@ fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
             &(*obj).keys_array as *const _ as usize,
             original_keys as u64,
         );
-        (*obj).field_count = original_field_count;
     }
 
     assert_eq!(passed, 1, "guard must consume ShapeDescriptor facts");
@@ -2461,5 +2458,95 @@ fn plain_array_index_get_guard_still_accepts_plain_arrays() {
         js_typed_feedback_plain_array_index_get_guard(6137, arr_box, 0, 1),
         1,
         "the emitted guard must keep admitting plain arrays to the fast path",
+    );
+}
+
+/// #7382 regression: interpreted `new Function(…)` source must not disarm the
+/// plain-array index fast path.
+///
+/// `dyn_eval` links every literal it builds to its creation realm's intrinsic
+/// prototype. For a plain `new Function(…)` body the creation realm IS the base
+/// realm, so that prototype is the one the value already resolves to and the
+/// record is a no-op on the observable chain — but `object_set_static_prototype`
+/// is the LOUD variant, and for a real array it latches
+/// `ARRAY_TARGET_PROTO_RECORDED` plus
+/// `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED` for the whole process. One `[…]`
+/// anywhere in ajv / fast-json-stringify / find-my-way generated source was
+/// therefore enough to stand `plain_array_index_guard` down permanently, for
+/// every array in the program.
+///
+/// Asserted on the GUARD and the flags, not on the interpreted result. The
+/// result stayed correct throughout — a behavioural assertion cannot see this
+/// bug, which is exactly why it shipped.
+#[cfg(feature = "dyn-eval")]
+#[test]
+fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(7382, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    assert!(
+        !crate::object::prototype_chain::array_static_proto_recorded(),
+        "precondition: some earlier test latched ARRAY_TARGET_PROTO_RECORDED and \
+         did not restore it — see ArrayPrototypeLatchGuard in dyn_eval/tests.rs"
+    );
+    assert_eq!(
+        crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "precondition: the array-index fast path was already invalidated"
+    );
+
+    // A `new Function` body whose literals are all base-realm: one array
+    // literal, one object literal holding it, one nested array from a spread.
+    let source: Vec<String> = [
+        "",
+        "const a = [1, 2, 3]; const o = { k: [...a, 4] }; return o.k.length;",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let f = crate::dyn_eval::dyn_function_from_strings(&source);
+    let result = unsafe { crate::closure::js_native_call_value(f, [].as_ptr(), 0) };
+    let result = crate::value::JSValue::from_bits(result.to_bits());
+    assert_eq!(
+        if result.is_int32() {
+            result.as_int32() as f64
+        } else {
+            f64::from_bits(result.bits())
+        },
+        4.0,
+        "the interpreted body must actually have run — otherwise the flag \
+         assertions below are vacuous"
+    );
+
+    assert!(
+        !crate::object::prototype_chain::array_static_proto_recorded(),
+        "a base-realm array literal in Function() source must not latch \
+         ARRAY_TARGET_PROTO_RECORDED: its prototype IS the default"
+    );
+    assert_eq!(
+        crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a base-realm literal must not invalidate the inline array-index guard \
+         byte that generated code loads on every array read"
+    );
+
+    // And the guard itself still admits a plain array — the observable end of
+    // the two flags above.
+    let arr = crate::array::js_array_alloc(4);
+    for i in 0..4 {
+        crate::array::js_array_push_f64(arr, i as f64);
+    }
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+    assert!(
+        plain_array_index_guard(arr as *const ArrayHeader, 0, true),
+        "plain_array_index_guard must still accept a plain array"
+    );
+    assert_eq!(
+        js_typed_feedback_plain_array_index_get_guard(7382, arr_box, 0, 1),
+        1,
+        "the emitted guard must still admit plain arrays to the fast path"
     );
 }

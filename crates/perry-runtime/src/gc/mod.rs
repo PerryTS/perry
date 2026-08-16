@@ -141,6 +141,8 @@ mod prefetch;
 mod copying;
 mod copying_first_cycle;
 mod copying_pointer_set;
+/// #8174: shared validation for the TARGET of a forwarding pointer.
+mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
 mod sticky_remembered;
@@ -149,6 +151,7 @@ use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
 // transitive re-exports the gc submodules reach these through.
 use copying_pointer_set::{plausible_gc_header, CopyingPointer, CopyingPointerKind};
+use forwarding::*;
 use sticky_remembered::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
 // pass in `crate::weakref` (#6182), which lives outside the gc module.

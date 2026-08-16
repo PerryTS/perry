@@ -17,6 +17,9 @@ use super::{root_get, root_push, root_set, roots_truncate};
 /// shadow or collide with it (interpreted code only reaches environments via
 /// identifier resolution, never via computed access).
 const PARENT_KEY: &str = "perry dyn parent";
+/// Optional ObjectEnvironmentRecord bindings for this scope. The space keeps
+/// the slot unreachable through interpreted identifiers, like `PARENT_KEY`.
+const OBJECT_BINDINGS_KEY: &str = "perry dyn object bindings";
 
 thread_local! {
     /// identifier name → its cached `StringHeader`. Every scope-chain read /
@@ -97,6 +100,49 @@ pub(crate) fn env_new(parent: f64) -> f64 {
     env
 }
 
+/// Allocate an object-environment scope. Identifier reads and writes delegate
+/// to `bindings` while lexical declarations continue to live on the wrapper.
+/// This is the shared seam used by VM globals and compileFunction context
+/// extensions; the bindings object remains live and is never copied/mutated
+/// with interpreter bookkeeping.
+pub(crate) fn env_new_object(parent: Option<f64>, bindings: f64) -> f64 {
+    let bindings_idx = root_push(bindings);
+    let env = match parent {
+        Some(parent) => env_new(parent),
+        None => env_new_root(),
+    };
+    let env_idx = root_push(env);
+    let key = key_string(OBJECT_BINDINGS_KEY);
+    crate::object::js_object_set_field_by_name(
+        env_object_ptr(root_get(env_idx)),
+        key,
+        root_get(bindings_idx),
+    );
+    let env = root_get(env_idx);
+    roots_truncate(bindings_idx);
+    env
+}
+
+fn env_object_bindings(env: f64) -> Option<f64> {
+    let value = env_read(env, OBJECT_BINDINGS_KEY);
+    (!crate::value::JSValue::from_bits(value.to_bits()).is_undefined()).then_some(value)
+}
+
+fn object_has_binding(bindings: f64, name: &str) -> bool {
+    let key = crate::value::js_nanbox_string(key_string(name) as i64);
+    crate::value::js_is_truthy(crate::object::js_object_has_property(bindings, key)) != 0
+}
+
+fn object_read_binding(bindings: f64, name: &str) -> f64 {
+    let key = crate::value::js_nanbox_string(key_string(name) as i64);
+    crate::proxy::js_reflect_get(bindings, key, bindings)
+}
+
+fn object_write_binding(bindings: f64, name: &str, value: f64, strict: bool) {
+    let key = crate::value::js_nanbox_string(key_string(name) as i64);
+    crate::proxy::js_put_value_set(bindings, key, value, bindings, strict as i32);
+}
+
 fn env_parent(env: f64) -> Option<f64> {
     let env_idx = root_push(env);
     let key = key_string(PARENT_KEY);
@@ -118,6 +164,42 @@ fn env_has_own(env: f64, name: &str) -> bool {
     let has = crate::object::js_object_has_own(root_get(env_idx), key_value);
     roots_truncate(env_idx);
     crate::value::js_is_truthy(has) != 0
+}
+
+pub(crate) fn variable_environment(env: f64) -> f64 {
+    let cur_idx = root_push(env);
+    loop {
+        if env_object_bindings(root_get(cur_idx)).is_some() {
+            let result = root_get(cur_idx);
+            roots_truncate(cur_idx);
+            return result;
+        }
+        match env_parent(root_get(cur_idx)) {
+            Some(parent) => root_set(cur_idx, parent),
+            None => {
+                let result = root_get(cur_idx);
+                roots_truncate(cur_idx);
+                return result;
+            }
+        }
+    }
+}
+
+pub(crate) fn ensure_var_binding(env: f64, name: &str) {
+    let env_idx = root_push(env);
+    if let Some(bindings) = env_object_bindings(root_get(env_idx)) {
+        if !object_has_binding(bindings, name) {
+            object_write_binding(
+                env_object_bindings(root_get(env_idx)).unwrap(),
+                name,
+                super::bridge::undefined(),
+                false,
+            );
+        }
+    } else if !env_has_own(root_get(env_idx), name) {
+        define(root_get(env_idx), name, super::bridge::undefined());
+    }
+    roots_truncate(env_idx);
 }
 
 fn env_read(env: f64, name: &str) -> f64 {
@@ -179,7 +261,10 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
         if keys.is_null() {
             return ScopeProbe::Bail;
         }
-        let alloc_limit = std::cmp::max((*o).field_count, crate::object::INLINE_SLOT_FLOOR as u32);
+        let alloc_limit = std::cmp::max(
+            crate::object::object_live_slot_count(o),
+            crate::object::INLINE_SLOT_FLOOR as u32,
+        );
         if let Some(idx) = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize) {
             if idx < alloc_limit {
                 let v = crate::object::js_object_get_field(o, idx);
@@ -230,7 +315,7 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
         std::ptr::null()
     };
     loop {
-        if fast {
+        if fast && env_object_bindings(root_get(cur_idx)).is_none() {
             match scope_probe(root_get(cur_idx), key) {
                 ScopeProbe::Hit(v) => {
                     roots_truncate(cur_idx);
@@ -261,6 +346,13 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
             roots_truncate(cur_idx);
             return Some(value);
         }
+        let has_object_binding = env_object_bindings(root_get(cur_idx))
+            .is_some_and(|bindings| object_has_binding(bindings, name));
+        if has_object_binding {
+            let value = object_read_binding(env_object_bindings(root_get(cur_idx)).unwrap(), name);
+            roots_truncate(cur_idx);
+            return Some(value);
+        }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
             None => {
@@ -281,7 +373,7 @@ pub(crate) fn is_bound(env: f64, name: &str) -> bool {
         std::ptr::null()
     };
     loop {
-        let present = if fast {
+        let present = if fast && env_object_bindings(root_get(cur_idx)).is_none() {
             match scope_probe(root_get(cur_idx), key) {
                 ScopeProbe::Hit(_) => Some(true),
                 ScopeProbe::Absent => Some(false),
@@ -294,6 +386,12 @@ pub(crate) fn is_bound(env: f64, name: &str) -> bool {
         if present {
             roots_truncate(cur_idx);
             return true;
+        }
+        if let Some(bindings) = env_object_bindings(root_get(cur_idx)) {
+            if object_has_binding(bindings, name) {
+                roots_truncate(cur_idx);
+                return true;
+            }
         }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
@@ -310,7 +408,7 @@ pub(crate) fn is_bound(env: f64, name: &str) -> bool {
 /// generated matcher relies on (`value = derivedConstraints.version` with
 /// `value` never declared) — creates the binding on the chain's ROOT scope
 /// (the Function instance's private "global").
-pub(crate) fn assign(env: f64, name: &str, value: f64) {
+pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
     let fast = super::fast_scope_enabled();
     let value_idx = root_push(value);
     let cur_idx = root_push(env);
@@ -320,7 +418,7 @@ pub(crate) fn assign(env: f64, name: &str, value: f64) {
         std::ptr::null()
     };
     loop {
-        let present = if fast {
+        let present = if fast && env_object_bindings(root_get(cur_idx)).is_none() {
             match scope_probe(root_get(cur_idx), key) {
                 ScopeProbe::Hit(_) => Some(true),
                 ScopeProbe::Absent => Some(false),
@@ -335,10 +433,30 @@ pub(crate) fn assign(env: f64, name: &str, value: f64) {
             roots_truncate(value_idx);
             return;
         }
+        let has_object_binding = env_object_bindings(root_get(cur_idx))
+            .is_some_and(|bindings| object_has_binding(bindings, name));
+        if has_object_binding {
+            object_write_binding(
+                env_object_bindings(root_get(cur_idx)).unwrap(),
+                name,
+                root_get(value_idx),
+                strict,
+            );
+            roots_truncate(value_idx);
+            return;
+        }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
             None => {
-                env_write(root_get(cur_idx), name, root_get(value_idx));
+                if strict {
+                    roots_truncate(value_idx);
+                    super::bridge::throw_reference_error(&format!("{name} is not defined"));
+                }
+                if let Some(bindings) = env_object_bindings(root_get(cur_idx)) {
+                    object_write_binding(bindings, name, root_get(value_idx), strict);
+                } else {
+                    env_write(root_get(cur_idx), name, root_get(value_idx));
+                }
                 roots_truncate(value_idx);
                 return;
             }

@@ -56,7 +56,7 @@ pub use async_runtime::{
 mod types;
 pub use types::{
     ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, NativeAsyncCompletion, ObjectHeader,
-    Promise, StringHeader, BIGINT_LIMBS,
+    Promise, StringHeader, BIGINT_LIMBS, OBJECT_HEADER_ABI_REVISION,
 };
 
 mod handle;
@@ -74,7 +74,7 @@ mod jsvalue;
 pub use jsvalue::{
     alloc_null_proto_object, alloc_object, build_object_shape, js_array_alloc, js_array_get,
     js_array_length, js_array_push, js_array_set, js_object_alloc_with_shape, js_object_get_field,
-    js_object_set_field, object_field_by_name, JsValue,
+    js_object_live_slot_count, js_object_set_field, object_field_by_name, JsValue,
 };
 
 mod closure;

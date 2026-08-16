@@ -1,0 +1,39 @@
+[package]
+name = "perry-next-stdlib-provider"
+version = "0.0.0"
+edition.workspace = true
+
+[lib]
+name = "perry_next_stdlib_provider"
+crate-type = ["staticlib"]
+
+[dependencies]
+perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates/perry-stdlib", default-features = false, features = [
+  "http-client",
+  "database",
+  "crypto",
+  "email",
+  "image",
+  "scheduler",
+  "ids",
+  "html-parser",
+  "rate-limit",
+  "validation",
+  "bundled-dotenv",
+  "bundled-slugify",
+  "bundled-lru-cache",
+  "bundled-exponential-backoff",
+  "bundled-decimal",
+  "bundled-dayjs",
+  "bundled-moment",
+  "bundled-commander",
+  "external-events-construct",
+  "external-http-server-pump",
+  "external-net-pump",
+  "external-ws-pump",
+  "external-zlib-pump",
+] }
+perry-ext-events = { path = "../../../../../../crates/perry-ext-events" }
+perry-ext-http = { path = "../../../../../../crates/perry-ext-http" }
+perry-ext-net = { path = "../../../../../../crates/perry-ext-net" }
+perry-ext-zlib = { path = "../../../../../../crates/perry-ext-zlib" }

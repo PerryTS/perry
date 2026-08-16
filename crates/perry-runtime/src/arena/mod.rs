@@ -86,8 +86,9 @@ pub use walk::{
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
-    general_block_sizes, old_arena_walk_all_headers_filtered, ArenaBlockSnapshot,
-    ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaTelemetrySnapshot, ArenaWalkOrder,
+    general_block_sizes, old_arena_walk_all_headers_filtered, young_allocation_census,
+    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaTelemetrySnapshot,
+    ArenaWalkOrder,
 };
 
 // reset.rs

@@ -168,6 +168,26 @@ pub(crate) fn throw_syntax_error(message: &str) -> ! {
     throw_error_kind(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
 }
 
+pub(crate) fn throw_eval_error(message: &str) -> ! {
+    throw_error_kind(crate::error::ERROR_KIND_EVAL_ERROR, message)
+}
+
+fn wasm_codegen_error(api: &str) -> f64 {
+    let message = format!("{api}(): Wasm code generation disallowed by embedder");
+    let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_error_new_with_name_message_bytes(b"CompileError", message);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+pub(crate) fn wasm_codegen_rejection(api: &str) -> f64 {
+    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api));
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+pub(crate) fn throw_wasm_codegen_error(api: &str) -> ! {
+    crate::exception::js_throw(wasm_codegen_error(api))
+}
+
 /// The diagnostic contract of #6559: anything outside the interpreter subset
 /// throws a TypeError that NAMES the construct, so gaps met in the wild show
 /// up as actionable errors, never as silent miscomputation.
@@ -214,15 +234,15 @@ pub(crate) fn get_index(base: f64, key: f64) -> f64 {
 }
 
 /// `base[key] = value` (also used for `base.name = value` with a string key).
-pub(crate) fn set_index(base: f64, key: f64, value: f64) {
-    crate::value::js_dyn_index_set(base, key, value);
+pub(crate) fn set_index(base: f64, key: f64, value: f64, strict: bool) {
+    crate::proxy::js_put_value_set(base, key, value, base, strict as i32);
 }
 
 pub(crate) fn set_member(base: f64, name: &str, value: f64) {
     let base_idx = root_push(base);
     let value_idx = root_push(value);
     let key = make_string(name);
-    set_index(root_get(base_idx), key, root_get(value_idx));
+    set_index(root_get(base_idx), key, root_get(value_idx), false);
     roots_truncate(base_idx);
 }
 
@@ -272,9 +292,98 @@ pub(crate) fn construct(callee: f64, args: &[f64]) -> f64 {
 
 // ── globals ────────────────────────────────────────────────────────────────
 
-/// Look `name` up on the real `globalThis` (Math, JSON, Array, isNaN, …).
-pub(crate) fn global_lookup(name: &str) -> f64 {
-    crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+/// Whether the selected global (including its prototype chain) binds `name`.
+pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
+    let global = if crate::proxy::js_proxy_is_proxy(global) != 0 {
+        crate::proxy::js_proxy_target(global)
+    } else {
+        global
+    };
+    let global_idx = root_push(global);
+    let key = make_string(name);
+    let present = crate::object::js_object_has_property(root_get(global_idx), key);
+    roots_truncate(global_idx);
+    truthy(present)
+}
+
+/// Look `name` up on the selected global receiver, then on the selected realm's
+/// intrinsic-global backing. VM contexts pass distinct values; ordinary
+/// dynamic Function calls pass the process global for both.
+pub(crate) fn global_lookup(global_this: f64, intrinsics: f64, name: &str) -> f64 {
+    let lookup_target = if crate::proxy::js_proxy_is_proxy(global_this) != 0 {
+        crate::proxy::js_proxy_target(global_this)
+    } else {
+        global_this
+    };
+    if global_has_property(lookup_target, name) {
+        return get_member(lookup_target, name);
+    }
+    let builtin = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.contains(&name)
+        || crate::object::GLOBAL_THIS_BUILTIN_NAMESPACES.contains(&name)
+        || crate::object::GLOBAL_THIS_BUILTIN_FUNCTIONS.contains(&name);
+    if builtin {
+        get_member(intrinsics, name)
+    } else {
+        undefined()
+    }
+}
+
+/// The selected realm's `<Constructor>.prototype` value.
+pub(crate) fn intrinsic_prototype(intrinsics: f64, name: &str) -> f64 {
+    let intrinsics_idx = root_push(intrinsics);
+    let constructor = get_member(root_get(intrinsics_idx), name);
+    let constructor_idx = root_push(constructor);
+    let prototype = get_member(root_get(constructor_idx), "prototype");
+    roots_truncate(intrinsics_idx);
+    prototype
+}
+
+/// Link a freshly-created value to the actual prototype of its creation realm.
+/// The value is returned through a handle because creating object metadata may
+/// collect and move it.
+///
+/// **Recording the BASE realm's own default is skipped, and that is the point.**
+/// `object_set_static_prototype` is the loud variant: besides storing the
+/// prototype it bumps the prop-plan epoch, retires every outstanding
+/// element-shape proof, and — for a real array target — latches the
+/// process-wide `ARRAY_TARGET_PROTO_RECORDED` sticky flag that stands down
+/// `plain_array_index_guard` for the remaining life of the process
+/// (`object/prototype_chain.rs`). Most interpreted code is NOT a `node:vm`
+/// realm at all: a plain `new Function(…)` / `eval(…)` body runs with
+/// `intrinsics == globalThis`, so every `[…]` and `{…}` literal in it was
+/// asking to record the prototype the value already resolves to. That is a
+/// no-op on the observable chain and a permanent global de-optimisation
+/// otherwise — one array literal anywhere in generated source was enough to
+/// disarm the array-index fast path for the whole program.
+///
+/// So the record is made only when the creation realm's prototype actually
+/// DIFFERS from the base-realm default (a real `vm` context with its own
+/// populated realm), or when the value already carries a recorded prototype
+/// and this call is genuinely resetting it. `js_object_get_prototype_of`
+/// resolves an un-recorded object/array through exactly
+/// `builtin_prototype_value`, so "equal to the base-realm default" and
+/// "already the value's prototype" are the same statement here.
+pub(crate) fn attach_intrinsic_prototype(value: f64, intrinsics: f64, name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let prototype = intrinsic_prototype(intrinsics, name);
+    let prototype_handle = scope.root_nanbox_f64(prototype);
+    let prototype = prototype_handle.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(prototype.to_bits()).is_pointer() {
+        return value_handle.get_nanbox_f64();
+    }
+    let value = value_handle.get_nanbox_f64();
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    if raw == 0 {
+        return value_handle.get_nanbox_f64();
+    }
+    if prototype.to_bits() == crate::object::builtin_prototype_value(name).to_bits()
+        && crate::object::prototype_chain::object_static_prototype(raw).is_none()
+    {
+        return value_handle.get_nanbox_f64();
+    }
+    crate::object::prototype_chain::object_set_static_prototype(raw, prototype.to_bits());
+    value_handle.get_nanbox_f64()
 }
 
 // ── operators ──────────────────────────────────────────────────────────────

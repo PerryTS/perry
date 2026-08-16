@@ -110,38 +110,38 @@ fn mapped_arguments_params(params: &[Param]) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// Resolve `property` against `class_name`'s ancestry and report how the callee
-/// expects its TRAILING parameters to be filled, as
-/// `(has_synthesized_arguments, has_user_rest)`.
+/// Does `property`, resolved against `class_name`'s ancestry, declare a USER
+/// `...rest` parameter — as opposed to (or in addition to) the trailing
+/// `arguments` slot #677 synthesizes?
 ///
-/// #8040. Both a user `...rest` and the `arguments` slot synthesized by #677 are
-/// lowered as `Param { is_rest: true }`, so a single `has_rest` bit cannot tell
-/// a call site which one it is filling — and they are filled from different
-/// offsets. Only the synthesized slot carries `arguments_object`, which is the
-/// bit this reads. Returns `(false, false)` for a class the current module does
-/// not have HIR for (an imported class), leaving those call sites on the
-/// pre-existing `method_has_rest` behavior.
-pub(crate) fn resolve_method_trailing_shape(
+/// #8040/#8162. Both spellings lower as `Param { is_rest: true }`, so
+/// `method_has_rest` is true for either, and `method_has_synthetic_arguments`
+/// only names the synthesized slot — the PAIR still cannot distinguish
+/// "synthesized `arguments` only" from "user rest AND synthesized `arguments`",
+/// and those fill a different number of trailing slots (`m(a, ...rest)` with an
+/// `arguments` read is `[a, rest, arguments]`: TWO arrays, from two offsets).
+/// The discriminator is `arguments_object`, which the synthesized parameter
+/// carries and nothing else does.
+///
+/// Read off the class HIR, so a class the current module has no HIR for (an
+/// imported class) reports `false`, leaving those call sites on the
+/// one-trailing-slot behavior they had — `method_has_synthetic_arguments`
+/// still covers the imported synth-only shape via its interface bit.
+pub(crate) fn method_has_user_rest(
     ctx: &crate::expr::FnCtx<'_>,
     class_name: &str,
     property: &str,
-) -> (bool, bool) {
+) -> bool {
     let mut walk = Some(class_name.to_string());
     while let Some(cur) = walk {
         let class = ctx.classes.get(&cur);
         if let Some(f) = class.and_then(|c| c.methods.iter().find(|m| m.name == *property)) {
-            let synth = f
-                .params
-                .last()
-                .map(|p| p.arguments_object.is_some())
-                .unwrap_or(false);
-            let user_rest = f
+            return f
                 .params
                 .iter()
                 .any(|p| p.is_rest && p.arguments_object.is_none());
-            return (synth, user_rest);
         }
         walk = class.and_then(|c| c.extends_name.clone());
     }
-    (false, false)
+    false
 }

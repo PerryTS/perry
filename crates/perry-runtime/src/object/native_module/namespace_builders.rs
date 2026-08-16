@@ -4,7 +4,18 @@ use std::sync::atomic::Ordering;
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 pub(crate) fn create_sub_namespace(name: &str) -> f64 {
-    js_create_native_module_namespace(name.as_ptr(), name.len())
+    let value = js_create_native_module_namespace(name.as_ptr(), name.len());
+    if name == "vm.constants" {
+        let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+        if !object.is_null() {
+            super::super::prototype_chain::object_set_static_prototype(
+                object as usize,
+                crate::value::TAG_NULL,
+            );
+            super::super::js_object_freeze(value);
+        }
+    }
+    value
 }
 
 pub(crate) fn native_namespace_or_create(module_name: &str, namespace_obj: f64) -> f64 {

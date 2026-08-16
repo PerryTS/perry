@@ -221,6 +221,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/class_id_collisions.py
 
+      # #8047/#8067. `ObjectHeader.object_type`, `field_count` and `keys_array`
+      # are being retired in favour of the authoritative ShapeId descriptor.
+      # #8086 migrated the guards AND built this exact-callsite census to keep
+      # them retired -- then wired it into nothing, so it has never been able to
+      # fail a build. A gate that no job invokes is documentation.
+      #
+      # The census is exact rather than a grep count: it strips comments and
+      # string literals, classifies each site declaration-vs-access, and diffs
+      # the full multiset against a reviewed baseline, so it can tell an
+      # ObjectHeader read from another struct's identically-named field. It
+      # also asserts the authority surfaces directly (no guard may compare a
+      # keys pointer, no emitter may bake header offsets 0/12/16) and carries
+      # its own lexer self-test plus sabotage self-tests, which run
+      # unconditionally on every invocation.
+      - name: Object-header shape-descriptor census
+        if: ${{ !cancelled() }}
+        run: python3 scripts/shape_descriptor_census.py
+
       # #7645. The copying minor skips its eligibility preflight — the walk that
       # proves nothing reachable is pinned — whenever the young-pin latch is
       # clear. That is sound only while EVERY creation of GC_FLAG_PINNED goes
@@ -252,6 +270,24 @@ jobs:
         run: |
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
+
+      # #8174. A side table whose KEY is a raw heap address, REKEYED in place by
+      # `visit_metadata_*` (rewritten if the object moved, deliberately not
+      # marked), depends on `gc::dead_owner` dropping that key when the object
+      # dies. #8168 wired up the one table that had been missed; the invariant
+      # was otherwise maintained by a hand-written list happening to be
+      # complete, and a table added without a prune reappears days later as a
+      # `TypeError: value is not a function` in an unrelated function (#8040).
+      # This adjudicates every rekey site against the runtime registry: an
+      # unclassified site fails, and so does an exemption that matches nothing.
+      #
+      # Cheap and build-free, so it belongs in `lint`, which IS a required
+      # context (CLAUDE.md hazard 2).
+      - name: Rekeyed side-table custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_rekeyed_key_tables.py --self-test
+          python3 scripts/gc_rekeyed_key_tables.py
 
       # #7877. A deleted GC knob left executable CI arms that still looked
       # distinct but selected the same collector. Derive the accepted names
@@ -945,6 +981,26 @@ jobs:
               echo "::endgroup::"
             done
           fi
+
+      # #8113 — the perry-ffi <-> perry-runtime ABI mirror, which had NEVER
+      # EXECUTED. `perry_ffi::types::layout_tests` is
+      # `#[cfg(all(test, feature = "runtime-link"))]`, `runtime-link` was
+      # enabled nowhere in `.github/`, and the scope loop above runs
+      # `cargo test -p perry-ffi` with DEFAULT features — so the module never
+      # even compiled. Deleting a mirrored field still went red (an `offset_of!`
+      # on a missing field stops compiling), but a SIZE or PADDING divergence
+      # between the two structs was invisible, which is precisely the failure
+      # mode of a header-layout change.
+      #
+      # Unconditional, not scope-gated: perry-ffi's optional dependency on
+      # perry-runtime means a runtime-only diff need not pull perry-ffi into
+      # scope, and this is the one check that says the published ABI mirror
+      # still matches the runtime it mirrors.
+      - name: perry-ffi ABI mirror matches the runtime (#8113)
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: cargo test -p perry-ffi --features runtime-link --lib
 
   # ---------------------------------------------------------------------------
   # Scoped e2e: run the integration suites NAMED BY THE DIFF (#5960)
