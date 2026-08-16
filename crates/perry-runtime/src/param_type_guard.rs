@@ -39,6 +39,19 @@ const OP_MASK: u8 = 0x7F;
 const MAX_DESCRIPTOR_LEN: usize = 1 << 20;
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 256;
+/// Cumulative node visits allowed in one validation. `MAX_DEPTH` bounds how
+/// DEEP the walk goes, not how much of it runs. #8238 stopped recording a
+/// visit for descriptor nodes that are neither on a cycle nor reachable two
+/// ways, which is exactly right for the descriptor graph — but a *value* can
+/// still re-enter such a node with the same address, by holding one object at
+/// many indices of an array. Nesting that duplication multiplies, so an
+/// untracked subtree that used to be memoized into one walk can run k^d times.
+/// Exhausting the budget fails the guard, which is the same safe direction as
+/// the depth cap: the caller falls back to the generic function. A million
+/// checks is also the point past which the guard has lost on its own terms —
+/// no specialized call recoups that — so the fallback is the better choice
+/// here even when the walk would have terminated.
+const MAX_VISITS: u32 = 1 << 20;
 const MAX_CONTAINER_LEN: usize = 16_000_000;
 const INLINE_VISITED: usize = 64;
 
@@ -135,6 +148,8 @@ struct GuardState<'a> {
     inline_visited_len: usize,
     spill_visited: Option<HashSet<(usize, u32)>>,
     spill_log: Vec<(usize, u32)>,
+    /// Cumulative `matches` entries, capped by `MAX_VISITS`.
+    visits: u32,
     /// The last object `plain_object` validated, keyed on the NaN-box bits it
     /// came from (#8202). A union tries its arms against the SAME value, so
     /// every arm past the first re-ran the whole validation — including the
@@ -444,6 +459,10 @@ impl GuardState<'_> {
         if depth > MAX_DEPTH {
             return false;
         }
+        self.visits += 1;
+        if self.visits > MAX_VISITS {
+            return false;
+        }
         let Some(node) = self.descriptor.node(node_id) else {
             return false;
         };
@@ -698,6 +717,7 @@ pub extern "C" fn js_param_type_guard(value: f64, descriptor: *const u8, length:
         inline_visited_len: 0,
         spill_visited: None,
         spill_log: Vec::new(),
+        visits: 0,
         validated_object: None,
     };
     unsafe { state.matches(JSValue::from_bits(value.to_bits()), root, 0) as i32 }
@@ -864,7 +884,7 @@ mod tests {
 
     /// `{ <name>: <child> }`, optionally carrying the compiler's
     /// visit-tracking bit, as one object node.
-    fn object_node(track: bool, name: &[u8], child: u32) -> Vec<u8> {
+    fn tracked_single_field_node(track: bool, name: &[u8], child: u32) -> Vec<u8> {
         let mut body = vec![if track {
             OP_OBJECT | OP_TRACK_VISIT
         } else {
@@ -903,13 +923,13 @@ mod tests {
         );
 
         assert_eq!(
-            guard(node, &descriptor(0, &[&object_node(true, b"next", 0)])),
+            guard(node, &descriptor(0, &[&tracked_single_field_node(true, b"next", 0)])),
             1
         );
         // Without it the walk runs out of depth and the caller conservatively
         // takes the generic function — never a hang, never a false accept.
         assert_eq!(
-            guard(node, &descriptor(0, &[&object_node(false, b"next", 0)])),
+            guard(node, &descriptor(0, &[&tracked_single_field_node(false, b"next", 0)])),
             0
         );
     }
@@ -930,13 +950,55 @@ mod tests {
             pair_body.extend_from_slice(name);
             pair_body.extend_from_slice(&1u32.to_le_bytes());
         }
-        let leaf_body = object_node(false, b"v", 2);
+        let leaf_body = tracked_single_field_node(false, b"v", 2);
         let blob = descriptor(0, &[&pair_body, &leaf_body, &[OP_NUMBER]]);
         assert_eq!(guard(pair, &blob), 1);
 
         let mut mismatched = blob.clone();
         *mismatched.last_mut().unwrap() = OP_STRING;
         assert_eq!(guard(pair, &mismatched), 0);
+    }
+
+    /// #8238 drops the visit record for nodes that are neither on a cycle nor
+    /// reachable two ways in the DESCRIPTOR graph. A *value* can still re-enter
+    /// such a node with the same address, by holding one object at several
+    /// fields, and nesting that duplication multiplies: `d` levels of a
+    /// two-way share re-walk the leaf 2^d times where the memoized walk ran it
+    /// once. `MAX_DEPTH` does not bound that — it bounds depth, not total work.
+    /// `MAX_VISITS` does, in the same safe direction as the depth cap.
+    #[test]
+    fn nested_value_duplication_through_untracked_nodes_is_bounded() {
+        const LEVELS: u32 = 40;
+
+        // Descriptor: LEVELS untracked `{a: next, b: next}` nodes over a number.
+        // Every node is single-entry and acyclic, so #8238 leaves them all
+        // untracked — this is precisely the shape the analysis declines to mark.
+        let mut nodes: Vec<Vec<u8>> = Vec::new();
+        for level in 0..LEVELS {
+            let mut body = vec![OP_OBJECT];
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&2u32.to_le_bytes());
+            for name in [b"a", b"b"] {
+                body.push(0);
+                body.extend_from_slice(&1u16.to_le_bytes());
+                body.extend_from_slice(name);
+                body.extend_from_slice(&(level + 1).to_le_bytes());
+            }
+            nodes.push(body);
+        }
+        nodes.push(vec![OP_NUMBER]);
+        let refs: Vec<&[u8]> = nodes.iter().map(|n| n.as_slice()).collect();
+        let blob = descriptor(0, &refs);
+
+        // Value: the same child at BOTH fields, all the way down.
+        let mut value = JSValue::number(1.0);
+        for _ in 0..LEVELS {
+            value = plain_object(&[(b"a", value), (b"b", value)]).1;
+        }
+
+        // Unbounded this is 2^40 visits. The budget stops it and fails the
+        // guard, so the caller takes the generic function.
+        assert_eq!(guard(value, &blob), 0);
     }
 
     /// The tracking bits changed what the op byte means, so a descriptor from

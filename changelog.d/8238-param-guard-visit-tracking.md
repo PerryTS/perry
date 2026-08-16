@@ -66,3 +66,14 @@ always accepts and one whose guard always rejects land within 0.3% of each
 other, 12% below `main`: on these two rows the specialization the validator
 gates is worth ~0.2% while running the validator costs ~12%. That is a policy
 question for #8094/#8079, not a per-call-overhead one.
+
+Review follow-up: the analysis decides tracking from the DESCRIPTOR graph, but
+"entered twice with the same address" is a property of the VALUE. One object
+held at several fields re-enters an untracked node at `entries == 1`, and
+nesting that duplication multiplies — `d` levels of a two-way share re-walk
+`k^d` times where the unconditional memo ran once. The realistic sharing shapes
+are safe (a recursive type is on a cycle, a diamond has two ways in), but
+`MAX_DEPTH` bounds depth, not total work. `MAX_VISITS` now caps cumulative
+visits and fails the guard to the generic function — the same safe direction as
+the depth cap, and the better choice on its own terms past a million checks.
+Covered by `nested_value_duplication_through_untracked_nodes_is_bounded`.
