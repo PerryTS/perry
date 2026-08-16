@@ -106,7 +106,7 @@ impl Drop for CopyingWalkPhaseGuard {
     }
 }
 
-fn copying_walk_phase() -> Option<&'static str> {
+pub(super) fn copying_walk_phase() -> Option<&'static str> {
     COPYING_WALK_PHASE.with(|c| c.get())
 }
 

@@ -50,6 +50,31 @@ pub(crate) fn refused_forwarding_target_count() -> u64 {
 crate::perry_thread_local! {
     static REPORTED_SOURCES: Cell<u64> = const { Cell::new(0) };
     static REPORTED_TARGETS: Cell<u64> = const { Cell::new(0) };
+    /// Refusals attributed to the named root-scanner walk that produced them
+    /// (`pin::CopyingWalkPhaseGuard`), reset at each report.
+    ///
+    /// The aggregate says a stale key reached a rewrite walk. This says WHICH
+    /// TABLE's key it was, which is the whole distance between "there is a bug
+    /// of the #8040 shape somewhere in the tree" and a fix — #8040 itself took
+    /// days to attribute. Bounded by the registered-scanner count, and only
+    /// populated when diagnostics are on.
+    static REFUSALS_BY_WALK: RefCell<Vec<(&'static str, u64)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+fn note_refusal_walk() {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    let name = super::pin::copying_walk_phase().unwrap_or("(outside a named walk)");
+    REFUSALS_BY_WALK.with(|rows| {
+        let mut rows = rows.borrow_mut();
+        if let Some(row) = rows.iter_mut().find(|(n, _)| *n == name) {
+            row.1 += 1;
+        } else {
+            rows.push((name, 1));
+        }
+    });
 }
 
 /// Report the refusals since the last call, and only when there were any.
@@ -69,22 +94,34 @@ pub(super) fn report_forwarding_refusals(phase: &str) {
     let new_targets = targets - REPORTED_TARGETS.with(Cell::get);
     REPORTED_SOURCES.with(|c| c.set(sources));
     REPORTED_TARGETS.with(|c| c.set(targets));
+    let by_walk = REFUSALS_BY_WALK.with(|rows| std::mem::take(&mut *rows.borrow_mut()));
     if new_sources == 0 && new_targets == 0 {
         return;
     }
+    let mut attribution = String::new();
+    for (name, count) in &by_walk {
+        if !attribution.is_empty() {
+            attribution.push(',');
+        }
+        attribution.push_str(name);
+        attribution.push('=');
+        attribution.push_str(&count.to_string());
+    }
     eprintln!(
-        "[gc-forwarding] {phase} refused_sources={new_sources}          refused_targets={new_targets} total_sources={sources}          total_targets={targets}"
+        "[gc-forwarding] {phase} refused_sources={new_sources} refused_targets={new_targets} total_sources={sources} total_targets={targets} by_walk=[{attribution}]"
     );
 }
 
 #[cold]
 fn note_refused_forwarding_source() {
     REFUSED_FORWARDING_SOURCES.with(|c| c.set(c.get().saturating_add(1)));
+    note_refusal_walk();
 }
 
 #[cold]
 fn note_refused_forwarding_target() {
     REFUSED_FORWARDING_TARGETS.with(|c| c.set(c.get().saturating_add(1)));
+    note_refusal_walk();
 }
 
 /// The header to read a forwarding pointer out of, or `None` to stop the walk.
