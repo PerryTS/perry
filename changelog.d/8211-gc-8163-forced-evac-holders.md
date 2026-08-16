@@ -36,6 +36,24 @@ suspects until each printed the exact address the fault reporter named.
   the first JS call. `js_node_http_im_resume`'s `'end'` snapshot and
   `js_node_https_server_close`'s callback get the same treatment.
 
+**Registering a scanner over a table makes every "allocate under its guard" site a
+deadlock, so those were hoisted in the same change.** `std::sync::Mutex` is not
+reentrant: the scanner takes `REQUEST_REGISTRY` during a collection on the mutator
+thread, so any site holding that guard across a GC allocation self-deadlocks the
+first time the allocation collects. Twelve string arms in `dispatch_request_property`
+plus `js_request_get_url` / `_method` / `_body`, `js_request_input_to_url` and
+`request_string_field` now snapshot the field bytes under the guard and allocate
+after dropping it. Worse, `js_request_clone` **threw** under the guard — the
+exception transport unwinds through the frame without running `Drop` (it is written
+for `panic=abort`), so the registry mutex would stay locked for the life of the
+process; it now decides "unusable" under the guard and throws outside it. Two tests
+hold this line, because the failure mode is a hang and a test that hangs is worse
+than one that fails: `request_reads_release_the_registry_guard` `try_lock`s after
+every reader, and `no_allocation_is_taken_off_a_live_registry_borrow` scans for the
+`js_string_from_bytes(req.…)` shape (with a planted sample proving the scan can
+still match it). Found in review by a parallel session — credit to them; the
+contract that caught it is the one this module's own docs state.
+
 **Why the audit missed it.** `scripts/gc_runtime_root_holders.py` could not see any
 of this: its `DECL` regex did not match `lazy_static!`'s `static ref`, so 93 tables
 across runtime+stdlib were outside the census; `strip_comments` blanks string
@@ -45,8 +63,16 @@ had a body in the walk (the FFI scanner trampolines included); a body-less
 the following functions; and the registration regex stopped at the first `(` of
 `SOURCE.as_ptr()`, dropping the scanner name from every C-ABI registration. All four
 are fixed. The census grows from 78 to 129 declarations (74 reached by a scanner,
-was 53); the 31 newly visible uncovered holders each carry a written verdict in
-`gc_runtime_root_holders.json`, and one stale entry is deleted.
+was 53) — the gate was green because the narrow regex hid the candidates, not
+because they were classified. The 31 newly visible uncovered holders each carry a
+written verdict in `gc_runtime_root_holders.json` naming the mechanism (the
+address-keyed `REGEX_POINTERS` / `REGEX_SOURCE_TABLE` are rekeyed on move and
+pruned on death by `regex_header_moved_for_gc` / `_clear_dead_for_gc`, dispatched
+from `gc/types.rs`; `THREAD_GLOBAL_THIS` / `THREAD_MODULE_TOP_THIS` register their
+own cell address with `js_gc_register_global_root`; `DIAG_STORE_SCOPES` cannot hold
+a heap pointer because `store_handle` rejects one), and one stale entry
+(`EXT_BLOCKING_TASKS_INFLIGHT`, now reached through the newly visible C-ABI scanner
+chain) is deleted.
 
 **Validation.** Same app dylib, same seed (8036), providers from the same tree:
 main → 59 `TypeError`s / 0 `PASS`, from-space fault at minor #218; fixed → 2×

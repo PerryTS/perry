@@ -230,3 +230,146 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
         .remove(&(headers_id, "entries"));
     REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
 }
+
+/// #8163: every `Request` reader must RELEASE the `REQUEST_REGISTRY` guard
+/// before it returns. The Fetch root scanner takes that same lock during a
+/// collection on this thread, so a leaked guard — which is what a throw under
+/// the guard produces, since the exception transport unwinds through the frame
+/// without running `Drop` — silently disables the scanner and reintroduces
+/// #8163's root cause. `try_lock` is the cheap witness: it fails if the guard
+/// is still held, and unlike calling a reader while holding the lock it FAILS
+/// rather than hangs.
+#[test]
+fn request_reads_release_the_registry_guard() {
+    let request = unsafe {
+        js_request_new(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(TAG_UNDEFINED),
+        )
+    };
+    let id = handle_id(request);
+    assert!(
+        REQUEST_REGISTRY.try_lock().is_ok(),
+        "js_request_new leaked the registry guard"
+    );
+
+    let readers: &[(&str, &dyn Fn())] = &[
+        ("js_request_get_url", &|| {
+            js_request_get_url(request);
+        }),
+        ("js_request_get_method", &|| {
+            js_request_get_method(request);
+        }),
+        ("js_request_get_body", &|| {
+            js_request_get_body(request);
+        }),
+        ("js_request_input_to_url", &|| {
+            js_request_input_to_url(request);
+        }),
+        ("js_request_get_signal", &|| {
+            js_request_get_signal(request);
+        }),
+        ("js_request_get_destination", &|| {
+            js_request_get_destination(request);
+        }),
+        ("js_request_clone", &|| {
+            js_request_clone(request);
+        }),
+    ];
+    for (name, run) in readers {
+        run();
+        assert!(
+            REQUEST_REGISTRY.try_lock().is_ok(),
+            "{name} left the registry guard held"
+        );
+    }
+
+    // The untyped dispatcher's string arms are the twelve sites that used to
+    // allocate under the guard; walk every one.
+    for prop in [
+        "url",
+        "method",
+        "destination",
+        "referrer",
+        "referrerPolicy",
+        "mode",
+        "credentials",
+        "cache",
+        "redirect",
+        "integrity",
+        "duplex",
+        "body",
+        "bodyUsed",
+        "keepalive",
+        "signal",
+    ] {
+        dispatch::dispatch_request_property(id, prop);
+        assert!(
+            REQUEST_REGISTRY.try_lock().is_ok(),
+            "dispatch_request_property({prop:?}) left the registry guard held"
+        );
+    }
+
+    REQUEST_REGISTRY.lock().unwrap().remove(&id);
+}
+
+/// #8163, the half `try_lock` cannot see: a reader that allocates *while* the
+/// guard is live deadlocks against the root scanner instead of leaking, and a
+/// test that reproduces it would hang rather than fail. The shape is
+/// syntactic — `js_string_from_bytes(req.<field>.as_ptr(), …)` allocates
+/// straight out of a borrow that only the `REQUEST_REGISTRY` guard keeps
+/// alive — so scan for it. Post-fix every site snapshots the bytes into an
+/// owned local first and allocates after dropping the guard.
+#[test]
+fn no_allocation_is_taken_off_a_live_registry_borrow() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("fetch/mod.rs", include_str!("mod.rs")),
+        ("fetch/dispatch.rs", include_str!("dispatch.rs")),
+        ("fetch/body_metadata.rs", include_str!("body_metadata.rs")),
+        ("fetch/request_ctor.rs", include_str!("request_ctor.rs")),
+    ];
+    // `req` is the universal binding for a borrowed `RequestRecord` in these
+    // files; `b` is the one used for its `body`. `f(req)` is
+    // `request_string_field`'s accessor form.
+    const FORBIDDEN: &[&str] = &[
+        "js_string_from_bytes(req.",
+        "js_string_from_bytes(b.",
+        "js_string_from_bytes(f(req)",
+    ];
+    let mut offenders = Vec::new();
+    for (name, text) in SOURCES {
+        for (lineno, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or(line);
+            for pattern in FORBIDDEN {
+                if code.contains(pattern) {
+                    offenders.push(format!("{name}:{}: {}", lineno + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "allocation taken directly off a REQUEST_REGISTRY borrow (#8163 — snapshot \
+         the bytes, drop the guard, then allocate):\n  {}",
+        offenders.join("\n  ")
+    );
+
+    // The scan must be able to see the shape it forbids, or it is decoration.
+    let planted = "        let p = js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);";
+    assert!(
+        FORBIDDEN.iter().any(|pattern| planted.contains(pattern)),
+        "the forbidden-pattern list no longer matches the shape it exists to catch"
+    );
+}

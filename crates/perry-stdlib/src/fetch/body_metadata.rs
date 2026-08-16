@@ -259,14 +259,17 @@ pub unsafe extern "C" fn js_response_form_data(handle: f64) -> *mut perry_runtim
 
 fn request_string_field(handle: f64, f: impl FnOnce(&RequestRecord) -> &str) -> *mut StringHeader {
     let id = handle_id(handle);
-    let guard = REQUEST_REGISTRY.lock().unwrap();
-    match guard.get(&id) {
-        Some(req) => {
-            let value = f(req);
-            js_string_from_bytes(value.as_ptr(), value.len() as u32)
-        }
-        None => js_string_from_bytes("".as_ptr(), 0),
-    }
+    // #8163: snapshot under the guard, allocate after it is dropped — the Fetch
+    // root scanner takes this same lock during a collection on this thread, so
+    // allocating inside the guard's scope self-deadlocks whenever that
+    // allocation triggers one. See `fetch::gc` and `js_request_get_url`.
+    let value = REQUEST_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|req| f(req).to_owned())
+        .unwrap_or_default();
+    js_string_from_bytes(value.as_ptr(), value.len() as u32)
 }
 
 #[no_mangle]

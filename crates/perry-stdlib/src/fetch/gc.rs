@@ -28,11 +28,31 @@
 //! process-wide runtime image rather than into any runtime glue that happens to
 //! be linked into the stdlib image.
 //!
-//! Locking contract: the scanner runs *during* a collection on the mutator
-//! thread and takes each table's mutex, so no site may hold one of these guards
-//! across a GC allocation. `js_request_new` builds its `RequestRecord`
-//! (including the default `AbortSignal` allocation) *before* taking the
-//! `REQUEST_REGISTRY` lock for that reason.
+//! **Locking contract (load-bearing).** The scanner runs *during* a collection
+//! on the mutator thread and takes each table's mutex, so **no site may hold one
+//! of these guards across a GC allocation, or across a throw**. `std::sync::Mutex`
+//! is not reentrant: an allocation under the guard that triggers a collection
+//! deadlocks against this scanner on the same thread, and a throw under the
+//! guard unwinds through the frame without running `Drop` (the `eh.rs` transport
+//! is written for `panic=abort` semantics), leaving the registry locked for the
+//! life of the process.
+//!
+//! Registering this scanner is therefore what turned a dozen pre-existing
+//! "allocate under the guard" sites into real deadlocks, and they were hoisted
+//! in the same change: `js_request_new` builds its whole `RequestRecord`
+//! (default `AbortSignal` allocation included) before taking the lock;
+//! `js_request_get_url` / `_method` / `_body`, `js_request_input_to_url`,
+//! `request_string_field` and `dispatch_request_property`'s twelve string arms
+//! snapshot the field bytes under the guard and allocate after dropping it; and
+//! `js_request_clone` decides "unusable" under the guard but throws outside it.
+//! Two tests hold the line, because the failure mode is a HANG and a test that
+//! hangs is worse than one that fails:
+//! `fetch::tests::request_reads_release_the_registry_guard` exercises every
+//! reader and asserts the mutex is free afterwards (a guard leaked by a throw
+//! shows up here), and
+//! `fetch::tests::no_allocation_is_taken_off_a_live_registry_borrow` is a
+//! source scan for the shape that caused it — `js_string_from_bytes(req.…)`,
+//! i.e. allocating straight out of a borrow that only the guard keeps alive.
 
 use super::*;
 use std::ffi::c_void;

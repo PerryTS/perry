@@ -177,7 +177,7 @@
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
       "name": "NEXT_READ_LINES_ID",
       "verdict": "not_a_gc_pointer",
-      "why": "Monotonic id counter for READ_LINES_REGISTRY keys."
+      "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/net.rs",
@@ -202,7 +202,7 @@
       "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
       "name": "DIAG_STORE_SCOPES",
       "verdict": "not_a_gc_pointer",
-      "why": "DiagStoreScopeState.handles are DIAG_CHANNELS/DIAG_STORE ids (i64 keys), not heap addresses; `disposed` is a flag. The store objects live in DIAG_CHANNELS, which scan_node_submodule_singleton_roots_mut visits."
+      "why": "DiagStoreScopeState.handles are store KEYS produced by store_handle() (diagnostics_tail.rs:72), which admits only an INT32-tagged value, a POINTER_TAG value inside the handle band (raw < 0x10000), or a finite float \u2014 a real heap pointer returns None, so one cannot be stored here by construction. The store CONTEXT objects live in DIAG_CHANNELS[*].stores, which scan_node_submodule_singleton_roots_mut visits."
     },
     {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",

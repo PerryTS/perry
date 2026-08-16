@@ -1734,11 +1734,15 @@ pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let guard = REQUEST_REGISTRY.lock().unwrap();
-    match guard.get(&id) {
-        Some(req) => js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32),
-        None => std::ptr::null_mut(),
-    }
+    // #8163: snapshot under the guard, allocate after it is dropped. The Fetch
+    // root scanner takes this same lock during a collection on this thread, so
+    // a `js_string_from_bytes` inside the guard's scope self-deadlocks the
+    // moment that allocation triggers one. See `fetch::gc`.
+    let url = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
+        Some(req) => req.url.clone(),
+        None => return std::ptr::null_mut(),
+    };
+    js_string_from_bytes(url.as_ptr(), url.len() as u32)
 }
 
 /// Coerce the first argument of `new Request(input, init)` to its URL string.
@@ -1752,8 +1756,14 @@ pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_request_input_to_url(value: f64) -> *mut StringHeader {
     let id = handle_id(value);
-    if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get(&id) {
-        return js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);
+    // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
+    let url = REQUEST_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|req| req.url.clone());
+    if let Some(url) = url {
+        return js_string_from_bytes(url.as_ptr(), url.len() as u32);
     }
     perry_runtime::value::js_jsvalue_to_string(value) as *mut StringHeader
 }
@@ -1761,28 +1771,28 @@ pub extern "C" fn js_request_input_to_url(value: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);
-    let guard = REQUEST_REGISTRY.lock().unwrap();
-    match guard.get(&id) {
-        Some(req) => js_string_from_bytes(req.method.as_ptr(), req.method.len() as u32),
-        None => std::ptr::null_mut(),
-    }
+    // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
+    let method = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
+        Some(req) => req.method.clone(),
+        None => return std::ptr::null_mut(),
+    };
+    js_string_from_bytes(method.as_ptr(), method.len() as u32)
 }
 
 /// req.body — returns a string body or null. NaN-boxed return.
 #[no_mangle]
 pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     let id = handle_id(handle);
-    let guard = REQUEST_REGISTRY.lock().unwrap();
-    match guard.get(&id) {
+    // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
+    let body = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
         Some(req) => match &req.body {
-            Some(b) => {
-                let s = js_string_from_bytes(b.as_ptr(), b.len() as u32);
-                f64::from_bits(JSValue::string_ptr(s).bits())
-            }
-            None => f64::from_bits(TAG_NULL),
+            Some(b) => b.clone(),
+            None => return f64::from_bits(TAG_NULL),
         },
-        None => f64::from_bits(TAG_NULL),
-    }
+        None => return f64::from_bits(TAG_NULL),
+    };
+    let s = js_string_from_bytes(body.as_ptr(), body.len() as u32);
+    f64::from_bits(JSValue::string_ptr(s).bits())
 }
 
 /// request.bodyUsed -> boolean
@@ -1797,13 +1807,19 @@ pub extern "C" fn js_request_body_used(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_request_clone(handle: f64) -> f64 {
     let id = handle_id(handle);
-    let cloned = {
+    // #8163: the `unusable` throw MUST NOT happen under the guard. It allocates
+    // an Error (a collection point, and the scanner takes this same lock) and
+    // then unwinds through this frame without running `Drop`, so the registry
+    // mutex would stay locked for the life of the process. Decide under the
+    // guard, throw after it is dropped. `Err(())` is "unusable".
+    #[allow(clippy::result_unit_err)]
+    let cloned: Option<Result<RequestRecord, ()>> = {
         let guard = REQUEST_REGISTRY.lock().unwrap();
         guard.get(&id).map(|req| {
             if req.body.is_some() && req.body_used {
-                unsafe { throw_fetch_type_error("unusable") };
+                return Err(());
             }
-            RequestRecord {
+            Ok(RequestRecord {
                 url: req.url.clone(),
                 method: req.method.clone(),
                 body: req.body.clone(),
@@ -1821,16 +1837,19 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 duplex: req.duplex.clone(),
                 signal: req.signal,
                 cached_headers_id: None,
-            }
+            })
         })
     };
-    if let Some(new_req) = cloned {
-        let new_id = alloc_fetch_handle_id();
-        gc::ensure_gc_registered();
-        REQUEST_REGISTRY.lock().unwrap().insert(new_id, new_req);
-        return handle_to_f64(new_id);
+    match cloned {
+        Some(Err(())) => unsafe { throw_fetch_type_error("unusable") },
+        Some(Ok(new_req)) => {
+            let new_id = alloc_fetch_handle_id();
+            gc::ensure_gc_registered();
+            REQUEST_REGISTRY.lock().unwrap().insert(new_id, new_req);
+            handle_to_f64(new_id)
+        }
+        None => f64::from_bits(TAG_UNDEFINED),
     }
-    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// Read and consume a request's stored body. Bodiless requests are reusable and
