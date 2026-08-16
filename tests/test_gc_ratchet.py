@@ -55,6 +55,73 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOLERANCES_PATH = REPO_ROOT / "benchmarks" / "gc_ratchet" / "tolerances.json"
 
 
+def _artifact_with_synthetic_receipt():
+    """The pinned artifact plus a well-formed selective-re-pin receipt.
+
+    Derived FROM the pin rather than hard-coded. The tests that tamper with a
+    receipt are testing the *validator*, not whatever happens to be pinned
+    today -- sourcing their fixture from the live baseline is what tied them to
+    one historical selective re-pin and broke them at the next full one.
+
+    Two cells, because a single-cell receipt cannot catch an inspector that
+    validates only `cells[0]`.
+    """
+    artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+    artifact.pop("accepted_deterministic_deltas", None)
+
+    chosen = []
+    for probe_name, probe in sorted(artifact["probes"].items()):
+        for metric in sorted(probe.get("metrics", {})):
+            if metric not in DETERMINISTIC_METRICS:
+                continue
+            pinned = probe["metrics"][metric].get("median")
+            if isinstance(pinned, bool) or not isinstance(pinned, (int, float)):
+                continue
+            chosen.append((probe_name, metric, pinned))
+            break
+        if len(chosen) == 2:
+            break
+    assert len(chosen) == 2, "pinned artifact has too few deterministic cells to build a receipt"
+
+    cause = "b" * 40
+    artifact["accepted_deterministic_deltas"] = {
+        "commit": "a" * 40,
+        "code_tree": "c" * 40,
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "notes": "Synthetic receipt built by the test suite from the pinned artifact.",
+        "measurement": {
+            "platform": "test-harness",
+            "repeats": 3,
+            "traced_runs": 2,
+            "binaries": {
+                name: {"size": 1, "sha256": "d" * 64}
+                for name in ("perry", "libperry_runtime.a", "libperry_stdlib.a")
+            },
+        },
+        "causes": {
+            cause: {
+                "pull_request": 1,
+                "category": "synthetic",
+                "evidence": "constructed by the test suite",
+            }
+        },
+        "cells": [
+            {
+                "probe": probe,
+                "metric": metric,
+                # previous must differ from accepted, or the inspector reports
+                # "records no change" -- a receipt row for a cell that did not
+                # move is itself a defect.
+                "previous_median": pinned + 1,
+                "accepted_median": pinned,
+                "causes": [cause],
+            }
+            for probe, metric, pinned in chosen
+        ],
+    }
+    return artifact
+
+
 def _shipped_tolerances():
     return json.loads(TOLERANCES_PATH.read_text(encoding="utf-8"))
 
@@ -490,48 +557,67 @@ class ArtifactValidationTests(unittest.TestCase):
         for key in ("perry", "libperry_runtime.a", "libperry_stdlib.a"):
             self.assertRegex(binaries[key]["sha256"], r"^[0-9a-f]{64}$")
 
-    def test_selective_refresh_names_every_accepted_cell_and_cause(self):
+    def test_a_full_re_pin_without_a_receipt_is_valid(self):
+        """The contract #8204 exercised, which nothing covered.
+
+        `accepted_deterministic_deltas` is the receipt for a SELECTIVE re-pin --
+        the dangerous kind, which can turn one red row green while leaving no
+        machine-readable answer to which rows moved or why. A FULL re-pin has
+        artifact-wide provenance instead, and the validator says so explicitly:
+        `if receipt is None: return`.
+
+        This existed only as a docstring. #8204 did a full re-pin (130 of 168
+        cells moved), correctly carried no receipt, and three tests here that
+        hard-subscripted the key errored with `KeyError`, reddening
+        `windows-build` on every open PR. The gate punished the correct action,
+        so pin the permission as a test rather than a comment.
+        """
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
-        receipt = artifact["accepted_deterministic_deltas"]
-        expected = {
-            ("02_survivor_promotion", "copied_objects"),
-            ("03_cross_gen_writes", "copied_objects"),
-            ("03_cross_gen_writes", "copied_bytes"),
-            ("03_cross_gen_writes", "freed_bytes"),
-            ("04_dead_after_deep_stack", "copied_objects"),
-            ("04_dead_after_deep_stack", "freed_bytes"),
-            ("05_closure_capture", "copied_objects"),
-            ("05_closure_capture", "freed_bytes"),
-            ("06_string_retention", "freed_bytes"),
-            ("08_map_set_sidetables", "copied_objects"),
-            ("08_map_set_sidetables", "copied_bytes"),
-            ("08_map_set_sidetables", "freed_bytes"),
-            ("12_large_live_set", "copied_objects"),
-            ("12_large_live_set", "promoted_bytes"),
-            ("12_large_live_set", "freed_bytes"),
-            ("13_large_eden_survivors", "heap_used_bytes"),
-            ("13_large_eden_survivors", "freed_bytes"),
-            ("14_grow_then_churn", "copied_objects"),
-            ("14_grow_then_churn", "copied_bytes"),
-            ("14_grow_then_churn", "promoted_bytes"),
-            ("14_grow_then_churn", "freed_bytes"),
-        }
-        actual = {(cell["probe"], cell["metric"]) for cell in receipt["cells"]}
-        self.assertEqual(actual, expected)
-        self.assertEqual(
-            {cause["pull_request"] for cause in receipt["causes"].values()},
-            {7928, 7960, 7961},
+        self.assertNotIn(
+            "accepted_deterministic_deltas",
+            artifact,
+            "the pinned baseline is a full re-pin; update this test if that changes",
         )
+        validate_artifact(artifact)
+
+    def test_a_receipt_on_the_pin_must_name_real_cells_and_real_causes(self):
+        """The durable half of the old cell-by-cell assertion.
+
+        What that test actually pinned was one historical selective re-pin:
+        #8069's exact 21 cells and causes {7928, 7960, 7961}. That is a snapshot,
+        not an invariant -- any later re-pin breaks it by construction, which is
+        precisely what happened. The invariant worth keeping is structural: a
+        receipt, IF present, must describe the artifact it ships with.
+        """
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        receipt = artifact.get("accepted_deterministic_deltas")
+        if receipt is None:
+            self.skipTest("pinned baseline is a full re-pin (no selective receipt)")
+        probes = artifact["probes"]
+        for cell in receipt["cells"]:
+            self.assertIn(cell["probe"], probes)
+            self.assertIn(cell["metric"], probes[cell["probe"]]["metrics"])
+            self.assertEqual(
+                cell["accepted_median"],
+                probes[cell["probe"]]["metrics"][cell["metric"]]["median"],
+                f"{cell['probe']}.{cell['metric']} receipt disagrees with the pin",
+            )
+            for commit in cell["causes"]:
+                self.assertIn(commit, receipt["causes"])
+        for cause in receipt["causes"].values():
+            self.assertIsInstance(cause["pull_request"], int)
+            self.assertGreater(cause["pull_request"], 0)
 
     def test_selective_refresh_receipt_cannot_disagree_with_the_pin(self):
-        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        artifact = _artifact_with_synthetic_receipt()
+        validate_artifact(artifact)  # control: the fixture itself is valid
         tampered = copy.deepcopy(artifact)
         tampered["accepted_deterministic_deltas"]["cells"][0]["accepted_median"] += 1
         with self.assertRaisesRegex(RatchetError, "does not match pinned median"):
             validate_artifact(tampered)
 
     def test_selective_refresh_receipt_rejects_a_malformed_timestamp(self):
-        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        artifact = _artifact_with_synthetic_receipt()
         tampered = copy.deepcopy(artifact)
         tampered["accepted_deterministic_deltas"]["generated_at"] = "unknown"
         with self.assertRaisesRegex(RatchetError, "ISO-8601 UTC timestamp"):
