@@ -84,6 +84,14 @@ pub struct RegCounter {
     /// to find the loads that rewrite makes stale. See
     /// `docs/src/internals/gc-rooting-invariant.md`.
     shadow_slot_allocas: RefCell<HashSet<String>>,
+    /// #8175: module-level registry of `preserve_nonecc` function symbols
+    /// (recursion-participating specialized clones). Injected by
+    /// `LlModule::define_function` into every function's counter so the two
+    /// call choke points below can stamp the call-site convention without any
+    /// per-site threading — a call site whose convention disagrees with its
+    /// callee is UB, so the registry, not the emitting code, is the single
+    /// source of truth. `None` for functions built outside a module (tests).
+    preserve_none_fns: RefCell<Option<Rc<RefCell<HashSet<String>>>>>,
 }
 
 impl RegCounter {
@@ -92,6 +100,28 @@ impl RegCounter {
             value: Cell::new(0),
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
+            preserve_none_fns: RefCell::new(None),
+        }
+    }
+
+    /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
+    /// once per function by `LlModule::define_function`; the shared cell means
+    /// registration order does not matter — reads happen at call-emission and
+    /// render time, both after the specialization plan is final.
+    pub(crate) fn set_preserve_none_fns(&self, fns: Rc<RefCell<HashSet<String>>>) {
+        *self.preserve_none_fns.borrow_mut() = Some(fns);
+    }
+
+    /// Whether `callee` must be called with the `preserve_nonecc` convention.
+    /// Cheap for the overwhelmingly common miss: only generated clone symbols
+    /// contain `$`, so ordinary runtime helpers never reach the set lookup.
+    pub(crate) fn callee_preserve_none(&self, callee: &str) -> bool {
+        if !callee.contains('$') {
+            return false;
+        }
+        match &*self.preserve_none_fns.borrow() {
+            Some(fns) => fns.borrow().contains(callee),
+            None => false,
         }
     }
 
@@ -836,6 +866,7 @@ impl LlBlock {
                 ret: "i32",
                 callee: "llvm.aarch64.fjcvtzs".to_string(),
                 args: vec![("double", val.to_string())],
+                cconv: None,
             });
             return r;
         }
@@ -1186,6 +1217,13 @@ impl LlBlock {
         // codegen finishes to auto-link the providing crate.
         crate::ext_registry::record_ffi_call(func_name);
         let r = self.reg();
+        // #8175: a `preserve_nonecc` callee (recursion-participating spec
+        // clone) must be called with its own convention — on the invoke arm
+        // exactly as on the plain-call arm, since a mismatch is UB.
+        let cconv = self
+            .counter
+            .callee_preserve_none(func_name)
+            .then_some(crate::inst::PRESERVE_NONE_CC);
         // Invoke-EH (#7302): inside a handler scope, throw-capable calls
         // carry the unwind edge. The invoke + inline continuation label ride
         // the Raw escape hatch; the native-construction backend bails on
@@ -1193,9 +1231,10 @@ impl LlBlock {
         // reader learns invoke.
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
+            let cc = cconv.map(|c| format!("{c} ")).unwrap_or_default();
             self.emit(format!(
-                "{} = invoke {} @{}({}) to label %{} unwind label %{}",
-                r, ret_ty, func_name, arg_str, cont, lpad
+                "{} = invoke {}{} @{}({}) to label %{} unwind label %{}",
+                r, cc, ret_ty, func_name, arg_str, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1204,6 +1243,7 @@ impl LlBlock {
                 ret: ret_ty,
                 callee: func_name.to_string(),
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+                cconv,
             });
         }
         r
@@ -1214,11 +1254,16 @@ impl LlBlock {
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
             .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
+        let cconv = self
+            .counter
+            .callee_preserve_none(func_name)
+            .then_some(crate::inst::PRESERVE_NONE_CC);
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
+            let cc = cconv.map(|c| format!("{c} ")).unwrap_or_default();
             self.emit(format!(
-                "invoke void @{}({}) to label %{} unwind label %{}",
-                func_name, arg_str, cont, lpad
+                "invoke {}void @{}({}) to label %{} unwind label %{}",
+                cc, func_name, arg_str, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1227,6 +1272,7 @@ impl LlBlock {
                 ret: "void",
                 callee: func_name.to_string(),
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+                cconv,
             });
         }
     }

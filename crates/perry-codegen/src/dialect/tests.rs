@@ -306,3 +306,64 @@ fn channel_reduction_vector_forms_round_trip() {
         "built only {n} instructions from:\n{ir}"
     );
 }
+
+/// #8175: `preserve_nonecc` on a define header, a call site, and an invoke
+/// site all construct natively with the real LLVM convention — asserted on
+/// LLVM's own printed form, which only shows the token when the convention
+/// was actually set on the value (a dropped call-site convention would be a
+/// silent define/call mismatch, i.e. UB, so this must not rely on perry's
+/// emitter being the only writer).
+#[test]
+fn preserve_none_constructs_on_define_call_and_invoke() {
+    let ctx = Context::create();
+    let skeleton = "declare i32 @perry_eh_personality(i32, i32, i64, ptr, ptr)\n";
+    let module = crate::inprocess::parse_ir_text(&ctx, skeleton, "preserve_none_skel")
+        .expect("skeleton parses");
+    let fns = [
+        "define internal preserve_nonecc double @callee$pn_i32(i32 %arg0) {\n\
+         entry.0:\n\
+         \x20 %r1 = sitofp i32 %arg0 to double\n\
+         \x20 ret double %r1\n\
+         }\n",
+        "define double @caller(double %arg0) {\n\
+         entry.0:\n\
+         \x20 %r1 = call preserve_nonecc double @callee$pn_i32(i32 7)\n\
+         \x20 ret double %r1\n\
+         }\n",
+        "define double @trycaller(double %arg0) personality ptr @perry_eh_personality {\n\
+         entry.0:\n\
+         \x20 %r1 = invoke preserve_nonecc double @callee$pn_i32(i32 7) to label %eh.cont1 \
+         unwind label %lpad.0\n\
+         eh.cont1:\n\
+         \x20 ret double %r1\n\
+         lpad.0:\n\
+         \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
+         \x20 ret double 0.0\n\
+         }\n",
+    ];
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).expect("predeclare");
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let printed = module.print_to_string().to_string();
+    assert!(
+        printed.contains("define internal preserve_nonecc double @\"callee$pn_i32\"")
+            || printed.contains("define internal preserve_nonecc double @callee$pn_i32"),
+        "function value lost its calling convention:\n{printed}"
+    );
+    assert_eq!(
+        printed.matches("call preserve_nonecc double").count(),
+        1,
+        "call site lost its calling convention:\n{printed}"
+    );
+    assert_eq!(
+        printed.matches("invoke preserve_nonecc double").count(),
+        1,
+        "invoke site lost its calling convention:\n{printed}"
+    );
+}

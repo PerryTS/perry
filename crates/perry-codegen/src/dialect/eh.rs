@@ -33,6 +33,14 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let cont = self.block(cont_label.trim());
         let pad = self.block(unwind_label.trim());
 
+        // #8175: explicit calling-convention token before the return type.
+        let (head, preserve_none) = match head
+            .trim_start()
+            .strip_prefix(crate::inst::PRESERVE_NONE_CC)
+        {
+            Some(tail) => (tail.trim_start(), true),
+            None => (head, false),
+        };
         let callee_pos = head
             .find(['@', '%'])
             .ok_or_else(|| anyhow!("invoke without callee"))?;
@@ -74,6 +82,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .builder
             .build_indirect_invoke(fn_ty, callee_ptr, &args, cont, pad, name)
             .map_err(be)?;
+        if preserve_none {
+            site.set_call_convention(super::LLVM_CC_PRESERVE_NONE);
+        }
         // An invoke terminates its block; the emitted text continues in
         // the inline continuation label, which arrives as the next line.
         match site.try_as_basic_value() {

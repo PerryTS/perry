@@ -4,6 +4,8 @@
 //! by all its blocks (see `block.rs`), an ordered list of blocks, and emits
 //! itself as an LLVM `define` when serialized.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::block::{FpFlags, LlBlock, RegCounter};
@@ -711,6 +713,21 @@ impl LlFunction {
         self.blocks.len()
     }
 
+    /// #8175: install the module's `preserve_nonecc` symbol registry on this
+    /// function's counter, so its call sites stamp the call-site convention
+    /// and its own define/declare rendering can consult the same set. Called
+    /// by `LlModule::define_function` for every function.
+    pub(crate) fn set_preserve_none_fns(&self, fns: Rc<RefCell<HashSet<String>>>) {
+        self.reg_counter.set_preserve_none_fns(fns);
+    }
+
+    /// Whether this function's define header (and every declare of it) must
+    /// carry the `preserve_nonecc` calling convention (#8175). Render-time
+    /// lookup against the module registry, so define order never matters.
+    pub(crate) fn is_preserve_none(&self) -> bool {
+        self.reg_counter.callee_preserve_none(&self.name)
+    }
+
     /// Whether final rendering must lower shadow-slot bindings into native
     /// `addrspace(1)` roots before RS4GC runs.
     ///
@@ -777,6 +794,17 @@ impl LlFunction {
             format!("{} ", self.linkage)
         };
 
+        // #8175: the calling convention survives `force_external` on purpose —
+        // codegen-unit promotion changes VISIBILITY, never the ABI. A unit
+        // that calls a promoted `preserve_nonecc` clone still calls it with
+        // the clone's convention (declare + call site both carry the token),
+        // so splitting is carried, not refused.
+        let cconv: String = if self.is_preserve_none() {
+            format!("{} ", crate::inst::PRESERVE_NONE_CC)
+        } else {
+            String::new()
+        };
+
         let attrs = if self.force_inline {
             " alwaysinline"
         } else if self.no_inline {
@@ -812,8 +840,9 @@ impl LlFunction {
             None => String::new(),
         };
         format!(
-            "define {}{} @{}({}){}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{} {{",
             linkage,
+            cconv,
             self.return_type,
             self.name,
             param_str,
