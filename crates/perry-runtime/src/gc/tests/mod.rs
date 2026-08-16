@@ -17,6 +17,7 @@ mod dirty_page_cache;
 mod env_knob_parse;
 mod error_side_tables;
 mod evacuation;
+mod forwarding_target_validation;
 mod fromspace_protect;
 mod fromspace_scan;
 mod global_bootstrap;

@@ -271,6 +271,24 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #8174. A side table whose KEY is a raw heap address, REKEYED in place by
+      # `visit_metadata_*` (rewritten if the object moved, deliberately not
+      # marked), depends on `gc::dead_owner` dropping that key when the object
+      # dies. #8168 wired up the one table that had been missed; the invariant
+      # was otherwise maintained by a hand-written list happening to be
+      # complete, and a table added without a prune reappears days later as a
+      # `TypeError: value is not a function` in an unrelated function (#8040).
+      # This adjudicates every rekey site against the runtime registry: an
+      # unclassified site fails, and so does an exemption that matches nothing.
+      #
+      # Cheap and build-free, so it belongs in `lint`, which IS a required
+      # context (CLAUDE.md hazard 2).
+      - name: Rekeyed side-table custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_rekeyed_key_tables.py --self-test
+          python3 scripts/gc_rekeyed_key_tables.py
+
       # #7877. A deleted GC knob left executable CI arms that still looked
       # distinct but selected the same collector. Derive the accepted names
       # from live runtime/codegen parsers; historical journals are path-exact
