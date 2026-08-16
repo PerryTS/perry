@@ -375,16 +375,25 @@ fn emit_public_spec_function_trampoline(
                 });
             }
             if let Some(descriptor) = descriptor {
-                let raw = blk.call(
-                    I32,
-                    "js_param_type_guard",
-                    &[
-                        (DOUBLE, arg.as_str()),
-                        (PTR, &format!("@{}", descriptor.descriptor_name)),
-                        (I32, &descriptor.descriptor.len().to_string()),
-                    ],
-                );
-                let ok = blk.icmp_ne(I32, &raw, "0");
+                let ok = if let Some(rep) =
+                    super::param_guard::scalar_descriptor_rep(&descriptor.descriptor)
+                {
+                    // (#8079) Scalar proof: the typed-abi leaf guard decides
+                    // the exact same predicate without the interpretive
+                    // validator's per-call descriptor parse + state init.
+                    emit_typed_arg_guard(blk, rep, arg)
+                } else {
+                    let raw = blk.call(
+                        I32,
+                        "js_param_type_guard",
+                        &[
+                            (DOUBLE, arg.as_str()),
+                            (PTR, &format!("@{}", descriptor.descriptor_name)),
+                            (I32, &descriptor.descriptor.len().to_string()),
+                        ],
+                    );
+                    blk.icmp_ne(I32, &raw, "0")
+                };
                 guard = Some(match guard {
                     Some(prev) => blk.and(I1, &prev, &ok),
                     None => ok,

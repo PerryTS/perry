@@ -7551,8 +7551,13 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_stays_generic() 
         "the guarded clone should consume its descriptor proof:\n{clone}"
     );
     let entry = function_ir_section(&ir, symbol);
+    // (#8079) A scalar (Number) descriptor is decided by the typed-abi leaf
+    // guard — same predicate as the validator's OP_NUMBER, no interpretive
+    // per-call cost. The invariant is unchanged: the raw-f64 clone is only
+    // reachable through the entry guard, with the generic body as fallback.
     assert!(
-        entry.contains("call i32 @js_param_type_guard(")
+        entry.contains("call i32 @js_typed_f64_arg_guard(")
+            && !entry.contains("call i32 @js_param_type_guard(")
             && entry.contains(&format!("@{symbol}$generic(")),
         "the raw-f64 clone must be reachable only through the entry guard, with the generic body as fallback:\n{entry}"
     );

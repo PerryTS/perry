@@ -2634,6 +2634,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 continue;
             };
             for guard in plan.guards.iter().flatten() {
+                // (#8079) Scalar descriptors are decided inline by a
+                // typed-abi leaf guard; no rodata blob is referenced.
+                if param_guard::scalar_descriptor_rep(&guard.descriptor).is_some() {
+                    continue;
+                }
                 llmod.add_named_string_constant(
                     &guard.descriptor_name,
                     guard.descriptor.len() + 1,
