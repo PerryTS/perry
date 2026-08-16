@@ -7,9 +7,9 @@
 # production oracle byte-for-byte across 10 cold starts of two 21-request
 # verifier passes each.
 #
-# What it does NOT assert by default: behaviour under forced evacuation. That
-# arm is opt-in behind `PERRY_NEXT_ROUTE_FORCED_GC=1` and is currently red —
-# see the block above the cold-start loop and #8163.
+# Odd cold starts run under FORCED evacuation with a seeded GC schedule and the
+# moving-GC liveness assert (#8163 — fixed; `PERRY_NEXT_ROUTE_FORCED_GC=0`
+# turns that arm off for a normal-only run).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -187,26 +187,19 @@ run_cold_start() {
   cleanup_server
 }
 
-# The forced-evacuation arm is OPT-IN, and deliberately not a skip.
-#
-# It currently FAILS — a stale closure reaches Next's `Reflect.get` adapter
-# from a holder that is outside the GC heap and unregistered with any root
-# scanner (#8163 has the full elimination trail and a seconds-long
-# reproducer). Shipping it on would make this fixture red for everyone; making
-# it a `SKIP` would let it read as covered when it is not; wrapping it in
-# `continue-on-error` would make it documentation rather than a gate. So it is
-# a knob that is OFF here and FAILS LOUDLY when set — the one arrangement that
-# neither blocks the production-parity coverage below nor overstates it.
-#
-# `PERRY_NEXT_ROUTE_FORCED_GC=1` restores the original alternation (odd cold
-# starts run under forced evacuation with the moving-GC liveness assert) and is
-# how #8163 should be worked and, once fixed, how this default flips back.
-FORCED_GC="${PERRY_NEXT_ROUTE_FORCED_GC:-0}"
+# The forced-evacuation arm is ON by default: odd cold starts run under forced
+# evacuation with the moving-GC liveness assert. It was opt-in (and red) while
+# #8163 was open — a stale closure reached Next's `Reflect.get` adapter from
+# `HEADERS_METHOD_VALUE_CACHE`, and a second one reached the `res.end()` tail
+# from `ServerResponse.once_listeners`; both were holders outside the GC heap
+# that no root scanner marked or rewrote. `PERRY_NEXT_ROUTE_FORCED_GC=0` runs
+# the normal arm only; it is a knob, not a skip, and never `continue-on-error`.
+FORCED_GC="${PERRY_NEXT_ROUTE_FORCED_GC:-1}"
 if [[ "$FORCED_GC" == "1" ]]; then
   echo "  [6/7] $COLD_STARTS cold processes (alternating normal / FORCED-evacuation), two 21-request verifier runs each"
 else
   echo "  [6/7] $COLD_STARTS cold processes, two 21-request verifier runs each"
-  echo "        forced-evacuation arm OFF (#8163) — set PERRY_NEXT_ROUTE_FORCED_GC=1 to run it"
+  echo "        forced-evacuation arm OFF (PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi
 for index in $(seq 0 $((COLD_STARTS - 1))); do
   if [[ "$FORCED_GC" == "1" ]] && (( index % 2 == 1 )); then mode="forced"; else mode="normal"; fi
@@ -217,5 +210,5 @@ echo "  [7/7] production AppRouteRouteModule.handle parity complete"
 if [[ "$FORCED_GC" == "1" ]]; then
   echo "PASS $NAME (with forced-evacuation arm)"
 else
-  echo "PASS $NAME (forced-evacuation arm not run — #8163)"
+  echo "PASS $NAME (forced-evacuation arm not run — PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi

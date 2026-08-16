@@ -104,3 +104,129 @@ fn response_constructor_copies_headers_initializer() {
         .unwrap()
         .remove(&response_headers_id);
 }
+
+/// #8163: the Headers / FormData bound-method caches and `RequestRecord::signal`
+/// are heap values held in Rust tables outside the GC heap. The registered
+/// scanner must EMIT them (mark) — a value it does not emit dies on the next
+/// collection and the cache hands out a dangling closure.
+#[test]
+fn fetch_root_scanner_emits_method_caches_and_request_signal() {
+    let headers_id = alloc_headers(HeadersStore::default());
+    let headers_get = headers_bound_method_value(headers_id, "get");
+    let form_id = alloc_fetch_handle_id();
+    let form_bits: u64 = 0x7FFD_0000_0000_1230;
+    dispatch::FORM_DATA_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .insert((form_id, "get"), form_bits);
+    let request = unsafe {
+        js_request_new(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(TAG_UNDEFINED),
+        )
+    };
+    let signal = js_request_get_signal(request);
+    assert_ne!(
+        signal.to_bits(),
+        TAG_UNDEFINED,
+        "a default AbortSignal is allocated"
+    );
+
+    let mut emitted = Vec::new();
+    gc::scan_fetch_roots(&mut |value| emitted.push(value.to_bits()));
+
+    assert!(
+        emitted.contains(&headers_get.to_bits()),
+        "cached Headers bound-method closure must be a root"
+    );
+    assert!(
+        emitted.contains(&form_bits),
+        "cached FormData bound-method closure must be a root"
+    );
+    assert!(
+        emitted.contains(&signal.to_bits()),
+        "request.signal must be a root"
+    );
+
+    dispatch::FORM_DATA_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .remove(&(form_id, "get"));
+}
+
+/// #8163: marking alone is not enough under a moving collector — the cache
+/// slot must be REWRITTEN, or the next `headers.get` read returns the
+/// pre-move address (exactly what Next's `ReflectAdapter.get` hit). The
+/// visitor here relocates only the slots this test planted, so parallel tests
+/// sharing the process-global tables are untouched.
+#[test]
+fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
+    struct Relocate {
+        targets: Vec<u64>,
+    }
+    impl gc::FetchRootVisitor for Relocate {
+        fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) {
+            if self.targets.contains(&slot.to_bits()) {
+                *slot = f64::from_bits(slot.to_bits() + 0x1000);
+            }
+        }
+        fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) {
+            if self.targets.contains(slot) {
+                *slot += 0x1000;
+            }
+        }
+    }
+
+    let headers_id = alloc_headers(HeadersStore::default());
+    let before = headers_bound_method_value(headers_id, "entries");
+    let request = unsafe {
+        js_request_new(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(TAG_UNDEFINED),
+        )
+    };
+    let signal_before = js_request_get_signal(request);
+
+    gc::scan_fetch_roots_with(&mut Relocate {
+        targets: vec![before.to_bits(), signal_before.to_bits()],
+    });
+
+    // The cache HIT path must hand back the relocated value, not the planted one.
+    let after = headers_bound_method_value(headers_id, "entries");
+    assert_eq!(after.to_bits(), before.to_bits() + 0x1000);
+    assert_eq!(
+        js_request_get_signal(request).to_bits(),
+        signal_before.to_bits() + 0x1000
+    );
+
+    // Leave no bogus (relocated) pointers behind for other tests.
+    headers_method_value::HEADERS_METHOD_VALUE_CACHE
+        .lock()
+        .unwrap()
+        .remove(&(headers_id, "entries"));
+    REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
+}

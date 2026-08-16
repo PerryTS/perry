@@ -132,12 +132,6 @@
       "why": "In-flight job counter for perry/thread."
     },
     {
-      "file": "crates/perry-stdlib/src/common/async_bridge.rs",
-      "name": "EXT_BLOCKING_TASKS_INFLIGHT",
-      "verdict": "not_a_gc_pointer",
-      "why": "In-flight blocking-task counter. The JS values are in PENDING_RESOLUTIONS / PENDING_DEFERRED, both covered by scan_pending_native_async_resolution_roots_mut."
-    },
-    {
       "file": "crates/perry-stdlib/src/streams.rs",
       "name": "N",
       "verdict": "not_a_gc_pointer",
@@ -154,6 +148,200 @@
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CAPTURED_MISS_STREAK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by the closure's func_ptr \u2014 a CODE address, which the collector neither moves nor traces; the value is a miss-streak count."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_ALLOC_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic allocation counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_CAP_SINGLETON_HIT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cache hit counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_CAP_SINGLETON_MISS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cache miss counter (telemetry). Holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/filehandle.rs",
+      "name": "NEXT_READ_LINES_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter for READ_LINES_REGISTRY keys."
+    },
+    {
+      "file": "crates/perry-runtime/src/net.rs",
+      "name": "TCP_SERVERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by handle id; TcpListenerWrapper is Rust-owned (tokio listener + SocketAddr), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/net.rs",
+      "name": "TCP_SOCKETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_TRACES",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1528, visit_raw_mut_ptr_slot on DiagTracingState.obj)",
+      "why": "Visited from the sibling module, so the same-file rule misses it. The `events: [i64; 5]` are DIAG_CHANNELS ids, not addresses."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
+      "name": "DIAG_STORE_SCOPES",
+      "verdict": "not_a_gc_pointer",
+      "why": "DiagStoreScopeState.handles are DIAG_CHANNELS/DIAG_STORE ids (i64 keys), not heap addresses; `disposed` is a flag. The store objects live in DIAG_CHANNELS, which scan_node_submodule_singleton_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "THREAD_GLOBAL_THIS",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots GLOBAL_ROOTS \u2014 the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_get_global_this) and marked+rewritten as a mutable global root",
+      "why": "A raw-pointer cache slot registered as a global root at first population; the registration is a call, not a scanner body, so the walk cannot see it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "THREAD_MODULE_TOP_THIS",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots GLOBAL_ROOTS \u2014 the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_module_top_this)",
+      "why": "Same shape as THREAD_GLOBAL_THIS: a NaN-boxed cache slot registered as a mutable global root at first population."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REGEX_POINTERS",
+      "verdict": "covered_elsewhere",
+      "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs), the RegExp move/death hooks the copying minor and sweep invoke",
+      "why": "Address-KEYED owner set, not a root: the key is rekeyed when the RegExpHeader moves and removed when it dies; it never keeps the header alive. Reached from GC hooks, not from a registered scanner, so the walk misses it."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REGEX_SOURCE_TABLE",
+      "verdict": "covered_elsewhere",
+      "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs)",
+      "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
+    },
+    {
+      "file": "crates/perry-runtime/src/text.rs",
+      "name": "DECODER_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
+      "name": "FORM_DATA_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; FormDataStore is Rust-owned (Vec<(String, String)>). The bound-method closures for FormData live in FORM_DATA_METHOD_VALUE_CACHE, which fetch::gc::scan_fetch_roots_with visits."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "BLOB_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; BlobData is Rust-owned (bytes, content type, file name, last-modified). No JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "FETCH_RESPONSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by fetch handle id; FetchResponse is Rust-owned (status, HeadersStore, body bytes, cached HANDLE IDS for headers/body stream). No JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "REQUEST_REGISTRY",
+      "verdict": "covered_elsewhere",
+      "scanner": "fetch::gc::scan_fetch_roots_with (fetch/gc.rs, visit_nanbox_f64_slot on RequestRecord.signal), registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:fetch\"",
+      "why": "RequestRecord.signal is the AbortSignal object behind request.signal (#8163). Visited from the child module, so the same-file rule misses it; everything else in the record is Rust-owned."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "STREAM_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by stream id; StreamState is Rust-owned (status, buffered lines, error String)."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch_blob.rs",
+      "name": "NEXT_OBJECT_URL_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch_blob.rs",
+      "name": "OBJECT_URL_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams.rs",
+      "name": "READABLE_STREAMS",
+      "verdict": "covered_elsewhere",
+      "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
+      "why": "Chunks, callbacks, pending-read promises and error values are all visited from the child module, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/tee.rs",
+      "name": "TEE_PULLING",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of tee SOURCE stream ids (READABLE_STREAMS keys), not addresses."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/tee.rs",
+      "name": "TEE_STARTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of tee source stream ids, not addresses."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_BACKPRESSURED_JOBS",
+      "verdict": "covered_elsewhere",
+      "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
+      "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_PAIRS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Transform readable id -> writable id: both are stream HANDLE IDS."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_PENDING_WRITES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Transform writable id -> COUNT of queued write jobs (#6607). No address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "NEXT_PORT_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic MessagePort id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "NEXT_WS_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic ws id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "WS_CLIENT_PARENT_SERVER",
+      "verdict": "not_a_gc_pointer",
+      "why": "Client ws id -> parent server HANDLE id. No address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "WS_CONNECTIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
     }
   ]
 }

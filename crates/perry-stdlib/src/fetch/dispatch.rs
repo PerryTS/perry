@@ -239,8 +239,20 @@ pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> 
 }
 
 lazy_static::lazy_static! {
-    static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
+    /// Bound-method closures behind `formData.get` / `.entries` / … — the
+    /// `FormData` twin of `HEADERS_METHOD_VALUE_CACHE`, and a GC root for the
+    /// same reason (#8163): the values are heap closures held outside the heap.
+    pub(super) static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
         Mutex::new(HashMap::new());
+}
+
+/// Visit every cached `FormData` bound-method closure (see `super::gc`).
+pub(super) fn visit_form_data_method_value_roots<V: super::gc::FetchRootVisitor>(visitor: &mut V) {
+    if let Ok(mut cache) = FORM_DATA_METHOD_VALUE_CACHE.lock() {
+        for bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    }
 }
 
 fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f64 {
@@ -257,6 +269,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
         fn js_write_barrier_root_nanbox(value_bits: u64);
     }
 
+    // Register before allocating — see `headers_bound_method_value`.
+    super::gc::ensure_gc_registered();
     let closure =
         perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(form_id));

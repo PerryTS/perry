@@ -88,6 +88,13 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
   holders. Deeper hops are matched on the bare name, because nothing in the text
   says which module a call resolved to; that direction over-approximates
   coverage, and an inventory entry is the correction.
+* **Anything outside `perry-runtime` / `perry-stdlib`.** The `perry-ext-*`
+  crates park user closures in handle-struct FIELDS (`ServerResponse.listeners`
+  / `once_listeners`, `IncomingMessage.signal`, ...) and register their scanners
+  by hand through `perry_ffi`; nothing here checks that a scanner reaches every
+  such field. #8163's second holder was exactly that — ext-http scanned
+  `listeners` and never `once_listeners`. That is a struct-field census over
+  registered handle types, a different instrument from this declaration scan.
 * **Whether a "covered" holder is covered CORRECTLY.** The scanner may visit
   three of a table's four slots — the shape #7239 found in
   `scan_parent_port_event_roots_mut`. Reading the body is the only way, and this
@@ -162,19 +169,38 @@ ALLOCATOR_TOKENS = (
 # holder reached only from `gc_init` reads as uncovered — which is exactly what
 # happened when they were introduced, and the MIN_REGISTERED floor below is
 # what caught it.
+#
+# The argument list may itself contain ONE level of calls — the provider-safe
+# C-ABI registration `perry_ffi_gc_register_mutable_root_scanner_named(
+# SOURCE.as_ptr(), SOURCE.len(), 0, scan_stream_roots_ffi)` (`streams/gc.rs`,
+# `fetch/gc.rs`) is the shape. A `[^;()]*` argument body stopped at the first
+# `(` of `as_ptr(` and dropped the scanner name, so every FFI-registered
+# stdlib scanner was invisible to the walk and its tables read as uncovered
+# (#8163 exposed this the moment `lazy_static!` tables entered the census).
 REGISTER_CALL = re.compile(
     r"(?:gc_register_\w*root_scanner\w*|reg_scanner!|reg_budgeted_scanner!)"
-    r"\s*\((?P<args>[^;()]*)\)",
+    r"\s*\((?P<args>(?:[^;()]|\([^;()]*\))*)\)",
     re.S,
 )
-FN_DEF = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|extern\s+\"C\"\s+)*fn\s+(\w+)")
+# `strip_comments` blanks string literals before this runs, so `extern "C" fn`
+# reaches the matcher as `extern "" fn` — the ABI string must be matched as
+# ANY (possibly empty) literal, or no `extern "C"` function in either crate has
+# a body in the walk. That is what kept the C-ABI scanner trampolines
+# (`scan_stream_roots_ffi`, `scan_fetch_roots_ffi`) unreachable (#8163).
+FN_DEF = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)"
+)
 IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
 
 # A declaration: `static NAME: TYPE =` — covers `pub(crate) static`, the bodies
-# of `thread_local!` blocks (which use the same syntax), and `static NAME:
-# Lazy<...>`.
+# of `thread_local!` blocks (which use the same syntax), `static NAME:
+# Lazy<...>`, and — since #8163 — `lazy_static!`'s `static ref NAME: TYPE =`.
+# The `ref` keyword was invisible to the first version of this regex, which
+# left every `lazy_static!` table in both crates out of the census; that is
+# how `HEADERS_METHOD_VALUE_CACHE` (a `Mutex<HashMap<_, u64>>` of NaN-boxed
+# closure pointers) went unaudited and unrooted, and became #8163's holder.
 DECL = re.compile(
-    r"^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?static\s+(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*(?P<type>[^=]+?)\s*="
+    r"^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?static\s+(?:ref\s+)?(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*(?P<type>[^=]+?)\s*="
 )
 
 MAX_SCANNER_DEPTH = 3
@@ -253,8 +279,19 @@ def function_bodies(text: str) -> dict[str, str]:
         depth = 0
         started = False
         chunk: list[str] = []
+        declaration_only = False
         while index < len(lines):
             line = lines[index]
+            # A body-less declaration — `fn f(...);` inside an `extern "C" {}`
+            # block or a trait — has no body to count. Before this check the
+            # counter ran on into the NEXT item's braces and swallowed every
+            # function up to wherever the depth happened to balance; in
+            # `streams/gc.rs` and `fetch/gc.rs` that hid the FFI-registered
+            # scanner entry point itself, so the walk never started (#8163).
+            if not started and line.rstrip().endswith(";") and "{" not in line:
+                declaration_only = True
+                index += 1
+                break
             chunk.append(line)
             depth += line.count("{") - line.count("}")
             if "{" in line:
@@ -262,6 +299,8 @@ def function_bodies(text: str) -> dict[str, str]:
             index += 1
             if started and depth <= 0:
                 break
+        if declaration_only:
+            continue
         bodies.setdefault(name, "")
         bodies[name] += "\n".join(chunk)
     return bodies

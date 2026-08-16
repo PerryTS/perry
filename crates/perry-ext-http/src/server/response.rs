@@ -19,7 +19,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::oneshot;
 
-use crate::server::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
+use crate::server::request::handle_to_pointer_f64;
+use crate::server::response_end::call_closure0;
 use crate::server::types::{
     js_json_stringify, js_node_setheaders_entries_json, js_value_is_closure, jsvalue_to_body_bytes,
     jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL,
@@ -471,7 +472,7 @@ impl ServerResponse {
     }
 
     /// Auto-fill `Content-Length` if unset and we know the full body.
-    fn ensure_content_length(&mut self) {
+    pub(crate) fn ensure_content_length(&mut self) {
         // A response with trailers must not declare a fixed Content-Length:
         // the body length alone doesn't bound the response (trailing headers
         // still follow), and some clients/proxies treat a present
@@ -1159,7 +1160,7 @@ pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
 /// Return the closure pointer carried by `value_bits` if it is a real callable
 /// (POINTER_TAG + CLOSURE_MAGIC), else 0. Uses `js_value_is_closure` so a
 /// `Buffer`/object chunk — also POINTER_TAG — is never mistaken for a callback.
-fn callback_from_bits(value_bits: i64) -> i64 {
+pub(crate) fn callback_from_bits(value_bits: i64) -> i64 {
     if unsafe { js_value_is_closure(value_bits) } != 0 {
         (value_bits as u64 & PTR_MASK) as i64
     } else {
@@ -1170,7 +1171,7 @@ fn callback_from_bits(value_bits: i64) -> i64 {
 /// Pick the callback from a `(encoding?, callback?)` trailing arg pair, the
 /// later slot first — mirroring Node's `(chunk, encoding, callback)` rule. A
 /// string encoding is not callable, so it is skipped.
-fn pick_trailing_callback(arg2: i64, arg3: i64) -> i64 {
+pub(crate) fn pick_trailing_callback(arg2: i64, arg3: i64) -> i64 {
     let c3 = callback_from_bits(arg3);
     if c3 != 0 {
         c3
@@ -1228,53 +1229,6 @@ pub extern "C" fn js_node_http_res_write_full(
     f64::from_bits(if below_hwm { TAG_TRUE } else { TAG_FALSE })
 }
 
-/// `res.end([chunk][, encoding][, callback])` — the full Node surface routed
-/// from the static native dispatch table. Handles the `end(cb)` form (callback
-/// in the first slot) as well as `end(chunk[, encoding][, callback])`. Queued
-/// write callbacks fire first (in order), then the end callback, then the
-/// `'finish'`/`'close'` listeners — Node's ordering where `'finish'` never
-/// precedes the end callback (#4909).
-///
-/// # Safety
-/// FFI entry; `handle` must be a live `ServerResponse` handle (or absent).
-#[no_mangle]
-pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2: i64, arg3: i64) {
-    // `end(cb)` passes the callback as the first arg; otherwise it trails.
-    let first_cb = callback_from_bits(chunk.to_bits() as i64);
-    let (real_chunk, callback) = if first_cb != 0 {
-        (f64::from_bits(TAG_UNDEFINED), first_cb)
-    } else {
-        (chunk, pick_trailing_callback(arg2, arg3))
-    };
-
-    let is_standalone = get_handle::<ServerResponse>(handle)
-        .map(|sr| sr.standalone)
-        .unwrap_or(false);
-    if is_standalone {
-        // standalone_end already runs write cbs → end cb → listeners in order.
-        standalone_end(handle, real_chunk, callback);
-        return;
-    }
-
-    let listeners = finalize_buffered_end(handle, real_chunk);
-    let write_cbs = get_handle_mut::<ServerResponse>(handle)
-        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
-        .unwrap_or_default();
-    for cb in write_cbs {
-        call_closure0(cb);
-    }
-    // Node order: queued write callbacks flush, then `'finish'` listeners, then
-    // the end callback, then `'close'`. The end cb fires *after* `'finish'` so
-    // a `res.on('finish')` handler that inspects end-callback state sees the
-    // same interleaving as Node.
-    let (finish_listeners, close_listeners) = listeners.unwrap_or_default();
-    emit_no_arg_to_listeners(&finish_listeners);
-    if callback != 0 {
-        call_closure0(callback);
-    }
-    emit_no_arg_to_listeners(&close_listeners);
-}
-
 /// `res.addTrailers(headers)` — store HTTP trailers emitted after the
 /// response body, per Node's `ServerResponse.addTrailers`. Trailers carry
 /// metadata that isn't known until the body has been produced.
@@ -1317,7 +1271,7 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
 /// that `res.end(cb)` can run write/end callbacks before `'finish'` (Node's
 /// contract, where `'finish'` never precedes the end callback). Returns
 /// `None` if the response was already ended or the handle is gone.
-fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
+pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -1384,17 +1338,6 @@ fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)
     }
     sr.writable_finished = true;
     Some((finish_listeners, close_listeners))
-}
-
-/// `res.end(chunk?)` — append final chunk + flush the response back
-/// to hyper through the oneshot channel + fire `'finish'` and
-/// `'close'` listeners.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
-    if let Some((finish_listeners, close_listeners)) = finalize_buffered_end(handle, chunk) {
-        emit_no_arg_to_listeners(&finish_listeners);
-        emit_no_arg_to_listeners(&close_listeners);
-    }
 }
 
 /// Flush the response head to the wire now and switch the response into
@@ -1819,123 +1762,9 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
     }
 }
 
-/// `res.end([chunk][, callback])` — callback-aware variant. Standalone
-/// responses flush through the assigned socket; everything else takes the
-/// existing hyper-oneshot path. Queued write callbacks run first, in
-/// order, then the end callback (#4904).
-#[no_mangle]
-pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, callback: i64) {
-    let is_standalone = get_handle::<ServerResponse>(handle)
-        .map(|sr| sr.standalone)
-        .unwrap_or(false);
-    if is_standalone {
-        standalone_end(handle, chunk, callback);
-        return;
-    }
-    // #4909 — Node's flush ordering, matching `js_node_http_res_end_full`:
-    // queued write callbacks → `'finish'` → end callback → `'close'`. The
-    // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
-    // before any callback ran.
-    let listeners = finalize_buffered_end(handle, chunk);
-    let write_cbs = get_handle_mut::<ServerResponse>(handle)
-        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
-        .unwrap_or_default();
-    for cb in write_cbs {
-        call_closure0(cb);
-    }
-    let (finish_listeners, close_listeners) = listeners.unwrap_or_default();
-    emit_no_arg_to_listeners(&finish_listeners);
-    if callback != 0 {
-        call_closure0(callback);
-    }
-    emit_no_arg_to_listeners(&close_listeners);
-}
-
-/// Flush a standalone response: serialize the head + buffered body and
-/// write them through the assigned socket's JS `write` method — one write
-/// for head+body, then the zero-length finish chunk Node's corked flush
-/// emits. The body is suppressed for HEAD requests.
-unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
-    let v = JsValue::from_bits(chunk.to_bits());
-    let final_chunk = if v.is_undefined() || v.is_null() {
-        None
-    } else {
-        jsvalue_to_body_bytes(chunk)
-    };
-
-    let (socket, payload, write_cbs, finish_listeners, close_listeners);
-    {
-        let sr = match get_handle_mut::<ServerResponse>(handle) {
-            Some(s) => s,
-            None => return,
-        };
-        if sr.writable_ended {
-            return;
-        }
-        if let Some(c) = final_chunk {
-            sr.buffered_body.extend_from_slice(&c);
-        }
-        sr.headers_sent = true;
-        sr.writable_ended = true;
-        sr.ensure_content_length();
-        let body = std::mem::take(&mut sr.buffered_body);
-        // Fast path: with no custom `statusMessage`, a common status code has a
-        // precomputed `HTTP/1.1 <code> <canonical reason>\r\n` status line,
-        // skipping the per-response `format!`. The interned bytes equal exactly
-        // what the `format!` produced for `(code, canonical reason)`. A custom
-        // message, or an uncommon code, falls back so its reason still reaches
-        // the wire byte-for-byte.
-        let mut head = match sr.status_message.as_deref() {
-            None => {
-                crate::server::response_fast::status_line_bytes(sr.status_code).map(str::to_string)
-            }
-            Some(_) => None,
-        }
-        .unwrap_or_else(|| {
-            let reason = sr.status_message.clone().unwrap_or_else(|| {
-                StatusCode::from_u16(sr.status_code)
-                    .ok()
-                    .and_then(|s| s.canonical_reason())
-                    .unwrap_or("")
-                    .to_string()
-            });
-            format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason)
-        });
-        for (k, v) in sr.snapshot_headers() {
-            head.push_str(&k);
-            head.push_str(": ");
-            head.push_str(&v);
-            head.push_str("\r\n");
-        }
-        head.push_str("\r\n");
-        let mut bytes = head.into_bytes();
-        if sr.standalone_req_method.as_deref() != Some("HEAD") {
-            bytes.extend_from_slice(&body);
-        }
-        payload = bytes;
-        socket = sr.standalone_socket;
-        write_cbs = std::mem::take(&mut sr.pending_write_callbacks);
-        finish_listeners = take_event_listeners(sr, "finish");
-        close_listeners = take_event_listeners(sr, "close");
-        sr.writable_finished = true;
-    }
-    if !JsValue::from_bits(socket.to_bits()).is_undefined() {
-        socket_write_str(socket, &String::from_utf8_lossy(&payload));
-        socket_write_str(socket, "");
-    }
-    for cb in write_cbs {
-        call_closure0(cb);
-    }
-    if callback != 0 {
-        call_closure0(callback);
-    }
-    emit_no_arg_to_listeners(&finish_listeners);
-    emit_no_arg_to_listeners(&close_listeners);
-}
-
 /// Invoke `socket.write(chunk)` on an arbitrary JS value through the
 /// runtime's dynamic method-call path.
-unsafe fn socket_write_str(socket: f64, chunk: &str) {
+pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
     extern "C" {
         fn js_native_call_method_str_key(
             object: f64,
@@ -1948,19 +1777,6 @@ unsafe fn socket_write_str(socket: f64, chunk: &str) {
     let chunk_val = f64::from_bits(JsValue::from_string_ptr(alloc_string(chunk).as_raw()).bits());
     let args = [chunk_val];
     let _ = js_native_call_method_str_key(socket, name.as_raw() as i64, args.as_ptr(), 1);
-}
-
-/// Call a closure pointer with no args, ignoring the result.
-fn call_closure0(callback: i64) {
-    if callback == 0 {
-        return;
-    }
-    unsafe {
-        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
-        if !closure.is_null() {
-            let _ = closure.call0();
-        }
-    }
 }
 
 pub(crate) fn alloc_server_response_for_request(

@@ -38,6 +38,11 @@ pub use dispatch::*;
 mod body_metadata;
 pub use body_metadata::*;
 
+// GC root scanner for the heap values the Fetch registries hold (#8163):
+// the two bound-method caches and `RequestRecord::signal`. Same
+// child-module/`use super::*` contract as `headers`.
+mod gc;
+
 // Web Fetch `Request` constructors (`js_request_new` /
 // `js_request_new_from_init`) — split out to keep this file under the
 // 2,000-line lint gate (#5458). Same child-module/`use super::*` contract as
@@ -1821,6 +1826,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
     };
     if let Some(new_req) = cloned {
         let new_id = alloc_fetch_handle_id();
+        gc::ensure_gc_registered();
         REQUEST_REGISTRY.lock().unwrap().insert(new_id, new_req);
         return handle_to_f64(new_id);
     }

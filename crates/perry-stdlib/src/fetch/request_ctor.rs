@@ -93,31 +93,36 @@ pub unsafe extern "C" fn js_request_new(
     } else {
         HeadersStore::default()
     };
+    // `signal` is a heap value the registry keeps (and the GC scanner in
+    // `super::gc` roots), and defaulting it ALLOCATES an `AbortController` —
+    // so resolve it, and build the whole record, before taking the registry
+    // lock: the scanner takes that same lock during a collection on this
+    // thread, and a collection triggered by the allocation under the guard
+    // would deadlock.
+    let signal = body_metadata::signal_or_default(signal);
     let id = alloc_fetch_handle_id();
-    REQUEST_REGISTRY.lock().unwrap().insert(
-        id,
-        RequestRecord {
-            url,
-            method,
-            body,
-            body_used: false,
-            headers,
-            destination: String::new(),
-            referrer: string_from_header(referrer_ptr)
-                .unwrap_or_else(|| "about:client".to_string()),
-            referrer_policy: string_from_header(referrer_policy_ptr).unwrap_or_default(),
-            mode: string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string()),
-            credentials: string_from_header(credentials_ptr)
-                .unwrap_or_else(|| "same-origin".to_string()),
-            cache: string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string()),
-            redirect: string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
-            integrity: string_from_header(integrity_ptr).unwrap_or_default(),
-            keepalive: body_metadata::bool_from_js(keepalive),
-            duplex: string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string()),
-            signal: body_metadata::signal_or_default(signal),
-            cached_headers_id: None,
-        },
-    );
+    let record = RequestRecord {
+        url,
+        method,
+        body,
+        body_used: false,
+        headers,
+        destination: String::new(),
+        referrer: string_from_header(referrer_ptr).unwrap_or_else(|| "about:client".to_string()),
+        referrer_policy: string_from_header(referrer_policy_ptr).unwrap_or_default(),
+        mode: string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string()),
+        credentials: string_from_header(credentials_ptr)
+            .unwrap_or_else(|| "same-origin".to_string()),
+        cache: string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string()),
+        redirect: string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
+        integrity: string_from_header(integrity_ptr).unwrap_or_default(),
+        keepalive: body_metadata::bool_from_js(keepalive),
+        duplex: string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string()),
+        signal,
+        cached_headers_id: None,
+    };
+    super::gc::ensure_gc_registered();
+    REQUEST_REGISTRY.lock().unwrap().insert(id, record);
     handle_to_f64(id)
 }
 
