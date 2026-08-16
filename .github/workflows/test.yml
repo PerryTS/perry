@@ -171,12 +171,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate > files.json
-          jq -r '.[].filename' files.json | grep -q '^crates/' || { echo "No crates/ changes — gate not applicable."; exit 0; }
+          # jq -e, no pipes: `lint` is a registered gate (gc_gate_wiring_check)
+          # and `jq | grep -q` under pipefail can fail on SIGPIPE when grep
+          # closes early on the first match.
+          # `-s` + `[.[][]]`: --paginate emits one JSON array per page, and
+          # `jq -e` reports only the LAST array's verdict without the slurp.
+          if ! jq -s -e '[.[][]] | any(.filename | startswith("crates/"))' files.json > /dev/null; then
+            echo "No crates/ changes — gate not applicable."; exit 0
+          fi
           # The fragment must be ADDED in this PR (editing a leftover file
           # doesn't count) and match the root-level <digits>-<slug>.md shape
           # cut_release_notes.sh folds at release time.
-          jq -r '.[] | select(.status == "added") | .filename' files.json | grep -qE '^changelog\.d/[0-9]+-[^/]+\.md$' && exit 0
+          if jq -s -e '[.[][]] | any(.status == "added" and (.filename | test("^changelog\\.d/[0-9]+-[^/]+\\.md$")))' files.json > /dev/null; then
+            exit 0
+          fi
           echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
           exit 1
 
@@ -2158,6 +2168,13 @@ jobs:
           # correctness input, not an incidental toolchain detail — never pin it
           # inline here. See CLAUDE.md ("TypeScript Parity Status").
           node-version-file: .node-version
+
+      # #8198: six gap tests import npm packages that are now root
+      # devDependencies (`.npmrc`: the root install "materializes the
+      # parity-test fixture deps"). Without this the oracle cannot resolve
+      # them, node exits 1, and the tests read as parity failures.
+      - name: Install the npm packages the gap tests' oracle imports
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
       #   fast: build the release compiler + runtime archives ONCE here, then
