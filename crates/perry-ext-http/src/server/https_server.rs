@@ -578,7 +578,12 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905/#4971).
     signal_connections_close(handle, true);
+    // #8082/#8163: `callback` crosses the close-listener emits, which run JS —
+    // same rooting as the `http.Server.close` twin in `server.rs`.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback_rooted = scope.root_addr(callback);
     emit_no_arg_to_listeners(&close_listeners);
+    let callback = callback_rooted.get();
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);

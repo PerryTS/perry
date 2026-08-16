@@ -104,40 +104,78 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if has_rest {
                     let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                     if declared_count > 0 {
-                        let fixed = declared_count.saturating_sub(1);
+                        let has_synthetic_arguments = ctx
+                            .method_has_synthetic_arguments
+                            .get(&key)
+                            .copied()
+                            .unwrap_or(false);
+                        // #8162: a static body with BOTH a user `...rest` and an
+                        // `arguments` read declares `[a, rest, arguments]` — TWO
+                        // trailing array slots, so two come off the declared
+                        // count. Read off the static-method HIR: statics have
+                        // their own list, and the registry key differs from the
+                        // source name, so `method_has_user_rest` (instance-only)
+                        // does not apply here.
+                        let has_user_rest = ctx
+                            .classes
+                            .get(class_name)
+                            .and_then(|c| c.static_methods.iter().find(|m| m.name == *method_name))
+                            .map(|m| {
+                                m.params
+                                    .iter()
+                                    .any(|p| p.is_rest && p.arguments_object.is_none())
+                            })
+                            .unwrap_or(false);
+                        let trailing_slots = if has_synthetic_arguments && has_user_rest {
+                            2
+                        } else {
+                            1
+                        };
+                        let fixed = declared_count.saturating_sub(trailing_slots);
                         let all_actual = std::mem::take(&mut lowered);
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                         for i in 0..fixed {
                             lowered
                                 .push(all_actual.get(i).cloned().unwrap_or_else(|| undef.clone()));
                         }
-                        let has_synthetic_arguments = ctx
-                            .method_has_synthetic_arguments
-                            .get(&key)
-                            .copied()
-                            .unwrap_or(false);
-                        let packed = if has_synthetic_arguments {
-                            all_actual.as_slice()
-                        } else {
-                            all_actual.get(fixed..).unwrap_or(&[])
-                        };
-                        let arr_handle = ctx.block().call(
-                            I64,
-                            "js_array_alloc",
-                            &[(I32, &packed.len().to_string())],
-                        );
-                        // js_array_push_f64 may realloc and return a
-                        // possibly-new handle; thread it.
-                        let mut handle_cur = arr_handle;
-                        for value in packed {
-                            handle_cur = ctx.block().call(
-                                I64,
-                                "js_array_push_f64",
-                                &[(I64, &handle_cur), (DOUBLE, value)],
-                            );
+                        // (bundled slice, mark as arguments object), in callee
+                        // param order: the user rest slot takes the args PAST
+                        // the fixed params; the synthesized `arguments` slot
+                        // takes EVERY passed arg and is marked, without which
+                        // the callee's `arguments` is an ordinary Array.
+                        let mut bundles: Vec<(&[String], bool)> = Vec::new();
+                        if has_user_rest || !has_synthetic_arguments {
+                            bundles.push((all_actual.get(fixed..).unwrap_or(&[]), false));
                         }
-                        let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
-                        lowered.push(arr_box);
+                        if has_synthetic_arguments {
+                            bundles.push((all_actual.as_slice(), true));
+                        }
+                        for (packed, mark) in bundles {
+                            let arr_handle = ctx.block().call(
+                                I64,
+                                "js_array_alloc",
+                                &[(I32, &packed.len().to_string())],
+                            );
+                            // js_array_push_f64 may realloc and return a
+                            // possibly-new handle; thread it.
+                            let mut handle_cur = arr_handle;
+                            for value in packed {
+                                handle_cur = ctx.block().call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &handle_cur), (DOUBLE, value)],
+                                );
+                            }
+                            if mark {
+                                handle_cur = ctx.block().call(
+                                    I64,
+                                    "js_array_mark_arguments_object",
+                                    &[(I64, &handle_cur)],
+                                );
+                            }
+                            let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
+                            lowered.push(arr_box);
+                        }
                     }
                 } else {
                     // Issue #235: a static method called with fewer args than

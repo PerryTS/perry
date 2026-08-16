@@ -30,6 +30,19 @@ name: ext-link
 
 on:
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
+  # Main-line arm: nightly + release tags. It used to have none -- the PR arm
+  # was the only execution and it was red on every PR (#8155) at 90-130 min a
+  # run. Staggered off the six-hourly GC gates' minutes.
+  schedule:
+    - cron: "52 4 * * *"
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -42,6 +55,8 @@ permissions:
 
 jobs:
   ext-link:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     runs-on: ubuntu-latest
     # Measured on an arm64 dev Mac. COLD release target, the five crates from
     # #7650 only: 7:24, 7 test binaries. All 38 ext crates with perry-runtime

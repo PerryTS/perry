@@ -63,6 +63,7 @@ mod https_server;
 mod raw_upgrade;
 mod request;
 mod response;
+mod response_end;
 mod response_fast;
 mod server;
 mod tls;
@@ -151,6 +152,14 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     });
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
+        // #8163: `res.once(event, cb)` stores into a SECOND table that
+        // `take_event_listeners` merges into every emit. It was never scanned,
+        // so a `once('close')` closure that a moving minor relocated (or, with
+        // no other referent, freed) reached `emit_no_arg_to_listeners` as a
+        // pre-move address — Next's `pipeToNodeResponse` registers exactly
+        // that, and the production App Route fixture faulted on it under
+        // forced evacuation.
+        scan_listener_roots(&mut sr.once_listeners, visitor);
         visitor.visit_nanbox_f64_slot(&mut sr.standalone_socket);
         for cb in sr.pending_write_callbacks.iter_mut() {
             visitor.visit_i64_slot(cb);
@@ -169,6 +178,10 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<Http2StreamHandle, _>(|stream| {
         scan_listener_roots(&mut stream.listeners, visitor);
     });
+
+    // Closures parked in the HTTP/2 pending-event queue between a JS-side
+    // `session.close/settings/ping(cb)` and the main-thread drain.
+    http2_server::scan_h2_pending_event_roots(visitor);
 }
 
 #[cfg(test)]
@@ -395,9 +408,15 @@ mod tests {
         let incoming_handle = register_handle(incoming);
 
         let response_listener = young_gc_root();
+        let response_once_listener = young_gc_root();
+        let response_write_cb = young_gc_root();
         let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
         let mut response = ServerResponse::new(response_tx);
         response.listeners = listener_map("finish", response_listener);
+        // #8163: the `once` table is a distinct holder — it must be rewritten
+        // too, or `res.once('close', cb)` hands a pre-move closure to the emit.
+        response.once_listeners = listener_map("close", response_once_listener);
+        response.pending_write_callbacks = vec![response_write_cb];
         let response_handle = register_handle(response);
 
         let _ = perry_runtime::gc::gc_collect_minor();
@@ -424,6 +443,8 @@ mod tests {
 
             let response = get_handle::<ServerResponse>(response_handle).expect("response");
             assert_rewritten(response_listener, response.listeners["finish"][0]);
+            assert_rewritten(response_once_listener, response.once_listeners["close"][0]);
+            assert_rewritten(response_write_cb, response.pending_write_callbacks[0]);
         }
 
         drop_handle(http_handle);

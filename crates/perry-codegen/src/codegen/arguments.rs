@@ -109,3 +109,39 @@ fn mapped_arguments_params(params: &[Param]) -> Vec<(u32, u32)> {
         .flat_map(|meta| meta.mapped_parameter_ids.iter().copied())
         .collect()
 }
+
+/// Does `property`, resolved against `class_name`'s ancestry, declare a USER
+/// `...rest` parameter — as opposed to (or in addition to) the trailing
+/// `arguments` slot #677 synthesizes?
+///
+/// #8040/#8162. Both spellings lower as `Param { is_rest: true }`, so
+/// `method_has_rest` is true for either, and `method_has_synthetic_arguments`
+/// only names the synthesized slot — the PAIR still cannot distinguish
+/// "synthesized `arguments` only" from "user rest AND synthesized `arguments`",
+/// and those fill a different number of trailing slots (`m(a, ...rest)` with an
+/// `arguments` read is `[a, rest, arguments]`: TWO arrays, from two offsets).
+/// The discriminator is `arguments_object`, which the synthesized parameter
+/// carries and nothing else does.
+///
+/// Read off the class HIR, so a class the current module has no HIR for (an
+/// imported class) reports `false`, leaving those call sites on the
+/// one-trailing-slot behavior they had — `method_has_synthetic_arguments`
+/// still covers the imported synth-only shape via its interface bit.
+pub(crate) fn method_has_user_rest(
+    ctx: &crate::expr::FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let mut walk = Some(class_name.to_string());
+    while let Some(cur) = walk {
+        let class = ctx.classes.get(&cur);
+        if let Some(f) = class.and_then(|c| c.methods.iter().find(|m| m.name == *property)) {
+            return f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+        }
+        walk = class.and_then(|c| c.extends_name.clone());
+    }
+    false
+}

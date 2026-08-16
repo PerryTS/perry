@@ -731,7 +731,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     .unwrap_or(0);
                 (first, cb)
             };
-            crate::server::response::js_node_http_res_end_with_cb(handle, chunk, cb);
+            crate::server::response_end::js_node_http_res_end_with_cb(handle, chunk, cb);
             self_ref
         }
         "flushHeaders" => {

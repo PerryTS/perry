@@ -795,3 +795,13 @@ test_gap_gc_define_property_descriptor_rooting
 # purpose — a back-edge poll is the only safepoint reachable from user JS, so an
 # allocation-free callback makes the whole file pass vacuously.
 test_gap_gc_uint8_buffer_callback_rooting
+
+# Census follow-up (gc_runtime_root_holders ffi/ext coverage): runtime-side
+# side-table holders. Each parks a NaN-boxed value in a Rust static across a
+# GC window; the fixture drives the owning subsystem (fetch caches, Request
+# signal registry, ext-net once-flags, ext-http H2 pending-event queue) with
+# allocating churn between park and use.
+test_gap_gc_fetch_method_value_cache_rooting
+test_gap_gc_request_signal_rooting
+test_gap_gc_net_once_flags_rekey
+test_gap_gc_http2_pending_event_callback_rooting

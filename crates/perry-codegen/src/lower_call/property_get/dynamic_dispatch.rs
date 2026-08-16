@@ -164,40 +164,32 @@ fn emit_tower_pshape_call(
 /// Build the exact direct-call ABI for one concrete method implementation.
 /// Virtual towers cannot share this vector: sibling overrides may disagree on
 /// declared arity, user rest, or the compiler-synthesized `arguments` slot.
+///
+/// #8162: `has_synthetic_arguments` and `has_rest` alone cannot size the tail.
+/// A body with BOTH a user `...rest` and an `arguments` read declares
+/// `[a, rest, arguments]` — TWO trailing array slots, bundled from different
+/// offsets over the same argument list. `has_user_rest` (false for a class
+/// this module has no HIR for, which keeps the one-slot shape those calls
+/// already had) is the bit that tells the two-slot case from synth-only.
 fn build_direct_method_args(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     user_args: &[String],
     has_rest: bool,
     has_synthetic_arguments: bool,
+    has_user_rest: bool,
     declared_count: usize,
     undefined_lit: &str,
 ) -> Vec<String> {
     let mut direct_args = Vec::with_capacity(declared_count + 1);
     direct_args.push(recv_box.to_string());
-    if has_synthetic_arguments {
-        let visible_params = declared_count.saturating_sub(1);
-        for index in 0..visible_params {
-            direct_args.push(
-                user_args
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| undefined_lit.to_string()),
-            );
-        }
-        let capacity = (user_args.len() as u32).to_string();
-        let mut raw_args = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
-        for value in user_args {
-            let block = ctx.block();
-            raw_args = block.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &raw_args), (DOUBLE, value)],
-            );
-        }
-        direct_args.push(nanbox_pointer_inline(ctx.block(), &raw_args));
-    } else if has_rest {
-        let fixed_user = declared_count.saturating_sub(1);
+    if has_synthetic_arguments || has_rest {
+        let trailing_slots = if has_synthetic_arguments && has_user_rest {
+            2
+        } else {
+            1
+        };
+        let fixed_user = declared_count.saturating_sub(trailing_slots);
         for index in 0..fixed_user {
             direct_args.push(
                 user_args
@@ -206,18 +198,33 @@ fn build_direct_method_args(
                     .unwrap_or_else(|| undefined_lit.to_string()),
             );
         }
-        let rest_count = user_args.len().saturating_sub(fixed_user);
-        let capacity = (rest_count as u32).to_string();
-        let mut rest_array = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
-        for value in user_args.iter().skip(fixed_user) {
-            let block = ctx.block();
-            rest_array = block.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &rest_array), (DOUBLE, value)],
-            );
+        // (first bundled index, mark as arguments object), in callee param
+        // order: the user rest slot first (bundling from `fixed_user`), then
+        // the synthesized `arguments` slot (from 0 — it must reflect EVERY
+        // passed argument, and gets the marking without which the callee's
+        // `arguments` is an ordinary Array). A lone trailing slot is the rest
+        // shape unless the method synthesizes `arguments`.
+        let mut bundles: Vec<(usize, bool)> = Vec::new();
+        if has_user_rest || !has_synthetic_arguments {
+            bundles.push((fixed_user, false));
         }
-        direct_args.push(nanbox_pointer_inline(ctx.block(), &rest_array));
+        if has_synthetic_arguments {
+            bundles.push((0, true));
+        }
+        for (from, mark) in bundles {
+            let count = user_args.len().saturating_sub(from);
+            let capacity = (count as u32).to_string();
+            let mut bundle = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
+            for value in user_args.iter().skip(from) {
+                let block = ctx.block();
+                bundle = block.call(I64, "js_array_push_f64", &[(I64, &bundle), (DOUBLE, value)]);
+            }
+            if mark {
+                let block = ctx.block();
+                bundle = block.call(I64, "js_array_mark_arguments_object", &[(I64, &bundle)]);
+            }
+            direct_args.push(nanbox_pointer_inline(ctx.block(), &bundle));
+        }
     } else {
         direct_args.extend(user_args.iter().cloned());
         while direct_args.len() < declared_count + 1 {
@@ -316,10 +323,13 @@ pub(crate) fn try_lower_instance_method_call(
         // C's parent chain and find the FIRST class that has `property`
         // in `ctx.methods`. Register (C's id → that ancestor's fn_name).
         let mut implementors: Vec<(u32, String)> = Vec::new();
-        // #5437: (has_rest, decl_param_count) per implementor, aligned 1:1 with
-        // `implementors`, so each case block can build its own per-arity args
-        // without rescanning `ctx.methods`.
-        let mut impl_meta: Vec<(bool, bool, usize)> = Vec::new();
+        // #5437: (has_rest, has_synthetic_arguments, has_user_rest,
+        // decl_param_count) per implementor, aligned 1:1 with `implementors`,
+        // so each case block can build its own per-arity args without
+        // rescanning `ctx.methods`. The user-rest bit is #8162's: with both a
+        // user `...rest` and a synthesized `arguments` the tail is TWO array
+        // slots, which the first two bits alone cannot express.
+        let mut impl_meta: Vec<(bool, bool, bool, usize)> = Vec::new();
         // #7142: aligned 1:1 with `implementors` — `Some(class)` exactly when
         // the receiver class of this case DECLARES `property` itself (the walk
         // stopped at its own entry). That is the condition a proven-`this`
@@ -355,10 +365,14 @@ pub(crate) fn try_lower_instance_method_call(
                         let has_rest = matches!(ctx.method_has_rest.get(&key), Some(&true));
                         let has_synthetic_arguments =
                             matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true));
+                        // `c` is the DEFINING class, so the user-rest bit is
+                        // read off the body this case actually calls.
+                        let has_user_rest =
+                            crate::codegen::arguments::method_has_user_rest(ctx, &c, property);
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                         impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
                         implementors.push((start_cid, fname));
-                        impl_meta.push((has_rest, has_synthetic_arguments, decl));
+                        impl_meta.push((has_rest, has_synthetic_arguments, has_user_rest, decl));
                     }
                     break;
                 }
@@ -578,7 +592,10 @@ pub(crate) fn try_lower_instance_method_call(
             for (
                 case_no,
                 (
-                    (((_, fname), &case_idx), &(impl_has_rest, impl_has_synth, impl_decl_count)),
+                    (
+                        ((_, fname), &case_idx),
+                        &(impl_has_rest, impl_has_synth, impl_has_user_rest, impl_decl_count),
+                    ),
                     owner,
                 ),
             ) in implementors
@@ -640,6 +657,7 @@ pub(crate) fn try_lower_instance_method_call(
                         &static_user_args,
                         impl_has_rest,
                         impl_has_synth,
+                        impl_has_user_rest,
                         impl_decl_count,
                         &undefined_lit,
                     );
@@ -777,8 +795,10 @@ pub(crate) fn try_lower_instance_method_call(
             // explicit case in the dispatch table.
             let mut overrides: Vec<(u32, String)> = Vec::new();
             // Exact direct-call ABI for each override, aligned with `overrides`:
-            // (has user rest, has synthesized arguments, declared count).
-            let mut override_meta: Vec<(bool, bool, usize)> = Vec::new();
+            // (has any rest-shaped param, has synthesized arguments, has USER
+            // rest — the #8162 bit that sizes a two-array tail — declared
+            // count).
+            let mut override_meta: Vec<(bool, bool, bool, usize)> = Vec::new();
             // Fixed order, not `HashMap` order — the virtual-override tower has
             // the same #7622 defect as the interface tower above, and for the
             // same reason: `overrides` is walked by index to emit the
@@ -826,10 +846,20 @@ pub(crate) fn try_lower_instance_method_call(
                             ctx.method_has_synthetic_arguments.get(&sub_key),
                             Some(&true)
                         );
+                        // `sub_key.0` is the class the walk RESOLVED to, i.e.
+                        // the defining class of the body this case calls.
+                        let has_user_rest = crate::codegen::arguments::method_has_user_rest(
+                            ctx, &sub_key.0, property,
+                        );
                         let declared_count =
                             ctx.method_param_counts.get(&sub_key).copied().unwrap_or(0);
                         overrides.push((sub_id, sub_fn));
-                        override_meta.push((has_rest, has_synthetic_arguments, declared_count));
+                        override_meta.push((
+                            has_rest,
+                            has_synthetic_arguments,
+                            has_user_rest,
+                            declared_count,
+                        ));
                     }
                 }
             }
@@ -865,6 +895,11 @@ pub(crate) fn try_lower_instance_method_call(
                 ctx.method_has_synthetic_arguments.get(&fallback_key),
                 Some(&true)
             );
+            // `fallback_key.0` is the class the parent-chain walk resolved
+            // `property` to — the defining class, so #8162's user-rest bit is
+            // read off the body the fallback call reaches.
+            let fallback_has_user_rest =
+                crate::codegen::arguments::method_has_user_rest(ctx, &fallback_key.0, property);
             // Keep the maximum declared arity only for selecting safe
             // shape-guarded/typed fast-path arms below. Direct calls no longer
             // share an ABI vector: the fallback and each virtual override are
@@ -931,6 +966,7 @@ pub(crate) fn try_lower_instance_method_call(
                 &fallback_user_args,
                 fallback_has_rest,
                 fallback_has_synthetic_arguments,
+                fallback_has_user_rest,
                 fallback_decl_count,
                 &undefined_lit,
             );
@@ -1404,11 +1440,13 @@ pub(crate) fn try_lower_instance_method_call(
             // fallback's signature or shared with a sibling override.
             let merge_label = ctx.block_label(merge_idx);
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for (((_, fname), &(has_rest, has_synthetic_arguments, declared_count)), &case_idx) in
-                overrides
-                    .iter()
-                    .zip(override_meta.iter())
-                    .zip(case_idxs.iter())
+            for (
+                ((_, fname), &(has_rest, has_synthetic_arguments, has_user_rest, declared_count)),
+                &case_idx,
+            ) in overrides
+                .iter()
+                .zip(override_meta.iter())
+                .zip(case_idxs.iter())
             {
                 ctx.current_block = case_idx;
                 let case_args = build_direct_method_args(
@@ -1417,6 +1455,7 @@ pub(crate) fn try_lower_instance_method_call(
                     &fallback_user_args,
                     has_rest,
                     has_synthetic_arguments,
+                    has_user_rest,
                     declared_count,
                     &undefined_lit,
                 );

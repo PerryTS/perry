@@ -77,8 +77,8 @@ pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;
 pub(crate) use gc_slots::{
-    gc_field_slot_range, gc_keys_array_slot, rebuild_array_layout_from_slots,
-    rebuild_object_field_layout,
+    gc_field_slot_range, gc_keys_array_slot, gc_shape_keys_edge_slot,
+    rebuild_array_layout_from_slots, rebuild_object_field_layout,
 };
 mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;

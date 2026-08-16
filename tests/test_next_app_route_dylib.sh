@@ -265,23 +265,37 @@ if [[ -s "$missing_symbols" ]]; then
     exit 1
 fi
 
+# The host is C, not Rust (#8205): a Rust executable would carry rustc's
+# System-allocator shim, and the stdlib provider's `__rust_dealloc` import must
+# reach the runtime image's mimalloc-backed shim instead. See provider-host.c.
 host="$scratch/provider-host"
-rustc --edition 2021 -O "$fixture/provider-host.rs" -o "$host"
+"$real_cc" -O2 -o "$host" "$fixture/provider-host.c" -ldl
 provider_abi=$(shasum -a 256 "$available_symbols" | awk '{print $1}')
 echo "Provider ABI hash: $provider_abi"
 
 for cold_start in $(seq 1 "$cold_starts"); do
     host_log="$scratch/host-$cold_start.log"
     (
-        # Next's generated webpack runtime resolves `./chunks/*.js` from the
-        # production server root when it loads an on-demand route chunk.
-        cd "$fixture/.next/server"
+        # Run from the fixture root, the release-tier layout with production
+        # evidence (tests/release/packages/next-app-route/fixture.sh): Next
+        # resolves `.next/routes-manifest.json` against the working directory
+        # on every request, so serving from `.next/server` 500s each request
+        # with ENOENT. The old reason to sit in `.next/server` — the webpack
+        # runtime resolving `./chunks/*.js` from the server root — is gone:
+        # computed relative chunk requires resolve against the route bundle
+        # since #8146.
+        cd "$fixture"
+        # `exec` so `$host_pid` below is the host process itself, not this
+        # subshell. Killing the subshell leaves the host running (observed:
+        # an orphaned provider-host still serving port $port after the gate
+        # exited), and a survivor holds the port, so cold start 2 can never
+        # bind.
         if [[ "$host_os" == Darwin ]]; then
             PORT="$port" HOSTNAME=127.0.0.1 DYLD_LIBRARY_PATH="$providers" \
-                "$host" "$runtime_library" "$stdlib_library" "$app"
+                exec "$host" "$runtime_library" "$stdlib_library" "$app"
         else
             PORT="$port" HOSTNAME=127.0.0.1 LD_LIBRARY_PATH="$providers" \
-                "$host" "$runtime_library" "$stdlib_library" "$app"
+                exec "$host" "$runtime_library" "$stdlib_library" "$app"
         fi
     ) >"$host_log" 2>&1 &
     host_pid=$!

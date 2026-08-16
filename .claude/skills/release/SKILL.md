@@ -13,7 +13,7 @@ allowed-tools: Bash, Read, Edit, Write, Glob, Grep
 Perry releases are **tag-last**: nothing public happens until the test gate and every build leg are green. You dispatch `release-packages.yml` with `cut_release=true` on a branch pinned at the release candidate; the workflow then:
 
 1. `preflight` — resolves `vX.Y.Z` from `Cargo.toml` on that SHA, fails fast if the tag already exists, if CLAUDE.md's `**Current Version:**` disagrees, or if `changelog.d/` has no fragments.
-2. `await-tests` — dispatches `test.yml` + `simctl-tests.yml` on the branch if no run exists on the SHA yet, then polls by head SHA until both are green.
+2. `await-tests` — dispatches `test.yml` (with `tier=full`) + `simctl-tests.yml` on the branch if no suitable run exists on the SHA yet, then polls by head SHA until both are green. For `test.yml` only a run whose `full-suite-gate` job succeeded counts — a green push-to-main sweep or PR-tier run on the same SHA is not release-grade (see docs/src/testing/ci-tiers.md).
 3. `build` + `build-cross` — all release binaries, archives as workflow artifacts.
 4. `create-release` — **only now** creates the tag + GitHub Release (notes concatenated from `changelog.d/` fragments via `cut_release_notes.sh --notes-only`), and dispatches the tag-rider workflows (docs, benchmark, container-tests) on the new tag.
 5. `publish-assets` → homebrew / apt / apt-repo / winget / npm / update-workers.
@@ -44,9 +44,9 @@ git push origin "release/v$VERSION"
 gh workflow run release-packages.yml --ref "release/v$VERSION" -f cut_release=true
 ```
 
-The pinned branch matters for two reasons: `workflow_dispatch` always runs on a ref's **tip** (so `main` moving would shift the SHA under you), and `test.yml`'s `test-<ref>` concurrency group means dispatching tests on `main` cancels a running nightly.
+The pinned branch matters because `workflow_dispatch` always runs on a ref's **tip** (so `main` moving would shift the SHA under you). (`test.yml`'s dispatch runs are keyed per run-id, so a dispatch on `main` no longer cancels a running nightly — but pin anyway.)
 
-Optional pre-warm: dispatch `test.yml` + `simctl-tests.yml` on the branch yourself right away — the gate matches any run on the SHA, so pre-flighted runs subtract their ~30 min from the critical path. If you skip this, `await-tests` dispatches them for you.
+Optional pre-warm: dispatch `test.yml` (`-f tier=full`) + `simctl-tests.yml` on the branch yourself right away — the gate matches any full-tier run on the SHA, so pre-flighted runs subtract their time from the critical path. If you skip this, `await-tests` dispatches them for you.
 
 ### 4. Watch
 

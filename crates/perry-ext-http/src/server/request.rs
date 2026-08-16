@@ -558,10 +558,16 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     } else {
         return;
     }
+    // #8163: the `'end'` snapshot crosses the `'data'` emits, which run JS and
+    // can trigger a moving collection — root it and re-read at use.
+    // (`emit_data_to_listeners` roots its own snapshot internally.)
+    let scope = perry_ffi::TransientRootScope::enter();
+    let end_rooted = scope.root_addrs(&end_listeners);
     if should_emit_data {
         emit_data_to_listeners(&data_listeners, &body_bytes, encoding.as_deref());
     }
     if should_emit_end {
+        let end_listeners: Vec<i64> = end_rooted.iter().map(|cb| cb.get()).collect();
         emit_end_to_listeners(&end_listeners);
     }
 }

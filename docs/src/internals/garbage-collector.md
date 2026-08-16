@@ -223,17 +223,18 @@ neither can go quiet while this page keeps claiming the old thing.
 
 ## Validation and CI authority
 
-As of 2026-08-11, branch protection requires `lint`, `cargo-test`, `parity`,
-`compile-smoke`, `api-docs-drift`, `security-audit`, and
-`conformance-smoke-complete`. The GC-specific coverage is split deliberately:
+As of 2026-08-16, branch protection requires exactly one status, `pr-gate` — the
+fan-in of `test.yml`'s PR tier (see `docs/src/testing/ci-tiers.md`; the tier
+policy is `scripts/ci_plan.py`). The GC-specific coverage is split deliberately:
 
 | check | where it runs | required status |
 |---|---|---|
-| root-holder custody, GC-knob drift, and this page's path/number claims | `test.yml` → `lint` | yes (`lint`) |
-| runtime unit suite and `run_memory_stability_tests.sh` four-mode matrix | `test.yml` → `cargo-test` | yes (`cargo-test`) |
-| emitted root dominance, including native statepoint IR | `gc-root-dominance.yml` | not currently branch-required |
-| pinned collector counters/RSS/wall matrix | `gc-ratchet.yml` | not currently branch-required |
-| thread-local mechanism/policy budget | `tls-budget.yml` | not currently branch-required |
+| root-holder custody, GC-knob drift, and this page's path/number claims | `test.yml` → `lint` | yes (via `pr-gate`) |
+| runtime unit suite and `run_memory_stability_tests.sh` four-mode matrix | `test.yml` → `cargo-test` | yes (via `pr-gate`; the PR tier is diff-scoped, the sweep/full tiers run the workspace) |
+| GC × representation-selection matrix, rooting-bug instruments, write-barrier stress | `test.yml` → `gc-stress` | yes (via `pr-gate`; PR subset on PRs, full matrix in the sweep) |
+| emitted root dominance, including native statepoint IR | `gc-root-dominance.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
+| pinned collector counters/RSS/wall matrix | `gc-ratchet.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
+| thread-local mechanism/policy budget | `tls-budget.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
 
 Useful local preflight commands:
 

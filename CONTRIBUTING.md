@@ -115,9 +115,16 @@ Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
 
 ```bash
-./scripts/run_gap_tests.sh                          # 401 tests; ~1h serially
+./scripts/run_gap_tests.sh                          # ~560 tests; the PR gate runs this in 6 shards
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
+
+What CI runs on a PR versus after a merge versus before a release is one
+policy file, `scripts/ci_plan.py` (`python3 scripts/ci_plan.py --table`);
+[docs/src/testing/ci-tiers.md](docs/src/testing/ci-tiers.md) explains the
+three tiers. The single required status check is `pr-gate`. Apply the
+`run-extended-tests` label to a PR to run the full tier and the satellite GC /
+perf gates on it before merge.
 
 **Use the Node version pinned in `.node-version`, not whatever you have.**
 Node is the oracle the suite diffs against, so its version is a correctness

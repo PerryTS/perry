@@ -29,10 +29,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .get(&current_class_name)
                 .and_then(|c| c.extends_name.clone());
             let mut resolved_fn: Option<String> = None;
+            // #8040: the class the body actually lives on, so the trailing
+            // parameter shape below is read off the callee we are calling.
+            let mut resolved_owner: Option<String> = None;
             while let Some(p) = parent {
                 let key = (p.clone(), method.clone());
                 if let Some(fname) = ctx.methods.get(&key).cloned() {
                     resolved_fn = Some(fname);
+                    resolved_owner = Some(p.clone());
                     break;
                 }
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
@@ -102,8 +106,81 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let this_box = ctx.block().load(DOUBLE, &this_slot);
             let mut lowered: Vec<String> = Vec::with_capacity(args.len() + 1);
             lowered.push(this_box);
+            let mut user_vals: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
-                lowered.push(lower_expr(ctx, a)?);
+                user_vals.push(lower_expr(ctx, a)?);
+            }
+            // #8040: this arm passed every argument POSITIONALLY, which is wrong
+            // whenever the resolved parent method ends in an array-shaped slot.
+            // A body reading `arguments` gets one synthesized trailing parameter
+            // (#677) and a `...rest` gets its own; either way the callee expects
+            // an array there, and a raw positional scalar landed in it instead —
+            // `super.m(1, 2, 3)` into `m(a, b) { arguments }` bound `arguments`
+            // to the number 3.
+            // The synth bit comes off the metadata maps, which also cover a
+            // parent this module has no HIR for (an imported class). The
+            // user-rest bit is read off the class HIR where available
+            // (`method_has_user_rest`); for the HIR-less parent, a rest-shaped
+            // param that is NOT the synthesized slot can only be a user rest.
+            let owner_key = resolved_owner
+                .as_deref()
+                .map(|owner| (owner.to_string(), method.clone()));
+            let synth = owner_key
+                .as_ref()
+                .map(|key| {
+                    ctx.method_has_synthetic_arguments
+                        .get(key)
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            let has_rest = owner_key
+                .as_ref()
+                .map(|key| ctx.method_has_rest.get(key).copied().unwrap_or(false))
+                .unwrap_or(false);
+            let user_rest = resolved_owner
+                .as_deref()
+                .map(|owner| crate::codegen::arguments::method_has_user_rest(ctx, owner, method))
+                .unwrap_or(false)
+                || (has_rest && !synth);
+            if synth || user_rest {
+                let declared = resolved_owner
+                    .as_deref()
+                    .and_then(|owner| {
+                        ctx.method_param_counts
+                            .get(&(owner.to_string(), method.clone()))
+                            .copied()
+                    })
+                    .unwrap_or(0);
+                let trailing_slots = if synth && user_rest { 2 } else { 1 };
+                let fixed = declared.saturating_sub(trailing_slots);
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                for i in 0..fixed {
+                    lowered.push(user_vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
+                }
+                // (from, to, mark_as_arguments_object), in callee param order.
+                let mut bundles: Vec<(usize, usize, bool)> = Vec::new();
+                if user_rest {
+                    bundles.push((fixed, user_vals.len(), false));
+                }
+                if synth {
+                    bundles.push((0, user_vals.len(), true));
+                }
+                for (from, to, mark) in bundles {
+                    let cap = (to.saturating_sub(from) as u32).to_string();
+                    let mut arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for v in user_vals.iter().take(to).skip(from) {
+                        let blk = ctx.block();
+                        arr = blk.call(I64, "js_array_push_f64", &[(I64, &arr), (DOUBLE, v)]);
+                    }
+                    if mark {
+                        let blk = ctx.block();
+                        arr = blk.call(I64, "js_array_mark_arguments_object", &[(I64, &arr)]);
+                    }
+                    lowered.push(nanbox_pointer_inline(ctx.block(), &arr));
+                }
+            } else {
+                lowered.extend(user_vals);
             }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();

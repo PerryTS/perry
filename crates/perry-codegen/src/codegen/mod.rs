@@ -179,6 +179,7 @@ mod artifacts;
 mod boxed_locals;
 mod closure;
 mod closure_collect;
+mod ctor_arity;
 #[cfg(test)]
 mod emission_order_tests;
 mod entry;

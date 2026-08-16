@@ -16,6 +16,12 @@ name: llvm-inprocess
 # run (conclusion: skipped), which branch protection accepts.
 on:
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
   # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
   # `push: branches: [main]` starved this gate and nine others for two days
   # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
@@ -55,6 +61,8 @@ jobs:
   # action). Pushes to main always run — main executions are the gate's
   # anchor and the promotion prerequisite.
   changes:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -306,7 +314,7 @@ jobs:
   #     gate for eight days without anyone noticing.
   llvm-inprocess-complete:
     needs: [changes, native-backend]
-    if: always()
+    if: (always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

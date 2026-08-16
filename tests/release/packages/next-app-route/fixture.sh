@@ -4,12 +4,32 @@
 # What this asserts, on every run: Next 16.3.0's UNTOUCHED production webpack
 # output compiles to an app-only dylib against separately loaded runtime and
 # stdlib provider images, serves through a `dlopen` host, and matches the Node
-# production oracle byte-for-byte across 10 cold starts of two 21-request
-# verifier passes each.
+# production oracle byte-for-byte across 10 cold starts of
+# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START` (default 10) 21-request verifier
+# passes each — 100 batches by default, #8040's "100-iteration run of the
+# 20-way concurrent request batch". Every request must also enter the generated
+# `AppRouteRouteModule.handle`: `perry-host.js` wraps it and logs
+# `generated handler bypassed routeModule.handle` for any request that reached
+# the userland handler another way, and each cold-start log is grepped for that
+# line as a hard failure. That signal lives ONLY in the host log — the guard
+# throws inside a `.then()` after the response is already sent, so
+# `verify.mjs` still exits 0 when it fires (#8161).
 #
-# What it does NOT assert by default: behaviour under forced evacuation. That
-# arm is opt-in behind `PERRY_NEXT_ROUTE_FORCED_GC=1` and is currently red —
-# see the block above the cold-start loop and #8163.
+# Known state (#8163, reopened): #8211 rooted the two holders behind the
+# forced-evacuation arm, but a default-GC residual remains — a default-mode
+# copying minor occasionally strands a stale closure, and ~1-2% of the batches
+# that follow one lose a response (`TypeError: value is not a function` in the
+# host log right after a `[gc-copy-minor] ran` line, then an empty body in
+# `verify.mjs`). With the default 10 verifier passes per process this fixture
+# is therefore intermittently RED until that residual lands. Two passes per
+# process finished before the first copying minor (~pass 3), which is how the
+# fixture read green while #8040's 100-iteration bullet was red; set
+# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2` to recover exactly the old
+# coverage.
+#
+# Odd cold starts run under FORCED evacuation with a seeded GC schedule and
+# the moving-GC liveness assert (its two #8163 holders were fixed in #8211;
+# `PERRY_NEXT_ROUTE_FORCED_GC=0` turns that arm off for a normal-only run).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,6 +38,14 @@ REPO_ROOT="$(cd ../../../.. && pwd)"
 PERRY_BIN="${PERRY_BIN:-$REPO_ROOT/target/release/perry}"
 PORT_BASE="${PERRY_NEXT_ROUTE_PORT:-31836}"
 COLD_STARTS="${PERRY_NEXT_ROUTE_COLD_STARTS:-10}"
+# Verifier passes per cold start: restart/ABI/parity/bypass-guard coverage
+# across N fresh processes. Each 10-pass process runs ~2-3 copying minors
+# (the first lands around pass 3), so this arm is sensitive to per-collection
+# bugs — but a fresh process lives permanently in the early/small-heap regime
+# and never reaches the grown heap where collections accelerate. Collection
+# DEPTH in one process is a different knob (`PERRY_NEXT_ROUTE_WARM_PASSES`,
+# #8215); neither substitutes for the other.
+VERIFIERS_PER_START="${PERRY_NEXT_ROUTE_VERIFIERS_PER_START:-10}"
 if [[ -n "${PERRY_NEXT_ROUTE_BUILD_DIR:-}" ]]; then
   BUILD_DIR="$PERRY_NEXT_ROUTE_BUILD_DIR"
   BUILD_DIR_OWNED=0
@@ -60,6 +88,14 @@ fail() {
 for tool in npm node cargo cc ar nm python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH"
 done
+for value in "$COLD_STARTS" "$VERIFIERS_PER_START"; do
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "cold starts and verifiers per start must be positive integers (got '$value')"
+done
+TOTAL_BATCHES=$((COLD_STARTS * VERIFIERS_PER_START))
+# `generated handler bypassed` is the routeModule.handle guard in perry-host.js.
+# It is a log line, not an exit code: verify.mjs passes even when it fires, so
+# the per-cold-start grep below is the only place the guard can fail the run.
+FORBIDDEN_DIAGNOSTICS='generated handler bypassed|\[perry-gc\].*SKIPPED|unsettled-await|unimplemented|compatibility[- ]fallback'
 [[ -x "$PERRY_BIN" ]] || fail "perry not found at $PERRY_BIN"
 
 case "$(uname -s)" in
@@ -174,48 +210,162 @@ run_cold_start() {
   done
   [[ "$ready" == "1" ]] || fail "$mode cold start $index did not become ready"
 
-  BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode cold verifier 1 failed"
-  BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || fail "$mode warm verifier 2 failed"
+  local verifier label
+  for verifier in $(seq 1 "$VERIFIERS_PER_START"); do
+    if (( verifier == 1 )); then label="cold"; else label="warm"; fi
+    BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1 || {
+      tail -40 "$log" | sed 's/^/    /'
+      fail "$mode cold start $index: $label verifier $verifier/$VERIFIERS_PER_START failed"
+    }
+  done
   if [[ "$mode" == "forced" ]]; then
     python3 "$REPO_ROOT/scripts/gc_evacuation_liveness_assert.py" \
       "$log" --probe "$NAME-$mode-$index" \
       || fail "$mode cold start $index did not prove moving-GC liveness"
   fi
-  if grep -Eiq '\[perry-gc\].*SKIPPED|unsettled-await|unimplemented|compatibility[- ]fallback' "$log"; then
+  if grep -Eiq "$FORBIDDEN_DIAGNOSTICS" "$log"; then
+    grep -Ein "$FORBIDDEN_DIAGNOSTICS" "$log" | head -20 | sed 's/^/    /'
     fail "$mode cold start $index emitted a forbidden fallback diagnostic"
   fi
   cleanup_server
 }
 
-# The forced-evacuation arm is OPT-IN, and deliberately not a skip.
+# One process, many verifier passes — the instrument the cold-start loop is
+# structurally blind to (#8163).
 #
-# It currently FAILS — a stale closure reaches Next's `Reflect.get` adapter
-# from a holder that is outside the GC heap and unregistered with any root
-# scanner (#8163 has the full elimination trail and a seconds-long
-# reproducer). Shipping it on would make this fixture red for everyone; making
-# it a `SKIP` would let it read as covered when it is not; wrapping it in
-# `continue-on-error` would make it documentation rather than a gate. So it is
-# a knob that is OFF here and FAILS LOUDLY when set — the one arrangement that
-# neither blocks the production-parity coverage below nor overstates it.
+# `run_cold_start` makes TWO verifier passes per process, and in NORMAL mode two
+# passes run **zero copying minors** — measured, and the reason this arm asserts
+# its own collection count below. So the cold-start loop's normal arm cannot
+# exercise a moving-GC holder at all; only its forced arm moves anything.
 #
-# `PERRY_NEXT_ROUTE_FORCED_GC=1` restores the original alternation (odd cold
-# starts run under forced evacuation with the moving-GC liveness assert) and is
-# how #8163 should be worked and, once fixed, how this default flips back.
-FORCED_GC="${PERRY_NEXT_ROUTE_FORCED_GC:-0}"
+# The residual #8163 failure is a holder that survives the DEFAULT (unforced)
+# collector and costs roughly one broken request per hundred verifier passes in
+# a warm process. Two passes cannot see it. Neither can a hundred: at p = 0.01 a
+# clean 100-pass run happens ~37% of the time on a KNOWN-BROKEN build, and two
+# of five measured 100-pass runs did come back clean while the bug was present.
+# A green short run is therefore not evidence, which is exactly the failure mode
+# CLAUDE.md warns about — a gate that cannot fail.
+#
+# So the arm prints the confidence its N actually buys rather than letting any
+# green run imply elimination. Rule of three: ~3/p passes to be 95% confident an
+# event of rate p is absent.
+#
+#   PERRY_NEXT_ROUTE_WARM_PASSES=300   # 95% confident vs the measured ~1/100
+#   PERRY_NEXT_ROUTE_WARM_PASSES=460   # 99%
+#
+# Those percentages are a CONSERVATIVE FLOOR, not a model: they assume the ~1/100
+# failure is independent per pass, and it is not. The failures track COLLECTIONS,
+# and collections accelerate as the heap grows. Measured over one 100-pass run,
+# copying minors landed at passes
+#
+#   3 5 11 19 28 36 43 49 54 59 64 68 72 76 79 82 86 89 92 94 97 99
+#
+# — early gaps of 8-9 passes tightening to 2-3 by the end (22 minors in 100
+# passes; the growth is #8213's retention). So doubling N more than doubles the
+# collections it buys, and the printed confidence understates a long run.
+#
+# The same arithmetic says what a per-cold-start pass count buys, which is a
+# different thing and worth not confusing (`PERRY_NEXT_ROUTE_VERIFIERS_PER_START`,
+# if present, drives THAT): a FRESH process reaches its first minor around pass 3
+# and its second around pass 5, so ten passes per start is ~2 collections, and ten
+# such starts ~20 — genuinely sensitive to a per-collection bug (this residual was
+# caught at pass 6 of a 10-pass process, with 2 minors), but always in the
+# small-heap regime. One warm process is what reaches the grown-heap regime where
+# collections are frequent. Cold starts buy ABI/parity/bypass-guard coverage
+# across restarts; the warm soak buys collection depth. Neither substitutes.
+#
+# OFF by default (0) because a meaningful N is slow — it is the acceptance
+# instrument for closing #8163, not a per-run check. It deliberately runs the
+# server in NORMAL mode: forcing evacuation would measure the arm that is
+# already fixed.
+run_warm_soak() {
+  local passes="${PERRY_NEXT_ROUTE_WARM_PASSES:-0}"
+  [[ "$passes" =~ ^[0-9]+$ ]] || fail "PERRY_NEXT_ROUTE_WARM_PASSES must be a non-negative integer"
+  if [[ "$passes" == "0" ]]; then
+    echo "  [warm soak] not run (#8163 residual) — set PERRY_NEXT_ROUTE_WARM_PASSES=300 for 95% confidence"
+    return 0
+  fi
+
+  local port=$((PORT_BASE + 100))
+  local log="$BUILD_DIR/perry-warm-soak.log"
+  : >"$log"
+  echo "  [warm soak] 1 warm process x $passes verifier passes (default GC)"
+  env PERRY_GC_DIAG=1 PORT="$port" HOSTNAME=127.0.0.1 NODE_ENV=production \
+    "$HOST_BIN" "$RUNTIME_IMAGE" "$STDLIB_IMAGE" "$APP_IMAGE" >>"$log" 2>&1 &
+  SERVER_PID=$!
+  local ready=0
+  for _ in $(seq 1 150); do
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "warm soak exited during startup"
+    if grep -q "PERRY_NEXT_APP_ROUTE_READY" "$log"; then ready=1; break; fi
+    sleep 0.1
+  done
+  [[ "$ready" == "1" ]] || fail "warm soak did not become ready"
+
+  local failed_iterations=()
+  local pass
+  for pass in $(seq 1 "$passes"); do
+    if ! BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1; then
+      failed_iterations+=("$pass")
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "warm soak process died at pass $pass"
+  done
+  cleanup_server
+
+  local minors
+  minors="$(grep -c '\[gc-copy-minor\] ran' "$log" || true)"
+  local type_errors
+  type_errors="$(grep -c 'TypeError: value is not a function' "$log" || true)"
+  echo "  [warm soak] passes=$passes failures=${#failed_iterations[@]} copying_minors=$minors host_type_errors=$type_errors"
+
+  # Order matters: an OBSERVED failure is reported even when the liveness
+  # counter looks wrong, because a real broken request outranks a complaint
+  # about the instrument. Reversing these two once masked a genuine failure
+  # behind "exercised nothing" while this arm was being tested.
+  if (( ${#failed_iterations[@]} > 0 || type_errors > 0 )); then
+    fail "warm soak: ${#failed_iterations[@]} failing pass(es) [${failed_iterations[*]}], $type_errors host TypeError(s) — #8163 residual"
+  fi
+
+  # A soak that ran no collections proves nothing about a GC holder, so a clean
+  # run must still show its subject was live — the same rule the forced arm's
+  # evacuation-liveness assert applies (CLAUDE.md: a gate must assert its
+  # subject RAN, not merely that nothing threw).
+  (( minors > 0 )) || fail "warm soak ran $passes passes with ZERO copying minors — it exercised nothing"
+
+  # State what a green run of THIS size does and does not license.
+  python3 - "$passes" <<'PY'
+import math, sys
+n = int(sys.argv[1])
+p = 0.01  # measured residual rate: ~1 failing verifier pass in 100
+conf = (1.0 - (1.0 - p) ** n) * 100.0
+verdict = "sufficient to claim elimination" if conf >= 95.0 else "NOT sufficient — a broken build passes this often"
+print(f"  [warm soak] clean at N={n}: {conf:.0f}% confidence the ~1/100 residual is gone ({verdict})")
+PY
+}
+
+# The forced-evacuation arm is ON by default: odd cold starts run under forced
+# evacuation with the moving-GC liveness assert. It was opt-in (and red) while
+# #8163 was open — a stale closure reached Next's `Reflect.get` adapter from
+# `HEADERS_METHOD_VALUE_CACHE`, and a second one reached the `res.end()` tail
+# from `ServerResponse.once_listeners`; both were holders outside the GC heap
+# that no root scanner marked or rewrote. `PERRY_NEXT_ROUTE_FORCED_GC=0` runs
+# the normal arm only; it is a knob, not a skip, and never `continue-on-error`.
+FORCED_GC="${PERRY_NEXT_ROUTE_FORCED_GC:-1}"
 if [[ "$FORCED_GC" == "1" ]]; then
-  echo "  [6/7] $COLD_STARTS cold processes (alternating normal / FORCED-evacuation), two 21-request verifier runs each"
+  echo "  [6/7] $COLD_STARTS cold processes (alternating normal / FORCED-evacuation), $VERIFIERS_PER_START 21-request verifier runs each ($TOTAL_BATCHES batches)"
 else
-  echo "  [6/7] $COLD_STARTS cold processes, two 21-request verifier runs each"
-  echo "        forced-evacuation arm OFF (#8163) — set PERRY_NEXT_ROUTE_FORCED_GC=1 to run it"
+  echo "  [6/7] $COLD_STARTS cold processes, $VERIFIERS_PER_START 21-request verifier runs each ($TOTAL_BATCHES batches)"
+  echo "        forced-evacuation arm OFF (PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi
 for index in $(seq 0 $((COLD_STARTS - 1))); do
   if [[ "$FORCED_GC" == "1" ]] && (( index % 2 == 1 )); then mode="forced"; else mode="normal"; fi
   run_cold_start "$index" "$mode"
 done
 
-echo "  [7/7] production AppRouteRouteModule.handle parity complete"
+run_warm_soak
+
+echo "  [7/7] production AppRouteRouteModule.handle parity complete: $TOTAL_BATCHES verifier batches over $COLD_STARTS cold starts, 0 bypass-guard fires"
 if [[ "$FORCED_GC" == "1" ]]; then
-  echo "PASS $NAME (with forced-evacuation arm)"
+  echo "PASS $NAME ($TOTAL_BATCHES batches, with forced-evacuation arm)"
 else
-  echo "PASS $NAME (forced-evacuation arm not run — #8163)"
+  echo "PASS $NAME ($TOTAL_BATCHES batches, forced-evacuation arm not run — PERRY_NEXT_ROUTE_FORCED_GC=0)"
 fi

@@ -239,6 +239,25 @@ fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
             }
         }
     }
+    // `once_flags()` keys membership by the closure's ADDRESS BITS. The
+    // canonical copy in `listeners()` above keeps the closure alive and is
+    // rewritten when the copying GC moves it — but a `HashSet<i64>` element
+    // cannot be rewritten in place, so without this rebuild the set still
+    // holds the OLD address after evacuation: the once-membership test in
+    // `lifecycle.rs` then misses, the listener is never auto-removed, and a
+    // "once" callback fires on every subsequent event. Drain, forward each
+    // element through the visitor, and reinsert under the new identity.
+    if let Ok(mut once) = statics::once_flags().lock() {
+        for per_handle in once.values_mut() {
+            for set in per_handle.values_mut() {
+                let old: Vec<i64> = set.drain().collect();
+                for mut cb in old {
+                    visitor.visit_i64_slot(&mut cb);
+                    set.insert(cb);
+                }
+            }
+        }
+    }
 }
 
 pub(crate) struct SocketState {

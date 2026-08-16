@@ -15,6 +15,12 @@ name: GC Ratchet
 
 on:
   pull_request:
+    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
+    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
+    # a run, but every job in it is skipped, which costs no runner slot. The
+    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
+    # when the label lands.
+    types: [opened, synchronize, reopened, labeled]
   # POST-MERGE ARM: a staggered six-hourly sweep of `main`, NOT one run per merge.
   #
   # `push: branches: [main]` is what took this gate dark for two days (#7856).
@@ -98,6 +104,8 @@ env:
 
 jobs:
   gc-ratchet:
+    # PR arm is opt-in (label `run-extended-tests`); see the `on:` block.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
     # macos-14 is arm64, which matches the `darwin-arm64` platform key the
     # baseline was captured under. The checker refuses a platform mismatch
     # rather than comparing numbers that are not comparable, so moving this to

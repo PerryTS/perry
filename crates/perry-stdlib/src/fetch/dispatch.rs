@@ -239,8 +239,20 @@ pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> 
 }
 
 lazy_static::lazy_static! {
-    static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
+    /// Bound-method closures behind `formData.get` / `.entries` / … — the
+    /// `FormData` twin of `HEADERS_METHOD_VALUE_CACHE`, and a GC root for the
+    /// same reason (#8163): the values are heap closures held outside the heap.
+    pub(super) static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
         Mutex::new(HashMap::new());
+}
+
+/// Visit every cached `FormData` bound-method closure (see `super::gc`).
+pub(super) fn visit_form_data_method_value_roots<V: super::gc::FetchRootVisitor>(visitor: &mut V) {
+    if let Ok(mut cache) = FORM_DATA_METHOD_VALUE_CACHE.lock() {
+        for bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    }
 }
 
 fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f64 {
@@ -257,6 +269,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
         fn js_write_barrier_root_nanbox(value_bits: u64);
     }
 
+    // Register before allocating — see `headers_bound_method_value`.
+    super::gc::ensure_gc_registered();
     let closure =
         perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(form_id));
@@ -357,73 +371,53 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             js_class_method_bind(handle_to_f64(req_id), name.as_ptr(), name.len())
         });
     }
-    let guard = REQUEST_REGISTRY.lock().unwrap();
-    let req = guard.get(&req_id)?;
-    let bits = match prop {
-        "url" => {
-            let p = js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);
-            JSValue::string_ptr(p).bits()
+    // #8163: every string arm here used to call `js_string_from_bytes` WHILE
+    // holding the `REQUEST_REGISTRY` guard. The Fetch root scanner takes that
+    // same lock during a collection on this thread, so any `request.url` read
+    // whose allocation triggered one would self-deadlock. Snapshot the bytes
+    // under the guard, release it, and allocate after. Arms that answer
+    // without allocating (`bodyUsed`, `keepalive`, `signal`) still return
+    // directly. See `fetch::gc`.
+    enum RequestProp {
+        /// Bytes to turn into a JS string once the registry lock is released.
+        Bytes(Vec<u8>),
+        /// An answer that needed no allocation.
+        Ready(f64),
+    }
+    let snapshot = {
+        let guard = REQUEST_REGISTRY.lock().unwrap();
+        let req = guard.get(&req_id)?;
+        match prop {
+            "url" => RequestProp::Bytes(req.url.as_bytes().to_vec()),
+            "method" => RequestProp::Bytes(req.method.as_bytes().to_vec()),
+            "destination" => RequestProp::Bytes(req.destination.as_bytes().to_vec()),
+            "referrer" => RequestProp::Bytes(req.referrer.as_bytes().to_vec()),
+            "referrerPolicy" => RequestProp::Bytes(req.referrer_policy.as_bytes().to_vec()),
+            "mode" => RequestProp::Bytes(req.mode.as_bytes().to_vec()),
+            "credentials" => RequestProp::Bytes(req.credentials.as_bytes().to_vec()),
+            "cache" => RequestProp::Bytes(req.cache.as_bytes().to_vec()),
+            "redirect" => RequestProp::Bytes(req.redirect.as_bytes().to_vec()),
+            "integrity" => RequestProp::Bytes(req.integrity.as_bytes().to_vec()),
+            "duplex" => RequestProp::Bytes(req.duplex.as_bytes().to_vec()),
+            "body" => match &req.body {
+                Some(b) => RequestProp::Bytes(b.clone()),
+                None => RequestProp::Ready(f64::from_bits(TAG_NULL)),
+            },
+            "bodyUsed" => RequestProp::Ready(tagged_bool(req.body_used)),
+            "keepalive" => RequestProp::Ready(tagged_bool(req.keepalive)),
+            "signal" => RequestProp::Ready(req.signal),
+            // Other Request properties not yet wired — fall through so other
+            // dispatchers (or the final undefined fallback) can answer.
+            _ => return None,
         }
-        "method" => {
-            let p = js_string_from_bytes(req.method.as_ptr(), req.method.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "destination" => {
-            let p = js_string_from_bytes(req.destination.as_ptr(), req.destination.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "referrer" => {
-            let p = js_string_from_bytes(req.referrer.as_ptr(), req.referrer.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "referrerPolicy" => {
-            let p = js_string_from_bytes(
-                req.referrer_policy.as_ptr(),
-                req.referrer_policy.len() as u32,
-            );
-            JSValue::string_ptr(p).bits()
-        }
-        "mode" => {
-            let p = js_string_from_bytes(req.mode.as_ptr(), req.mode.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "credentials" => {
-            let p = js_string_from_bytes(req.credentials.as_ptr(), req.credentials.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "cache" => {
-            let p = js_string_from_bytes(req.cache.as_ptr(), req.cache.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "redirect" => {
-            let p = js_string_from_bytes(req.redirect.as_ptr(), req.redirect.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "integrity" => {
-            let p = js_string_from_bytes(req.integrity.as_ptr(), req.integrity.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "duplex" => {
-            let p = js_string_from_bytes(req.duplex.as_ptr(), req.duplex.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "body" => match &req.body {
-            Some(b) => {
-                let p = js_string_from_bytes(b.as_ptr(), b.len() as u32);
-                JSValue::string_ptr(p).bits()
-            }
-            None => TAG_NULL,
-        },
-        "bodyUsed" => {
-            return Some(tagged_bool(req.body_used));
-        }
-        "keepalive" => return Some(tagged_bool(req.keepalive)),
-        "signal" => return Some(req.signal),
-        // Other Request properties not yet wired — fall through so other
-        // dispatchers (or the final undefined fallback) can answer.
-        _ => return None,
     };
-    Some(f64::from_bits(bits))
+    match snapshot {
+        RequestProp::Ready(value) => Some(value),
+        RequestProp::Bytes(bytes) => {
+            let p = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            Some(f64::from_bits(JSValue::string_ptr(p).bits()))
+        }
+    }
 }
 
 /// #1698: try to dispatch a method call on a Request handle by registry id.
