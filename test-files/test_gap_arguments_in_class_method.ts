@@ -71,6 +71,11 @@ class Base {
   static stat(a: number, b: number) {
     return arguments.length;
   }
+
+  // (6b) the rest+`arguments` both-shape through the static call-site path.
+  static statBoth(a: number, ...rest: number[]) {
+    return `args=${arguments.length} rest=${rest.length} rest0=${rest[0]}`;
+  }
 }
 
 // (7) an inherited method resolves through the parent, and must bundle using
@@ -86,6 +91,10 @@ class Override extends Base {
   }
   fromSibling() {
     return super.two(1, 2, 3);
+  }
+  // (10b) the rest+`arguments` both-shape through the `super.m(…)` call site.
+  superBoth() {
+    return super.both(1, 2, 3);
   }
 }
 
@@ -106,6 +115,7 @@ console.log("(3) idx(7,8,9):", (b as any).idx(7, 8, 9));
 console.log("(4) both(1,2,3):", (b as any).both(1, 2, 3));
 console.log("(4b) bothIdx(1,2,3):", (b as any).bothIdx(1, 2, 3));
 console.log("(6) Base.stat(1,2,3):", (Base as any).stat(1, 2, 3));
+console.log("(6b) Base.statBoth(1,2,3):", Base.statBoth(1, 2, 3));
 console.log("(7) Derived.two(1,2,3):", (new Derived() as any).two(1, 2, 3));
 
 // (8) the same method reached dynamically and through call/apply — these went
@@ -144,6 +154,7 @@ console.log("(9) startActiveSpan:", (tracer as any).startActiveSpan("span", {}, 
 
 console.log("(10) Override.two(9):", (new Override() as any).two(9));
 console.log("(10) Override.fromSibling():", new Override().fromSibling());
+console.log("(10b) Override.superBoth():", new Override().superBoth());
 console.log("(11) Gen.g(1,2,3):", (new Gen() as any).g(1, 2, 3).next().value);
 
 (async () => {
