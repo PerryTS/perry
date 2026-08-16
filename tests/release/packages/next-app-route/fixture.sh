@@ -187,6 +187,97 @@ run_cold_start() {
   cleanup_server
 }
 
+# One process, many verifier passes — the instrument the cold-start loop is
+# structurally blind to (#8163).
+#
+# `run_cold_start` makes TWO verifier passes per process, and in NORMAL mode two
+# passes run **zero copying minors** — measured, and the reason this arm asserts
+# its own collection count below. So the cold-start loop's normal arm cannot
+# exercise a moving-GC holder at all; only its forced arm moves anything.
+#
+# The residual #8163 failure is a holder that survives the DEFAULT (unforced)
+# collector and costs roughly one broken request per hundred verifier passes in
+# a warm process. Two passes cannot see it. Neither can a hundred: at p = 0.01 a
+# clean 100-pass run happens ~37% of the time on a KNOWN-BROKEN build, and two
+# of five measured 100-pass runs did come back clean while the bug was present.
+# A green short run is therefore not evidence, which is exactly the failure mode
+# CLAUDE.md warns about — a gate that cannot fail.
+#
+# So the arm prints the confidence its N actually buys rather than letting any
+# green run imply elimination. Rule of three: ~3/p passes to be 95% confident an
+# event of rate p is absent.
+#
+#   PERRY_NEXT_ROUTE_WARM_PASSES=300   # 95% confident vs the measured ~1/100
+#   PERRY_NEXT_ROUTE_WARM_PASSES=460   # 99%
+#
+# OFF by default (0) because a meaningful N is slow — it is the acceptance
+# instrument for closing #8163, not a per-run check. It deliberately runs the
+# server in NORMAL mode: forcing evacuation would measure the arm that is
+# already fixed.
+run_warm_soak() {
+  local passes="${PERRY_NEXT_ROUTE_WARM_PASSES:-0}"
+  [[ "$passes" =~ ^[0-9]+$ ]] || fail "PERRY_NEXT_ROUTE_WARM_PASSES must be a non-negative integer"
+  if [[ "$passes" == "0" ]]; then
+    echo "  [warm soak] not run (#8163 residual) — set PERRY_NEXT_ROUTE_WARM_PASSES=300 for 95% confidence"
+    return 0
+  fi
+
+  local port=$((PORT_BASE + 100))
+  local log="$BUILD_DIR/perry-warm-soak.log"
+  : >"$log"
+  echo "  [warm soak] 1 warm process x $passes verifier passes (default GC)"
+  env PERRY_GC_DIAG=1 PORT="$port" HOSTNAME=127.0.0.1 NODE_ENV=production \
+    "$HOST_BIN" "$RUNTIME_IMAGE" "$STDLIB_IMAGE" "$APP_IMAGE" >>"$log" 2>&1 &
+  SERVER_PID=$!
+  local ready=0
+  for _ in $(seq 1 150); do
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "warm soak exited during startup"
+    if grep -q "PERRY_NEXT_APP_ROUTE_READY" "$log"; then ready=1; break; fi
+    sleep 0.1
+  done
+  [[ "$ready" == "1" ]] || fail "warm soak did not become ready"
+
+  local failed_iterations=()
+  local pass
+  for pass in $(seq 1 "$passes"); do
+    if ! BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1; then
+      failed_iterations+=("$pass")
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "warm soak process died at pass $pass"
+  done
+  cleanup_server
+
+  local minors
+  minors="$(grep -c '\[gc-copy-minor\] ran' "$log" || true)"
+  local type_errors
+  type_errors="$(grep -c 'TypeError: value is not a function' "$log" || true)"
+  echo "  [warm soak] passes=$passes failures=${#failed_iterations[@]} copying_minors=$minors host_type_errors=$type_errors"
+
+  # Order matters: an OBSERVED failure is reported even when the liveness
+  # counter looks wrong, because a real broken request outranks a complaint
+  # about the instrument. Reversing these two once masked a genuine failure
+  # behind "exercised nothing" while this arm was being tested.
+  if (( ${#failed_iterations[@]} > 0 || type_errors > 0 )); then
+    fail "warm soak: ${#failed_iterations[@]} failing pass(es) [${failed_iterations[*]}], $type_errors host TypeError(s) — #8163 residual"
+  fi
+
+  # A soak that ran no collections proves nothing about a GC holder, so a clean
+  # run must still show its subject was live — the same rule the forced arm's
+  # evacuation-liveness assert applies (CLAUDE.md: a gate must assert its
+  # subject RAN, not merely that nothing threw).
+  (( minors > 0 )) || fail "warm soak ran $passes passes with ZERO copying minors — it exercised nothing"
+
+  # State what a green run of THIS size does and does not license.
+  python3 - "$passes" <<'PY'
+import math, sys
+n = int(sys.argv[1])
+p = 0.01  # measured residual rate: ~1 failing verifier pass in 100
+conf = (1.0 - (1.0 - p) ** n) * 100.0
+verdict = "sufficient to claim elimination" if conf >= 95.0 else "NOT sufficient — a broken build passes this often"
+print(f"  [warm soak] clean at N={n}: {conf:.0f}% confidence the ~1/100 residual is gone ({verdict})")
+PY
+}
+
 # The forced-evacuation arm is ON by default: odd cold starts run under forced
 # evacuation with the moving-GC liveness assert. It was opt-in (and red) while
 # #8163 was open — a stale closure reached Next's `Reflect.get` adapter from
@@ -205,6 +296,8 @@ for index in $(seq 0 $((COLD_STARTS - 1))); do
   if [[ "$FORCED_GC" == "1" ]] && (( index % 2 == 1 )); then mode="forced"; else mode="normal"; fi
   run_cold_start "$index" "$mode"
 done
+
+run_warm_soak
 
 echo "  [7/7] production AppRouteRouteModule.handle parity complete"
 if [[ "$FORCED_GC" == "1" ]]; then
