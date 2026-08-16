@@ -121,6 +121,76 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// `value::addr_class` (`PROXY_ID_BAND_START`).
 const PROXY_TAG_BASE: u64 = crate::value::addr_class::PROXY_ID_BAND_START as u64;
 
+/// Number of ids the revocable-Proxy band can encode: `HANDLE_BAND_MAX -
+/// PROXY_ID_BAND_START`, i.e. **65,536**, of which id 0 is reserved so a
+/// handle is never the bare band base.
+///
+/// This is a hard ceiling, not a soft one. `encode_proxy_id` maps id `n` to
+/// `PROXY_TAG_BASE + n`, so the first id at or above this length encodes to
+/// `HANDLE_BAND_MAX` — a payload that `addr_class::is_proxy_id_band` rejects
+/// and `addr_class::is_above_handle_band` **accepts as a dereferenceable heap
+/// address**. Minting one is therefore a memory-safety bug rather than a lost
+/// proxy: the 65,536th `new Proxy(...)` in a thread used to hand back a value
+/// that the very next property read dereferenced, SIGSEGV (#8213).
+///
+/// Every other handle band already refuses to allocate past its end
+/// (`common/handle.rs`, `fetch/mod.rs` both panic). The Proxy band was the
+/// one without a guard — and the only one whose ids are minted straight from
+/// user code with no matching free/close call, so it is also the only one a
+/// long-running program reaches by simply staying up (#8213 measured ~4
+/// proxies per HTTP request on a warm Next.js App Route, i.e. this ceiling
+/// lands after roughly 16k requests).
+const PROXY_ID_BAND_LEN: u64 = (crate::value::addr_class::HANDLE_BAND_MAX
+    - crate::value::addr_class::PROXY_ID_BAND_START) as u64;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only shrink of [`PROXY_ID_BAND_LEN`] so the exhaustion boundary
+    /// can be walked without allocating 65k objects. Thread-local, and the
+    /// test harness gives every test its own thread, so it cannot leak into
+    /// another test. Never set outside `cfg(test)`.
+    static PROXY_ID_BAND_LEN_OVERRIDE: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[inline]
+fn proxy_id_band_len() -> u64 {
+    #[cfg(test)]
+    {
+        if let Some(len) = PROXY_ID_BAND_LEN_OVERRIDE.with(|c| c.get()) {
+            return len;
+        }
+    }
+    PROXY_ID_BAND_LEN
+}
+
+/// Reserve the id a registry of `len` entries would hand out next, or `None`
+/// when that id would fall outside the band.
+///
+/// Split out from [`js_proxy_new`] because the refusal is the testable half:
+/// the throw itself ends the process when no `try` is open, so the boundary
+/// is asserted here instead.
+fn reserve_proxy_id(len: usize) -> Option<u64> {
+    let id = len as u64;
+    (id < proxy_id_band_len()).then_some(id)
+}
+
+/// The band is full. Throw a catchable `RangeError` rather than mint an
+/// out-of-band id — same trade as `error::throw_allocation_failed` (#5067):
+/// a program that can catch it keeps running, and one that cannot gets a
+/// named error instead of a segfault.
+#[cold]
+fn throw_proxy_band_exhausted() -> ! {
+    let msg = format!(
+        "Too many proxies: this thread's Proxy registry is full ({} entries); \
+         Perry never reclaims a Proxy registry slot",
+        PROXY_ID_BAND_LEN - 1
+    );
+    let handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_rangeerror_new(handle);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn encode_proxy_id(id: u64) -> i64 {
     (PROXY_TAG_BASE + id) as i64
 }
@@ -128,6 +198,15 @@ fn encode_proxy_id(id: u64) -> i64 {
 fn decode_proxy_id(raw: i64) -> Option<u64> {
     let raw = raw as u64;
     if raw < PROXY_TAG_BASE {
+        return None;
+    }
+    // Reject payloads at or past the band end so this decoder and
+    // `addr_class::is_proxy_id_band` agree about what a proxy id is. They used
+    // to disagree above the band: `lookup` accepted anything below 4 GiB while
+    // every addr-class consumer read the same payload as a heap address
+    // (#8213). `reserve_proxy_id` makes such an id unmintable; this keeps the
+    // two classifications from drifting apart again.
+    if raw >= crate::value::addr_class::HANDLE_BAND_MAX as u64 {
         return None;
     }
     let id = raw - PROXY_TAG_BASE;
@@ -232,9 +311,18 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
         throw_proxy_non_object();
     }
     let callable = target_callable_at_creation(target);
+    // Reserve BEFORE taking the mutable borrow: `throw_proxy_band_exhausted`
+    // allocates a JS error, which can collect, and `scan_proxy_roots_mut`
+    // borrows `PROXIES` mutably — throwing under an open borrow would panic
+    // the collector (and a caught throw would leave the registry borrowed for
+    // the life of the thread).
+    let Some(reserved) = reserve_proxy_id(PROXIES.with(|p| p.borrow().len())) else {
+        throw_proxy_band_exhausted();
+    };
     PROXIES.with(|p| {
         let mut v = p.borrow_mut();
         let id = v.len() as u64;
+        debug_assert_eq!(id, reserved, "nothing may allocate a proxy id in between");
         v.push(Some(Box::new(ProxyEntry {
             target,
             handler,
@@ -2074,6 +2162,174 @@ mod tests {
     fn obj_value() -> f64 {
         let obj = crate::object::js_object_alloc(0, 0);
         f64::from_bits(POINTER_TAG | ((obj as u64) & POINTER_MASK))
+    }
+
+    /// #8213: an id past the end of the revocable-Proxy band does not merely
+    /// fail to round-trip — it encodes to a payload every addr-class consumer
+    /// reads as a **dereferenceable heap address**, so the value the 65,536th
+    /// `new Proxy(...)` handed back was segfaulted by the next property read.
+    ///
+    /// The vacuity guard matters here: if the band is ever moved or resized,
+    /// `PROXY_ID_BAND_LEN` moves with it and the loop below would still pass
+    /// while testing a different range, so pin the width too.
+    #[test]
+    fn every_reservable_proxy_id_encodes_inside_the_band() {
+        use crate::value::addr_class;
+
+        assert_eq!(
+            PROXY_ID_BAND_LEN, 0x10000,
+            "the revocable-Proxy band is [0xF0000, 0x100000): 65,536 ids"
+        );
+
+        for len in 0..PROXY_ID_BAND_LEN as usize {
+            let id = reserve_proxy_id(len).expect("inside the band");
+            assert_eq!(id, len as u64);
+            assert!(
+                addr_class::is_proxy_id_band(encode_proxy_id(id) as usize),
+                "id {id} must encode inside the proxy band"
+            );
+        }
+
+        // The first refused id, and why refusing it is a memory-safety fix
+        // rather than a tidiness one.
+        assert_eq!(reserve_proxy_id(PROXY_ID_BAND_LEN as usize), None);
+        let out_of_band = encode_proxy_id(PROXY_ID_BAND_LEN) as usize;
+        assert!(!addr_class::is_proxy_id_band(out_of_band));
+        assert!(
+            addr_class::is_above_handle_band(out_of_band),
+            "an out-of-band proxy id is classified as a heap address to be \
+             dereferenced — that is the SIGSEGV this guard prevents"
+        );
+    }
+
+    /// The decoder and `addr_class::is_proxy_id_band` must agree about what a
+    /// proxy id is. Before #8213 they did not: `lookup` accepted any payload
+    /// below 4 GiB, so an out-of-band id was simultaneously "a live proxy"
+    /// (here) and "a heap pointer" (everywhere else).
+    #[test]
+    fn decode_proxy_id_rejects_payloads_outside_the_band() {
+        use crate::value::addr_class;
+
+        assert_eq!(
+            decode_proxy_id(PROXY_TAG_BASE as i64),
+            None,
+            "id 0 reserved"
+        );
+        assert_eq!(
+            decode_proxy_id((PROXY_TAG_BASE - 1) as i64),
+            None,
+            "below band"
+        );
+        assert_eq!(
+            decode_proxy_id((addr_class::HANDLE_BAND_MAX - 1) as i64),
+            Some(PROXY_ID_BAND_LEN - 1),
+            "the last in-band payload still decodes"
+        );
+        assert_eq!(
+            decode_proxy_id(addr_class::HANDLE_BAND_MAX as i64),
+            None,
+            "the first payload past the band is not a proxy id"
+        );
+        assert_eq!(decode_proxy_id(0x1_0000_0000_i64), None);
+    }
+
+    /// End of the live path: `js_proxy_new` stops handing out ids at the band
+    /// edge. The refusal itself is asserted through `reserve_proxy_id` because
+    /// the throw `js_proxy_new` performs exits the process when no `try` is
+    /// open (`exception::js_throw`), which a unit test cannot survive.
+    #[test]
+    fn js_proxy_new_never_mints_past_the_band_edge() {
+        use crate::value::addr_class;
+
+        // Shrink the band so the edge is reachable without 65k allocations.
+        // Index 0 is reserved, so a length of 6 leaves 5 usable ids.
+        PROXY_ID_BAND_LEN_OVERRIDE.with(|c| c.set(Some(6)));
+
+        let mut minted = Vec::new();
+        for _ in 0..5 {
+            let proxy = js_proxy_new(obj_value(), obj_value());
+            let payload = (proxy.to_bits() & POINTER_MASK) as usize;
+            assert!(
+                addr_class::is_proxy_id_band(payload),
+                "{payload:#x} escaped the proxy band"
+            );
+            assert_eq!(js_proxy_is_proxy(proxy), 1);
+            minted.push(proxy);
+        }
+
+        let full = PROXIES.with(|p| p.borrow().len());
+        assert_eq!(full, 6, "registry is at the (shrunk) band edge");
+        assert_eq!(
+            reserve_proxy_id(full),
+            None,
+            "the next new Proxy(...) must be refused, not minted out of band"
+        );
+
+        // Everything minted before the edge still works.
+        for proxy in minted {
+            assert_eq!(js_proxy_is_proxy(proxy), 1);
+            assert_eq!(js_proxy_is_revoked(proxy), 0);
+        }
+    }
+
+    /// The live witness for #8213: what a program that runs off the end of the
+    /// band actually gets. It cannot be observed in-process — `js_throw` with
+    /// no open `try` prints the uncaught error and `process::exit(1)`s — so the
+    /// child re-runs this test against a shrunk band and the parent asserts on
+    /// its exit status and output. `Some(1)` versus a signal death is exactly
+    /// the difference this fix makes: before, the 65,536th `new Proxy(...)`
+    /// returned a payload the next property read dereferenced (SIGSEGV, no
+    /// status code at all).
+    ///
+    /// It also covers the two things a unit test on `reserve_proxy_id` cannot:
+    /// that the registry borrow is released before the throw (an open borrow
+    /// would panic the moment the error allocation reaches the GC's proxy
+    /// scanner), and that the error is allocatable at all with a full registry.
+    #[test]
+    fn exhausting_the_band_reports_a_range_error_instead_of_segfaulting() {
+        // Harness plumbing, deliberately not a `PERRY_GC_*` name (that family
+        // is audited by `scripts/check_gc_env_knobs.py`).
+        const CHILD_ENV: &str = "PERRY_TEST_PROXY_BAND_EXHAUSTION_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            // Index 0 is reserved, so a length of 4 leaves 3 usable ids and the
+            // 4th call is the one past the edge.
+            PROXY_ID_BAND_LEN_OVERRIDE.with(|c| c.set(Some(4)));
+            for _ in 0..8 {
+                js_proxy_new(obj_value(), obj_value());
+            }
+            unreachable!("js_proxy_new must not mint an id past the band edge");
+        }
+
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("current test binary"),
+        )
+        .arg("proxy::tests::exhausting_the_band_reports_a_range_error_instead_of_segfaulting")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .output()
+        .expect("launch the band-exhaustion witness");
+
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "exhaustion must exit(1) after an uncaught RangeError, not die on a \
+             signal and not run past the edge; output was:\n{combined}"
+        );
+        assert!(
+            combined.contains("RangeError"),
+            "the uncaught error must be a RangeError; output was:\n{combined}"
+        );
+        assert!(
+            combined.contains("Too many proxies"),
+            "the message must name the exhausted registry; output was:\n{combined}"
+        );
     }
 
     /// 2026-07-09 GC audit (wave 2 batch A): revocation must DETACH — null the
