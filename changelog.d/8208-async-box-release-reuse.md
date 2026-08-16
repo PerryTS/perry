@@ -18,24 +18,33 @@ The release is now real, with pooled reuse:
 
 Allocations grow exactly linearly (1,607 cells/batch) and `releases == allocs` at every size, while the malloc-side residue `allocs - pool_reuses` is a **constant 65,915** across a 10× range — one inter-`tick()` cascade's working set, slope zero. Both registries are empty at exit. Baseline peak RSS grows ~100 KB/batch; `vmmap` Memory Tag 240 (mimalloc) resident falls 141.1 MB → 71.6 MB at BATCHES=1200 (dirty 104.5 → 57.2 MB), which is the whole of the RSS delta. Program stdout is byte-identical at all three sizes.
 
-Corpus, best-of-5, instructions and peak RSS together, both arms rebuilt at `b8d32ab19`. All 10 rows produce byte-identical stdout across the arms.
+### Peak RSS across workload size, and the floor that is left
 
-| row | instructions | peak RSS |
-|---|--:|--:|
-| **asyncpipe_big** | **−10.73%** | **−42.01%** (141.3 → 81.9 MB) |
-| asyncpipe | −1.35% | −2.34% |
-| streq | −0.20% | +0.44% |
-| interp | −0.15% | +0.05% |
-| pipeline | −0.12% | +0.40% |
-| shapes | −0.11% | +0.24% |
-| churn_alloc | +0.01% | +0.40% |
-| iso_SUMLOOP | +0.07% | +0.96% |
-| fib35 | +0.08% | +0.62% |
-| iso_STRWORK | +0.09% | +0.55% |
+`asyncpipe`, matched arms at `b8d32ab19`, peak RSS best-of-5, stdout byte-identical at every point:
 
-Instructions are flat everywhere outside the async rows (|Δ| ≤ 0.20%, inside the ±0.42% same-binary spread). The instruction win on the target row is not incidental: not growing `BOX_REGISTRY` without bound removes the rehash traffic its own doc comment already blamed for ~3% CPU on promise-heavy workloads.
+| BATCHES | 30 | 60 | 90 | 120 | 300 | 600 | 1200 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| base MB | 21.89 | 28.53 | 36.11 | 40.97 | 57.41 | 83.27 | 149.03 |
+| fix MB | 22.69 | 29.45 | 35.92 | 40.78 | 49.23 | 58.20 | 79.30 |
+| **delta** | **+0.80** | **+0.92** | −0.19 | −0.19 | −8.17 | −25.06 | **−69.73** |
 
-**The RSS positives are real, and they are a fixed cost, not a scaling one.** At 9 reps the deltas exceed the 0.07–0.31% run-to-run spread: fib35 +32 KB, churn_alloc +96 KB, iso_SUMLOOP +161 KB. A `hello.ts` that runs no async at all pays **+80 KB** (5,136 → 5,216 KB, zero spread on the base arm), so this is a constant per-process cost paid at startup, not something that grows with the workload. It is *not* code size — the linked binary grows 72–80 **bytes** and `__TEXT` is unchanged — nor the pool data itself, which is 144 bytes of empty `Vec` headers; at 16 KB pages it is five pages of first-touch. Weighed plainly: every program pays ≲0.16 MB, and the target row saves 59.4 MB, a ratio of roughly 700:1. Reported rather than rounded away, because "strictly not worse on any other row" is not literally true.
+**This does not yet meet "strictly not worse on every row": below ~75 batches the change still costs ~0.9 MB.** Threading the free list through the cells moved the crossover from ~200 batches to between 60 and 90 and improved the 1200 row from −63.8 to −69.7 MB, but it did not remove the floor.
+
+The residue is **not** the reuse pool, which now costs zero bytes, and it is not a pool-sizing policy question. Measured mechanism:
+
+- The quarantine is published only at an outermost microtask-pump exit with an empty task queue, and **that boundary is reached 6 times in a 30-batch run and 46 times in a 1200-batch run** — a tight `await` cascade resolves through the `AsyncStep` fast path without pumping. Every release in between is held as an address in the quarantine `Vec`.
+- At BATCHES=30 that is 48,238 addresses (all of them — `pool_reuses` is literally **0**, the release does its work and harvests nothing), which at 8 B plus `Vec` doubling is ~0.7 MB, plus the ~80 KB page-touch cost. That is the +0.80 MB, fully accounted for.
+- Relaxing the boundary is not the lever it looks like: dropping the `MICROTASK_RUN_DEPTH == 1` clause was measured and moved flush count only 6 → 46, because `run_microtasks` itself is what runs that few times. `flush_attempts == flushes` at every size, so the empty-queue test never blocks a flush.
+
+**Capping or decaying the free list cannot fix this, and would cost most of the win.** Reuse is bounded by `flushes x cap`, so against the measured 46 intervals at BATCHES=1200:
+
+| cap | 1,024 | 4,096 | 8,192 | 16,384 | 32,768 | 65,536 |
+|---|--:|--:|--:|--:|--:|--:|
+| max reuse | 2.4% | 9.8% | 19.5% | 39.1% | 78.2% | 96.6% |
+
+The natural high-water mark, 65,915, *is* one flush interval's working set — the knee is already where the pool sits. And a cap would not return memory anyway: capped-out cells are still minted and, by design, never handed back to the allocator, so capping converts pooled cells into freshly-minted ones. Decay and page-return are blocked by the same invariant (cell memory is never returned, which is what perry#4898 and #7906 rest on).
+
+Removing the floor therefore means publishing released cells somewhere more frequent than the microtask-pump exit — a change to the async pump's boundaries, with its own use-after-release safety argument and test pass, not a tuning knob on this pool.
 
 The GC ratchet is unmoved: an A/B of both arms over all 14 probes compares 126 gated (probe, metric) cells — retention, evacuation and promotion counters — with **0 differences** and correctness `pass` on every probe in both arms (non-vacuous: `copied_objects` and `promoted_objects` are non-zero on several rows).
 
