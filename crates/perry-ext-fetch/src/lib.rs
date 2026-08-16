@@ -29,6 +29,12 @@ use validation::{throw_range_error, throw_type_error};
 #[cfg(test)]
 mod test_async_shims;
 
+// Definitions for the four fetch symbols perry-runtime CALLS under
+// `external-fetch-symbols` but perry-stdlib OWNS, so this crate's own test
+// binary links (#8155). Test-only on purpose — see the module docs.
+#[cfg(test)]
+mod test_link_stubs;
+
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
