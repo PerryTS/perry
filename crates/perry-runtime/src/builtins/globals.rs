@@ -376,19 +376,22 @@ fn hex4_chars(cs: &[char]) -> Option<u16> {
 // structuredClone
 // ============================================================
 
-// Cycle-detection state for `js_structured_clone` (#1512). Tracks the source
-// pointers currently mid-clone on this thread. On re-entry for a pointer
-// already in the set, we return the original value rather than recursing
-// — that breaks the spec's "preserve reference identity" guarantee but
-// keeps cycles from infinite-recursing into a stack overflow, which is
-// what previously caused `performance.mark("n", { detail: o.self = o })`
-// to crash. Full reference-identity preservation would need a src→dst
-// map; deferred until a real user-facing need surfaces.
 thread_local! {
-    static STRUCTURED_CLONE_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<usize>>
-        = std::cell::RefCell::new(std::collections::HashSet::new());
+    static STRUCTURED_CLONE_MEMO: std::cell::RefCell<StructuredCloneMemo>
+        = std::cell::RefCell::new(StructuredCloneMemo::default());
     static STRUCTURED_CLONE_TRANSFER_STATE: std::cell::RefCell<Option<StructuredCloneTransferState>>
         = const { std::cell::RefCell::new(None) };
+}
+
+#[derive(Default)]
+struct StructuredCloneMemo {
+    entries: Vec<StructuredCloneMemoEntry>,
+    by_source: std::collections::HashMap<usize, usize>,
+}
+
+struct StructuredCloneMemoEntry {
+    source: u64,
+    clone: u64,
 }
 
 #[derive(Default)]
@@ -397,34 +400,75 @@ struct StructuredCloneTransferState {
     clones: std::collections::HashMap<usize, usize>,
 }
 
-fn structured_clone_seen(ptr: usize) -> bool {
-    STRUCTURED_CLONE_IN_PROGRESS.with(|set| set.borrow().contains(&ptr))
+fn structured_clone_memo_lookup(source: usize) -> Option<f64> {
+    STRUCTURED_CLONE_MEMO.with(|memo| {
+        let memo = memo.borrow();
+        let index = *memo.by_source.get(&source)?;
+        let clone = memo.entries[index].clone;
+        (clone != crate::value::TAG_UNDEFINED).then(|| f64::from_bits(clone))
+    })
 }
 
-fn structured_clone_mark(ptr: usize) {
-    STRUCTURED_CLONE_IN_PROGRESS.with(|set| {
-        set.borrow_mut().insert(ptr);
+fn structured_clone_memo_reserve(source: f64) -> usize {
+    let source_bits = source.to_bits();
+    crate::gc::runtime_write_barrier_root_nanbox(source_bits);
+    STRUCTURED_CLONE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let index = memo.entries.len();
+        memo.entries.push(StructuredCloneMemoEntry {
+            source: source_bits,
+            clone: crate::value::TAG_UNDEFINED,
+        });
+        memo.by_source
+            .insert((source_bits & crate::value::POINTER_MASK) as usize, index);
+        index
+    })
+}
+
+fn structured_clone_memo_record(index: usize, clone: f64) {
+    crate::gc::runtime_write_barrier_root_nanbox(clone.to_bits());
+    STRUCTURED_CLONE_MEMO.with(|memo| memo.borrow_mut().entries[index].clone = clone.to_bits());
+}
+
+fn structured_clone_memo_value(index: usize) -> f64 {
+    STRUCTURED_CLONE_MEMO.with(|memo| f64::from_bits(memo.borrow().entries[index].clone))
+}
+
+/// Keep the source→clone memo alive and current while recursive cloning can
+/// allocate. Both sides are mutable roots because a copying collection may
+/// relocate either object; rebuild the address-keyed lookup after visitation.
+pub(crate) fn scan_structured_clone_memo_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    STRUCTURED_CLONE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        for entry in &mut memo.entries {
+            visitor.visit_nanbox_u64_slot(&mut entry.source);
+            visitor.visit_nanbox_u64_slot(&mut entry.clone);
+        }
+        let sources: Vec<usize> = memo
+            .entries
+            .iter()
+            .map(|entry| (entry.source & crate::value::POINTER_MASK) as usize)
+            .collect();
+        memo.by_source.clear();
+        for (index, source) in sources.into_iter().enumerate() {
+            memo.by_source.insert(source, index);
+        }
     });
 }
 
-fn structured_clone_unmark(ptr: usize) {
-    STRUCTURED_CLONE_IN_PROGRESS.with(|set| {
-        set.borrow_mut().remove(&ptr);
+fn clear_structured_clone_memo() {
+    STRUCTURED_CLONE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        memo.entries.clear();
+        memo.by_source.clear();
     });
 }
 
 fn reset_structured_clone_state() {
-    STRUCTURED_CLONE_IN_PROGRESS.with(|set| set.borrow_mut().clear());
+    clear_structured_clone_memo();
     STRUCTURED_CLONE_TRANSFER_STATE.with(|state| *state.borrow_mut() = None);
-}
-
-/// RAII guard that unmarks a pointer from the in-progress set when dropped,
-/// even on early returns from `js_structured_clone`'s POINTER_TAG branches.
-struct CloneCycleGuard(usize);
-impl Drop for CloneCycleGuard {
-    fn drop(&mut self) {
-        structured_clone_unmark(self.0);
-    }
 }
 
 struct CloneTransferStateGuard(Option<StructuredCloneTransferState>);
@@ -443,14 +487,27 @@ fn throw_structured_clone_type_error(message: &str) -> ! {
 }
 
 fn throw_data_clone_error(message: &str) -> ! {
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"DataCloneError", msg);
+    // The runtime throw uses longjmp, so no Rust guard can release roots from
+    // the abandoned traversal. They are no longer needed once cloning fails.
+    clear_structured_clone_memo();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message = scope.root_nanbox_f64(crate::value::js_nanbox_string(js_string_from_bytes(
+        message.as_ptr(),
+        message.len() as u32,
+    ) as i64));
+    let name = scope.root_nanbox_f64(crate::value::js_nanbox_string(js_string_from_bytes(
+        b"DataCloneError".as_ptr(),
+        14,
+    ) as i64));
+    let err =
+        crate::event_target::js_dom_exception_new(message.get_nanbox_f64(), name.get_nanbox_f64());
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 const MAX_STRUCTURED_CLONE_NESTING_DEPTH: usize = 1_000;
 
 fn throw_structured_clone_depth_error() -> ! {
+    clear_structured_clone_memo();
     let message = "structuredClone: value nested deeper than 1000 levels";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
@@ -639,7 +696,9 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
     // Runtime throws use longjmp and therefore skip Rust destructors. Clear
     // traversal state left by a previously caught error before a new clone.
     reset_structured_clone_state();
-    js_structured_clone_inner(value, 0)
+    let cloned = js_structured_clone_inner(value, 0);
+    clear_structured_clone_memo();
+    cloned
 }
 
 /// structuredClone(value, options) -> deep-cloned value with supported transfers.
@@ -656,6 +715,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     let _guard = CloneTransferStateGuard(previous);
     let cloned = js_structured_clone_inner(value, 0);
     detach_transferables_after_success();
+    clear_structured_clone_memo();
     cloned
 }
 
@@ -724,28 +784,28 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
             if crate::closure::is_closure_ptr(addr) {
                 throw_data_clone_error("Function could not be cloned");
             }
+            if let Some(cloned) = structured_clone_memo_lookup(addr) {
+                return cloned;
+            }
             if crate::buffer::is_registered_buffer(addr) {
-                return clone_buffer_header(addr, transfer_requested(addr));
+                let memo_index = structured_clone_memo_reserve(value);
+                let cloned = clone_buffer_header(addr, transfer_requested(addr));
+                structured_clone_memo_record(memo_index, cloned);
+                return cloned;
             }
-            // #1512: short-circuit on cycle so `o.self = o` doesn't infinite-
-            // recurse. The cycle edge resolves to the original value, not
-            // the clone — that breaks full reference-identity preservation
-            // but keeps cycles from stack-overflowing the runtime.
-            if structured_clone_seen(addr) {
-                return value;
-            }
-            structured_clone_mark(addr);
-            let _guard = CloneCycleGuard(addr);
             // Set is tracked in SET_REGISTRY (not GC_TYPE_SET since it has
             // no GC header). Check the registry BEFORE touching the GC
             // header bytes — they'd be garbage for raw-allocated sets.
             if crate::set::is_registered_set(addr) {
+                let memo_index = structured_clone_memo_reserve(value);
                 let src = ptr as *const crate::set::SetHeader;
                 let size = crate::set::js_set_size(src);
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let src_handle = scope.root_raw_const_ptr(src);
                 let new_set = crate::set::js_set_alloc(size.max(8));
                 let new_set_handle = scope.root_raw_mut_ptr(new_set);
+                let new_set_value = crate::value::js_nanbox_pointer(new_set as i64);
+                structured_clone_memo_record(memo_index, new_set_value);
                 for i in 0..size {
                     let src_now = src_handle.get_raw_const_ptr::<crate::set::SetHeader>();
                     let elem = crate::set::js_set_value_at(src_now, i);
@@ -753,9 +813,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     let new_set_now = new_set_handle.get_raw_mut_ptr::<crate::set::SetHeader>();
                     crate::set::js_set_add(new_set_now, v);
                 }
-                let new_set = new_set_handle.get_raw_mut_ptr::<crate::set::SetHeader>();
-                let new_bits = 0x7FFD_0000_0000_0000u64 | (new_set as u64 & 0x0000_FFFF_FFFF_FFFF);
-                return f64::from_bits(new_bits);
+                return structured_clone_memo_value(memo_index);
             }
             unsafe {
                 // Validated probe (plausibility + band + slab) before reading
@@ -766,22 +824,32 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                 };
                 if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Clone array using existing clone, then recursively clone elements
+                    let memo_index = structured_clone_memo_reserve(value);
                     let arr = ptr as *const crate::array::ArrayHeader;
                     let new_arr = crate::array::js_array_clone(arr);
                     let len = (*new_arr).length;
-                    let elements = (new_arr as *mut u8)
-                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                        as *mut f64;
+                    structured_clone_memo_record(
+                        memo_index,
+                        crate::value::js_nanbox_pointer(new_arr as i64),
+                    );
                     for i in 0..len as usize {
+                        let new_arr = pointer_addr(structured_clone_memo_value(memo_index)).unwrap()
+                            as *mut crate::array::ArrayHeader;
+                        let elements = (new_arr as *mut u8)
+                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                            as *mut f64;
                         let elem = *elements.add(i);
                         let cloned = js_structured_clone_inner(elem, depth + 1);
+                        let new_arr = pointer_addr(structured_clone_memo_value(memo_index)).unwrap()
+                            as *mut crate::array::ArrayHeader;
+                        let elements = (new_arr as *mut u8)
+                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                            as *mut f64;
                         // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                         *elements.add(i) = cloned;
                         crate::array::note_array_slot(new_arr, i, cloned.to_bits());
                     }
-                    let new_bits =
-                        0x7FFD_0000_0000_0000u64 | (new_arr as u64 & 0x0000_FFFF_FFFF_FFFF);
-                    f64::from_bits(new_bits)
+                    structured_clone_memo_value(memo_index)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Check if this is a RegExp (the RegExpHeader lives in an
                     // arena slot with GC_TYPE_OBJECT but tracked in
@@ -789,13 +857,16 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     // building a fresh one via js_regexp_new.
                     #[cfg(feature = "regex-engine")]
                     if crate::regex::is_regex_pointer(ptr as *const u8) {
+                        let memo_index = structured_clone_memo_reserve(value);
                         let re_ptr = ptr as *const crate::regex::RegExpHeader;
                         let src = crate::regex::js_regexp_get_source(re_ptr);
                         let flg = crate::regex::js_regexp_get_flags(re_ptr);
                         let new_re = crate::regex::js_regexp_new(src, flg);
                         let new_bits =
                             0x7FFD_0000_0000_0000u64 | (new_re as u64 & 0x0000_FFFF_FFFF_FFFF);
-                        return f64::from_bits(new_bits);
+                        let cloned = f64::from_bits(new_bits);
+                        structured_clone_memo_record(memo_index, cloned);
+                        return cloned;
                     }
                     // #4879: properties that live outside the inline field
                     // region (OVERFLOW_FIELDS of a dict-grown object, or every
@@ -814,10 +885,15 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                         0
                     };
                     if key_count > crate::object::object_live_slot_count(src_obj) as usize {
+                        let memo_index = structured_clone_memo_reserve(value);
                         let scope = crate::gc::RuntimeHandleScope::new();
                         let src_handle = scope.root_raw_const_ptr(src_obj);
                         let new_obj = crate::object::js_object_alloc(0, key_count as u32);
                         let new_handle = scope.root_raw_mut_ptr(new_obj);
+                        structured_clone_memo_record(
+                            memo_index,
+                            crate::value::js_nanbox_pointer(new_obj as i64),
+                        );
                         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                         for i in 0..key_count {
                             let src_now =
@@ -847,36 +923,44 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                                 new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
                             crate::object::js_object_set_field_by_name(new_now, key_ptr, cloned);
                         }
-                        let new_now = new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                        let new_bits =
-                            0x7FFD_0000_0000_0000u64 | (new_now as u64 & 0x0000_FFFF_FFFF_FFFF);
-                        return f64::from_bits(new_bits);
+                        return structured_clone_memo_value(memo_index);
                     }
                     // Clone object using clone_with_extra (0 extra fields, no static keys)
+                    let memo_index = structured_clone_memo_reserve(value);
                     let cloned_obj =
                         crate::object::js_object_clone_with_extra(value, 0, std::ptr::null(), 0);
                     if !cloned_obj.is_null() && (cloned_obj as usize) > 0x10000 {
+                        structured_clone_memo_record(
+                            memo_index,
+                            crate::value::js_nanbox_pointer(cloned_obj as i64),
+                        );
                         let field_count = crate::object::object_live_slot_count(cloned_obj);
-                        let fields = (cloned_obj as *mut u8)
-                            .add(std::mem::size_of::<crate::object::ObjectHeader>())
-                            as *mut f64;
                         for i in 0..field_count as usize {
+                            let cloned_obj = pointer_addr(structured_clone_memo_value(memo_index))
+                                .unwrap()
+                                as *mut crate::object::ObjectHeader;
+                            let fields = (cloned_obj as *mut u8)
+                                .add(std::mem::size_of::<crate::object::ObjectHeader>())
+                                as *mut f64;
                             let field = *fields.add(i);
                             let cloned = js_structured_clone_inner(field, depth + 1);
+                            let cloned_obj = pointer_addr(structured_clone_memo_value(memo_index))
+                                .unwrap()
+                                as *mut crate::object::ObjectHeader;
                             // GC_STORE_AUDIT(BARRIERED): cloned field uses the shared object slot-store helper.
                             // The recursive clone above can run minor GCs that tenure `cloned_obj`
                             // mid-loop, so this store must be barriered like the array branch.
                             crate::object::store_object_field_slot(cloned_obj, i, cloned.to_bits());
                         }
+                    } else {
+                        structured_clone_memo_record(memo_index, value);
                     }
-                    // NaN-box with POINTER_TAG
-                    let new_bits =
-                        0x7FFD_0000_0000_0000u64 | (cloned_obj as u64 & 0x0000_FFFF_FFFF_FFFF);
-                    f64::from_bits(new_bits)
+                    structured_clone_memo_value(memo_index)
                 } else if gc_type == crate::gc::GC_TYPE_MAP {
                     // Deep-clone a Map by building a fresh one and copying
                     // entries through js_map_set (which handles the hash
                     // bucket + entries array layout).
+                    let memo_index = structured_clone_memo_reserve(value);
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let map_handle = scope.root_raw_const_ptr(ptr as *const crate::map::MapHeader);
                     let size = crate::map::js_map_size(
@@ -884,6 +968,10 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     );
                     let new_map = crate::map::js_map_alloc(size.max(8));
                     let new_map_handle = scope.root_raw_mut_ptr(new_map);
+                    structured_clone_memo_record(
+                        memo_index,
+                        crate::value::js_nanbox_pointer(new_map as i64),
+                    );
                     // Walk entries via js_map_entries which returns an
                     // Array<[key, value]> pair array.
                     let entries_arr = crate::map::js_map_entries(
@@ -926,10 +1014,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                             value_handle.get_nanbox_f64(),
                         );
                     }
-                    let new_map = new_map_handle.get_raw_mut_ptr::<crate::map::MapHeader>();
-                    let new_bits =
-                        0x7FFD_0000_0000_0000u64 | (new_map as u64 & 0x0000_FFFF_FFFF_FFFF);
-                    f64::from_bits(new_bits)
+                    structured_clone_memo_value(memo_index)
                 } else {
                     // Unknown pointer type — pass through
                     value
@@ -1193,6 +1278,25 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
 #[cfg(test)]
 mod structured_clone_tests {
     use super::*;
+
+    /// #8232: a clone memo must resolve a back-edge to the destination object,
+    /// not return the original source object as the old recursion guard did.
+    #[test]
+    fn structured_clone_preserves_cycle_identity() {
+        let src = crate::object::js_object_alloc(0, 1);
+        let src_v = crate::value::js_nanbox_pointer(src as i64);
+        let self_key = crate::string::js_string_from_bytes(b"self".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(src, self_key, src_v);
+
+        let cloned_v = js_structured_clone(src_v);
+        let cloned =
+            crate::value::js_nanbox_get_pointer(cloned_v) as *const crate::object::ObjectHeader;
+        let cloned_self_key = crate::string::js_string_from_bytes(b"self".as_ptr(), 4);
+        let cloned_self = crate::object::js_object_get_field_by_name(cloned, cloned_self_key);
+
+        assert_ne!(cloned_v.to_bits(), src_v.to_bits());
+        assert_eq!(cloned_self.bits(), cloned_v.to_bits());
+    }
 
     /// #4879: properties past the inline field region (overflow side table /
     /// `{}`-born objects with no inline capacity) must survive structuredClone.
