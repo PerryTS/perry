@@ -16,13 +16,14 @@
 # `verify.mjs` still exits 0 when it fires (#8161).
 #
 # Known state (#8163): with the default 10 verifier passes per process this
-# fixture is RED on today's `main` — a default-mode copying minor occasionally
-# strands a stale closure, and ~2% of warm batches then lose one response
-# (`TypeError: value is not a function` in the host log right after a
-# `[gc-copy-minor] ran` line, then an empty body in `verify.mjs`). Two passes
-# per process never reached a copying minor, which is how the fixture read
-# green while #8040's 100-iteration bullet was red. Set
-# `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2` to recover the old coverage.
+# fixture is intermittently RED on today's `main` — a default-mode copying
+# minor occasionally strands a stale closure, and ~2% of the batches that
+# follow one lose a response (`TypeError: value is not a function` in the host
+# log right after a `[gc-copy-minor] ran` line, then an empty body in
+# `verify.mjs`). Two passes per process finished before the first copying
+# minor (~pass 3), which is how the fixture read green while #8040's
+# 100-iteration bullet was red. Set `PERRY_NEXT_ROUTE_VERIFIERS_PER_START=2`
+# to recover the old coverage.
 #
 # Odd cold starts run under FORCED evacuation with a seeded GC schedule and the
 # moving-GC liveness assert (#8163 — fixed; `PERRY_NEXT_ROUTE_FORCED_GC=0`
@@ -35,6 +36,13 @@ REPO_ROOT="$(cd ../../../.. && pwd)"
 PERRY_BIN="${PERRY_BIN:-$REPO_ROOT/target/release/perry}"
 PORT_BASE="${PERRY_NEXT_ROUTE_PORT:-31836}"
 COLD_STARTS="${PERRY_NEXT_ROUTE_COLD_STARTS:-10}"
+# Verifier passes per cold start: restart/ABI/parity/bypass-guard coverage
+# across N fresh processes. Each 10-pass process runs ~2-3 copying minors
+# (the first lands around pass 3), so this arm is sensitive to per-collection
+# bugs — but a fresh process lives permanently in the early/small-heap regime
+# and never reaches the grown heap where collections accelerate. Collection
+# DEPTH in one process is a different knob (`PERRY_NEXT_ROUTE_WARM_PASSES`,
+# #8215); neither substitutes for the other.
 VERIFIERS_PER_START="${PERRY_NEXT_ROUTE_VERIFIERS_PER_START:-10}"
 if [[ -n "${PERRY_NEXT_ROUTE_BUILD_DIR:-}" ]]; then
   BUILD_DIR="$PERRY_NEXT_ROUTE_BUILD_DIR"
