@@ -515,6 +515,35 @@ pub(super) fn lower_builtin_new<'a>(
                 &[(DOUBLE, &cb)],
             )))
         }
+        "PerformanceMark" => {
+            let (name, options) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
+            ctx.pending_declares.push((
+                "js_perf_mark_constructor".to_string(),
+                DOUBLE,
+                vec![DOUBLE, DOUBLE],
+            ));
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_perf_mark_constructor",
+                &[(DOUBLE, &name), (DOUBLE, &options)],
+            )))
+        }
+        "Performance"
+        | "PerformanceEntry"
+        | "PerformanceMeasure"
+        | "PerformanceObserverEntryList"
+        | "PerformanceResourceTiming" => {
+            for arg in args {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            ctx.pending_declares
+                .push(("js_perf_illegal_constructor".to_string(), DOUBLE, vec![]));
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_perf_illegal_constructor",
+                &[],
+            )))
+        }
         // string_decoder.StringDecoder — issue #848. `new StringDecoder("utf8")`
         // pre-fix fell through to the generic `js_object_alloc(0, 0)` placeholder,
         // so `dec.write` / `dec.end` were `undefined`. Allocate a real handle

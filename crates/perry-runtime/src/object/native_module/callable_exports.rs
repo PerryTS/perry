@@ -96,7 +96,19 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     // module's handler is registered by its `js_nm_install_<module>()`, and
     // this path is only reachable through that module's namespace — so a
     // binary links exactly the attach machinery of the modules it imports.
-    if export_module_name == "module" && property_name == "SourceMap" {
+    if export_module_name == "perf_hooks" {
+        // These constructors are also installed as globals during realm
+        // bootstrap, before an explicit perf_hooks import necessarily arms the
+        // optional module hook. Their prototypes are intrinsic constructor
+        // state, so install them at this common callable-creation seam.
+        unsafe {
+            crate::perf_hooks::attach_perf_hooks_constructor(
+                property_name,
+                value.get_nanbox_f64(),
+                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
+            );
+        }
+    } else if export_module_name == "module" && property_name == "SourceMap" {
         // A named import can materialize this callable without first lowering
         // a namespace expression (and therefore before `js_nm_install_module`
         // registers the optional attach handler). SourceMap's prototype is
@@ -1623,18 +1635,10 @@ pub(crate) unsafe fn nm_attach_crypto(
 
 #[allow(unused_mut)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
-    property_name: &str,
-    mut value: f64,
-    closure_addr: usize,
+    _property_name: &str,
+    value: f64,
+    _closure_addr: usize,
 ) -> f64 {
-    // `PerformanceObserver.supportedEntryTypes` is a static array on the
-    // constructor. `PerformanceObserver` is a function value (a bound-method
-    // closure), so hang the array off it as a dynamic property — keeps
-    // `typeof PerformanceObserver === "function"` while the static read works.
-    if property_name == "PerformanceObserver" {
-        let arr = crate::perf_hooks::js_perf_supported_entry_types();
-        crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
-    }
     value
 }
 

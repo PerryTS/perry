@@ -599,9 +599,11 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
         // ── PerformanceObserverEntryList (the callback `list` arg) ──
         ("perf_observer_list", "getEntries") => crate::perf_hooks::current_list_get_entries(),
         ("perf_observer_list", "getEntriesByType") => {
+            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "type", args_len == 0);
             crate::perf_hooks::current_list_get_by_type(arg(0))
         }
         ("perf_observer_list", "getEntriesByName") => {
+            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "name", args_len == 0);
             crate::perf_hooks::current_list_get_by_name(arg(0))
         }
 

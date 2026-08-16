@@ -1051,6 +1051,26 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // PerformanceObserverEntryList is a native namespace receiver, and typed
+    // feedback can dispatch its methods before the generic prototype/native-
+    // module tower below. Validate the WebIDL-required filter argument at this
+    // common entry so direct calls and extracted prototype calls agree.
+    if method_name_len == 16
+        && !method_name_ptr.is_null()
+        && crate::perf_hooks::is_perf_observer_list_value(object)
+    {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        let arg0 = if args_len > 0 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        if name == b"getEntriesByName" {
+            crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
+        } else if name == b"getEntriesByType" {
+            crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+        }
+    }
     // #7769: the tower's own previously-computed answer for this
     // (class_id, method_name) pair, when the receiver still satisfies every
     // per-object precondition. See `try_class_vtable_fast_dispatch`.

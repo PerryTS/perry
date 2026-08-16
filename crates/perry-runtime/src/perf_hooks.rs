@@ -33,6 +33,11 @@ use std::cell::{Cell, RefCell};
 use std::sync::{Once, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+mod prototypes;
+
+pub(crate) use prototypes::{attach_perf_hooks_constructor, perf_supported_entry_types_value};
+use prototypes::{is_perf_constructor_name, link_perf_prototype};
+
 const ENTRY_TYPE_MARK: u8 = 0;
 const ENTRY_TYPE_MEASURE: u8 = 1;
 const ENTRY_TYPE_RESOURCE: u8 = 2;
@@ -327,6 +332,7 @@ pub fn performance_namespace() -> f64 {
     }
     let module = b"perf_hooks";
     let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let ns = link_perf_prototype(ns, "Performance");
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
 }
@@ -549,7 +555,13 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
     if let Some(initiator_type) = &e.initiator_type {
         set_named_field(obj, "initiatorType", str_value(initiator_type));
     }
-    crate::value::js_nanbox_pointer(obj as i64)
+    let class_name = match e.entry_type {
+        ENTRY_TYPE_MARK => "PerformanceMark",
+        ENTRY_TYPE_MEASURE => "PerformanceMeasure",
+        ENTRY_TYPE_RESOURCE => "PerformanceResourceTiming",
+        _ => "PerformanceEntry",
+    };
+    link_perf_prototype(crate::value::js_nanbox_pointer(obj as i64), class_name)
 }
 
 /// `performance.now()` reading used for default mark startTimes / measure
@@ -744,6 +756,75 @@ pub extern "C" fn js_perf_mark(name_val: f64, options_val: f64) -> f64 {
         PERF_ENTRIES.with(|store| store.borrow_mut().push(entry));
         obj
     }
+}
+
+/// `new PerformanceMark(name, options?)` creates a detached mark. Node clones
+/// `detail` exactly like `performance.mark`, but does not append the result to
+/// the global performance timeline or notify observers.
+#[no_mangle]
+pub extern "C" fn js_perf_mark_constructor(name_val: f64, options_val: f64) -> f64 {
+    unsafe {
+        if crate::symbol::js_is_symbol(name_val) != 0 {
+            throw_type_error("Cannot convert a Symbol value to a string");
+        }
+        let name = coerce_to_string(name_val);
+        let mut start_time = perf_now();
+        let mut detail_bits = JSValue::null().bits();
+        if let Some(opts) = as_object_ptr(options_val) {
+            if option_present(opts, "startTime") {
+                match option_number(opts, "startTime") {
+                    Some(st) => {
+                        validate_user_timing_timestamp(st);
+                        start_time = st;
+                    }
+                    None => throw_type_error_with_code(
+                        "The \"startTime\" option must be of type number",
+                        "ERR_INVALID_ARG_TYPE",
+                    ),
+                }
+            }
+            detail_bits = option_detail_bits(opts);
+        }
+        let entry = PerfEntry {
+            name,
+            entry_type: ENTRY_TYPE_MARK,
+            start_time,
+            duration: 0.0,
+            detail_bits,
+            object_bits: 0,
+            initiator_type: None,
+        };
+        entry_to_object(&entry)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_perf_illegal_constructor() -> f64 {
+    throw_type_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
+}
+
+pub(crate) unsafe fn construct_perf_hooks_class(
+    class_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !is_perf_constructor_name(class_name) {
+        return None;
+    }
+    let args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    Some(match class_name {
+        "PerformanceMark" => js_perf_mark_constructor(
+            args.first().copied().unwrap_or(undefined),
+            args.get(1).copied().unwrap_or(undefined),
+        ),
+        "PerformanceObserver" => js_perf_observer_new(args.first().copied().unwrap_or(undefined)),
+        _ => js_perf_illegal_constructor(),
+    })
 }
 
 // ── performance.measure(name, startOrOptions?, end?) ─────────────────────────
@@ -1366,7 +1447,19 @@ unsafe fn make_observer_object(id: usize) -> f64 {
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
     crate::object::js_object_set_keys(obj, keys);
-    crate::value::js_nanbox_pointer(obj as i64)
+    link_perf_prototype(
+        crate::value::js_nanbox_pointer(obj as i64),
+        "PerformanceObserver",
+    )
+}
+
+fn is_perf_observer_value(value: f64) -> bool {
+    unsafe {
+        let Some(obj) = as_object_ptr(value) else {
+            return false;
+        };
+        string_of(js_object_get_field(obj, 0)).as_deref() == Some("perf_observer")
+    }
 }
 
 /// True if `v` is callable (matches `typeof v === "function"`) — covers
@@ -1675,6 +1768,7 @@ pub extern "C" fn js_perf_observer_flush_all(
             let module = b"perf_observer_list";
             let list =
                 crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+            let list = link_perf_prototype(list, "PerformanceObserverEntryList");
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {
                 // Node invokes the callback as `(list, observer)` with `this`
@@ -1712,6 +1806,18 @@ pub(crate) unsafe fn current_list_to_array(filter: impl Fn(&PerfEntry) -> bool) 
 
 pub unsafe fn current_list_get_entries() -> f64 {
     current_list_to_array(|_| true)
+}
+
+pub(crate) fn validate_perf_list_filter_arg(value: f64, name: &str, missing: bool) {
+    if missing || JSValue::from_bits(value.to_bits()).is_undefined() {
+        throw_type_error_with_code(
+            &format!("The \"{name}\" argument must be specified"),
+            "ERR_MISSING_ARGS",
+        );
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        throw_type_error("Cannot convert a Symbol value to a string");
+    }
 }
 
 pub unsafe fn current_list_get_by_type(type_val: f64) -> f64 {

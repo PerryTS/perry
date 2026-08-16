@@ -453,6 +453,20 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
+    // `PerformanceObserver.supportedEntryTypes` is a built-in static accessor:
+    // reflection reads its descriptor below, while ordinary property reads
+    // must invoke it and receive a fresh frozen array. Native-module class
+    // exports otherwise store only ordinary dynamic data properties, so keep
+    // this constructor-specific accessor at the common closure read seam.
+    if prop == "supportedEntryTypes" {
+        let value = crate::value::js_nanbox_pointer(ptr as i64);
+        if unsafe { crate::object::bound_native_callable_module_and_method(value) }.is_some_and(
+            |(module, method)| module == "perf_hooks" && method == "PerformanceObserver",
+        ) {
+            return crate::perf_hooks::perf_supported_entry_types_value();
+        }
+    }
+
     if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
         if acc.get == 0 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);

@@ -313,6 +313,13 @@ pub unsafe extern "C" fn js_new_function_construct(
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        if module == "perf_hooks" {
+            if let Some(result) =
+                crate::perf_hooks::construct_perf_hooks_class(&method, args_ptr, args_len)
+            {
+                return result;
+            }
+        }
         if module == "sqlite"
             && matches!(
                 method.as_str(),
