@@ -20,15 +20,15 @@ Allocations grow exactly linearly (1,607 cells/batch) and `releases == allocs` a
 
 ### Peak RSS across workload size, and the floor that is left
 
-`asyncpipe`, matched arms at `b8d32ab19`, peak RSS best-of-5, stdout byte-identical at every point:
+`asyncpipe`, both arms rebuilt at `923342925`, peak RSS best-of-5, stdout byte-identical at every point:
 
 | BATCHES | 30 | 60 | 90 | 120 | 300 | 600 | 1200 |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| base MB | 21.89 | 28.53 | 36.11 | 40.97 | 57.41 | 83.27 | 149.03 |
-| fix MB | 22.69 | 29.45 | 35.92 | 40.78 | 49.23 | 58.20 | 79.30 |
-| **delta** | **+0.80** | **+0.92** | −0.19 | −0.19 | −8.17 | −25.06 | **−69.73** |
+| base MB | 21.92 | 28.41 | 36.59 | 41.33 | 57.02 | 85.59 | 138.02 |
+| fix MB | 22.44 | 29.20 | 35.72 | 40.48 | 49.06 | 57.97 | 79.08 |
+| **delta** | **+0.52** | **+0.80** | −0.88 | −0.84 | −7.95 | −27.62 | **−58.94** |
 
-**This does not yet meet "strictly not worse on every row": below ~75 batches the change still costs ~0.9 MB.** Threading the free list through the cells moved the crossover from ~200 batches to between 60 and 90 and improved the 1200 row from −63.8 to −69.7 MB, but it did not remove the floor.
+**This does not yet meet "strictly not worse on every row": below ~75 batches the change still costs ~0.9 MB.** Threading the free list through the cells moved the crossover from ~200 batches to between 60 and 90, but it did not remove the floor. (The 1200-row saving reads smaller than the −69.7 MB measured at `b8d32ab19` only because main's own param-guard work, #8238/#8242, cut the BASE arm's peak from 149.0 to 138.0 MB in the meantime.)
 
 The residue is **not** the reuse pool, which now costs zero bytes, and it is not a pool-sizing policy question. Measured mechanism:
 
@@ -51,7 +51,7 @@ Removing the floor therefore means publishing released cells somewhere more freq
 
 What would work is **per-activation reachability**: refcount the queued `Task::AsyncStep`s per activation (increment on enqueue, decrement on dispatch) and publish an activation's cells when its count reaches zero. That is safe by construction rather than by a global queue predicate, and it would publish almost immediately after a terminal state — collapsing both the quarantine and the floor. It also puts an increment and a decrement on the async enqueue/dispatch hot path and changes the pump's contract, so it belongs in its own change with its own test pass, not bolted onto this one.
 
-The GC ratchet is unmoved: an A/B of both arms over all 14 probes compares 126 gated (probe, metric) cells — retention, evacuation and promotion counters — with **0 differences** and correctness `pass` on every probe in both arms (non-vacuous: `copied_objects` and `promoted_objects` are non-zero on several rows).
+The GC ratchet passes: `gc_ratchet.py check --profile shared_ci` against the pinned baseline is **`gc-ratchet: OK`** with every gated retention/evacuation/promotion cell at +0.00% (runnable again now that #8214 unblocked the harness step #8204 broke). An A/B of both arms over all 14 probes independently compares 126 gated (probe, metric) cells — retention, evacuation and promotion counters — with **0 differences** and correctness `pass` on every probe in both arms (non-vacuous: `copied_objects` and `promoted_objects` are non-zero on several rows).
 
 Release and reuse run *while the collector is active*, not merely in GC-quiet code: `asyncpipe` at BATCHES=1200 reports `minors=15`, `copied_objects=600`, `promoted_objects=14`, `loop_polls=16` alongside its 1,928,428 releases and 1,862,513 pool reuses, with stdout unchanged.
 
