@@ -2635,8 +2635,10 @@ def _probe_boxes_outside_the_gc_heap():
 
     So the old `dealloc` grep is kept (it is still the thing that would break
     the address-validity leg) and a second check is added for the property that
-    now carries the reuse argument: release must PARK into a quarantine, and
-    only `flush_released_boxes` may feed the reuse pool. A release that pushed
+    now carries the reuse argument: release must PARK in the current async-step
+    scope (falling back to the global quarantine), and publication may happen
+    only after that step returns and no resume for the same activation remains
+    queued, or at the old outermost empty-queue boundary. A release that pushed
     straight onto the free pool could hand a cell to a second activation while
     the first can still resume, which is a use-after-release aliasing hazard
     that this exemption would otherwise silently suppress.
@@ -2662,34 +2664,74 @@ def _probe_boxes_outside_the_gc_heap():
                        "recycled address could become a non-box object, which "
                        "voids both perry#4898's pointer rejection and #7906's "
                        "positive cache")
-    # The reuse path must stay quarantine-gated. Each release parks into a
-    # *_RELEASE_QUARANTINE; only flush_released_boxes drains those into the
-    # intrusive free list (threaded through the cells) that
-    # js_*box_alloc* pops from.
-    for fn, quarantine in (("js_box_release", "BOX_RELEASE_QUARANTINE"),
-                           ("js_i32_box_release", "I32_BOX_RELEASE_QUARANTINE"),
-                           ("js_bool_box_release", "BOOL_BOX_RELEASE_QUARANTINE")):
+    # The reuse path must stay scope/quarantine-gated. Each release goes
+    # through park_released_box; it must never touch the intrusive free list.
+    for fn, kind in (("js_box_release", "ReleasedBoxKind::Box"),
+                     ("js_i32_box_release", "ReleasedBoxKind::I32"),
+                     ("js_bool_box_release", "ReleasedBoxKind::Bool")):
         rel = rust_fn_body("crates/perry-runtime/src/box.rs", fn)
         if rel is None:
             return (False, f"{fn} not found in box.rs; the #8208 release path "
                            "changed shape and this premise must be re-argued")
-        if quarantine not in rel:
-            return (False, f"{fn} no longer parks into {quarantine}")
+        if f"park_released_box({kind}" not in rel:
+            return (False, f"{fn} no longer parks through the activation "
+                           f"scope with {kind}")
         if "FREE_HEAD" in rel:
             return (False, f"{fn} touches the free list directly — release must "
-                           "park into the quarantine and let "
-                           "flush_released_boxes publish it. Publishing is also "
-                           "what overwrites the cell with its free-list link, so "
-                           "a release that published directly would destroy the "
-                           "parked terminal value a stray resume still reads.")
+                           "park first. Publishing overwrites the cell with its "
+                           "free-list link, so publishing here would destroy the "
+                           "terminal value a stray resume still reads.")
+    park = rust_fn_body("crates/perry-runtime/src/box.rs", "park_released_box")
+    if park is None:
+        return (False, "park_released_box not found; releases have no audited "
+                       "quarantine funnel")
+    for holder in ("ASYNC_BOX_RELEASE_SCOPES", "BOX_RELEASE_QUARANTINE",
+                   "I32_BOX_RELEASE_QUARANTINE", "BOOL_BOX_RELEASE_QUARANTINE"):
+        if holder not in park:
+            return (False, f"park_released_box no longer reaches {holder}")
+    if "FREE_HEAD" in park:
+        return (False, "park_released_box touches a free-list head directly")
+
+    finish = rust_fn_body("crates/perry-runtime/src/box.rs",
+                          "finish_async_box_release_scope")
+    if finish is None:
+        return (False, "finish_async_box_release_scope not found")
+    for required in ("if activation_is_quiescent", "publish_released_batch",
+                     "BOX_RELEASE_QUARANTINE", "I32_BOX_RELEASE_QUARANTINE",
+                     "BOOL_BOX_RELEASE_QUARANTINE"):
+        if required not in finish:
+            return (False, "activation-scope finish lost its quiescence gate "
+                           f"or conservative fallback: missing {required}")
+
+    queue_check = rust_fn_body("crates/perry-runtime/src/promise/mod.rs",
+                               "async_step_is_queued")
+    if queue_check is None or any(token not in queue_check for token in
+                                  ("TASK_QUEUE", "Task::AsyncStep",
+                                   "*queued == step")):
+        return (False, "async_step_is_queued no longer proves that the FIFO "
+                       "has no resume for the same activation")
+    for path, fn in (("crates/perry-runtime/src/promise/async_step.rs",
+                      "call_async_step_body"),
+                     ("crates/perry-runtime/src/promise/microtasks.rs",
+                      "run_microtasks")):
+        caller = rust_fn_body(path, fn)
+        if caller is None:
+            return (False, f"{fn} not found; async release publication is "
+                           "no longer bracketed at every step entry")
+        for required in ("begin_async_box_release_scope", "release_scope",
+                         ".finish(!super::async_step_is_queued"):
+            if required not in caller:
+                return (False, f"{fn} no longer gates activation publication "
+                               f"on the queued-resume proof: missing {required}")
     flush = rust_fn_body("crates/perry-runtime/src/box.rs",
                          "flush_released_boxes")
     if flush is None:
         return (False, "flush_released_boxes not found; nothing drains the "
                        "release quarantine into the reuse pool")
     return (True, "std::alloc::alloc, no arena allocation, cell memory never "
-                  "returned to the allocator; release is quarantine-gated and "
-                  "only flush_released_boxes publishes cells for reuse")
+                  "returned to the allocator; release is activation-scoped "
+                  "and publication requires either per-activation quiescence "
+                  "or the outermost empty-queue boundary")
 
 
 IMMOVABLE_SOURCES = (
@@ -2708,9 +2750,10 @@ IMMOVABLE_SOURCES = (
         not_reclaimable_because=(
             "box CELL MEMORY is never returned to the allocator: box.rs has no "
             "dealloc. #8208 made a completed async activation's cells "
-            "RECYCLABLE — released cells are parked in a quarantine, published "
-            "to a per-kind free pool by flush_released_boxes at the outermost "
-            "microtask-pump exit, and re-registered by a later js_box_alloc* — "
+            "RECYCLABLE — released cells are parked per async-step invocation, "
+            "published when that activation has no queued resume (or by "
+            "flush_released_boxes at the outermost microtask-pump exit), and "
+            "re-registered by a later js_box_alloc* — "
             "so BOX_REGISTRY membership is no longer monotonic. The exemption "
             "does not rest on that membership. It rests on the weaker property "
             "#8208 preserves deliberately: every address js_box_alloc* ever "

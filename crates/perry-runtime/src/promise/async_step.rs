@@ -921,6 +921,10 @@ fn call_async_step_body(
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let captured_h = scope.root_nanbox_f64(boxed_promise_or_undef(captured_trap_next));
+    // #8213: unlike the old implementation, the step is needed after the
+    // arbitrary user call so its release scope can prove that no resume for
+    // this activation remains queued. Keep it movable across that call.
+    let step_h = scope.root_nanbox_f64(boxed_closure_or_undef(step));
 
     // #691 Phase 2: when this thunk is invoked from the pending-Promise
     // fallback in js_async_step_chain (await of a still-pending inner),
@@ -940,10 +944,10 @@ fn call_async_step_body(
     let prev_step_h =
         scope.root_nanbox_f64(boxed_closure_or_undef(prev.current_step as ClosurePtr));
 
-    // `step` is needed only by this call and is never used afterward. Any
-    // future post-call use must root it and re-read its relocated address.
-    let result = crate::closure::js_closure_call2(step, value, is_error);
+    let release_scope = crate::r#box::begin_async_box_release_scope();
+    let result = crate::closure::js_closure_call2(unboxed_closure(&step_h), value, is_error);
     let result_h = scope.root_nanbox_f64(result);
+    release_scope.finish(!super::async_step_is_queued(unboxed_closure(&step_h)));
     INLINE_TRAP.with(|c| {
         c.set(InlineTrap {
             trap_next: unboxed_promise(&prev_trap_h),

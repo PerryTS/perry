@@ -6,58 +6,33 @@ The release is now real, with pooled reuse:
 
 - New HIR `Stmt::ReleaseBoxes(ids)` (a reclamation hint — safe to drop, but must be remapped like a `LocalSet` target by id-substitution passes) replaces the per-cell `LocalSet(id, undefined)` release, and the terminal release set now covers the whole activation frame including `__gen_state`/`__gen_done`/`__gen_executing` and the pending-completion record.
 - Codegen lowers it to `js_box_release` / `js_i32_box_release` / `js_bool_box_release`, mirroring `emit_preallocate_boxes`' kind selection, through local slots or closure-capture slots.
-- The runtime release clears the cell, de-registers it, evicts the positive-cache slot, and parks the address in a per-kind quarantine that drains into a free pool at the outermost microtask-pump exit once the task queue is empty; `js_*box_alloc*` reuses pooled cells before calling `std::alloc`. Cell memory is never handed back to the allocator, so "was a box" can never become "is another object" — perry#4898 and #7906 survive unchanged. A stray duplicate resume of a terminal activation observes parked terminal values (`__gen_done`=true, `__gen_state`=-1) and takes byte-for-byte the pre-release short-circuit path; by the time the pool is eligible for reuse the task queue has drained, so no such resume can exist.
+- The runtime release clears the cell, de-registers it, evicts the positive-cache slot, and parks the address in the current async-step invocation's release scope. After that invocation returns, its cells move to the free pool when no resume for the same activation remains queued. A queued duplicate resume falls back to the original outermost empty-queue quarantine. `js_*box_alloc*` reuses pooled cells before calling `std::alloc`. Cell memory is never handed back to the allocator, so "was a box" can never become "is another object" — perry#4898 and #7906 survive unchanged. A stray duplicate resume still observes the parked terminal values (`__gen_done`=true, `__gen_state`=-1) and takes the pre-release short-circuit path.
 
-**Measured on `b8d32ab19`** with both arms rebuilt at that commit (the earlier run on `07c8040bf` reproduced within 0.3 MB on every row, so #8204's header shrink and GC pacing change, #8196's side-table prunes, and #8211/#8212/#8162 none of them move this residue). `asyncpipe` at BATCHES=120/600/1200, `PERRY_GC_DIAG=1` `[box-stats]`:
+### Per-activation publication removes both the slope and the small-workload floor
 
-| BATCHES | allocs | releases | resident cells | peak RSS before | peak RSS after |
+`asyncpipe`, current head, peak RSS best-of-5 via `/usr/bin/time -l`; every run at every size produced byte-identical stdout and identical box counters:
+
+| BATCHES | allocs / releases | resident cells | base RSS | #8208 global-boundary RSS | final RSS |
 |--:|--:|--:|--:|--:|--:|
-| 120 | 192,868 | 192,868 | **65,915** | 41.0 MB | 41.8 MB |
-| 600 | 964,228 | 964,228 | **65,915** | 83.3 MB | 58.8 MB |
-| 1200 | 1,928,428 | 1,928,428 | **65,915** | 149.0 MB | **79.9 MB** |
+| 30 | 48,238 / 48,238 | **1,635** | 21.92 MiB | 22.44 MiB | **20.84 MiB** |
+| 60 | 96,448 / 96,448 | **1,635** | 28.41 MiB | 29.20 MiB | **27.22 MiB** |
+| 1200 | 1,928,428 / 1,928,428 | **1,635** | 138.02 MiB | 79.08 MiB | **79.30 MiB** |
 
-Allocations grow exactly linearly (1,607 cells/batch) and `releases == allocs` at every size, while the malloc-side residue `allocs - pool_reuses` is a **constant 65,915** across a 10× range — one inter-`tick()` cascade's working set, slope zero. Both registries are empty at exit. Baseline peak RSS grows ~100 KB/batch; `vmmap` Memory Tag 240 (mimalloc) resident falls 141.1 MB → 71.6 MB at BATCHES=1200 (dirty 104.5 → 57.2 MB), which is the whole of the RSS delta. Program stdout is byte-identical at all three sizes.
+The malloc-side residue is now a constant 1,635 cells across a 40x workload range, down from #8208's 65,915-cell inter-pump working set. The strict small-workload bar is met: the 30- and 60-batch rows are 1.08 MiB and 1.19 MiB below the no-release base rather than 0.52 MiB and 0.80 MiB above it. At 1,200 batches the 58.72 MiB saving is retained (the 0.22 MiB difference from #8208 alone is inside the observed RSS floor while the cell counter improves 40x).
 
-### Peak RSS across workload size, and the floor that is left
+The publication rule does not add a counter update to every await:
 
-`asyncpipe`, both arms rebuilt at `923342925`, peak RSS best-of-5, stdout byte-identical at every point:
-
-| BATCHES | 30 | 60 | 90 | 120 | 300 | 600 | 1200 |
-|---|--:|--:|--:|--:|--:|--:|--:|
-| base MB | 21.92 | 28.41 | 36.59 | 41.33 | 57.02 | 85.59 | 138.02 |
-| fix MB | 22.44 | 29.20 | 35.72 | 40.48 | 49.06 | 57.97 | 79.08 |
-| **delta** | **+0.52** | **+0.80** | −0.88 | −0.84 | −7.95 | −27.62 | **−58.94** |
-
-**This does not yet meet "strictly not worse on every row": below ~75 batches the change still costs ~0.9 MB.** Threading the free list through the cells moved the crossover from ~200 batches to between 60 and 90, but it did not remove the floor. (The 1200-row saving reads smaller than the −69.7 MB measured at `b8d32ab19` only because main's own param-guard work, #8238/#8242, cut the BASE arm's peak from 149.0 to 138.0 MB in the meantime.)
-
-The residue is **not** the reuse pool, which now costs zero bytes, and it is not a pool-sizing policy question. Measured mechanism:
-
-- The quarantine is published only at an outermost microtask-pump exit with an empty task queue, and **that boundary is reached 6 times in a 30-batch run and 46 times in a 1200-batch run** — a tight `await` cascade resolves through the `AsyncStep` fast path without pumping. Every release in between is held as an address in the quarantine `Vec`.
-- At BATCHES=30 that is 48,238 addresses (all of them — `pool_reuses` is literally **0**, the release does its work and harvests nothing), which at 8 B plus `Vec` doubling is ~0.7 MB, plus the ~80 KB page-touch cost. That is the +0.80 MB, fully accounted for.
-- Relaxing the boundary is not the lever it looks like: dropping the `MICROTASK_RUN_DEPTH == 1` clause was measured and moved flush count only 6 → 46, because `run_microtasks` itself is what runs that few times. `flush_attempts == flushes` at every size, so the empty-queue test never blocks a flush.
-
-**Capping or decaying the free list cannot fix this, and would cost most of the win.** Reuse is bounded by `flushes x cap`, so against the measured 46 intervals at BATCHES=1200:
-
-| cap | 1,024 | 4,096 | 8,192 | 16,384 | 32,768 | 65,536 |
-|---|--:|--:|--:|--:|--:|--:|
-| max reuse | 2.4% | 9.8% | 19.5% | 39.1% | 78.2% | 96.6% |
-
-The natural high-water mark, 65,915, *is* one flush interval's working set — the knee is already where the pool sits. And a cap would not return memory anyway: capped-out cells are still minted and, by design, never handed back to the allocator, so capping converts pooled cells into freshly-minted ones. Decay and page-return are blocked by the same invariant (cell memory is never returned, which is what perry#4898 and #7906 rest on).
-
-Removing the floor therefore means publishing released cells somewhere more frequent than the microtask-pump exit. That was investigated rather than assumed, and **no safe earlier publish point exists within this change's scope**:
-
-- *Per-kind split — refuted.* The tempting argument is that only the i32/i1 CONTROL cells need their parked terminal values, because generated code reads them raw, while body-local `Box` cells go through the registry-checked `js_box_get_bits` and so read `undefined` once de-registered no matter what their bytes hold — which would let body locals publish immediately at release. It does not hold. A stray resume **writes `__gen_sent` before it reads `__gen_done`** (`generator/lower/async_step.rs`: *"it writes `__gen_sent` before reading it, then short-circuits on the un-released `__gen_done`"*). `__gen_sent` is a plain `Box` cell. While it is merely de-registered that write is dropped, which is exactly why the current design is safe; but a republished cell is **re-registered to a different activation**, so the write would land on that activation's live local. Body-local cells are therefore no safer to publish early than the control cells.
-- *Dropping `MICROTASK_RUN_DEPTH == 1` — measured, rejected.* It moved flush count only 6 → 46, because `run_microtasks` itself runs that few times, and it spends a documented safety clause to buy almost nothing.
-
-What would work is **per-activation reachability**: refcount the queued `Task::AsyncStep`s per activation (increment on enqueue, decrement on dispatch) and publish an activation's cells when its count reaches zero. That is safe by construction rather than by a global queue predicate, and it would publish almost immediately after a terminal state — collapsing both the quarantine and the floor. It also puts an increment and a decrement on the async enqueue/dispatch hot path and changes the pump's contract, so it belongs in its own change with its own test pass, not bolted onto this one.
+- Each step invocation gets a nested `ReleasedBoxBatch`. Empty batches and their three `Vec` buffers are pooled per synchronous nesting depth, so a warm process does not allocate temporary vectors per activation.
+- After the step returns, the caller re-reads the potentially moved step closure from its runtime handle and scans the FIFO for a matching `Task::AsyncStep`. No match means the activation is quiescent and its batch can publish immediately.
+- A match preserves the terminal sentinels by appending the batch to the old global quarantine. The outermost empty-queue flush remains the conservative fallback, so the duplicate-resume path is unchanged.
 
 The GC ratchet passes: `gc_ratchet.py check --profile shared_ci` against the pinned baseline is **`gc-ratchet: OK`** with every gated retention/evacuation/promotion cell at +0.00% (runnable again now that #8214 unblocked the harness step #8204 broke). An A/B of both arms over all 14 probes independently compares 126 gated (probe, metric) cells — retention, evacuation and promotion counters — with **0 differences** and correctness `pass` on every probe in both arms (non-vacuous: `copied_objects` and `promoted_objects` are non-zero on several rows).
 
-Release and reuse run *while the collector is active*, not merely in GC-quiet code: `asyncpipe` at BATCHES=1200 reports `minors=15`, `copied_objects=600`, `promoted_objects=14`, `loop_polls=16` alongside its 1,928,428 releases and 1,862,513 pool reuses, with stdout unchanged.
+Release and reuse run *while the collector is active*, not merely in GC-quiet code: the earlier `asyncpipe` collection run reported `minors=15`, `copied_objects=600`, `promoted_objects=14`, and `loop_polls=16`; the final BATCHES=1200 run pairs 1,928,428 releases with 1,926,793 pool reuses and unchanged stdout.
 
-**Known limitation, measured.** Reuse is gated on reaching the outermost microtask-pump exit with an empty task queue — the boundary that makes a stray duplicate resume impossible. A program that never returns to an empty task queue until it ends (one continuous `await` cascade with no timer or I/O between stages) therefore performs its releases but never harvests them: `pool_reuses=0`, and the malloc residue is what it was before. On a synthetic fixture of exactly that shape (400 iterations over 7 async exit-path shapes, no timers) the release work is unrecovered overhead worth **+1.32% instructions and +0.3 MB peak RSS** (run-to-run spreads 0.79% / 0.07%, so both are real if small). Real event-driven workloads drain between events — which is why `asyncpipe`, whose `tick()` is a `setTimeout`, harvests 1.86 M of 1.93 M cells — and none of the ten corpus rows shows the degenerate shape. The boundary is deliberately not loosened here: every weaker rule permits a cell to be reused while an activation could still resume, which is the one way this change could corrupt state rather than merely fail to help.
+The former continuous-`await` limitation is gone: publication is keyed to the activation's own queued reachability, not to how often the global microtask pump happens to exit. At BATCHES=30 the old path reused zero of 48,238 releases; the final path reuses 46,603 and leaves only the 1,635-cell concurrency working set.
 
-**Exit-path coverage.** A fixture exercising normal return, `throw` after an `await`, early `return` from inside a loop after a suspend, `await` on a rejected promise, `try`/`finally` across a suspend on both terminal arms, loop-created closures capturing a per-iteration binding across a suspend, and async-generator `.return()` / full drain — 400 iterations each — produces output byte-identical to the Node oracle on **both** arms. The release is live on it (`releases=20027` of `allocs=25628`), and the 5,601 cells it does *not* release are exactly the ones still registered at exit, so every cell is accounted for as either released or still reachable.
+**Exit-path coverage.** A fixture exercising normal return, `throw` after an `await`, early `return` from inside a loop after a suspend, `await` on a rejected promise, `try`/`finally` across a suspend on both terminal arms, loop-created closures capturing a per-iteration binding across a suspend, and async-generator `.return()` / full drain — 400 iterations each — produces output byte-identical to the Node oracle on **both** arms. The release is live on it (`releases=20,027` of `allocs=25,628`); the final path reuses 19,997 cells and leaves 5,631 resident, only 30 above the 5,601 cells that remain registered and reachable at exit.
 
 `PERRY_GC_DIAG=1` now prints a `[box-stats]` line (allocs / pool_reuses / releases / resident_cells / registry sizes) at exit. Regression gates assert the counters, because the leak is behaviourally invisible and a test that merely runs to completion cannot catch it: `perry-runtime` `release_tests` (residue bounded not linear, parked-cell inertness, release idempotence, flush-gated reuse, foreign-pointer no-op) and `perry-codegen` `release_boxes_lowering` (an emitted release must reach the IR; kind selection; capture path).
 
@@ -65,7 +40,7 @@ Release and reuse run *while the collector is active*, not merely in GC-quiet co
 
 `scripts/gc_root_dominance_check.py`:
 
-- The "box" immovable-source exemption rested on *"boxes are never freed"*, which this change falsifies, while its probe only grepped for `dealloc(`/`arena_alloc(` — all of which a *recycle* path passes. The exemption would have stayed green on a dead premise, which the script's own docstring calls strictly worse than no exemption. Re-argued on the property the design actually preserves (cell memory is never returned to the allocator, so an address never stops naming box-cell memory and can never become another kind of object), and the probe now additionally requires the reuse path to stay quarantine-gated. Sabotage-tested: bypassing the quarantine, and introducing a real `dealloc`, each turn it red.
+- The "box" immovable-source exemption rested on *"boxes are never freed"*, which this change falsifies, while its probe only grepped for `dealloc(`/`arena_alloc(` — all of which a *recycle* path passes. The exemption would have stayed green on a dead premise, which the script's own docstring calls strictly worse than no exemption. Re-argued on the property the design actually preserves (cell memory is never returned to the allocator, so an address never stops naming box-cell memory and can never become another kind of object), and the probe now additionally requires every reuse path to remain behind either an activation-quiescence proof or the conservative global quarantine. Sabotage-tested: bypassing those gates, and introducing a real `dealloc`, each turn it red.
 - The three `js_*box_release` names were added to `gc_call_effects.rs` only, breaking the one-way containment four comments there assert — the same one-sided drift that cost #7510 358 spurious violations. They are now in `NONCOLLECTING` too, and `box_and_closure_helpers_stay_contained_in_the_checker_authority` machine-checks the relation for that family instead of trusting prose. (A whole-table subset is deliberately *not* asserted: 28 pre-existing entries diverge, and since the checker treats an unknown callee as collecting, closing that gap would make it *less* conservative — a separate decision needing per-name evidence.)
 
 Also refreshes every monotonicity claim the release invalidated, including the load-bearing correctness argument in `expr/literals_vars.rs` that let a `box_ptr` outlive a collecting call on the strength of "never freed".

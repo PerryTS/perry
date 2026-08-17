@@ -844,11 +844,18 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     crate::async_hooks::before(step_async_id, step_trigger_id);
                     crate::v8::promise_hook_before(next);
                     // #7497: re-read both across the two calls above.
+                    // #8213: keep this invocation's releases private until it
+                    // returns. If it did not queue another resume for the same
+                    // activation, its cells can become reusable immediately;
+                    // otherwise `finish` falls back to the global quarantine.
+                    let release_scope = crate::r#box::begin_async_box_release_scope();
                     let result = call_async_step_direct(
                         rooted_closure(&step_handle),
                         value_handle.get_nanbox_f64(),
                         is_error_bits,
                     );
+                    release_scope
+                        .finish(!super::async_step_is_queued(rooted_closure(&step_handle)));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK

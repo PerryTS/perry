@@ -18,13 +18,14 @@
 //!
 //! #8208 makes the release real. `Stmt::ReleaseBoxes` lowers to
 //! `js_box_release` / `js_i32_box_release` / `js_bool_box_release`, which clear
-//! the cell, de-register it, evict its positive-cache slot, and park it in a
-//! per-kind quarantine; `flush_released_boxes` publishes the quarantine to a
-//! free pool at the outermost microtask-pump exit once the task queue is empty,
-//! and `js_*box_alloc*` pops that pool before calling `std::alloc`. Registry
-//! membership is therefore no longer monotonic — but the property perry#4898
-//! and #7906 actually depend on survives untouched, because cell memory is
-//! never handed back to the allocator: an address minted by `js_box_alloc*`
+//! the cell, de-register it, evict its positive-cache slot, and park it in the
+//! current async-step invocation's release scope. After that invocation
+//! returns, the runtime publishes its cells when no resume for the same step
+//! remains queued; the old outermost empty-queue quarantine is the conservative
+//! fallback. `js_*box_alloc*` pops the free pool before calling `std::alloc`.
+//! Registry membership is therefore no longer monotonic — but the property
+//! perry#4898 and #7906 actually depend on survives untouched, because cell
+//! memory is never handed back to the allocator: an address minted by `js_box_alloc*`
 //! stays 8 readable bytes of box cell for the life of the thread, so "was a
 //! box" can never become "is another object".
 //!

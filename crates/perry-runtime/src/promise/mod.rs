@@ -580,6 +580,23 @@ pub(crate) enum Task {
     AsyncStep(ClosurePtr, f64, *mut Promise, bool, AsyncContextSnapshot),
 }
 
+/// Whether the FIFO still contains a direct resume for `step`.
+///
+/// Called only after an invocation released async-activation boxes. At that
+/// point a matching queued `AsyncStep` is the sole remaining path that can
+/// reach the parked terminal cells; ordinary promise reactions are settle-once
+/// and cannot manufacture a second invocation after the terminal one.
+pub(crate) fn async_step_is_queued(step: ClosurePtr) -> bool {
+    if step.is_null() {
+        return false;
+    }
+    TASK_QUEUE.with(|q| {
+        q.borrow()
+            .iter()
+            .any(|task| matches!(task, Task::AsyncStep(queued, ..) if *queued == step))
+    })
+}
+
 // Global task queue for pending promise callbacks. Must be FIFO per
 // ECMAScript microtask semantics: `Promise.resolve(1).then(...)` and
 // `Promise.resolve(2).then(...)` registered in source order must run

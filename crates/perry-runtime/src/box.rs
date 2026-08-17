@@ -22,11 +22,13 @@ static BOOL_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_POOL_REUSE_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_RELEASE_COUNT: AtomicU64 = AtomicU64::new(0);
-// Diagnostic-only (#8208 tuning): how often the quarantine actually drains,
-// and how many cells that published. A pool whose high-water mark is 41x one
-// batch's working set is a flush-frequency question, not a pool-size question.
+// Diagnostic-only (#8208/#8213 tuning): how often the global quarantine and
+// per-activation scopes publish, and how many cells they publish in total.
+// A pool whose high-water mark is 41x one batch's working set is a publication-
+// frequency question, not a pool-size question.
 static BOX_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_FLUSH_PUBLISHED: AtomicU64 = AtomicU64::new(0);
+static BOX_ACTIVATION_PUBLISH_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Snapshot of the release/reuse counters: `(allocs, pool_reuses, releases)`.
 /// Sums all three box kinds.
@@ -62,9 +64,10 @@ pub fn report_box_stats_at_exit() {
     eprintln!(
         "[box-stats] allocs={allocs} pool_reuses={reuses} releases={releases} \
          resident_cells={} registry_len={reg} i32_registry_len={i32_reg} \
-         bool_registry_len={bool_reg} flushes={} published={}",
+         bool_registry_len={bool_reg} flushes={} activation_publishes={} published={}",
         allocs - reuses,
         BOX_FLUSH_COUNT.load(Ordering::Relaxed),
+        BOX_ACTIVATION_PUBLISH_COUNT.load(Ordering::Relaxed),
         BOX_FLUSH_PUBLISHED.load(Ordering::Relaxed),
     );
 }
@@ -127,6 +130,7 @@ crate::perry_thread_local! {
 const BOX_PTR_CACHE_SLOTS: usize = 8;
 
 type BoxPtrCache = crate::tls_hot::HotKey<[std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS]>;
+type BoxFreeHead = crate::tls_hot::HotKey<std::cell::Cell<usize>>;
 
 crate::perry_thread_local! {
     /// Direct-mapped **positive** cache over `BOX_REGISTRY`.
@@ -176,9 +180,13 @@ crate::perry_thread_local! {
     /// states, ONLY for cells the transform's escape analysis proved no
     /// closure can observe — `perry-transform/src/generator/box_release.rs`)
     /// clears the cell, removes it from its registry, and parks the address
-    /// in the QUARANTINE. The quarantine drains into the free list at the
-    /// outermost microtask-pump boundary once the task queue is empty
-    /// (`flush_released_boxes`, called from `promise/microtasks.rs`), and
+    /// in the current async-step invocation's release scope. Once that
+    /// invocation returns, its cells can move directly to the free list if
+    /// no resume for the same activation remains queued. If a duplicate
+    /// resume is still queued (or release happens outside an async step), the
+    /// cells fall back to the process-turn QUARANTINE. That quarantine drains
+    /// at the outermost empty-queue microtask-pump boundary
+    /// (`flush_released_boxes`, called from `promise/microtasks.rs`).
     /// `js_*box_alloc*` pops the pool before touching `std::alloc`.
     ///
     /// ## Why the boundary, and why this is sound
@@ -223,7 +231,8 @@ crate::perry_thread_local! {
     /// Overwriting the cell is why this list holds only cells that are PAST
     /// the quarantine. A quarantined cell must keep the parked terminal value
     /// a stray duplicate resume reads (`-1` / `true` / `undefined`); once
-    /// `flush_released_boxes` has run, the task queue is empty and no such
+    /// the owning step has returned with no matching resume queued — or
+    /// `flush_released_boxes` has run with the whole task queue empty — no such
     /// resume can exist, so the bytes are free to become a link.
     static BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static I32_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -234,6 +243,153 @@ crate::perry_thread_local! {
         std::cell::RefCell::new(Vec::new());
     static BOOL_BOX_RELEASE_QUARANTINE: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::new());
+    /// Nested because a step body may synchronously enter another async
+    /// activation, which may itself re-enter the microtask runner. Each scope
+    /// owns only the cells released by that one step invocation.
+    static ASYNC_BOX_RELEASE_SCOPES: std::cell::RefCell<Vec<ReleasedBoxBatch>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Empty batches retain their three Vec buffers here after a scope
+    /// finishes. A hot server therefore allocates at most one buffer cohort
+    /// per synchronous nesting depth, not three fresh Vecs per activation.
+    static ASYNC_BOX_RELEASE_BATCH_POOL: std::cell::RefCell<Vec<ReleasedBoxBatch>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[derive(Default)]
+struct ReleasedBoxBatch {
+    boxes: Vec<usize>,
+    i32_boxes: Vec<usize>,
+    bool_boxes: Vec<usize>,
+}
+
+impl ReleasedBoxBatch {
+    fn is_empty(&self) -> bool {
+        self.boxes.is_empty() && self.i32_boxes.is_empty() && self.bool_boxes.is_empty()
+    }
+}
+
+#[derive(Copy, Clone)]
+enum ReleasedBoxKind {
+    Box,
+    I32,
+    Bool,
+}
+
+/// One invocation of a compiler-generated async step. Releases stay local to
+/// this scope until the step returns, so they cannot be reused by allocations
+/// made later in the same terminal path. Nested async calls get nested scopes.
+pub(crate) struct AsyncBoxReleaseScope {
+    depth: usize,
+    finished: bool,
+}
+
+pub(crate) fn begin_async_box_release_scope() -> AsyncBoxReleaseScope {
+    let batch = ASYNC_BOX_RELEASE_BATCH_POOL
+        .with(|pool| pool.borrow_mut().pop())
+        .unwrap_or_default();
+    debug_assert!(batch.is_empty());
+    let depth = ASYNC_BOX_RELEASE_SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        scopes.push(batch);
+        scopes.len()
+    });
+    AsyncBoxReleaseScope {
+        depth,
+        finished: false,
+    }
+}
+
+impl AsyncBoxReleaseScope {
+    /// Finish the step invocation. `activation_is_quiescent` is true only
+    /// after the caller has re-read the possibly moved step closure and
+    /// proved TASK_QUEUE has no `AsyncStep` for it. Otherwise preserve the
+    /// old empty-queue quarantine boundary.
+    pub(crate) fn finish(mut self, activation_is_quiescent: bool) {
+        self.finished = true;
+        finish_async_box_release_scope(self.depth, activation_is_quiescent);
+    }
+}
+
+impl Drop for AsyncBoxReleaseScope {
+    fn drop(&mut self) {
+        if !self.finished {
+            // A Rust unwind must never make a partly released activation's
+            // cells reusable. Falling back to the old global quarantine is
+            // conservative and keeps the terminal sentinels intact.
+            finish_async_box_release_scope(self.depth, false);
+        }
+    }
+}
+
+fn finish_async_box_release_scope(depth: usize, activation_is_quiescent: bool) {
+    let mut batch = ASYNC_BOX_RELEASE_SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        assert_eq!(
+            scopes.len(),
+            depth,
+            "async box release scopes must finish in stack order"
+        );
+        scopes.pop().expect("async box release scope disappeared")
+    });
+    if !batch.is_empty() {
+        if activation_is_quiescent {
+            BOX_ACTIVATION_PUBLISH_COUNT.fetch_add(1, Ordering::Relaxed);
+            publish_released_batch(&mut batch);
+        } else {
+            BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().append(&mut batch.boxes));
+            I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().append(&mut batch.i32_boxes));
+            BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().append(&mut batch.bool_boxes));
+        }
+    }
+    debug_assert!(batch.is_empty());
+    ASYNC_BOX_RELEASE_BATCH_POOL.with(|pool| pool.borrow_mut().push(batch));
+}
+
+fn park_released_box(kind: ReleasedBoxKind, addr: usize) {
+    let parked_in_scope = ASYNC_BOX_RELEASE_SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        let Some(batch) = scopes.last_mut() else {
+            return false;
+        };
+        match kind {
+            ReleasedBoxKind::Box => batch.boxes.push(addr),
+            ReleasedBoxKind::I32 => batch.i32_boxes.push(addr),
+            ReleasedBoxKind::Bool => batch.bool_boxes.push(addr),
+        }
+        true
+    });
+    if parked_in_scope {
+        return;
+    }
+    match kind {
+        ReleasedBoxKind::Box => BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr)),
+        ReleasedBoxKind::I32 => I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr)),
+        ReleasedBoxKind::Bool => BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr)),
+    }
+}
+
+fn publish_released_batch(batch: &mut ReleasedBoxBatch) {
+    publish_released_addresses(&mut batch.boxes, &BOX_FREE_HEAD);
+    publish_released_addresses(&mut batch.i32_boxes, &I32_BOX_FREE_HEAD);
+    publish_released_addresses(&mut batch.bool_boxes, &BOOL_BOX_FREE_HEAD);
+}
+
+fn publish_released_addresses(addresses: &mut Vec<usize>, head: &'static BoxFreeHead) {
+    if addresses.is_empty() {
+        return;
+    }
+    BOX_FLUSH_PUBLISHED.fetch_add(addresses.len() as u64, Ordering::Relaxed);
+    head.with(|h| {
+        let mut next = h.get();
+        for addr in addresses.drain(..) {
+            // Publishing is the first moment the parked terminal value is
+            // dead, so the cell's own bytes can become the free-list link.
+            debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+            unsafe { (addr as *mut usize).write(next) };
+            next = addr;
+        }
+        h.set(next);
+    });
 }
 
 /// Drain the release quarantines into the free pools. Called at the
@@ -248,22 +404,7 @@ pub fn flush_released_boxes() {
     ] {
         q.with(|q| {
             let mut q = q.borrow_mut();
-            if q.is_empty() {
-                return;
-            }
-            BOX_FLUSH_PUBLISHED.fetch_add(q.len() as u64, Ordering::Relaxed);
-            head.with(|h| {
-                let mut next = h.get();
-                for addr in q.drain(..) {
-                    // Publishing is the first moment the parked terminal value
-                    // is dead (queue empty => no resume can read it), so the
-                    // cell's own bytes become the link to the next free cell.
-                    debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
-                    unsafe { (addr as *mut usize).write(next) };
-                    next = addr;
-                }
-                h.set(next);
-            });
+            publish_released_addresses(&mut q, head);
             // Deliberately NOT shrunk. The quarantine is refilled to roughly
             // the same size every interval, so handing the buffer back here
             // just makes the next interval re-grow it: measured, shrinking to
@@ -486,7 +627,7 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
         // root scanner only walks the registry, which no longer has it).
         (*ptr).value = crate::value::TAG_UNDEFINED;
     }
-    BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    park_released_box(ReleasedBoxKind::Box, addr);
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -514,7 +655,7 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     unsafe {
         (*ptr).value = -1;
     }
-    I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    park_released_box(ReleasedBoxKind::I32, addr);
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -543,7 +684,7 @@ pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     unsafe {
         (*ptr).value = true;
     }
-    BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
+    park_released_box(ReleasedBoxKind::Bool, addr);
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -989,6 +1130,8 @@ pub(crate) fn test_clear_box_registry() {
     BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
+    ASYNC_BOX_RELEASE_SCOPES.with(|scopes| scopes.borrow_mut().clear());
+    ASYNC_BOX_RELEASE_BATCH_POOL.with(|pool| pool.borrow_mut().clear());
     // Registry membership is not monotonic any more (#8208: `js_*box_release`
     // de-registers a completed activation's cells), so the positive cache is
     // kept coherent by an eviction on every un-registration rather than by
@@ -1315,6 +1458,77 @@ mod release_tests {
         );
         assert!(is_registered_box_ptr(third), "reused cell re-registers");
         assert_eq!(js_box_get_bits(third), 3.0f64.to_bits() as i64);
+    }
+
+    /// #8213: the normal terminal path no longer waits for the whole process
+    /// turn to drain. The current invocation keeps its cells quarantined while
+    /// generated terminal code is still running, then publishes them as soon
+    /// as the caller proves this activation has no queued resume.
+    #[test]
+    fn quiescent_async_activation_publishes_at_step_return() {
+        super::test_clear_box_registry();
+        let scope = begin_async_box_release_scope();
+        let first = js_box_alloc_bits(1.0f64.to_bits() as i64);
+        js_box_release(first);
+
+        let during_terminal_path = js_box_alloc_bits(2.0f64.to_bits() as i64);
+        assert_ne!(
+            first, during_terminal_path,
+            "a step must not reuse its own cell before the terminal path returns"
+        );
+
+        scope.finish(true);
+        let after_step_return = js_box_alloc_bits(3.0f64.to_bits() as i64);
+        assert_eq!(
+            first, after_step_return,
+            "a quiescent activation should publish without a global queue drain"
+        );
+    }
+
+    /// A queued duplicate resume keeps the pre-#8213 safety boundary: the
+    /// parked terminal value remains intact until the outer empty-queue flush.
+    #[test]
+    fn non_quiescent_async_activation_falls_back_to_global_quarantine() {
+        super::test_clear_box_registry();
+        let scope = begin_async_box_release_scope();
+        let first = js_bool_box_alloc(0);
+        js_bool_box_release(first);
+        scope.finish(false);
+
+        assert!(
+            unsafe { (*first).value },
+            "a queued duplicate resume must retain the terminal sentinel"
+        );
+        let before_empty_queue = js_bool_box_alloc(0);
+        assert_ne!(first, before_empty_queue);
+
+        flush_released_boxes();
+        let after_empty_queue = js_bool_box_alloc(0);
+        assert_eq!(first, after_empty_queue);
+    }
+
+    /// Nested async entry must not merge release ownership: the inner step may
+    /// become reusable while the synchronously suspended outer invocation is
+    /// still running and its own cell remains quarantined.
+    #[test]
+    fn nested_async_release_scopes_finish_independently() {
+        super::test_clear_box_registry();
+        let outer = begin_async_box_release_scope();
+        let outer_cell = js_box_alloc_bits(1.0f64.to_bits() as i64);
+        js_box_release(outer_cell);
+
+        let inner = begin_async_box_release_scope();
+        let inner_cell = js_box_alloc_bits(2.0f64.to_bits() as i64);
+        js_box_release(inner_cell);
+        inner.finish(true);
+
+        let reused_inner = js_box_alloc_bits(3.0f64.to_bits() as i64);
+        assert_eq!(inner_cell, reused_inner);
+        assert_ne!(outer_cell, reused_inner);
+
+        outer.finish(true);
+        let reused_outer = js_box_alloc_bits(4.0f64.to_bits() as i64);
+        assert_eq!(outer_cell, reused_outer);
     }
 
     /// Generated async-step code reads the compiler-private control cells
