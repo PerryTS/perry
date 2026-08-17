@@ -2136,6 +2136,9 @@ struct ObjectArrayWriteLoop {
     outer_start: i32,
     outer_bound: i32,
     inner_counter_id: u32,
+    /// The fast loop may start inside the dense array. The range guard proves
+    /// exactly `[inner_start, inner_bound)` before the raw clone runs.
+    inner_start: i32,
     /// Constant inner bound, or — when `inner_bound_from_length` — the 16M
     /// ceiling used only by the finite-range proof (the runtime bound is the
     /// matched array's own length, resolved by the preflight guard).
@@ -2224,6 +2227,7 @@ fn object_array_write_number_finite_range(
     expr: &ObjectArrayWriteNumber,
     outer_start: i32,
     outer_bound: i32,
+    inner_start: i32,
     inner_bound: i32,
 ) -> Option<(f64, f64)> {
     let finite_range =
@@ -2232,19 +2236,23 @@ fn object_array_write_number_finite_range(
         ObjectArrayWriteNumber::OuterCounter => {
             finite_range(outer_start as f64, (outer_bound - 1) as f64)
         }
-        ObjectArrayWriteNumber::InnerCounter => finite_range(0.0, (inner_bound - 1) as f64),
+        ObjectArrayWriteNumber::InnerCounter => {
+            finite_range(inner_start as f64, (inner_bound - 1) as f64)
+        }
         ObjectArrayWriteNumber::Constant(value) => finite_range(*value, *value),
         ObjectArrayWriteNumber::Add(left, right) => {
             let (left_lo, left_hi) = object_array_write_number_finite_range(
                 left,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             let (right_lo, right_hi) = object_array_write_number_finite_range(
                 right,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             finite_range(left_lo + right_lo, left_hi + right_hi)
@@ -2254,12 +2262,14 @@ fn object_array_write_number_finite_range(
                 left,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             let (right_lo, right_hi) = object_array_write_number_finite_range(
                 right,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             let products = [
@@ -2277,12 +2287,14 @@ fn object_array_write_number_finite_range(
                 left,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             let (right_lo, right_hi) = object_array_write_number_finite_range(
                 right,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             finite_range(left_lo - right_hi, left_hi - right_lo)
@@ -2296,12 +2308,14 @@ fn object_array_write_number_finite_range(
                 left,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             let (right_lo, right_hi) = object_array_write_number_finite_range(
                 right,
                 outer_start,
                 outer_bound,
+                inner_start,
                 inner_bound,
             )?;
             if left_lo < 0.0 || right_lo != right_hi || right_lo < 1.0 || right_lo.fract() != 0.0 {
@@ -2490,10 +2504,17 @@ fn match_object_array_write_loop(
             }
             _ => return None,
         };
-    // Starting at zero lets the runtime preflight prove one contiguous dense
-    // prefix and keeps the raw element address calculation minimal.
-    if inner_start != 0
+    // A constant non-zero start can use the range preflight while retaining
+    // absolute array indexes in the raw clone.
+    if inner_start < 0
+        || inner_start >= inner_bound
         || inner_bound > 16_000_000
+        // A runtime length can be below the source start. In that case the
+        // original loop leaves its counter at `start`, while the existing
+        // fast completion path publishes `length`; keep that separate loop
+        // dimension on the semantic path until completion uses max(start,
+        // length).
+        || (inner_start != 0 && dyn_len_source.is_some())
         || outer_counter_id == inner_counter_id
         || ctx.boxed_vars.contains(&outer_counter_id)
         || ctx.boxed_vars.contains(&inner_counter_id)
@@ -2675,6 +2696,7 @@ fn match_object_array_write_loop(
                                         &idx,
                                         outer_start,
                                         outer_bound,
+                                        inner_start,
                                         inner_bound,
                                     )
                                 {
@@ -2694,6 +2716,7 @@ fn match_object_array_write_loop(
                                             &value,
                                             outer_start,
                                             outer_bound,
+                                            inner_start,
                                             inner_bound,
                                         )?;
                                         key_table = Some(KeyTableLane {
@@ -2737,7 +2760,13 @@ fn match_object_array_write_loop(
             if object_array_write_number_node_count(&value) > MAX_OBJECT_ARRAY_WRITE_NUMBER_NODES {
                 return None;
             }
-            object_array_write_number_finite_range(&value, outer_start, outer_bound, inner_bound)?;
+            object_array_write_number_finite_range(
+                &value,
+                outer_start,
+                outer_bound,
+                inner_start,
+                inner_bound,
+            )?;
             properties.push(property);
             values.push(value);
             if properties.len() > MAX_OBJECT_ARRAY_WRITE_FIELDS {
@@ -2768,8 +2797,13 @@ fn match_object_array_write_loop(
         }
     }
 
-    // v1: a key-table lane is exclusive — single group, sole store.
-    if key_table.is_some() && (groups.len() != 1 || !groups[0].properties.is_empty()) {
+    // v1: a key-table lane is exclusive — single group, sole store. Its
+    // wrapper currently exposes only the zero-based prefix guard; keep a
+    // non-zero range on the ordinary dynamic-key path rather than scanning
+    // receivers the generated loop never uses.
+    if key_table.is_some()
+        && (inner_start != 0 || groups.len() != 1 || !groups[0].properties.is_empty())
+    {
         return None;
     }
     let first = groups.remove(0);
@@ -2778,6 +2812,7 @@ fn match_object_array_write_loop(
         outer_start,
         outer_bound,
         inner_counter_id,
+        inner_start,
         inner_bound,
         inner_bound_from_length: dyn_len_source.is_some(),
         array_id: first.array_id,
@@ -2898,7 +2933,8 @@ fn lower_object_array_write_versioned_for(
     // the call-free clone. When the guard would have passed anyway the cost
     // is one ordinary outer round of a multi-round nest. The peel calls
     // `lower_for_after_init` directly, so it cannot re-enter this
-    // versioning path.
+    // versioning path. Non-zero starts use the range preflight below, so the
+    // peel and the proof cover the same active receiver suffix.
     let mut peeled_init_stmt: Option<Stmt> = None;
     if matched.outer_start < matched.outer_bound {
         let Some(Stmt::Let {
@@ -2993,19 +3029,37 @@ fn lower_object_array_write_versioned_for(
         ctx.block().zext(I32, &ret, I64)
     } else {
         let blk = ctx.block();
-        blk.call(
-            I64,
-            "js_object_array_numeric_write_guard",
-            &[
-                (DOUBLE, &array_box),
-                (DOUBLE, &key_boxes[0]),
-                (DOUBLE, &key_boxes[1]),
-                (DOUBLE, &key_boxes[2]),
-                (DOUBLE, &key_boxes[3]),
-                (I32, &field_count),
-                (I32, &inner_bound),
-            ],
-        )
+        if matched.inner_start == 0 {
+            blk.call(
+                I64,
+                "js_object_array_numeric_write_guard",
+                &[
+                    (DOUBLE, &array_box),
+                    (DOUBLE, &key_boxes[0]),
+                    (DOUBLE, &key_boxes[1]),
+                    (DOUBLE, &key_boxes[2]),
+                    (DOUBLE, &key_boxes[3]),
+                    (I32, &field_count),
+                    (I32, &inner_bound),
+                ],
+            )
+        } else {
+            let inner_start = matched.inner_start.to_string();
+            blk.call(
+                I64,
+                "js_object_array_numeric_write_range_guard",
+                &[
+                    (DOUBLE, &array_box),
+                    (DOUBLE, &key_boxes[0]),
+                    (DOUBLE, &key_boxes[1]),
+                    (DOUBLE, &key_boxes[2]),
+                    (DOUBLE, &key_boxes[3]),
+                    (I32, &field_count),
+                    (I32, &inner_start),
+                    (I32, &inner_bound),
+                ],
+            )
+        }
     };
     // #6812 (w9): one preflight guard call per extra group — each group is
     // monomorphic on its own array, so the single-shape guard applies
@@ -3027,19 +3081,37 @@ fn lower_object_array_write_versioned_for(
         let g_field_count = group.properties.len().to_string();
         let g_packed = {
             let blk = ctx.block();
-            blk.call(
-                I64,
-                "js_object_array_numeric_write_guard",
-                &[
-                    (DOUBLE, &g_box),
-                    (DOUBLE, &g_keys[0]),
-                    (DOUBLE, &g_keys[1]),
-                    (DOUBLE, &g_keys[2]),
-                    (DOUBLE, &g_keys[3]),
-                    (I32, &g_field_count),
-                    (I32, &inner_bound),
-                ],
-            )
+            if matched.inner_start == 0 {
+                blk.call(
+                    I64,
+                    "js_object_array_numeric_write_guard",
+                    &[
+                        (DOUBLE, &g_box),
+                        (DOUBLE, &g_keys[0]),
+                        (DOUBLE, &g_keys[1]),
+                        (DOUBLE, &g_keys[2]),
+                        (DOUBLE, &g_keys[3]),
+                        (I32, &g_field_count),
+                        (I32, &inner_bound),
+                    ],
+                )
+            } else {
+                let inner_start = matched.inner_start.to_string();
+                blk.call(
+                    I64,
+                    "js_object_array_numeric_write_range_guard",
+                    &[
+                        (DOUBLE, &g_box),
+                        (DOUBLE, &g_keys[0]),
+                        (DOUBLE, &g_keys[1]),
+                        (DOUBLE, &g_keys[2]),
+                        (DOUBLE, &g_keys[3]),
+                        (I32, &g_field_count),
+                        (I32, &inner_start),
+                        (I32, &inner_bound),
+                    ],
+                )
+            }
         };
         extra_guards.push((g_packed, g_box));
     }
@@ -3180,7 +3252,7 @@ fn lower_object_array_write_versioned_for(
     let inner = ctx.block().phi(
         I32,
         &[
-            ("0", &fast_inner_pre_label),
+            (&matched.inner_start.to_string(), &fast_inner_pre_label),
             (&inner_next, &fast_inner_latch_label),
         ],
     );

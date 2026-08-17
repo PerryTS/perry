@@ -46,6 +46,46 @@ for (let r = 0; r < 7; r++) {
 }
 console.log("four", fieldSum(four, ["a", "b", "c", "d"]));
 
+// A non-zero inner start narrows the dense prefix proved by the guard. The
+// skipped receivers must remain untouched, and the counter value used in the
+// numeric RHS must still be the source index rather than a rebased offset.
+const nonzero: any[] = [
+  { x: 100, y: 100 },
+  { x: 100, y: 100 },
+  { x: 0, y: 0 },
+  { x: 0, y: 0 },
+  { x: 0, y: 0 },
+];
+for (let r = 0; r < 7; r++) {
+  for (let i = 2; i < 5; i++) {
+    const object: any = nonzero[i];
+    object.x = r + i;
+    object.y = r - i;
+  }
+}
+console.log(
+  "nonzero",
+  nonzero[0].x,
+  nonzero[1].y,
+  fieldSum(nonzero, ["x", "y"]),
+);
+
+// The paired semantic fallback: mixed active receiver shapes must reject the
+// once-only proof before any raw store, then execute the original loop.
+const nonzeroMixed: any[] = [
+  { x: 50, a: 0 },
+  { x: 50, a: 0 },
+  { x: 0, b: 0 },
+  { x: 0, c: 0 },
+];
+for (let r = 0; r < 3; r++) {
+  for (let i = 2; i < 4; i++) {
+    const object: any = nonzeroMixed[i];
+    object.x = r + i;
+  }
+}
+console.log("nonzero-mixed", fieldSum(nonzeroMixed, ["x"]));
+
 // Duplicate target slots are valid, but source order remains observable.
 const duplicate: any[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
 for (let r = 0; r < 5; r++) {

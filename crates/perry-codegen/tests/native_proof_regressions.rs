@@ -14727,6 +14727,96 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         }
     }
 
+    let mut nonzero_start_body = loop_body(2);
+    let Stmt::For {
+        body: outer_body, ..
+    } = &mut nonzero_start_body[1]
+    else {
+        panic!("expected outer loop");
+    };
+    let Stmt::For { init, .. } = &mut outer_body[0] else {
+        panic!("expected inner loop");
+    };
+    let Some(inner_init) = init else {
+        panic!("expected inner loop initializer");
+    };
+    let Stmt::Let {
+        init: Some(start), ..
+    } = inner_init.as_mut()
+    else {
+        panic!("expected inner counter binding");
+    };
+    *start = Expr::Integer(5);
+
+    let nonzero_start = compile_ir("nested_object_write_nonzero_start_loop", nonzero_start_body);
+    assert_eq!(
+        nonzero_start
+            .matches("call i64 @js_object_array_numeric_write_range_guard")
+            .count(),
+        1,
+        "a non-zero start must perform one proof over exactly its active receiver range:\n{nonzero_start}"
+    );
+    assert!(
+        nonzero_start.contains("[ 5, %object_array_write.loop.fast.inner.preheader"),
+        "the fast inner-counter phi must preserve the source start value:\n{nonzero_start}"
+    );
+    assert!(
+        nonzero_start.contains("for.object_array_write_peel"),
+        "the semantic peel must prime typed-layout state for the same suffix the range guard proves:\n{nonzero_start}"
+    );
+    assert!(
+        nonzero_start.contains("object_array_write.loop.slow.preheader")
+            && nonzero_start
+                .matches("call double @js_put_value_set_ic_miss")
+                .count()
+                >= 2,
+        "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
+    );
+
+    let mut nonzero_dynamic_bound_body = loop_body(1);
+    let Stmt::For {
+        body: outer_body, ..
+    } = &mut nonzero_dynamic_bound_body[1]
+    else {
+        panic!("expected outer loop");
+    };
+    let Stmt::For {
+        init, condition, ..
+    } = &mut outer_body[0]
+    else {
+        panic!("expected inner loop");
+    };
+    let Some(inner_init) = init else {
+        panic!("expected inner loop initializer");
+    };
+    let Stmt::Let {
+        init: Some(start), ..
+    } = inner_init.as_mut()
+    else {
+        panic!("expected inner counter binding");
+    };
+    *start = Expr::Integer(5);
+    let Some(Expr::Compare { right, .. }) = condition else {
+        panic!("expected inner loop condition");
+    };
+    *right = Box::new(length(objects));
+
+    let nonzero_dynamic_bound = compile_ir(
+        "nested_object_write_nonzero_dynamic_bound_loop",
+        nonzero_dynamic_bound_body,
+    );
+    assert!(
+        !nonzero_dynamic_bound.contains("call i64 @js_object_array_numeric_write_guard")
+            && !nonzero_dynamic_bound
+                .contains("call i64 @js_object_array_numeric_write_range_guard")
+            && !nonzero_dynamic_bound.contains("object_array_write.loop.fast"),
+        "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
+    );
+    assert!(
+        nonzero_dynamic_bound.contains("call double @js_put_value_set_ic_miss"),
+        "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
+    );
+
     let rejected = compile_ir("nested_object_write5_loop", loop_body(5));
     assert!(
         !rejected.contains("call i64 @js_object_array_numeric_write_guard")
