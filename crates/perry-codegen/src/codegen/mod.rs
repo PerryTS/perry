@@ -2615,6 +2615,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 f.id,
                 &module_prefix,
                 &f.params,
+                &f.body,
                 &demoted,
                 &guard_blocked,
                 &cross_module.type_aliases,
