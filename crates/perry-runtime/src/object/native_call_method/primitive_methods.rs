@@ -821,6 +821,13 @@ pub(super) unsafe fn dispatch_primitive(
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                     return Some(r);
                 }
+                if typed_array_lacks_array_method(method_name) {
+                    return Some(dispatch_absent_typed_array_array_method(
+                        ta,
+                        method_name,
+                        arg_handles,
+                    ));
+                }
             }
         }
     }

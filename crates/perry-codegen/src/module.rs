@@ -10,7 +10,9 @@
 //! `to_ir()` assembles the pieces into a complete `.ll` file with the target
 //! triple header.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::block::FpFlags;
 use crate::function::LlFunction;
@@ -282,7 +284,15 @@ pub(crate) fn declare_line_for(f: &LlFunction) -> String {
         .map(|(t, _)| t.to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    format!("declare {} @{}({})", f.return_type, f.name, params)
+    // #8175: a codegen unit that calls a promoted `preserve_nonecc` clone
+    // binds through this declare; the convention must ride along or the
+    // cross-unit ABI silently splits from the defining unit's.
+    let cconv: String = if f.is_preserve_none() {
+        format!("{} ", crate::inst::PRESERVE_NONE_CC)
+    } else {
+        String::new()
+    };
+    format!("declare {}{} @{}({})", cconv, f.return_type, f.name, params)
 }
 
 /// Render a function with external linkage forced, promoting an `internal` /
@@ -347,6 +357,13 @@ pub struct LlModule {
     pub buffer_alias_counter: u32,
     pub(crate) native_rep_records: Vec<NativeRepRecord>,
     fp_flags: FpFlags,
+    /// #8175: symbols that must be defined, declared, AND called with the
+    /// `preserve_nonecc` calling convention — recursion-participating
+    /// specialized clones. One shared cell, injected into every function's
+    /// `RegCounter` at `define_function` time; population happens once, after
+    /// the specialization plan is final (`codegen/mod.rs`), and reads happen
+    /// at call-emission/render time, so define order never matters.
+    preserve_none_fns: Rc<RefCell<HashSet<String>>>,
 }
 
 /// The `source_filename` every Perry-emitted module records.
@@ -387,7 +404,17 @@ impl LlModule {
             buffer_alias_counter: 0,
             native_rep_records: Vec::new(),
             fp_flags,
+            preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
         }
+    }
+
+    /// Register the module's `preserve_nonecc` symbols (#8175). Must be
+    /// called before any call site to one of them is emitted — in practice,
+    /// right after the specialization plan is selected and before any user
+    /// function body compiles. The shared cell means functions defined
+    /// earlier (init preludes, string pools) see the same registry.
+    pub(crate) fn set_preserve_none_fns(&mut self, fns: impl IntoIterator<Item = String>) {
+        self.preserve_none_fns.borrow_mut().extend(fns);
     }
 
     /// Append a raw metadata definition line (e.g. `!1 = distinct !{!1}`).
@@ -533,6 +560,9 @@ impl LlModule {
         let name = name.into();
         self.defined_names.insert(name.clone());
         let func = LlFunction::new_with_fp_flags(name, return_type, params, self.fp_flags);
+        // #8175: every function shares the module's preserve_nonecc registry,
+        // so its call sites and its own define header agree on the convention.
+        func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
         self.functions.push(func);
         self.functions.last_mut().unwrap()
     }

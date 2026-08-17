@@ -124,15 +124,17 @@ fn derived_recursive_i32_argument_re_enters_the_clone_behind_a_range_test() {
     // The subject has to exist before any of this means anything: the literal
     // module-init site must have produced a raw-i32 clone.
     assert!(
-        clone
-            .starts_with("define internal double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"),
+        clone.starts_with(
+            "define internal preserve_nonecc double \
+                 @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"
+        ),
         "expected a raw-i32 clone to specialize:\n{clone}"
     );
 
     // BOTH recursive edges re-enter the clone.
     assert_eq!(
         clone
-            .matches("call double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
+            .matches("call preserve_nonecc double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
             .count(),
         2,
         "both recursive calls must target the clone:\n{clone}"
@@ -170,15 +172,17 @@ fn a_multiplied_recursive_argument_keeps_the_boxed_call() {
     let clone = function_ir(&ir, "$spec_i32(");
 
     assert!(
-        clone
-            .starts_with("define internal double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"),
+        clone.starts_with(
+            "define internal preserve_nonecc double \
+                 @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"
+        ),
         "the clone must still exist, or this asserts nothing:\n{clone}"
     );
     // The `n - 1` edge proves — so the fixture is live — and the `n * 2` edge
     // does not.
     assert_eq!(
         clone
-            .matches("call double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
+            .matches("call preserve_nonecc double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
             .count(),
         1,
         "only the subtracting edge may reach the clone:\n{clone}"
@@ -205,8 +209,10 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
     let clone = function_ir(&ir, "$spec_i32(");
 
     assert!(
-        clone
-            .starts_with("define internal double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"),
+        clone.starts_with(
+            "define internal preserve_nonecc double \
+                 @perry_fn_spec_self_recursion_ts__f$spec_i32(i32"
+        ),
         "the clone must still exist, or this asserts nothing:\n{clone}"
     );
     // `f(3)` is a literal site and reaches the clone directly; `f(3) - 1` is
@@ -215,7 +221,7 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
     // call-result argument.
     assert_eq!(
         clone
-            .matches("call double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
+            .matches("call preserve_nonecc double @perry_fn_spec_self_recursion_ts__f$spec_i32(i32")
             .count(),
         2,
         "a call-result argument must not be treated as an i32 leaf:\n{clone}"

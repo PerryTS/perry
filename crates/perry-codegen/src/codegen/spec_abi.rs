@@ -54,6 +54,49 @@ pub(crate) fn spec_abi_enabled() -> bool {
     })
 }
 
+/// `PERRY_SPEC_PRESERVE_NONE` gate (#8175). Default on; `0`/`off`/`false`
+/// keeps specialized entries on the default C convention.
+///
+/// This is a BISECTION knob, not a mode: it exists so both arms of an A/B
+/// come from ONE compiler binary (flip the guard, not the artifact — the
+/// #8175 corpus table's control arm is exactly `=0`), and it is keyed into
+/// both the build cache and the object cache so arms never share objects.
+/// Kill-policy accounting: the OFF state is not an untested branch — it is
+/// the registry-empty configuration that
+/// `a_non_recursive_clone_keeps_the_default_convention` and
+/// `unsupported_targets_keep_the_default_convention` compile end-to-end in
+/// CI, and the parse itself is pinned by `preserve_none_env_parse` below.
+pub(crate) fn spec_preserve_none_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        preserve_none_env_allows(std::env::var("PERRY_SPEC_PRESERVE_NONE").ok().as_deref())
+    })
+}
+
+/// Pure parse seam for [`spec_preserve_none_enabled`] — the `OnceLock` above
+/// caches per process, so the OFF spelling can only be unit-tested here.
+fn preserve_none_env_allows(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("off") | Some("false"))
+}
+
+/// Whether `preserve_nonecc` is usable on this target (#8175).
+///
+/// Same predicate family as `helpers::set_native_roots_for_target` (the
+/// RS4GC target-awareness): aarch64/arm64 and x86-64 have the convention
+/// implemented in LLVM's backends; watchOS `arm64_32` (ILP32) and ARM64
+/// Windows are excluded — the exact pair whose frame model the rest of the
+/// GC stack also refuses. Keep the two predicates' shapes in agreement.
+pub(crate) fn preserve_none_target_ok(triple: &str) -> bool {
+    let arch_ok = (triple.starts_with("aarch64")
+        || triple.starts_with("arm64")
+        || triple.starts_with("x86_64"))
+        && !triple.starts_with("arm64_32");
+    let windows_ok =
+        (!triple.contains("windows") && !triple.contains("mingw")) || triple.starts_with("x86_64");
+    arch_ok && windows_ok
+}
+
 /// `PERRY_SPECIALIZED_ABI_MAX`: module-wide cap on emitted specialized
 /// entries (anti-bloat budget). Default 64. Also object-cache-keyed.
 pub(crate) fn spec_abi_max() -> usize {
@@ -256,6 +299,20 @@ mod tests {
     }
 
     #[test]
+    fn preserve_none_env_parse() {
+        use super::preserve_none_env_allows as allows;
+        // Default ON: unset or any unrecognized spelling.
+        assert!(allows(None));
+        assert!(allows(Some("1")));
+        assert!(allows(Some("on")));
+        assert!(allows(Some("")));
+        // The three OFF spellings, same family as PERRY_SPECIALIZED_ABI.
+        assert!(!allows(Some("0")));
+        assert!(!allows(Some("off")));
+        assert!(!allows(Some("false")));
+    }
+
+    #[test]
     fn dominant_tuple_selection_demotes_and_counts() {
         let ta = SpecParamRep::TaPtr {
             kind: 4,
@@ -288,11 +345,12 @@ mod tests {
     #[test]
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [&str; 6] = [
+        let allowed: [&str; 7] = [
             "codegen/spec_abi.rs",                   // naming + this test
             "codegen/function.rs",                   // entry emission
             "codegen/mod.rs",                        // eligibility/budget loop
             "codegen/ordinary_param_guard_tests.rs", // structural assertion only
+            "codegen/spec_preserve_none_tests.rs",   // structural assertion only (#8175)
             "codegen/spec_self_recursion_tests.rs",  // structural assertion only
             "lower_call/func_ref.rs",                // direct-call dispatch
         ];
