@@ -138,6 +138,8 @@ pub(crate) use write_barrier::{
 // and the `lower_expr` dispatch table moved into siblings to keep this file
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
 #[cfg(test)]
+mod array_callback_shape_tests;
+#[cfg(test)]
 mod array_push_guard_tests;
 #[cfg(test)]
 mod barrier_stem_census_tests;

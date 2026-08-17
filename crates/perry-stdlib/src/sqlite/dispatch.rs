@@ -5,6 +5,80 @@ use perry_runtime::{
     js_string_from_bytes, ArrayHeader, JSValue,
 };
 
+/// `js_class_method_bind` retains the name pointer in the closure, so make a
+/// non-static forwarded property slice impossible to pass accidentally.
+unsafe fn bind_static_handle_method(handle: Handle, method: &'static [u8]) -> f64 {
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    js_class_method_bind(js_nanbox_pointer(handle), method.as_ptr(), method.len())
+}
+
+fn database_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "open" => Some(b"open"),
+        "close" => Some(b"close"),
+        "exec" => Some(b"exec"),
+        "prepare" => Some(b"prepare"),
+        "serialize" => Some(b"serialize"),
+        "deserialize" => Some(b"deserialize"),
+        "function" => Some(b"function"),
+        "aggregate" => Some(b"aggregate"),
+        "enableDefensive" => Some(b"enableDefensive"),
+        "setAuthorizer" => Some(b"setAuthorizer"),
+        "createTagStore" => Some(b"createTagStore"),
+        "createSession" => Some(b"createSession"),
+        "applyChangeset" => Some(b"applyChangeset"),
+        "enableLoadExtension" => Some(b"enableLoadExtension"),
+        "loadExtension" => Some(b"loadExtension"),
+        "location" => Some(b"location"),
+        "__perry_dispose__" => Some(b"__perry_dispose__"),
+        "@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
+        _ => None,
+    }
+}
+
+fn tag_store_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "run" => Some(b"run"),
+        "get" => Some(b"get"),
+        "all" => Some(b"all"),
+        "iterate" => Some(b"iterate"),
+        "clear" => Some(b"clear"),
+        _ => None,
+    }
+}
+
+fn session_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "changeset" => Some(b"changeset"),
+        "patchset" => Some(b"patchset"),
+        "close" => Some(b"close"),
+        "__perry_dispose__" => Some(b"__perry_dispose__"),
+        "@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
+        _ => None,
+    }
+}
+
+fn statement_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "run" => Some(b"run"),
+        "get" => Some(b"get"),
+        "all" => Some(b"all"),
+        "iterate" => Some(b"iterate"),
+        "columns" => Some(b"columns"),
+        "setReadBigInts" => Some(b"setReadBigInts"),
+        "setReturnArrays" => Some(b"setReturnArrays"),
+        "setAllowBareNamedParameters" => Some(b"setAllowBareNamedParameters"),
+        "setAllowUnknownNamedParameters" => Some(b"setAllowUnknownNamedParameters"),
+        _ => None,
+    }
+}
+
 pub unsafe fn dispatch_node_sqlite_database_method(
     handle: Handle,
     method: &str,
@@ -97,39 +171,10 @@ pub unsafe fn dispatch_node_sqlite_database_property(
         "limits" => Some(js_nanbox_pointer(js_node_sqlite_database_sync_limits(
             handle,
         ))),
-        "open"
-        | "close"
-        | "exec"
-        | "prepare"
-        | "serialize"
-        | "deserialize"
-        | "function"
-        | "aggregate"
-        | "enableDefensive"
-        | "setAuthorizer"
-        | "createTagStore"
-        | "createSession"
-        | "applyChangeset"
-        | "enableLoadExtension"
-        | "loadExtension"
-        | "location"
-        | "__perry_dispose__"
-        | "@@__perry_wk_dispose" => {
-            extern "C" {
-                fn js_class_method_bind(
-                    instance: f64,
-                    method_name_ptr: *const u8,
-                    method_name_len: usize,
-                ) -> f64;
-            }
-            let instance = js_nanbox_pointer(handle);
-            Some(js_class_method_bind(
-                instance,
-                property_name.as_ptr(),
-                property_name.len(),
-            ))
-        }
-        _ => None,
+        _ => Some(bind_static_handle_method(
+            handle,
+            database_method_name_static(property_name)?,
+        )),
     }
 }
 
@@ -191,21 +236,10 @@ pub unsafe fn dispatch_node_sqlite_tag_store_property(
         "capacity" => Some(js_node_sqlite_sql_tag_store_capacity(handle)),
         "db" => Some(js_nanbox_pointer(js_node_sqlite_sql_tag_store_db(handle))),
         "constructor" => Some(sql_tag_store_constructor_value()),
-        "run" | "get" | "all" | "iterate" | "clear" => {
-            extern "C" {
-                fn js_class_method_bind(
-                    instance: f64,
-                    method_name_ptr: *const u8,
-                    method_name_len: usize,
-                ) -> f64;
-            }
-            Some(js_class_method_bind(
-                js_nanbox_pointer(handle),
-                property_name.as_ptr(),
-                property_name.len(),
-            ))
-        }
-        _ => None,
+        _ => Some(bind_static_handle_method(
+            handle,
+            tag_store_method_name_static(property_name)?,
+        )),
     }
 }
 
@@ -243,24 +277,10 @@ pub unsafe fn dispatch_node_sqlite_session_property(
     if js_node_sqlite_is_session_handle(handle) == 0 {
         return None;
     }
-    match property_name {
-        "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose" => {
-            extern "C" {
-                fn js_class_method_bind(
-                    instance: f64,
-                    method_name_ptr: *const u8,
-                    method_name_len: usize,
-                ) -> f64;
-            }
-            let instance = js_nanbox_pointer(handle);
-            Some(js_class_method_bind(
-                instance,
-                property_name.as_ptr(),
-                property_name.len(),
-            ))
-        }
-        _ => None,
-    }
+    Some(bind_static_handle_method(
+        handle,
+        session_method_name_static(property_name)?,
+    ))
 }
 
 pub(crate) unsafe fn packed_args_array(args: &[f64]) -> *mut ArrayHeader {
@@ -338,29 +358,10 @@ pub unsafe fn dispatch_node_sqlite_statement_property(
         "expandedSQL" => Some(f64_from_jsvalue(JSValue::string_ptr(
             js_node_sqlite_statement_sync_expanded_sql(handle),
         ))),
-        "run"
-        | "get"
-        | "all"
-        | "iterate"
-        | "columns"
-        | "setReadBigInts"
-        | "setReturnArrays"
-        | "setAllowBareNamedParameters"
-        | "setAllowUnknownNamedParameters" => {
-            extern "C" {
-                fn js_class_method_bind(
-                    instance: f64,
-                    method_name_ptr: *const u8,
-                    method_name_len: usize,
-                ) -> f64;
-            }
-            Some(js_class_method_bind(
-                js_nanbox_pointer(handle),
-                property_name.as_ptr(),
-                property_name.len(),
-            ))
-        }
-        _ => None,
+        _ => Some(bind_static_handle_method(
+            handle,
+            statement_method_name_static(property_name)?,
+        )),
     }
 }
 
@@ -464,5 +465,84 @@ pub unsafe extern "C" fn js_node_sqlite_is_session_handle(handle: Handle) -> i32
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod static_method_name_tests {
+    use super::*;
+
+    fn assert_static_lookup(lookup: fn(&str) -> Option<&'static [u8]>, names: &[&str]) {
+        for name in names {
+            let owned = (*name).to_owned();
+            let found = lookup(&owned).expect("known method must resolve");
+            assert_eq!(found, name.as_bytes());
+            assert_ne!(
+                found.as_ptr(),
+                owned.as_ptr(),
+                "lookup borrowed the forwarded property name for {name}"
+            );
+            assert_eq!(
+                found.as_ptr(),
+                lookup(name).unwrap().as_ptr(),
+                "lookup must always return the same static literal for {name}"
+            );
+        }
+        assert!(lookup("notASqliteMethod").is_none());
+    }
+
+    #[test]
+    fn sqlite_method_name_lookups_return_static_literals() {
+        assert_static_lookup(
+            database_method_name_static,
+            &[
+                "open",
+                "close",
+                "exec",
+                "prepare",
+                "serialize",
+                "deserialize",
+                "function",
+                "aggregate",
+                "enableDefensive",
+                "setAuthorizer",
+                "createTagStore",
+                "createSession",
+                "applyChangeset",
+                "enableLoadExtension",
+                "loadExtension",
+                "location",
+                "__perry_dispose__",
+                "@@__perry_wk_dispose",
+            ],
+        );
+        assert_static_lookup(
+            tag_store_method_name_static,
+            &["run", "get", "all", "iterate", "clear"],
+        );
+        assert_static_lookup(
+            session_method_name_static,
+            &[
+                "changeset",
+                "patchset",
+                "close",
+                "__perry_dispose__",
+                "@@__perry_wk_dispose",
+            ],
+        );
+        assert_static_lookup(
+            statement_method_name_static,
+            &[
+                "run",
+                "get",
+                "all",
+                "iterate",
+                "columns",
+                "setReadBigInts",
+                "setReturnArrays",
+                "setAllowBareNamedParameters",
+                "setAllowUnknownNamedParameters",
+            ],
+        );
     }
 }

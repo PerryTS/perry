@@ -1,5 +1,5 @@
-//! A bound TIMER-handle / TextDecoder / TextEncoder method closure must not
-//! capture a pointer into the key string.
+//! A bound TIMER-handle / TextDecoder / TextEncoder / primitive-receiver method
+//! closure must not capture a pointer into the key string.
 //!
 //! `js_class_method_bind` stores the method-name POINTER in the closure
 //! (capture 1) and `dispatch_bound_method` re-reads it at CALL time. Its
@@ -34,6 +34,9 @@
 //!   entry point, not a redundant copy.
 //! * `get_field_by_name.rs` — a third copy of the same timer block. Fixed
 //!   defensively; nothing guarantees it stays unreachable across refactors.
+//! * `get_field_by_name.rs`'s primitive-number receiver — `(5).toString` and
+//!   the inherited Object prototype methods used the computed key's movable
+//!   interior directly (#8178).
 //!
 //! ## Why these assert IDENTITY and not bytes
 //!
@@ -235,6 +238,23 @@ fn a_bound_text_encoder_method_never_captures_the_key_strings_interior() {
     }
 }
 
+/// ★ #8178's runtime regression: the helper shared by both primitive-number
+/// receiver guards must capture the static spelling, not the computed heap
+/// key's interior.
+#[test]
+fn a_bound_primitive_method_never_captures_the_key_strings_interior() {
+    let _guard = GcTestIsolationGuard::new();
+    unsafe {
+        let (key, key_interior) = heap_key("toString");
+        let key_bytes = std::slice::from_raw_parts(key_interior, (*key).byte_len as usize);
+        let bound = crate::object::bind_primitive_proto_method_static(5.0, key_bytes)
+            .expect("toString is a primitive prototype method");
+        let expected = crate::object::primitive_proto_method_name_static(b"toString")
+            .expect("toString is a primitive prototype method");
+        assert_names_the_literal(bound, expected, key_interior, "(5).toString");
+    }
+}
+
 /// The lookups must not simply echo their argument — a `|k| Some(k)` that
 /// type-checked would pass every identity assertion above while still handing
 /// back the caller's storage.
@@ -284,4 +304,28 @@ fn the_static_name_lookups_do_not_borrow_their_argument() {
             "every pre-#8133 timer-handle method must still resolve"
         );
     }
+
+    let owned = String::from("propertyIsEnumerable");
+    let found = crate::object::primitive_proto_method_name_static(owned.as_bytes())
+        .expect("propertyIsEnumerable is a primitive prototype method");
+    assert_ne!(
+        found.as_ptr(),
+        owned.as_ptr(),
+        "the primitive lookup must answer a literal, not borrow its argument"
+    );
+    for name in [
+        &b"toString"[..],
+        b"valueOf",
+        b"hasOwnProperty",
+        b"isPrototypeOf",
+        b"propertyIsEnumerable",
+        b"toLocaleString",
+    ] {
+        assert_eq!(
+            crate::object::primitive_proto_method_name_static(name),
+            Some(name),
+            "every primitive prototype method must still resolve"
+        );
+    }
+    assert!(crate::object::primitive_proto_method_name_static(b"notAPrototypeMethod").is_none());
 }

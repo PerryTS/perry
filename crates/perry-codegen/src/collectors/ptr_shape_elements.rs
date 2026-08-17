@@ -163,6 +163,10 @@ pub(crate) struct ElementShapeFacts {
     pushed: HashMap<u32, (u32, String)>,
     /// Element-read local -> (array root it was read from, element class).
     element_reads: HashMap<u32, (u32, String)>,
+    /// Inline array-callback element parameter -> (array root, element class,
+    /// callback FuncId). The closure expression is used directly at the
+    /// admitted iterator site, so this records its sole argument route.
+    callback_params: HashMap<u32, (u32, String, u32)>,
 }
 
 impl ElementShapeFacts {
@@ -180,6 +184,7 @@ impl ElementShapeFacts {
             && self.array_roots.is_empty()
             && self.pushed.is_empty()
             && self.element_reads.is_empty()
+            && self.callback_params.is_empty()
     }
 
     /// Is `value_local`'s push into `array_local` covered by a proven array,
@@ -201,7 +206,17 @@ impl ElementShapeFacts {
     /// Group integrity: `ptr_shape.rs` promotes all of these or none of them.
     pub(crate) fn group_members(&self) -> HashMap<u32, Vec<u32>> {
         let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
-        for (id, (root, _)) in self.pushed.iter().chain(self.element_reads.iter()) {
+        for (id, root) in self
+            .pushed
+            .iter()
+            .chain(self.element_reads.iter())
+            .map(|(id, (root, _))| (id, root))
+            .chain(
+                self.callback_params
+                    .iter()
+                    .map(|(id, (root, _, _))| (id, root)),
+            )
+        {
             out.entry(*root).or_default().push(*id);
         }
         out
@@ -220,6 +235,7 @@ impl ElementShapeFacts {
             .get(&local)
             .or_else(|| self.element_reads.get(&local))
             .map(|(root, _)| *root)
+            .or_else(|| self.callback_params.get(&local).map(|(root, _, _)| *root))
     }
 
     /// The proven element class of array root `root`.
@@ -232,6 +248,24 @@ impl ElementShapeFacts {
     pub(crate) fn proven_array_root(&self, id: u32) -> Option<u32> {
         let root = self.array_roots.get(&id)?;
         self.arrays.contains_key(root).then_some(*root)
+    }
+
+    /// Callback element parameters licensed by this region, paired with the
+    /// closure body that owns them. Callers still intersect these sites with
+    /// the full Ptr<Shape> containment/use proof.
+    pub(crate) fn callback_param_sites(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.callback_params
+            .iter()
+            .map(|(param, (_, _, func_id))| (*func_id, *param))
+    }
+
+    /// Callback element-parameter seeds for the enclosing region's complete
+    /// Ptr<Shape> proof. These are not independently sufficient facts: the
+    /// caller must still validate the parameter's complete use graph.
+    pub(crate) fn callback_param_seeds(&self) -> impl Iterator<Item = (u32, &str)> + '_ {
+        self.callback_params
+            .iter()
+            .map(|(param, (_, class_name, _))| (*param, class_name.as_str()))
     }
 }
 
@@ -327,6 +361,7 @@ pub(crate) fn collect_element_shape_facts(
         disqualified: HashSet::new(),
         pushes: HashMap::new(),
         reads: Vec::new(),
+        callbacks: Vec::new(),
         idx_writes: HashMap::new(),
         bounded: Vec::new(),
         in_closure: false,
@@ -336,6 +371,7 @@ pub(crate) fn collect_element_shape_facts(
         mut disqualified,
         pushes,
         reads,
+        callbacks,
         idx_writes,
         ..
     } = walk;
@@ -447,11 +483,34 @@ pub(crate) fn collect_element_shape_facts(
         element_reads.insert(read.local, (read.root, class_name.clone()));
     }
 
+    // The callback parameter has the same provenance as an admitted indexed
+    // read, but its binding is a closure parameter rather than a `Let` in this
+    // region. Preserve the identical precise-root requirement: a declared
+    // scalar parameter would not receive a shadow slot while a moving minor
+    // can relocate the object during the callback.
+    let mut callback_params: HashMap<u32, (u32, String, u32)> = HashMap::new();
+    for callback in callbacks {
+        let Some(class_name) = arrays.get(&callback.root) else {
+            continue;
+        };
+        if boxed_vars.contains(&callback.param)
+            || module_globals.contains_key(&callback.param)
+            || is_definitely_non_pointer_type(&callback.param_ty)
+        {
+            continue;
+        }
+        callback_params.insert(
+            callback.param,
+            (callback.root, class_name.clone(), callback.func_id),
+        );
+    }
+
     ElementShapeFacts {
         arrays,
         array_roots,
         pushed,
         element_reads,
+        callback_params,
     }
 }
 
@@ -495,12 +554,20 @@ struct ReadSite {
     local: u32,
 }
 
+struct CallbackReadSite {
+    root: u32,
+    func_id: u32,
+    param: u32,
+    param_ty: Type,
+}
+
 struct ArrayWalk<'a> {
     roots: &'a HashMap<u32, u32>,
     alias_edges: &'a [(u32, u32)],
     disqualified: HashSet<u32>,
     pushes: HashMap<u32, Vec<PushValue>>,
     reads: Vec<ReadSite>,
+    callbacks: Vec<CallbackReadSite>,
     /// local id -> number of writes (`Let` / `LocalSet` / `Update`) anywhere
     /// in the region, closures included.
     idx_writes: HashMap<u32, u32>,
@@ -823,6 +890,36 @@ impl<'a> ArrayWalk<'a> {
 
     fn walk_expr(&mut self, e: &Expr) {
         match e {
+            // An inline callback is a closed, single-use argument route: the
+            // runtime passes the element at parameter 0 (or parameter 1 for
+            // reduce). Record that parameter as an element-read candidate and
+            // audit the closure body with the same escape walk as every other
+            // candidate. Non-inline callbacks remain opaque escapes.
+            Expr::ArrayForEach { array, callback } | Expr::ArrayMap { array, callback } => {
+                if !self.walk_inline_array_callback(array, callback, 0) {
+                    self.walk_expr(array);
+                    self.walk_expr(callback);
+                }
+            }
+            Expr::ArrayReduce {
+                array,
+                callback,
+                initial,
+            }
+            | Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial,
+            } => {
+                let admitted = self.walk_inline_array_callback(array, callback, 1);
+                if let Some(initial) = initial {
+                    self.walk_expr(initial);
+                }
+                if !admitted {
+                    self.walk_expr(array);
+                    self.walk_expr(callback);
+                }
+            }
             // `A.length` — the only property read admitted on the array.
             Expr::PropertyGet {
                 object, property, ..
@@ -977,6 +1074,61 @@ impl<'a> ArrayWalk<'a> {
                 perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
             }
         }
+    }
+
+    fn walk_inline_array_callback(
+        &mut self,
+        array: &Expr,
+        callback: &Expr,
+        element_param_index: usize,
+    ) -> bool {
+        let Expr::LocalGet(array_id) = array else {
+            return false;
+        };
+        let Some(root) = self.root_of(*array_id) else {
+            return false;
+        };
+        let Expr::Closure {
+            func_id,
+            params,
+            is_arrow,
+            is_async,
+            is_generator,
+            ..
+        } = callback
+        else {
+            self.disqualified.insert(root);
+            return false;
+        };
+        let Some(param) = params.get(element_param_index) else {
+            self.disqualified.insert(root);
+            return false;
+        };
+        // Array callbacks also receive the source array as their final
+        // argument: `(element, index, array)` or
+        // `(accumulator, element, index, array)`. Until that alias is tracked,
+        // admitting a declared source-array parameter would let the callback
+        // mutate the array behind this proof's back.
+        let max_params_without_array_alias = element_param_index + 2;
+        if !*is_arrow
+            || *is_async
+            || *is_generator
+            || param.is_rest
+            || params.len() > max_params_without_array_alias
+            || params.iter().any(|p| p.arguments_object.is_some())
+        {
+            self.disqualified.insert(root);
+            return false;
+        }
+
+        self.callbacks.push(CallbackReadSite {
+            root,
+            func_id: *func_id,
+            param: param.id,
+            param_ty: param.ty.clone(),
+        });
+        self.walk_expr(callback);
+        true
     }
 }
 

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2018 entries across 123 modules
+// Coverage: 2019 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2416,6 +2416,9 @@ declare module "perf_hooks" {
   export class PerformanceResourceTiming { [key: string]: any; }
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export const performance: any;
   /** stdlib */

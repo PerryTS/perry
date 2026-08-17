@@ -802,7 +802,7 @@ fn extract_hrtime_prior(value: f64) -> (i64, i64) {
 
 // `process` EventEmitter surface lives in the `os_process_emitter`
 // submodule; split out to keep this file under the 2000-line gate.
-mod os_process_emitter;
+pub(crate) mod os_process_emitter;
 pub use os_process_emitter::*;
 
 // `process.chdir()` + its Node-shaped error live in the `chdir` submodule

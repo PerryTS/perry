@@ -23,61 +23,74 @@ use super::{
     undefined, TlsSocketCommand, TAG_UNDEFINED_BITS,
 };
 
-fn tls_server_method_name(method: &str) -> bool {
-    matches!(
-        method,
-        "listen"
-            | "close"
-            | "address"
-            | "on"
-            | "addListener"
-            | "once"
-            | "off"
-            | "removeListener"
-            | "removeAllListeners"
-            | "listenerCount"
-            | "eventNames"
-            | "setSecureContext"
-            | "getTicketKeys"
-            | "setTicketKeys"
-            | "ref"
-            | "unref"
-    )
+fn tls_server_method_name_static(method: &str) -> Option<&'static [u8]> {
+    match method {
+        "listen" => Some(b"listen"),
+        "close" => Some(b"close"),
+        "address" => Some(b"address"),
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "off" => Some(b"off"),
+        "removeListener" => Some(b"removeListener"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
+        "listenerCount" => Some(b"listenerCount"),
+        "eventNames" => Some(b"eventNames"),
+        "setSecureContext" => Some(b"setSecureContext"),
+        "getTicketKeys" => Some(b"getTicketKeys"),
+        "setTicketKeys" => Some(b"setTicketKeys"),
+        "ref" => Some(b"ref"),
+        "unref" => Some(b"unref"),
+        _ => None,
+    }
 }
 
-fn tls_socket_introspection_method_name(method: &str) -> bool {
-    matches!(
-        method,
-        "getProtocol"
-            | "getCipher"
-            | "getPeerCertificate"
-            | "getCertificate"
-            | "getSession"
-            | "isSessionReused"
-            | "exportKeyingMaterial"
-            | "setMaxSendFragment"
-            | "ref"
-            | "unref"
-    )
+fn tls_socket_introspection_method_name_static(method: &str) -> Option<&'static [u8]> {
+    match method {
+        "getProtocol" => Some(b"getProtocol"),
+        "getCipher" => Some(b"getCipher"),
+        "getPeerCertificate" => Some(b"getPeerCertificate"),
+        "getCertificate" => Some(b"getCertificate"),
+        "getSession" => Some(b"getSession"),
+        "isSessionReused" => Some(b"isSessionReused"),
+        "exportKeyingMaterial" => Some(b"exportKeyingMaterial"),
+        "setMaxSendFragment" => Some(b"setMaxSendFragment"),
+        "ref" => Some(b"ref"),
+        "unref" => Some(b"unref"),
+        _ => None,
+    }
 }
 
-fn tls_socket_server_method_name(method: &str) -> bool {
-    tls_socket_introspection_method_name(method)
-        || matches!(method, |"write"| "end"
-            | "destroy"
-            | "on"
-            | "addListener"
-            | "once"
-            | "off"
-            | "removeListener"
-            | "removeAllListeners"
-            | "listenerCount"
-            | "eventNames")
+fn tls_socket_server_method_name_static(method: &str) -> Option<&'static [u8]> {
+    tls_socket_introspection_method_name_static(method).or_else(|| match method {
+        "write" => Some(b"write"),
+        "end" => Some(b"end"),
+        "destroy" => Some(b"destroy"),
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "off" => Some(b"off"),
+        "removeListener" => Some(b"removeListener"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
+        "listenerCount" => Some(b"listenerCount"),
+        "eventNames" => Some(b"eventNames"),
+        _ => None,
+    })
+}
+
+/// `js_class_method_bind` retains the name pointer in the closure, so make a
+/// non-static forwarded property slice impossible to pass accidentally.
+unsafe fn bind_static_handle_method(handle: i64, method: &'static [u8]) -> f64 {
+    perry_runtime::object::js_class_method_bind(
+        raw_handle_value(handle),
+        method.as_ptr(),
+        method.len(),
+    )
 }
 
 pub fn should_dispatch_tls_handle(handle: i64, method: &str) -> bool {
     if is_tls_server_handle(handle) {
-        return tls_server_method_name(method);
+        return tls_server_method_name_static(method).is_some();
     }
     sockets()
         .lock()
@@ -85,9 +98,9 @@ pub fn should_dispatch_tls_handle(handle: i64, method: &str) -> bool {
         .get(&handle)
         .map(|socket| {
             if socket.server_side {
-                tls_socket_server_method_name(method)
+                tls_socket_server_method_name_static(method).is_some()
             } else {
-                tls_socket_introspection_method_name(method)
+                tls_socket_introspection_method_name_static(method).is_some()
             }
         })
         .unwrap_or(false)
@@ -274,16 +287,10 @@ pub unsafe fn dispatch_tls_property(handle: i64, property: &str) -> Option<f64> 
                     .unwrap_or(false);
                 return Some(f64::from_bits(JSValue::bool(value).bits()));
             }
-            "listen" | "close" | "address" | "on" | "addListener" | "once" | "off"
-            | "removeListener" | "removeAllListeners" | "listenerCount" | "eventNames"
-            | "setSecureContext" | "getTicketKeys" | "setTicketKeys" | "ref" | "unref" => {
-                return Some(perry_runtime::object::js_class_method_bind(
-                    raw_handle_value(handle),
-                    property.as_ptr(),
-                    property.len(),
-                ));
-            }
             _ => {}
+        }
+        if let Some(method) = tls_server_method_name_static(property) {
+            return Some(bind_static_handle_method(handle, method));
         }
     }
     if is_tls_socket_handle(handle) {
@@ -303,27 +310,104 @@ pub unsafe fn dispatch_tls_property(handle: i64, property: &str) -> Option<f64> 
             }
             "servername" => return Some(nanbox_str("localhost")),
             "alpnProtocol" => return Some(f64::from_bits(perry_runtime::JSValue::null().bits())),
-            _ if sockets()
-                .lock()
-                .unwrap()
-                .get(&handle)
-                .map(|socket| {
-                    if socket.server_side {
-                        tls_socket_server_method_name(property)
-                    } else {
-                        tls_socket_introspection_method_name(property)
-                    }
-                })
-                .unwrap_or(false) =>
-            {
-                return Some(perry_runtime::object::js_class_method_bind(
-                    raw_handle_value(handle),
-                    property.as_ptr(),
-                    property.len(),
-                ));
-            }
             _ => {}
+        }
+        let method = sockets().lock().unwrap().get(&handle).and_then(|socket| {
+            if socket.server_side {
+                tls_socket_server_method_name_static(property)
+            } else {
+                tls_socket_introspection_method_name_static(property)
+            }
+        });
+        if let Some(method) = method {
+            return Some(bind_static_handle_method(handle, method));
         }
     }
     None
+}
+
+#[cfg(test)]
+mod static_method_name_tests {
+    use super::*;
+
+    fn assert_static_lookup(lookup: fn(&str) -> Option<&'static [u8]>, names: &[&str]) {
+        for name in names {
+            let owned = (*name).to_owned();
+            let found = lookup(&owned).expect("known method must resolve");
+            assert_eq!(found, name.as_bytes());
+            assert_ne!(
+                found.as_ptr(),
+                owned.as_ptr(),
+                "lookup borrowed the forwarded property name for {name}"
+            );
+            assert_eq!(found.as_ptr(), lookup(name).unwrap().as_ptr());
+        }
+        assert!(lookup("notATlsMethod").is_none());
+    }
+
+    #[test]
+    fn tls_method_name_lookups_return_static_literals() {
+        assert_static_lookup(
+            tls_server_method_name_static,
+            &[
+                "listen",
+                "close",
+                "address",
+                "on",
+                "addListener",
+                "once",
+                "off",
+                "removeListener",
+                "removeAllListeners",
+                "listenerCount",
+                "eventNames",
+                "setSecureContext",
+                "getTicketKeys",
+                "setTicketKeys",
+                "ref",
+                "unref",
+            ],
+        );
+        assert_static_lookup(
+            tls_socket_introspection_method_name_static,
+            &[
+                "getProtocol",
+                "getCipher",
+                "getPeerCertificate",
+                "getCertificate",
+                "getSession",
+                "isSessionReused",
+                "exportKeyingMaterial",
+                "setMaxSendFragment",
+                "ref",
+                "unref",
+            ],
+        );
+        assert_static_lookup(
+            tls_socket_server_method_name_static,
+            &[
+                "getProtocol",
+                "getCipher",
+                "getPeerCertificate",
+                "getCertificate",
+                "getSession",
+                "isSessionReused",
+                "exportKeyingMaterial",
+                "setMaxSendFragment",
+                "ref",
+                "unref",
+                "write",
+                "end",
+                "destroy",
+                "on",
+                "addListener",
+                "once",
+                "off",
+                "removeListener",
+                "removeAllListeners",
+                "listenerCount",
+                "eventNames",
+            ],
+        );
+    }
 }

@@ -54,7 +54,7 @@ pub(super) fn run_native_stack_scan() {
     // (highest address), and pthread_get_stacksize_np gives the total size.
     // The stack grows downward, so valid range is [top - size, top].
     #[cfg(target_os = "macos")]
-    let (stack_lo, stack_hi) = {
+    let (_stack_lo, stack_hi) = {
         let top = unsafe { libc::pthread_get_stackaddr_np(libc::pthread_self()) } as usize;
         let size = unsafe { libc::pthread_get_stacksize_np(libc::pthread_self()) } as usize;
         (top - size, top)
@@ -244,8 +244,7 @@ fn walk_frame_pointers() -> Vec<FrameInfo> {
         fp = std::ptr::addr_of!(marker) as usize;
     }
 
-    let mut prev_fp: usize = 0;
-    let mut return_addr: usize = 0;
+    let return_addr: usize;
     let mut depth = 0;
 
     while fp != 0 && depth < 64 {
@@ -270,8 +269,6 @@ fn walk_frame_pointers() -> Vec<FrameInfo> {
             size: frame_size,
             return_addr: saved_lr,
         });
-
-        prev_fp = fp;
         fp = saved_fp;
         depth += 1;
     }

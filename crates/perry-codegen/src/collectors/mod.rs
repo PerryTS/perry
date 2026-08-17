@@ -36,6 +36,7 @@ mod proven_this;
 mod proven_this_routing_tests;
 mod ptr_numarray;
 mod ptr_shape;
+mod ptr_shape_callbacks;
 mod ptr_shape_elements;
 mod ptr_shape_report;
 mod ptr_shape_returns;
@@ -86,6 +87,7 @@ pub(crate) use proven_this::{
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
+pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
