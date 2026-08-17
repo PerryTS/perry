@@ -284,6 +284,7 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
                 property: "count".to_string(),
                 op: BinaryOp::Add,
                 prefix: false,
+                strict: true,
             })),
         ],
         Vec::new(),

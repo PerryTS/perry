@@ -190,6 +190,7 @@ pub enum Expr {
         property: String,
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
+        strict: bool,
     },
 
     // Array/index access
@@ -208,6 +209,7 @@ pub enum Expr {
         index: Box<Expr>,
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
+        strict: bool,
     },
 
     // Object literal

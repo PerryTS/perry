@@ -872,6 +872,7 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
                     UpdateOp::Decrement => BinaryOp::Sub,
                 },
                 prefix: *prefix,
+                strict: false,
             };
             return;
         }

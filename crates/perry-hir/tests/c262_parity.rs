@@ -589,3 +589,36 @@ fn logical_property_assignment_short_circuits_the_store_4586() {
         );
     }
 }
+
+#[test]
+fn member_updates_preserve_script_strictness_5902() {
+    let module = lower_js_src(
+        r#"
+        var object = { named: 1, computed: 2 };
+        function sloppy() {
+            object.named++;
+            --object["computed"];
+        }
+        function strict() {
+            "use strict";
+            object.named++;
+            --object["computed"];
+        }
+        "#,
+    );
+
+    let update_strictness = |name: &str| {
+        function(&module, name)
+            .body
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Expr(Expr::PropertyUpdate { strict, .. })
+                | Stmt::Expr(Expr::IndexUpdate { strict, .. }) => Some(*strict),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(update_strictness("sloppy"), vec![false, false]);
+    assert_eq!(update_strictness("strict"), vec![true, true]);
+}

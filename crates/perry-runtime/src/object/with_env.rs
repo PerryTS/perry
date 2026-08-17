@@ -98,12 +98,10 @@ pub extern "C" fn js_with_set_binding(
     strict: i32,
 ) -> f64 {
     let coerced = to_object_bindings(bindings);
-    let ptr = object_ptr(coerced);
     if strict != 0 && !has_property(coerced, key) {
         crate::error::js_throw_reference_error_unresolvable_assignment(key_as_value(key));
     }
-    js_object_set_field_by_name(ptr, key, value);
-    value
+    crate::proxy::js_put_value_set_ic_miss(coerced, key, value, strict, std::ptr::null_mut())
 }
 
 #[no_mangle]

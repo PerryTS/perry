@@ -55,6 +55,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             property,
             op,
             prefix,
+            strict,
         } => {
             // Scalar replacement fast path: load → fadd/fsub 1.0 → store
             // on the field's alloca, no heap traffic.
@@ -187,13 +188,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // #7628's scope note: the same read-modify-write skeleton as
             // `Expr::IndexUpdate`, and the same repair — with one extra shape
-            // on top. `obj_handle` is a RAW `i64` derived from the receiver
-            // before `js_object_get_field_by_name_f64` (a getter) and
-            // `js_to_numeric` (a `valueOf`), and re-read from it afterwards by
-            // `js_object_set_field_by_name`. That is the #7280 taxonomy's case
-            // (a): a pointer already unboxed to raw `i64` cannot be repaired by
-            // re-reading a slot, so the fix is to root the BOXED receiver and
-            // re-derive the handle below the window, not to root the handle.
+            // on top. The read derives a RAW `i64` handle before
+            // `js_object_get_field_by_name_f64` (a getter) and `js_to_numeric`
+            // (a `valueOf`), while the write consumes the boxed receiver again
+            // through strict-aware `js_put_value_set`. Root the BOXED receiver
+            // and re-read it below the collection window.
             //
             // `key_handle` is the same shape and needs no slot: it is derived
             // from a `__perry_init_strings_*` handle global, which is a
@@ -209,6 +208,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let result_may_be_heap =
                 !crate::type_analysis::is_provably_not_bigint(ctx, &field_read);
+            let strict_i32 = if *strict { "1" } else { "0" };
             rooting::with_rooted_group(ctx, 1, |ctx, group| {
                 let obj = group.lower(ctx, object, true)?;
                 let derive_handles = |ctx: &mut FnCtx<'_>, obj_box: &str| {
@@ -248,11 +248,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     group.adopt_emitted(ctx, Repr::Boxed, &new, result_may_be_heap && *prefix);
                 {
                     let obj_box = group.reread(ctx, obj)?;
-                    let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
+                    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
                     let new_arg = group.reread_emitted(ctx, new_root);
-                    ctx.block().call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new_arg)],
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_put_value_set",
+                        &[
+                            (DOUBLE, &obj_box),
+                            (DOUBLE, &key_box),
+                            (DOUBLE, &new_arg),
+                            (DOUBLE, &obj_box),
+                            (I32, strict_i32),
+                        ],
                     );
                 }
                 Ok(if *prefix {
@@ -268,17 +275,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Issue #957: lodash's `countBy` uses `++result[key]` which previously
         // bailed `expression IndexUpdate not yet supported` and stubbed the
         // entire module, leaving `import _ from "lodash"` resolving to
-        // undefined. Lower as a tag-aware read+modify+write through the
-        // `js_dyn_index_get` / `js_dyn_index_set` runtime helpers — they
-        // dispatch by gc_type at runtime, so the same emission works for
-        // arrays, plain objects, and TypedArrays without static type
-        // knowledge. `object` and `index` lower once into SSA registers so
-        // side effects are not re-evaluated.
+        // undefined. Lower as a tag-aware read through `js_dyn_index_get`, then
+        // write through strict-aware `js_put_value_set`; both work for arrays,
+        // plain objects, and TypedArrays without static type knowledge.
+        // `object` and `index` lower once into SSA registers so side effects are
+        // not re-evaluated.
         Expr::IndexUpdate {
             object,
             index,
             op,
             prefix,
+            strict,
         } => {
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:
@@ -286,7 +293,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //   old     = js_dyn_index_get(obj, idx)   ; a getter / Proxy trap
             //   old_num = js_to_numeric(old)           ; a valueOf
             //   new     = js_numeric_step(old_num, s)  ; allocates only (#7198)
-            //             js_dyn_index_set(obj, idx, new)  ; a setter / Proxy trap
+            //             js_put_value_set(obj, idx, new, obj, strict)
+            //                                                ; a setter / Proxy trap
             //
             // `with_operands_rooted` (#7615 slice 2) re-reads at exactly ONE
             // point, at the end of the operand list. `RootedGroup` (slice 6)
@@ -303,7 +311,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // BigInt element `js_to_numeric` / `js_numeric_step` hand back a
             // heap `BigIntHeader`, and whichever of the two the expression
             // yields — `old_num` for postfix, `new` for prefix — is live across
-            // `js_dyn_index_set`, i.e. across a user setter, as a bare call
+            // `js_put_value_set`, i.e. across a user setter, as a bare call
             // result with no slot for `root_reload` to reload from. `protect`
             // is the element's own non-BigInt proof, so a typed-array `ta[i]++`
             // keeps the IR it had.
@@ -313,6 +321,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let result_may_be_heap =
                 !crate::type_analysis::is_provably_not_bigint(ctx, &element_read);
+            let strict_i32 = if *strict { "1" } else { "0" };
             rooting::with_rooted_group(ctx, 2, |ctx, group| {
                 let obj = group.lower(ctx, object, true)?;
                 let idx = group.lower(ctx, index, true)?;
@@ -346,8 +355,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new_arg = group.reread_emitted(ctx, new_root);
                     ctx.block().call(
                         DOUBLE,
-                        "js_dyn_index_set",
-                        &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new_arg)],
+                        "js_put_value_set",
+                        &[
+                            (DOUBLE, &obj_box),
+                            (DOUBLE, &idx_box),
+                            (DOUBLE, &new_arg),
+                            (DOUBLE, &obj_box),
+                            (I32, strict_i32),
+                        ],
                     );
                 }
                 Ok(if *prefix {

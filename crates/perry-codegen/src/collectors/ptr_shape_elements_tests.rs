@@ -1329,6 +1329,7 @@ fn a_property_update_through_an_element_denies_the_array() {
                 property: "extra".to_string(),
                 op: perry_hir::BinaryOp::Add,
                 prefix: false,
+                strict: true,
             })],
         ),
         bounded_loop(8, 1, vec![let_elem(6, "r", 1, 8), read_x(6)]),

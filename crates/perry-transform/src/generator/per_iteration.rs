@@ -1049,6 +1049,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
                 index: Box::new(Expr::Integer(0)),
                 op,
                 prefix,
+                strict: false,
             };
             return;
         }

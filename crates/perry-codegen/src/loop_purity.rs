@@ -300,6 +300,7 @@ mod allocation_tests {
             index: Box::new(Expr::Integer(0)),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         };
         assert!(may_allocate(&[Stmt::Expr(update)], &[]));
     }

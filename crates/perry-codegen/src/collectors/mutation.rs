@@ -375,6 +375,7 @@ mod tests {
             property: "count".to_string(),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         };
         assert!(expr_has_mutation(&set, 7));
         assert!(expr_has_mutation(&update, 7));

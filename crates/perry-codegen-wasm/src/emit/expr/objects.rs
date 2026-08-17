@@ -211,6 +211,7 @@ impl<'a> FuncEmitCtx<'a> {
                 property,
                 op,
                 prefix,
+                ..
             } => {
                 // obj.prop++ or ++obj.prop
                 self.emit_expr(func, object);
@@ -356,6 +357,7 @@ impl<'a> FuncEmitCtx<'a> {
                 index,
                 op,
                 prefix,
+                ..
             } => {
                 // arr[i]++ / ++arr[i].  Pre-fix this only computed the updated
                 // value and left it on the stack; it never called the indexed

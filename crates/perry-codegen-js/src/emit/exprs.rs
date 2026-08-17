@@ -220,7 +220,13 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::PropertyUpdate { object, property, op, prefix } => {
+            Expr::PropertyUpdate {
+                object,
+                property,
+                op,
+                prefix,
+                ..
+            } => {
                 let op_str = match op {
                     BinaryOp::Add => "++",
                     BinaryOp::Sub => "--",
@@ -252,7 +258,13 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::IndexUpdate { object, index, op, prefix } => {
+            Expr::IndexUpdate {
+                object,
+                index,
+                op,
+                prefix,
+                ..
+            } => {
                 let op_str = match op {
                     BinaryOp::Add => "++",
                     BinaryOp::Sub => "--",

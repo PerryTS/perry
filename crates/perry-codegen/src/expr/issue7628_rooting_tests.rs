@@ -9,24 +9,24 @@
 //! old     = js_dyn_index_get(obj, idx)          ; a getter / Proxy trap
 //! old_num = js_to_numeric(old)                  ; a valueOf
 //! new     = js_numeric_step(old_num, step)
-//!           js_dyn_index_set(obj, idx, new)     ; a setter / Proxy trap
+//!           js_put_value_set(obj, idx, new, obj, strict) ; setter / Proxy trap
 //! ```
 //!
 //! #7628 filed the operand pair as a live #7154: `with_operands_rooted`
-//! re-reads at exactly ONE point, so the registers `js_dyn_index_set` reads
+//! re-reads at exactly ONE point, so the registers `js_put_value_set` reads
 //! were the ones produced above `js_dyn_index_get`. **On the emitted IR that is
 //! not what happens, and the sabotage arm is how that was found rather than
 //! argued.** Collapsing the per-use re-reads back to one — and, for
 //! `PropertyUpdate`, dropping the receiver's root entirely — leaves the emitted
 //! IR *unchanged in the relevant respect*: `root_reload` (#7280) rematerialises
-//! the slot load at each use a collection point can reach, including through
-//! the `ptrtoint` + `and POINTER_MASK` handle derivation:
+//! the slot load at each use a collection point can reach:
 //!
 //! ```llvm
 //!   %r49.rs4p = load ptr addrspace(1), ptr %r29     ; inserted by root_reload
 //!   %r49      = ptrtoint ptr addrspace(1) %r49.rs4p to i64
-//!   %r50      = and i64 %r49, 281474976710655
-//!   call void @js_object_set_field_by_name(i64 %r50, i64 %r53, double %r46)
+//!   %recv     = bitcast i64 %r49 to double
+//!   call double @js_put_value_set(double %recv, double %key, double %new,
+//!                                 double %recv, i32 %strict)
 //! ```
 //!
 //! So the operand half of #7628 is **not a live bug on the default build**, and
@@ -40,7 +40,7 @@
 //! The RESULT. `js_to_numeric` / `js_numeric_step` hand back a heap
 //! `BigIntHeader` for a BigInt element, and whichever of the two the expression
 //! yields — `old_num` for postfix, `new` for prefix — is live across
-//! `js_dyn_index_set`, i.e. across a user setter. It is a bare call result with
+//! `js_put_value_set`, i.e. across a user setter. It is a bare call result with
 //! **no slot**, so `root_reload` has nothing to reload from; that is the
 //! taxonomy's case (d) and the one this fix closes with
 //! `RootedGroup::adopt_emitted`.
@@ -189,20 +189,21 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
             index: Box::new(field_of_o("n")),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         })),
     );
     // The generic arm was reached — without this the rest is vacuous.
     require_call_line(&ir, "js_dyn_index_get");
     assert_operand_reread_below(
         &ir,
-        "js_dyn_index_set",
+        "js_put_value_set",
         0,
         "js_dyn_index_get",
         "the IndexUpdate receiver",
     );
     assert_operand_reread_below(
         &ir,
-        "js_dyn_index_set",
+        "js_put_value_set",
         1,
         "js_dyn_index_get",
         "the IndexUpdate index",
@@ -228,26 +229,27 @@ fn the_emitted_ir_rederives_the_raw_handles_below_the_read() {
             property: "count".to_string(),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         })),
     );
     require_call_line(&ir, "js_object_get_field_by_name_f64");
     assert_operand_reread_below(
         &ir,
-        "js_object_set_field_by_name",
+        "js_put_value_set",
         0,
         "js_object_get_field_by_name_f64",
-        "the PropertyUpdate receiver handle",
+        "the PropertyUpdate receiver",
     );
     assert_operand_reread_below(
         &ir,
-        "js_object_set_field_by_name",
+        "js_put_value_set",
         1,
         "js_object_get_field_by_name_f64",
-        "the PropertyUpdate key handle",
+        "the PropertyUpdate key",
     );
 }
 
-/// The RESULT of `a[i]++` is live across `js_dyn_index_set`, which runs a user
+/// The RESULT of `a[i]++` is live across `js_put_value_set`, which runs a user
 /// setter — so for an element that may be a BigInt it must be re-read below
 /// that call.
 ///
@@ -266,13 +268,14 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             index: Box::new(field_of_o("n")),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         }))),
     );
-    let write = require_call_line(&unproven, "js_dyn_index_set");
+    let write = require_call_line(&unproven, "js_put_value_set");
     let produced = producer_line(&unproven, &returned_register(&unproven));
     assert!(
         produced > write,
-        "a BigInt-capable element's postfix result is live across js_dyn_index_set (a user \
+        "a BigInt-capable element's postfix result is live across js_put_value_set (a user \
          setter) and must be re-read below it — produced at line {produced}, the write is at \
          line {write}.\n{unproven}"
     );
@@ -292,10 +295,11 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
                 index: Box::new(Expr::Number(0.0)),
                 op: BinaryOp::Add,
                 prefix: false,
+                strict: true,
             })),
         ],
     );
-    let typed_write = require_call_line(&typed, "js_dyn_index_set");
+    let typed_write = require_call_line(&typed, "js_put_value_set");
     let typed_produced = producer_line(&typed, &returned_register(&typed));
     assert!(
         typed_produced < typed_write,

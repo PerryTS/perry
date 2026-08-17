@@ -681,6 +681,7 @@ fn tower_route_counts_writes() {
             property: "b".to_string(),
             op: BinaryOp::Add,
             prefix: false,
+            strict: true,
         }),
     ]);
     assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 2);

@@ -170,11 +170,13 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             property,
             op,
             prefix,
+            strict,
         } => Expr::PropertyUpdate {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             op: *op,
             prefix: *prefix,
+            strict: *strict,
         },
 
         // Index access
