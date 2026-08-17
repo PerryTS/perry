@@ -358,6 +358,14 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         candidates.insert(id, class_name);
         element_seeded.insert(id);
     }
+    // #8103: a direct inline array callback's element parameter is the same
+    // provenance route as a licensed indexed read. Unlike every other seed it
+    // is a parameter binding, so the use walk expects zero `Let` sites.
+    let mut callback_seeded: HashSet<u32> = HashSet::new();
+    for (id, class_name) in element_facts.callback_param_seeds() {
+        candidates.insert(id, class_name.to_owned());
+        callback_seeded.insert(id);
+    }
     if candidates.is_empty() {
         return HashMap::new();
     }
@@ -487,7 +495,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             );
             continue;
         }
-        if let_counts.get(id).copied().unwrap_or(0) != 1 {
+        let expected_let_count = if callback_seeded.contains(id) { 0 } else { 1 };
+        if let_counts.get(id).copied().unwrap_or(0) != expected_let_count {
             deny(id, class_name, report::MULTIPLE_LET);
             continue;
         }

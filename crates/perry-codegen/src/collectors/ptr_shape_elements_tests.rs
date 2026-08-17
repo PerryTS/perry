@@ -10,7 +10,7 @@
 use super::*;
 use crate::collectors::PtrShapeLocal;
 use perry_hir::types::Type;
-use perry_hir::{ClassField, CompareOp, Function, Module, UpdateOp};
+use perry_hir::{ClassField, CompareOp, Function, Module, Param, UpdateOp};
 
 // ── Fixture builders ───────────────────────────────────────────────────────
 
@@ -266,6 +266,250 @@ fn promote(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, Pt
         &HashSet::new(),
         &els,
     )
+}
+
+fn callback_param(id: u32, ty: Type) -> Param {
+    Param {
+        id,
+        name: format!("p{id}"),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }
+}
+
+fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
+    Stmt::Expr(Expr::ArrayForEach {
+        array: Box::new(Expr::LocalGet(1)),
+        callback: Box::new(Expr::Closure {
+            func_id,
+            params,
+            return_type: Type::Any,
+            body,
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        }),
+    })
+}
+
+// -- Inline array-callback element route (#8103) ---------------------------
+
+#[test]
+fn inline_array_callback_element_param_is_promoted() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        inline_for_each(
+            99,
+            vec![callback_param(6, Type::Named("C".to_string()))],
+            vec![read_x(6)],
+        ),
+    ];
+
+    let promoted = promote(&stmts, &classes);
+    let callback = promoted
+        .get(&6)
+        .expect("the direct callback element parameter must inherit C's shape");
+    assert_eq!(callback.class_name, "C");
+    assert!(promoted.contains_key(&2), "the element group stays intact");
+}
+
+#[test]
+fn inline_map_element_param_is_promoted() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let Stmt::Expr(Expr::ArrayForEach { array, callback }) = inline_for_each(
+        99,
+        vec![callback_param(6, Type::Named("C".to_string()))],
+        vec![read_x(6)],
+    ) else {
+        unreachable!("inline_for_each fixture shape")
+    };
+    let stmts = vec![
+        let_arr(1, "rows"),
+        push(1, new_c()),
+        Stmt::Expr(Expr::ArrayMap { array, callback }),
+    ];
+
+    assert!(promote(&stmts, &classes).contains_key(&6));
+}
+
+#[test]
+fn inline_reduce_promotes_the_element_not_the_accumulator() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let Stmt::Expr(Expr::ArrayForEach { array, callback }) = inline_for_each(
+        99,
+        vec![
+            callback_param(5, Type::Number),
+            callback_param(6, Type::Named("C".to_string())),
+        ],
+        vec![read_x(6)],
+    ) else {
+        unreachable!("inline_for_each fixture shape")
+    };
+    let stmts = vec![
+        let_arr(1, "rows"),
+        push(1, new_c()),
+        Stmt::Expr(Expr::ArrayReduce {
+            array,
+            callback,
+            initial: Some(Box::new(Expr::Number(0.0))),
+        }),
+    ];
+
+    let promoted = promote(&stmts, &classes);
+    assert!(promoted.contains_key(&6));
+    assert!(
+        !promoted.contains_key(&5),
+        "the accumulator is not the source array's element route"
+    );
+}
+
+#[test]
+fn escaping_array_callback_element_denies_the_whole_group() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        inline_for_each(
+            99,
+            vec![callback_param(6, Type::Named("C".to_string()))],
+            vec![Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::FuncRef(9)),
+                args: vec![Expr::LocalGet(6)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            })],
+        ),
+    ];
+
+    let promoted = promote(&stmts, &classes);
+    assert!(!promoted.contains_key(&6));
+    assert!(
+        !promoted.contains_key(&2),
+        "one escaping callback view can reshape every element"
+    );
+}
+
+#[test]
+fn opaque_array_callback_is_not_an_element_shape_route() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        Stmt::Expr(Expr::ArrayForEach {
+            array: Box::new(Expr::LocalGet(1)),
+            callback: Box::new(Expr::LocalGet(8)),
+        }),
+    ];
+
+    assert!(promote(&stmts, &classes).is_empty());
+}
+
+#[test]
+fn element_returning_array_hof_is_not_a_contained_route() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let Stmt::Expr(Expr::ArrayForEach { array, callback }) = inline_for_each(
+        99,
+        vec![callback_param(6, Type::Named("C".to_string()))],
+        vec![read_x(6)],
+    ) else {
+        unreachable!("inline_for_each fixture shape")
+    };
+    let stmts = vec![
+        let_arr(1, "rows"),
+        push(1, new_c()),
+        Stmt::Expr(Expr::ArrayFilter { array, callback }),
+    ];
+
+    assert!(
+        promote(&stmts, &classes).is_empty(),
+        "filter returns source-element aliases independently of its callback"
+    );
+}
+
+#[test]
+fn source_array_callback_parameter_denies_the_route() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        inline_for_each(
+            99,
+            vec![
+                callback_param(6, Type::Named("C".to_string())),
+                callback_param(7, Type::Number),
+                callback_param(8, Type::Array(Box::new(Type::Named("C".to_string())))),
+            ],
+            vec![read_x(6)],
+        ),
+    ];
+
+    assert!(
+        promote(&stmts, &classes).is_empty(),
+        "the callback's third argument aliases and can mutate the source array"
+    );
+}
+
+#[test]
+fn self_callable_function_expression_denies_the_route() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let mut callback_stmt = inline_for_each(
+        99,
+        vec![callback_param(6, Type::Named("C".to_string()))],
+        vec![read_x(6)],
+    );
+    let Stmt::Expr(Expr::ArrayForEach {
+        callback: callback_expr,
+        ..
+    }) = &mut callback_stmt
+    else {
+        unreachable!("inline_for_each fixture shape")
+    };
+    let Expr::Closure { is_arrow, .. } = callback_expr.as_mut() else {
+        unreachable!("inline_for_each callback shape")
+    };
+    *is_arrow = false;
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        callback_stmt,
+    ];
+
+    assert!(
+        promote(&stmts, &classes).is_empty(),
+        "a named function expression can recursively call itself with arbitrary values"
+    );
 }
 
 // ── The producer half ──────────────────────────────────────────────────────

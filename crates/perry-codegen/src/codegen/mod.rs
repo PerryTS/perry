@@ -1987,6 +1987,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
         module_dispatch: module_dispatch_facts,
+        array_callback_shapes: std::collections::HashMap::new(),
         // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
         // call site AND few total call sites, so small hot callees can earn
         // `inlinehint` while the call-site cap bounds duplication.
@@ -2334,6 +2335,29 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+
+    // #8103: closure bodies are emitted before their enclosing regions. Prove
+    // inline array-callback element shapes module-wide now, while both sides
+    // of the boundary are available, then inject the vetted parameter facts
+    // when each closure is compiled.
+    let mut array_callback_shapes = crate::collectors::collect_array_callback_shapes(
+        hir,
+        &closures,
+        &module_boxed_vars,
+        &module_globals,
+        &module_receiver_types,
+        &class_table,
+        &cross_module.module_dispatch,
+    );
+    // Async/generator transforms clear the flags on the closure expression,
+    // but preserve the original identity in these module sets. Their callback
+    // parameters outlive the synchronous array HOF invocation and therefore
+    // cannot inherit its region-local containment fact.
+    array_callback_shapes.retain(|func_id, _| {
+        !cross_module.async_step_closures.contains(func_id)
+            && !cross_module.local_generator_funcs.contains(func_id)
+    });
+    cross_module.array_callback_shapes = array_callback_shapes;
 
     cross_module.typed_f64_closures.clear();
     cross_module.typed_i32_closures.clear();
