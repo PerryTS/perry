@@ -1256,17 +1256,141 @@ extern "C" fn test_context_todo(_closure: *const ClosureHeader, reason: f64) -> 
     undefined_value()
 }
 
+fn record_test_context_assertion() {
+    CURRENT_ASSERT_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+macro_rules! test_context_assertion3 {
+    ($name:ident, $assertion:path) => {
+        extern "C" fn $name(
+            _closure: *const ClosureHeader,
+            actual: f64,
+            expected: f64,
+            message: f64,
+        ) -> f64 {
+            record_test_context_assertion();
+            $assertion(actual, expected, message)
+        }
+    };
+}
+
+test_context_assertion3!(
+    test_context_assert_deep_equal,
+    crate::object::js_assert_deep_equal
+);
+test_context_assertion3!(
+    test_context_assert_deep_strict_equal,
+    crate::object::js_assert_deep_strict_equal
+);
+test_context_assertion3!(
+    test_context_assert_does_not_match,
+    crate::object::js_assert_does_not_match
+);
+test_context_assertion3!(
+    test_context_assert_does_not_reject,
+    crate::object::js_assert_does_not_reject
+);
+test_context_assertion3!(
+    test_context_assert_does_not_throw,
+    crate::object::js_assert_does_not_throw
+);
+test_context_assertion3!(test_context_assert_equal, crate::object::js_assert_equal);
+test_context_assertion3!(test_context_assert_match, crate::object::js_assert_match);
+test_context_assertion3!(
+    test_context_assert_not_deep_equal,
+    crate::object::js_assert_not_deep_equal
+);
+test_context_assertion3!(
+    test_context_assert_not_strict_equal,
+    crate::object::js_assert_not_strict_equal
+);
+test_context_assertion3!(
+    test_context_assert_rejects,
+    crate::object::js_assert_rejects
+);
+test_context_assertion3!(
+    test_context_assert_strict_equal,
+    crate::object::js_assert_strict_equal
+);
+test_context_assertion3!(test_context_assert_throws, crate::object::js_assert_throws);
+
+extern "C" fn test_context_assert_ok(
+    _closure: *const ClosureHeader,
+    value: f64,
+    message: f64,
+) -> f64 {
+    record_test_context_assertion();
+    crate::object::js_assert_ok(value, message)
+}
+
+extern "C" fn test_context_assert_fail(_closure: *const ClosureHeader, message: f64) -> f64 {
+    record_test_context_assertion();
+    crate::object::js_assert_fail(message)
+}
+
+extern "C" fn test_context_assert_if_error(_closure: *const ClosureHeader, value: f64) -> f64 {
+    record_test_context_assertion();
+    crate::object::js_assert_if_error(value)
+}
+
 fn test_context_value(name: &str) -> f64 {
-    let assert = js_object_alloc(0, 2);
+    let assert = js_object_alloc(0, 17);
+    for (name, func, arity) in [
+        ("deepEqual", test_context_assert_deep_equal as *const u8, 3),
+        (
+            "deepStrictEqual",
+            test_context_assert_deep_strict_equal as *const u8,
+            3,
+        ),
+        (
+            "doesNotMatch",
+            test_context_assert_does_not_match as *const u8,
+            3,
+        ),
+        (
+            "doesNotReject",
+            test_context_assert_does_not_reject as *const u8,
+            3,
+        ),
+        (
+            "doesNotThrow",
+            test_context_assert_does_not_throw as *const u8,
+            3,
+        ),
+        ("equal", test_context_assert_equal as *const u8, 3),
+        ("fail", test_context_assert_fail as *const u8, 1),
+        ("ifError", test_context_assert_if_error as *const u8, 1),
+        ("match", test_context_assert_match as *const u8, 3),
+        (
+            "notDeepEqual",
+            test_context_assert_not_deep_equal as *const u8,
+            3,
+        ),
+        (
+            "notStrictEqual",
+            test_context_assert_not_strict_equal as *const u8,
+            3,
+        ),
+        ("ok", test_context_assert_ok as *const u8, 2),
+        ("rejects", test_context_assert_rejects as *const u8, 3),
+        (
+            "strictEqual",
+            test_context_assert_strict_equal as *const u8,
+            3,
+        ),
+        ("throws", test_context_assert_throws as *const u8, 3),
+    ] {
+        set_field(assert, name, closure_value(func, arity));
+    }
     set_field(
         assert,
         "snapshot",
-        closure_value(assert_snapshot as *const u8, 1),
+        closure_value(assert_snapshot as *const u8, 2),
     );
     set_field(
         assert,
         "fileSnapshot",
-        closure_value(assert_file_snapshot as *const u8, 2),
+        closure_value(assert_file_snapshot as *const u8, 3),
     );
     let ctx = js_object_alloc(0, 8);
     let test_fn = closure_value(thunk_test as *const u8, 3);

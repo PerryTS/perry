@@ -48,8 +48,19 @@ pub(super) extern "C" fn snapshot_set_resolve_snapshot_path(
     undefined_value()
 }
 
-pub(super) extern "C" fn assert_snapshot(_closure: *const ClosureHeader, value: f64) -> f64 {
+fn validate_snapshot_assertion_options(options: f64) {
+    if !is_undefined_value(options) && !is_non_null_object(options) {
+        throw_invalid_arg_type("options", "object", options);
+    }
+}
+
+pub(super) extern "C" fn assert_snapshot(
+    _closure: *const ClosureHeader,
+    value: f64,
+    options: f64,
+) -> f64 {
     CURRENT_ASSERT_COUNT.with(|count| count.set(count.get() + 1));
+    validate_snapshot_assertion_options(options);
     let resolver = SNAPSHOT_RESOLVER.with(|slot| slot.get());
     if !is_callable_value(resolver) {
         throw_error_with_code(
@@ -103,8 +114,10 @@ pub(super) extern "C" fn assert_file_snapshot(
     _closure: *const ClosureHeader,
     value: f64,
     path_value: f64,
+    options: f64,
 ) -> f64 {
     CURRENT_ASSERT_COUNT.with(|count| count.set(count.get() + 1));
+    validate_snapshot_assertion_options(options);
     let Some(path) = value_to_string(path_value) else {
         throw_invalid_arg_type("path", "string", path_value);
     };
