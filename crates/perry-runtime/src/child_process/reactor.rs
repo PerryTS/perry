@@ -25,10 +25,10 @@
 //! GC mutable-root scanner.
 
 use std::collections::HashMap;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::BufRead;
 use std::io::{Read, Write};
-use std::process::{Child, ChildStdin};
+use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -40,8 +40,14 @@ use super::*;
 
 #[cfg(unix)]
 type IpcStream = std::os::unix::net::UnixStream;
-#[cfg(not(unix))]
+#[cfg(windows)]
+type IpcStream = super::ipc_transport::IpcStream;
+#[cfg(not(any(unix, windows)))]
 type IpcStream = ();
+
+type CpReader = Box<dyn Read + Send>;
+type CpWriter = Box<dyn Write + Send>;
+type CpWaiter = Box<dyn FnOnce() -> (Option<i32>, Option<i32>) + Send>;
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -94,7 +100,7 @@ struct LiveChild {
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
     pid: i32,
-    stdin: Option<ChildStdin>,
+    stdin: Option<CpWriter>,
     stdout_open: bool,
     stderr_open: bool,
     /// Hold stdout EOF until stderr EOF when both pipes exist. Node drains
@@ -248,21 +254,9 @@ fn cp_spawn_reader<R: Read + Send + 'static>(handle: u64, mut pipe: R, fd: usize
 }
 
 /// Spawn the waiter thread that reaps `child` and reports its exit status.
-fn cp_spawn_waiter(handle: u64, mut child: Child) {
+fn cp_spawn_waiter(handle: u64, waiter: CpWaiter) {
     std::thread::spawn(move || {
-        let (code, signal) = match child.wait() {
-            Ok(status) => {
-                #[cfg(unix)]
-                let signal = {
-                    use std::os::unix::process::ExitStatusExt;
-                    status.signal()
-                };
-                #[cfg(not(unix))]
-                let signal: Option<i32> = None;
-                (status.code(), signal)
-            }
-            Err(_) => (Some(-1), None),
-        };
+        let (code, signal) = waiter();
         cp_push_event(CpEvent::Exited {
             handle,
             code,
@@ -283,7 +277,7 @@ fn cp_spawn_timeout(handle: u64, timeout: Duration, signal: i32) {
 /// `serialization: 'advanced'` (#2130) the framing is instead a 4-byte
 /// big-endian length prefix followed by that many V8-serialized payload bytes
 /// (Node's `parseChannelMessages` shape).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream, advanced: bool) {
     if advanced {
         cp_spawn_ipc_reader_advanced(handle, sock);
@@ -307,7 +301,7 @@ fn cp_spawn_ipc_reader(handle: u64, sock: IpcStream, advanced: bool) {
 /// [`CpEvent::MessageAdvanced`] per `[u32 BE length][payload]` frame. Robust to
 /// a length field or payload split across socket reads (the
 /// `advanced-serialization-splitted-length-field` case).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn cp_spawn_ipc_reader_advanced(handle: u64, mut sock: IpcStream) {
     std::thread::spawn(move || {
         let mut acc: Vec<u8> = Vec::with_capacity(8192);
@@ -362,15 +356,124 @@ pub(super) fn cp_register_live_child(
     kill_signal: i32,
 ) -> u64 {
     let pid = child.id();
-    cp_set_field(cp, b"pid", pid as f64);
     // Duplicate the process handle BEFORE `child` moves to the waiter thread —
     // the kill paths act on it instead of the recyclable pid.
     #[cfg(windows)]
     let win_proc_handle = cp_win_dup_proc_handle(&child);
 
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-    let stdin_pipe = child.stdin.take();
+    let stdout_pipe = child.stdout.take().map(|pipe| Box::new(pipe) as CpReader);
+    let stderr_pipe = child.stderr.take().map(|pipe| Box::new(pipe) as CpReader);
+    let stdin_pipe = child.stdin.take().map(|pipe| Box::new(pipe) as CpWriter);
+    let waiter: CpWaiter = Box::new(move || match child.wait() {
+        Ok(status) => {
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt;
+                status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal: Option<i32> = None;
+            (status.code(), signal)
+        }
+        Err(_) => (Some(-1), None),
+    });
+    cp_register_live_child_parts(
+        cp,
+        stdout_obj,
+        stderr_obj,
+        stdin_obj,
+        extra_pipes,
+        pid,
+        stdin_pipe,
+        stdout_pipe,
+        stderr_pipe,
+        waiter,
+        ipc,
+        ipc_advanced,
+        timeout,
+        kill_signal,
+        #[cfg(windows)]
+        win_proc_handle,
+    )
+}
+
+#[cfg(windows)]
+pub(super) fn cp_register_windows_live_child(
+    cp: f64,
+    stdout_obj: f64,
+    stderr_obj: f64,
+    stdin_obj: f64,
+    extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    child: super::windows_fork::WindowsForkChild,
+    ipc: IpcStream,
+    ipc_advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
+) -> u64 {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+
+    let super::windows_fork::WindowsForkChild {
+        process,
+        pid,
+        stdin,
+        stdout,
+        stderr,
+    } = child;
+    let win_proc_handle = cp_win_dup_raw_proc_handle(process.as_raw_handle());
+    let waiter: CpWaiter = Box::new(move || {
+        let raw = process.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        if unsafe { WaitForSingleObject(raw, INFINITE) } == u32::MAX {
+            return (Some(-1), None);
+        }
+        let mut code = 0u32;
+        if unsafe { GetExitCodeProcess(raw, &mut code) } == 0 {
+            (Some(-1), None)
+        } else {
+            (Some(code as i32), None)
+        }
+    });
+
+    cp_register_live_child_parts(
+        cp,
+        stdout_obj,
+        stderr_obj,
+        stdin_obj,
+        extra_pipes,
+        pid,
+        stdin.map(|pipe| Box::new(pipe) as CpWriter),
+        stdout.map(|pipe| Box::new(pipe) as CpReader),
+        stderr.map(|pipe| Box::new(pipe) as CpReader),
+        waiter,
+        Some(ipc),
+        ipc_advanced,
+        timeout,
+        kill_signal,
+        win_proc_handle,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cp_register_live_child_parts(
+    cp: f64,
+    stdout_obj: f64,
+    stderr_obj: f64,
+    stdin_obj: f64,
+    extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    pid: u32,
+    stdin_pipe: Option<CpWriter>,
+    stdout_pipe: Option<CpReader>,
+    stderr_pipe: Option<CpReader>,
+    waiter: CpWaiter,
+    ipc: Option<IpcStream>,
+    ipc_advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
+    #[cfg(windows)] win_proc_handle: isize,
+) -> u64 {
+    cp_set_field(cp, b"pid", pid as f64);
     let stdout_open = stdout_pipe.is_some();
     let stderr_open = stderr_pipe.is_some();
 
@@ -386,9 +489,9 @@ pub(super) fn cp_register_live_child(
 
     // For fork, keep a clone of the IPC socket for send/disconnect; the reader
     // thread owns the original.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let ipc_send = ipc.as_ref().and_then(|s| s.try_clone().ok());
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let ipc_send = {
         let _ = &ipc;
         None
@@ -435,11 +538,11 @@ pub(super) fn cp_register_live_child(
     for (fd, _, pipe) in extra_pipes {
         cp_spawn_reader(handle, pipe, fd);
     }
-    cp_spawn_waiter(handle, child);
+    cp_spawn_waiter(handle, waiter);
     if let Some(timeout) = timeout {
         cp_spawn_timeout(handle, timeout, kill_signal);
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         if let Some(sock) = ipc {
             cp_spawn_ipc_reader(handle, sock, ipc_advanced);
@@ -543,13 +646,13 @@ fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
 /// it newline-delimited to the IPC socket. Returns whether the write
 /// succeeded. #1933.
 pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (handle, message);
         return false;
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         // Determine the channel's framing without holding the lock across the
         // (potentially GC-triggering) serialization below.
@@ -599,12 +702,12 @@ pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
 /// appended). Used by the cluster primary's `queryServerReply` (#4962); shares
 /// the live-child lock so it never interleaves with `cp_ipc_send`.
 pub fn cp_ipc_send_raw_json(handle: u64, json: &str) -> bool {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (handle, json);
         return false;
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         use std::io::Write;
         // Match the channel's selected framing. Cluster's query-server reply
@@ -667,19 +770,22 @@ pub fn cp_ipc_send_fd(handle: u64, key_id: u32, payload_fd: std::os::unix::io::R
 /// `child.disconnect()` — shut the IPC socket down (the reader thread then sees
 /// EOF and exits). Returns whether a channel was present. #1933.
 pub(super) fn cp_ipc_disconnect(handle: u64) -> bool {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = handle;
         return false;
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let mut guard = cp_live_lock();
         if let Some(map) = guard.as_mut() {
             if let Some(lc) = map.get_mut(&handle) {
                 if let Some(sock) = lc.ipc_send.take() {
+                    #[cfg(unix)]
                     let _ = sock.shutdown(std::net::Shutdown::Both);
+                    #[cfg(windows)]
+                    let _ = sock.shutdown();
                     return true;
                 }
             }
@@ -1024,7 +1130,20 @@ pub(super) fn cp_exec_async(
             if let Some(e) = stderr_pipe {
                 cp_spawn_reader(handle, e, 2);
             }
-            cp_spawn_waiter(handle, child);
+            let waiter: CpWaiter = Box::new(move || match child.wait() {
+                Ok(status) => {
+                    #[cfg(unix)]
+                    let signal = {
+                        use std::os::unix::process::ExitStatusExt;
+                        status.signal()
+                    };
+                    #[cfg(not(unix))]
+                    let signal: Option<i32> = None;
+                    (status.code(), signal)
+                }
+                Err(_) => (Some(-1), None),
+            });
+            cp_spawn_waiter(handle, waiter);
             if let Some(timeout) = timeout {
                 cp_spawn_timeout(handle, timeout, kill_signal);
             }
@@ -1493,13 +1612,18 @@ pub(super) fn cp_live_stdin_close(handle: u64) {
 #[cfg(windows)]
 fn cp_win_dup_proc_handle(child: &Child) -> isize {
     use std::os::windows::io::AsRawHandle;
+    cp_win_dup_raw_proc_handle(child.as_raw_handle())
+}
+
+#[cfg(windows)]
+fn cp_win_dup_raw_proc_handle(raw: std::os::windows::io::RawHandle) -> isize {
     use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     let mut dup: HANDLE = std::ptr::null_mut();
     let ok = unsafe {
         DuplicateHandle(
             GetCurrentProcess(),
-            child.as_raw_handle() as HANDLE,
+            raw as HANDLE,
             GetCurrentProcess(),
             &mut dup,
             0,

@@ -349,6 +349,8 @@ libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_Foundation",
     # `GetAdaptersAddresses` backs `os.networkInterfaces()` on Windows.
@@ -356,6 +358,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_System_LibraryLoader",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
     # `Win32_System_Threading` powers the Windows arm of `process.kill`
     # (`OpenProcess` / `TerminateProcess` / `GetExitCodeProcess`, mirroring
     # libuv's `uv_kill`) in `src/os/signal.rs`.

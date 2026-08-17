@@ -12,18 +12,23 @@ use crate::closure::{
     js_register_closure_arity, js_register_closure_length, ClosureHeader,
 };
 use crate::string::js_string_from_bytes;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::string::StringHeader;
 use crate::value::{JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{BufRead, Read, Write};
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+
+#[cfg(unix)]
+type IpcStream = UnixStream;
+#[cfg(windows)]
+type IpcStream = crate::child_process::ipc_transport::IpcStream;
 
 enum IpcEvent {
     Message(String),
@@ -38,8 +43,8 @@ struct ChildIpcState {
     refed: bool,
     disconnect_emitted: bool,
     advanced: bool,
-    #[cfg(unix)]
-    send: Option<UnixStream>,
+    #[cfg(any(unix, windows))]
+    send: Option<IpcStream>,
     queue: VecDeque<IpcEvent>,
 }
 
@@ -52,7 +57,7 @@ impl ChildIpcState {
             refed: false,
             disconnect_emitted: false,
             advanced: false,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             send: None,
             queue: VecDeque::new(),
         }
@@ -136,7 +141,10 @@ pub(crate) fn process_ipc_ensure_initialized() {
     #[cfg(unix)]
     initialize_unix_ipc(fd_var, &serialization_mode);
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    initialize_windows_ipc(fd_var, &serialization_mode);
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (fd_var, serialization_mode);
     }
@@ -168,11 +176,67 @@ fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
     state.send = Some(send);
 }
 
-#[cfg(unix)]
-fn spawn_ipc_reader(sock: UnixStream, advanced: bool) {
+#[cfg(windows)]
+fn initialize_windows_ipc(fd_var: Option<String>, serialization_mode: &str) {
+    use windows_sys::Win32::Foundation::{
+        DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let Some(fd) = fd_var
+        .and_then(|s| s.parse::<i32>().ok())
+        .filter(|fd| *fd >= 0)
+    else {
+        return;
+    };
+    let inherited = unsafe { libc::get_osfhandle(fd) } as HANDLE;
+    if inherited.is_null() || inherited == INVALID_HANDLE_VALUE || inherited as isize == -2 {
+        return;
+    }
+    let mut duplicate = INVALID_HANDLE_VALUE;
+    let process = unsafe { GetCurrentProcess() };
+    if unsafe {
+        DuplicateHandle(
+            process,
+            inherited,
+            process,
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return;
+    }
+    // The CRT owns the inherited descriptor. Close that entry after duplicating
+    // so only the transport's shared handle remains live.
+    unsafe {
+        libc::close(fd);
+    }
+    let stream = unsafe { IpcStream::from_raw_handle(duplicate, true, false) };
+    let send = match stream.try_clone() {
+        Ok(send) => send,
+        Err(_) => return,
+    };
+    let advanced = serialization_mode == "advanced";
+    spawn_ipc_reader(stream, advanced);
+
+    let mut state = ipc_lock();
+    state.available = true;
+    state.connected = true;
+    state.refed = false;
+    state.disconnect_emitted = false;
+    state.advanced = advanced;
+    state.send = Some(send);
+}
+
+#[cfg(any(unix, windows))]
+fn spawn_ipc_reader(sock: IpcStream, advanced: bool) {
     // Cluster workers (#4962) need a recvmsg-based reader to receive SCM_RIGHTS
     // connection fds for SCHED_RR in both serialization modes. Plain forks
     // keep the lighter framing-specific readers.
+    #[cfg(unix)]
     if crate::cluster::is_cluster_worker() {
         std::thread::spawn(move || {
             crate::cluster_sched::worker_recv_loop(
@@ -202,8 +266,8 @@ fn spawn_ipc_reader(sock: UnixStream, advanced: bool) {
     });
 }
 
-#[cfg(unix)]
-fn spawn_ipc_reader_advanced(mut sock: UnixStream) {
+#[cfg(any(unix, windows))]
+fn spawn_ipc_reader_advanced(mut sock: IpcStream) {
     std::thread::spawn(move || {
         let mut acc = Vec::with_capacity(8192);
         let mut chunk = [0u8; 8192];
@@ -371,13 +435,13 @@ fn process_ipc_send_message(message: f64) -> bool {
         return false;
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = message;
         false
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let advanced = ipc_lock().advanced;
         let frame = if advanced {
@@ -425,12 +489,12 @@ fn process_ipc_send_message(message: f64) -> bool {
 /// never exists as a JS value.
 pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
     process_ipc_ensure_initialized();
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = json;
         false
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let advanced = ipc_lock().advanced;
         let frame = if advanced {
@@ -454,7 +518,7 @@ pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn advanced_frame(message: f64) -> Vec<u8> {
     let payload = crate::child_process::v8_serialize(message);
     let mut frame = Vec::with_capacity(payload.len() + 4);
@@ -463,7 +527,7 @@ fn advanced_frame(message: f64) -> Vec<u8> {
     frame
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn json_frame(message: f64) -> Option<Vec<u8>> {
     let sh = unsafe { crate::json::js_json_stringify(message, 0) };
     if sh.is_null() {
@@ -513,7 +577,7 @@ fn channel_closed_error() -> f64 {
 
 fn process_ipc_disconnect_local() {
     process_ipc_ensure_initialized();
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let send = {
         let mut state = ipc_lock();
         if !state.available {
@@ -523,9 +587,12 @@ fn process_ipc_disconnect_local() {
         state.refed = false;
         state.send.take()
     };
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(sock) = send {
+        #[cfg(unix)]
         let _ = sock.shutdown(std::net::Shutdown::Both);
+        #[cfg(windows)]
+        let _ = sock.shutdown();
     }
 
     if mark_disconnect_emitted() {
@@ -540,7 +607,7 @@ fn mark_closed_from_event() -> bool {
     }
     state.connected = false;
     state.refed = false;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         state.send = None;
     }
