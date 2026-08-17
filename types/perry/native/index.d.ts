@@ -6,23 +6,44 @@
 /** Exact-width signed 32-bit integer when used in a native/POD contract. */
 export type i32 = number & { readonly __perryI32?: never };
 
+/** Convert a finite integer to `i32`, throwing when it is out of range. */
+export declare function i32(value: number): i32;
+
 /** Exact-width signed 64-bit integer when used in a native/POD contract. */
 export type i64 = number & { readonly __perryI64?: never };
+
+/** Convert a safe integer to `i64`, throwing rather than losing precision. */
+export declare function i64(value: number): i64;
 
 /** Exact-width unsigned 32-bit integer when used in a native/POD contract. */
 export type u32 = number & { readonly __perryU32?: never };
 
+/** Convert a non-negative finite integer to `u32`, throwing when out of range. */
+export declare function u32(value: number): u32;
+
 /** Exact-width unsigned 64-bit integer when used in a native/POD contract. */
 export type u64 = number & { readonly __perryU64?: never };
+
+/** Convert a non-negative safe integer to `u64`, throwing rather than losing precision. */
+export declare function u64(value: number): u64;
 
 /** Target pointer-sized unsigned integer in a native/POD contract. */
 export type usize = number & { readonly __perryUSize?: never };
 
+/** Convert a non-negative safe integer to `usize`. */
+export declare function usize(value: number): usize;
+
 /** IEEE-754 binary32 value when used in a native/POD contract. */
 export type f32 = number & { readonly __perryF32?: never };
 
+/** Round a finite number to its IEEE-754 binary32 representation. */
+export declare function f32(value: number): f32;
+
 /** IEEE-754 binary64 value when used in a native/POD contract. */
 export type f64 = number & { readonly __perryF64?: never };
+
+/** Validate a finite JavaScript number as an IEEE-754 binary64 value. */
+export declare function f64(value: number): f64;
 
 /**
  * A record with compiler-verified C field order, alignment, and padding.

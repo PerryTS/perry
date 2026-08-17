@@ -652,3 +652,66 @@ fn native_arena_public_view_rejects_dynamic_kind() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn native_scalar_conversion_imports_lower_as_native_module_calls() {
+    let module = lower_src(
+        r#"
+        import { u32 as word, f32 } from "perry/native";
+        const count = word(42);
+        const ratio = f32(0.1);
+        "#,
+    )
+    .expect("native scalar conversions should lower");
+
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMethodCall { module, method, args, .. }
+            if module == "perry/native" && method == "u32" && args.len() == 1
+    )));
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMethodCall { module, method, args, .. }
+            if module == "perry/native" && method == "f32" && args.len() == 1
+    )));
+}
+
+#[test]
+fn native_scalar_conversions_reject_invalid_call_shapes() {
+    let missing = lower_src(
+        r#"
+        import { u32 } from "perry/native";
+        const value = u32();
+        "#,
+    )
+    .expect_err("missing argument should fail lowering");
+    assert!(
+        missing.contains("u32(value) expects exactly one argument"),
+        "unexpected error: {missing}"
+    );
+
+    let spread = lower_src(
+        r#"
+        import { f32 } from "perry/native";
+        const args: any = [0.5];
+        const value = f32(...args);
+        "#,
+    )
+    .expect_err("spread should fail lowering");
+    assert!(
+        spread.contains("f32(value) does not accept spread arguments"),
+        "unexpected error: {spread}"
+    );
+
+    let namespace = lower_src(
+        r#"
+        import * as native from "perry/native";
+        const value = native.i64();
+        "#,
+    )
+    .expect_err("namespace conversion with missing argument should fail lowering");
+    assert!(
+        namespace.contains("i64(value) expects exactly one argument"),
+        "unexpected error: {namespace}"
+    );
+}

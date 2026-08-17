@@ -462,6 +462,13 @@ const fn p_str(name: &'static str) -> ParamSpec {
         optional: false,
     }
 }
+const fn p_num(name: &'static str) -> ParamSpec {
+    ParamSpec::Named {
+        name,
+        ty: TypeSpec::Number,
+        optional: false,
+    }
+}
 const fn p_any(name: &'static str) -> ParamSpec {
     ParamSpec::Named {
         name,

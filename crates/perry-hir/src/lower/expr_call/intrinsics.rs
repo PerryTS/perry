@@ -23,6 +23,7 @@ mod bare_builtins;
 mod eval_strict;
 mod namespace_static;
 mod native_arena;
+mod native_scalars;
 mod precompile_wasm;
 mod require;
 
@@ -38,5 +39,6 @@ pub(super) use native_arena::{
     try_native_arena_intrinsics, try_native_arena_public_api, try_native_memory_public_api,
     try_pod_layout_constants,
 };
+pub(super) use native_scalars::validate_native_scalar_conversion_call;
 pub(super) use precompile_wasm::{try_embed_wasm, try_precompile};
 pub(super) use require::{try_dynamic_require, try_require_literal};

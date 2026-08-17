@@ -48,6 +48,15 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_parallel_filter", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_spawn", DOUBLE, &[DOUBLE]);
+    // `perry/native` checked scalar conversions. Results remain ordinary
+    // JavaScript-compatible numbers at the public boundary.
+    module.declare_function("js_perry_native_i32", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_i64", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_u32", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_u64", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_usize", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_f32", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_perry_native_f64", DOUBLE, &[DOUBLE]);
 
     // ========== jsonwebtoken / JWT ==========
     module.declare_function("js_jwt_decode", I64, &[I64]);

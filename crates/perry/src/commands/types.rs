@@ -131,6 +131,7 @@ mod tests {
         let native_stub = project.path().join(".perry/types/perry/native/index.d.ts");
         let source = fs::read_to_string(native_stub).expect("read native type stub");
         assert!(source.contains("export type u32"));
+        assert!(source.contains("export declare function u32(value: number): u32"));
         assert!(source.contains("export type pod<T>"));
         assert!(source.contains("export declare const NativeArena"));
     }
