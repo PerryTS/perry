@@ -532,12 +532,22 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
     if e.object_bits != 0 {
         return f64::from_bits(e.object_bits);
     }
+    // `detail` can be an arbitrary heap value. Every allocation below may
+    // trigger a moving collection, so keep it rooted until the field and any
+    // timerify argument aliases have been installed on the entry.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let detail_handle = scope.root_nanbox_f64(f64::from_bits(e.detail_bits));
     let obj = js_object_alloc_with_shape(
         PERF_ENTRY_SHAPE,
         5,
         PERF_ENTRY_KEYS.as_ptr(),
         PERF_ENTRY_KEYS.len() as u32,
     );
+    let obj_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    let current_obj = || {
+        crate::value::js_nanbox_get_pointer(obj_handle.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader
+    };
     // Record the shared keys_array so `is_perf_entry_object` can recognize
     // entries by pointer identity (see PERF_ENTRY_KEYS_ARRAY). All entries on
     // this thread share it, so a single store on the first call suffices.
@@ -547,13 +557,38 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
             c.set(keys_ptr);
         }
     });
-    js_object_set_field(obj, 0, str_value(&e.name));
-    js_object_set_field(obj, 1, str_value(entry_type_name(e.entry_type)));
-    js_object_set_field(obj, 2, JSValue::number(e.start_time));
-    js_object_set_field(obj, 3, JSValue::number(e.duration));
-    js_object_set_field(obj, 4, JSValue::from_bits(e.detail_bits));
+    let name = str_value(&e.name);
+    js_object_set_field(current_obj(), 0, name);
+    let entry_type = str_value(entry_type_name(e.entry_type));
+    js_object_set_field(current_obj(), 1, entry_type);
+    js_object_set_field(current_obj(), 2, JSValue::number(e.start_time));
+    js_object_set_field(current_obj(), 3, JSValue::number(e.duration));
+    js_object_set_field(
+        current_obj(),
+        4,
+        JSValue::from_bits(detail_handle.get_nanbox_f64().to_bits()),
+    );
+    // Node exposes timerify's call arguments twice: as `entry.detail` and as
+    // enumerable indexed properties on the PerformanceEntry itself.
+    if e.entry_type == ENTRY_TYPE_FUNCTION {
+        let detail = crate::value::js_nanbox_get_pointer(detail_handle.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        if !detail.is_null() {
+            let len = crate::array::js_array_length(detail);
+            for i in 0..len {
+                let key_text = i.to_string();
+                let key =
+                    crate::string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
+                let detail = crate::value::js_nanbox_get_pointer(detail_handle.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader;
+                let value = crate::array::js_array_get_f64(detail, i);
+                js_object_set_field_by_name(current_obj(), key, value);
+            }
+        }
+    }
     if let Some(initiator_type) = &e.initiator_type {
-        set_named_field(obj, "initiatorType", str_value(initiator_type));
+        let value = str_value(initiator_type);
+        set_named_field(current_obj(), "initiatorType", value);
     }
     let class_name = match e.entry_type {
         ENTRY_TYPE_MARK => "PerformanceMark",
@@ -561,7 +596,7 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
         ENTRY_TYPE_RESOURCE => "PerformanceResourceTiming",
         _ => "PerformanceEntry",
     };
-    link_perf_prototype(crate::value::js_nanbox_pointer(obj as i64), class_name)
+    link_perf_prototype(obj_handle.get_nanbox_f64(), class_name)
 }
 
 /// `performance.now()` reading used for default mark startTimes / measure
@@ -1296,40 +1331,126 @@ unsafe fn function_value_name(value: f64) -> String {
         .unwrap_or_default()
 }
 
+unsafe fn finish_timerify_entry(name_value: f64, start_time: f64, histogram: f64, detail: f64) {
+    let duration = (perf_now() - start_time).max(0.0);
+    // Node records timerify durations in nanoseconds. A sub-nanosecond call
+    // still has to land in a bucket — the histogram's lowest trackable value
+    // is 1 — or `histogram.count` would not move.
+    crate::perf_histogram::record_timerify_duration(
+        histogram,
+        ((duration * 1.0e6).round() as i64).max(1),
+    );
+    let name = string_of(JSValue::from_bits(name_value.to_bits())).unwrap_or_default();
+    let mut entry = PerfEntry {
+        name,
+        entry_type: ENTRY_TYPE_FUNCTION,
+        start_time,
+        duration,
+        detail_bits: detail.to_bits(),
+        object_bits: 0,
+        initiator_type: None,
+    };
+    let obj = entry_to_object(&entry);
+    entry.object_bits = obj.to_bits();
+    notify_observers(&entry);
+}
+
+extern "C" fn perf_timerify_settle(
+    closure: *const crate::closure::ClosureHeader,
+    outcome: f64,
+) -> f64 {
+    unsafe {
+        let name = crate::closure::js_closure_get_capture_f64(closure, 0);
+        let start_time = crate::closure::js_closure_get_capture_f64(closure, 1);
+        let histogram = crate::closure::js_closure_get_capture_f64(closure, 2);
+        let detail = crate::closure::js_closure_get_capture_f64(closure, 3);
+        finish_timerify_entry(name, start_time, histogram, detail);
+    }
+    // A settle listener is observational only; preserving the outcome keeps
+    // the native promise's fulfillment/rejection untouched.
+    outcome
+}
+
 extern "C" fn perf_timerify_wrapper(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
     unsafe {
-        let target = crate::closure::js_closure_get_capture_f64(closure, 0);
-        let name_value = crate::closure::js_closure_get_capture_f64(closure, 1);
-        let histogram = crate::closure::js_closure_get_capture_f64(closure, 2);
-        let name = string_of(JSValue::from_bits(name_value.to_bits())).unwrap_or_default();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let wrapper_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+        let target_handle =
+            scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+        let name_handle =
+            scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
+        let histogram_handle =
+            scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
         let args = collect_rest_args(rest);
+        // The detail array allocation may move any heap-valued argument. Root
+        // each one first, then republish the post-collection values into both
+        // the call buffer and the array.
+        let arg_handles: Vec<_> = args.iter().map(|arg| scope.root_nanbox_f64(*arg)).collect();
+        let detail = crate::array::js_array_alloc(arg_handles.len() as u32);
+        (*detail).length = arg_handles.len() as u32;
+        for (i, arg) in arg_handles.iter().enumerate() {
+            crate::array::js_array_set_f64(detail, i as u32, arg.get_nanbox_f64());
+        }
+        let detail_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(detail as i64));
+        let call_args: Vec<f64> = arg_handles.iter().map(|arg| arg.get_nanbox_f64()).collect();
+
         let start_time = perf_now();
-        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
-        let duration = (perf_now() - start_time).max(0.0);
-        // Node records timerify durations in nanoseconds. A sub-nanosecond
-        // call still has to land in a bucket — the histogram's lowest
-        // trackable value is 1 — or `histogram.count` would not move.
-        crate::perf_histogram::record_timerify_duration(
-            histogram,
-            ((duration * 1.0e6).round() as i64).max(1),
-        );
-        let entry = PerfEntry {
-            name,
-            entry_type: ENTRY_TYPE_FUNCTION,
-            start_time,
-            duration,
-            detail_bits: JSValue::null().bits(),
-            object_bits: 0,
-            initiator_type: None,
+        let target = target_handle.get_nanbox_f64();
+        let new_target = crate::object::js_new_target_get();
+        let result = if new_target.to_bits() != crate::value::TAG_UNDEFINED {
+            let wrapper_value = wrapper_handle.get_nanbox_f64();
+            let forwarded_new_target = if new_target.to_bits() == wrapper_value.to_bits() {
+                target
+            } else {
+                new_target
+            };
+            crate::object::js_new_function_construct_with_new_target(
+                target,
+                call_args.as_ptr(),
+                call_args.len(),
+                forwarded_new_target,
+            )
+        } else {
+            // Declared classes have no [[Call]]. The generic native-value call
+            // path treats Perry's compact class-ref representation as a no-op,
+            // so reject it explicitly just as a direct class call does.
+            if crate::object::class_ref_id(target).is_some() {
+                throw_type_error("Class constructor cannot be invoked without 'new'");
+            }
+            crate::closure::js_native_call_value(target, call_args.as_ptr(), call_args.len())
         };
-        let mut entry = entry;
-        let obj = entry_to_object(&entry);
-        entry.object_bits = obj.to_bits();
-        notify_observers(&entry);
-        result
+        let result_handle = scope.root_nanbox_f64(result);
+
+        // Normalize only to discover thenables; return the original result.
+        // Native promises pass through unchanged, while a user thenable gets a
+        // native proxy promise whose settlement can use the same listener.
+        let normalized = crate::promise::js_assimilate_thenable(result_handle.get_nanbox_f64());
+        let normalized_handle = scope.root_nanbox_f64(normalized);
+        if crate::promise::js_value_is_promise(normalized_handle.get_nanbox_f64()) != 0 {
+            let listener = crate::closure::js_closure_alloc(perf_timerify_settle as *const u8, 4);
+            crate::closure::js_closure_set_capture_f64(listener, 0, name_handle.get_nanbox_f64());
+            crate::closure::js_closure_set_capture_f64(listener, 1, start_time);
+            crate::closure::js_closure_set_capture_f64(
+                listener,
+                2,
+                histogram_handle.get_nanbox_f64(),
+            );
+            crate::closure::js_closure_set_capture_f64(listener, 3, detail_handle.get_nanbox_f64());
+            let promise = crate::value::js_nanbox_get_pointer(normalized_handle.get_nanbox_f64())
+                as *mut crate::promise::Promise;
+            crate::promise::js_promise_attach_settle_listener(promise, listener, listener);
+        } else {
+            finish_timerify_entry(
+                name_handle.get_nanbox_f64(),
+                start_time,
+                histogram_handle.get_nanbox_f64(),
+                detail_handle.get_nanbox_f64(),
+            );
+        }
+        result_handle.get_nanbox_f64()
     }
 }
 
@@ -1357,6 +1478,7 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
         }
         TIMERIFY_WRAPPER_REGISTERED.call_once(|| {
             crate::closure::js_register_closure_rest(perf_timerify_wrapper as *const u8, 0);
+            crate::closure::js_register_closure_arity(perf_timerify_settle as *const u8, 1);
         });
         let name = function_value_name(fn_value);
         let closure = crate::closure::js_closure_alloc(perf_timerify_wrapper as *const u8, 3);
@@ -1382,6 +1504,9 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
             "name",
             f64::from_bits(wrapper_name_value.bits()),
         );
+        let attrs = crate::object::PropertyAttrs::new(false, true, false);
+        crate::object::set_property_attrs(closure as usize, "name".to_string(), attrs);
+        crate::object::set_property_attrs(closure as usize, "length".to_string(), attrs);
         crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
         f64::from_bits(JSValue::pointer(closure as *mut u8).bits())
     }

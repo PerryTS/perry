@@ -538,6 +538,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     // `Object.defineProperty`) overrides those defaults.
                     let registered = super::get_property_attrs(ptr, name);
                     let writable_default = registered.map(|a| a.writable());
+                    let enumerable_default = registered.map(|a| a.enumerable());
                     let configurable_default = registered.map(|a| a.configurable()).unwrap_or(true);
                     if let Some(acc) = super::get_accessor_descriptor(ptr, name) {
                         let attrs =
@@ -583,7 +584,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                             Some((
                                 arity as f64,
                                 writable_default.unwrap_or(false),
-                                false,
+                                enumerable_default.unwrap_or(false),
                                 configurable_default,
                             ))
                         }
@@ -597,7 +598,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                 Some((
                                     dynv,
                                     writable_default.unwrap_or(false),
-                                    false,
+                                    enumerable_default.unwrap_or(false),
                                     configurable_default,
                                 ))
                             } else {
@@ -610,7 +611,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                     fname.as_ptr(),
                                     fname.len() as u32,
                                 );
-                                Some((crate::js_nanbox_string(s as i64), false, false, true))
+                                Some((
+                                    crate::js_nanbox_string(s as i64),
+                                    writable_default.unwrap_or(false),
+                                    enumerable_default.unwrap_or(false),
+                                    configurable_default,
+                                ))
                             }
                         }
                         _ => {

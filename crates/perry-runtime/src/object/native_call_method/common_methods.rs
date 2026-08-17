@@ -284,7 +284,10 @@ pub(super) unsafe fn dispatch_common(
                     return Some(f64::from_bits(JSValue::bool(false).bits()));
                 }
                 if matches!(key_name, "name" | "length" | "prototype") {
-                    return Some(f64::from_bits(JSValue::bool(false).bits()));
+                    let enumerable = get_property_attrs(raw, key_name)
+                        .map(|attrs| attrs.enumerable())
+                        .unwrap_or(false);
+                    return Some(f64::from_bits(JSValue::bool(enumerable).bits()));
                 }
                 let enumerable = get_property_attrs(raw, key_name)
                     .map(|attrs| attrs.enumerable())
