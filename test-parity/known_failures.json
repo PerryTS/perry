@@ -10,29 +10,95 @@
     },
     "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite). Because that job runs after the merges it would judge, the OFFLINE half of the ratchet runs on `lint` (a required per-PR context) via `python3 scripts/parity_known_failures.py --audit`: it enforces the provenance fields above, rejects an entry naming a test file that no longer exists, and cross-checks every test_gap_* entry against test-parity/gap_snapshot.json — a generated, bidirectional baseline, so a gap entry absent from it is one the snapshot asserts passes. Migrating this whole file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
   },
-  "test_parity_stream": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Tracking issue #793 (roadmap umbrella) is CLOSED — this needs a live surface tracker (audited 2026-08-07, #7582). Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  "cluster_4962": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
   },
-  "test_parity_stream_web": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Tracking issue #793 (roadmap umbrella) is CLOSED — this needs a live surface tracker (audited 2026-08-07, #7582). Node.js module inventory — `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  "demo_claude_code_tui": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
   },
-  "test_sock_write_map": {
-    "issue": "1634",
-    "added": "2026-05-15",
-    "category": "ci-env",
-    "reason": "Tracking issue #1634 is CLOSED — this needs a live CI-fixture tracker (audited 2026-08-07, #7582; not adjudicated locally, the echo-server port was already bound). Tracked in #1634 (parity CI environment fixtures). Net test passes locally with an echo server running, fails on Linux CI (no echo fixture server). Environmental — issue #91 dispatch fix landed in v0.5.581 and is no longer the cause; needs a CI-side fixture."
+  "test_ads_compile_smoke": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
   },
-  "test_ramda_sum": {
-    "issue": "1634",
-    "added": "2026-05-18",
-    "category": "ci-env",
-    "reason": "Tracking issue #1634 is CLOSED — this needs a live CI-fixture tracker (audited 2026-08-07, #7582). Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list — the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
+  "test_better_sqlite3_raw": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_better_sqlite3_v8_bridge": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_class_field_layout": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_date_fns_format": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_effect_pipe_map": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_fastify_in_process": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_fastify_integration": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
   },
   "test_gap_2159_defineproperty_class_prototype": {
     "issue": "2159",
@@ -52,19 +118,1129 @@
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #3088 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. node:perf_hooks cluster (#3088/#3008/#3010/#3011) module-inventory gap."
   },
+  "test_gap_prop_plan_cache_invalidation": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
   "test_gap_v8_2_3680plus": {
     "issue": "3680",
     "added": "2026-07-04",
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #3680 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. node:v8 Serializer / Deserializer classes still absent from the surface."
   },
-  "test_gap_zlib_4917_level": {
-    "issue": "6847",
-    "added": "2026-07-26",
-    "category": "bug-stale",
-    "reason": "RE-TRIAGE, macOS only: #6847 was closed COMPLETED on 2026-07-30 (fixed by #7021, verified on a cold cache) but this test still reproduces its exact signature on macOS/arm64 — `Undefined symbols: _js_zlib_deflate_raw_sync, _js_zlib_inflate_raw_sync` when auto-optimize pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild. Reproduced 3/3 on 2026-08-07 (#7582 audit), so not a flake; its zlib siblings test_gap_zlib_3285_params and test_gap_zlib_fs_assert_2935_2752_2971 both PASS, so it is specific to the raw-sync entry points. Linux passes it (test-parity/gap_snapshot.json), which is why this is scoped rather than global — unscoped it would suppress a passing test on the platform the gate actually runs on. Needs #6847 reopened for macOS, or a new issue.",
+  "test_guarded_raw_numeric_arrays": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
     "platforms": [
-      "macos"
+      "linux"
+    ]
+  },
+  "test_harness_class_mixins": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_hono_bundle": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_http_server_unref_5011": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1021_rxjs_reexport_methods": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1120_fastify_buffer": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1140_buffer_index_runtime": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1193_cheerio_chain": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1240_fastify_request_json": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1293_fastify_request_json_as_any": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1425_gc_unsafe_zones": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1495_image_systemname": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1723_require_stdlib_subnamespace": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1777_prototype_borrow": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1867_audio_playback": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_1934_spawn_reactor": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_2022_canvas_draw_image": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_2153_http_typed_feedback_dispatch": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_2656_weakref_finalization_gc": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_339_sqlite_stmt_all_bound_params": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_340_axios_response_props": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_341_typed_field_native": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_351_media_playback": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_3558_computed_accessors": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_3580_arguments_object_semantics": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_358_perry_tui_phase1": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_358_perry_tui_phase2_counter": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_358_perry_tui_phase3_flexbox": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_358_perry_tui_phase4_5_widgets": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_358_perry_tui_phase4_widgets": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_402_403_404_405_406_holistic": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_402_perry_tui_table_tabs": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_4034_object_literal_semantics": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_403_404_animated_input": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_405_perry_tui_phase3_5": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_414_mysql_query_params": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_442_inline_button_bg": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_4449_thread_promise_void": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_449_new_target": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_4831_stripe_proto_methods": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_4913_atomics_cross_thread": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_4977_gc_toplevel_locals": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_5268_native_ctor_prototype_undefined": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_538_background_tasks": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_553_mobile_widgets": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_556_table_array": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_556_table_concat": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_562_stream_subclass": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_610_foreach": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_610_smoke": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_617_inline_await_fetch_with_auth": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_640_navstack_textfield": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_645_chained_method_on_null_obj": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_679_box_runtime_children": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_679_perry_tui_hooks": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_679_perry_tui_text_styling": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_679_useState_gc_root": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_699_runtime_ui_surface": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_7302_thread_throws": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_763_reactive_textfield": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_764_state_at_module_init": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_7769_thread_class_dispatch": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_7981_thread_shape_stamp_parent": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_806_curried_factory_extends_capture": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_806_curried_mixin_outer_capture": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_859_native_promise_pin": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_915_jwt_sign": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_915_jwt_sign_after_async_route": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_915_native_module_after_async_resume": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_927_jwt_verify_returns_object": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_issue_pino_sorting_order_undefined": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_jose_sign": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_jose_signverify_roundtrip": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_jwt_sign_dynamic_alg": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_lodash_max_min": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_lodash_sum": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_node_http2_basic": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_node_https_basic": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_argon2": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_buffer": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_cluster": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_commander": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_cron": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_crypto": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_date_fns": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_dayjs": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_decimal": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_dotenv": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_lodash": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_lru_cache": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_moment": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_nanoid": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_stream": {
+    "issue": "793",
+    "added": "2026-05-15",
+    "category": "module-inventory",
+    "reason": "Tracking issue #793 (roadmap umbrella) is CLOSED — this needs a live surface tracker (audited 2026-08-07, #7582). Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  },
+  "test_parity_stream_web": {
+    "issue": "793",
+    "added": "2026-05-15",
+    "category": "module-inventory",
+    "reason": "Tracking issue #793 (roadmap umbrella) is CLOSED — this needs a live surface tracker (audited 2026-08-07, #7582). Node.js module inventory — `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
+  },
+  "test_parity_test": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_util": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_uuid": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_validator": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_parity_zlib": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_pdf_create_smoke": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_gc_module": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_counter": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_useapp": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_useeffect": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_usefocus": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_usememo": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_useref": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_perry_tui_inkcompat_usestdout": {
+    "issue": "348",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_phase2v3_3_show_toast_set_text": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ramda_user_import": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_reflect_metadata": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_take_screenshot": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_three_like_native_class_descriptors": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_adbanner_smoke": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_comprehensive": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_controls": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_drag_drop": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_on_keydown_smoke": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_phase4": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ui_text_alignment": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_v8_self_contained": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_wasm_add": {
+    "issue": "8272",
+    "added": "2026-08-17",
+    "category": "bug-open",
+    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_ws_static_constants_6117": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
+    ]
+  },
+  "test_xmod_no_ctor_arg_forward": {
+    "issue": "8271",
+    "added": "2026-08-17",
+    "category": "untriaged",
+    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "platforms": [
+      "linux"
     ]
   }
 }

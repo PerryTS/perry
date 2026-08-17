@@ -89,5 +89,23 @@ windows = { version = "0.62", features = [
     "Win32_Networking_WinHttp",
 ] }
 
+# UWP XAML Islands + MapControl (#559). The current windows crate no longer
+# projects Windows.UI.Xaml, so keep the last Microsoft-generated projection
+# that does, under an explicit alias. It is isolated to map_view.rs; HWNDs are
+# bridged through their raw pointer value so no windows-core types cross the
+# version boundary.
+windows-xaml = { package = "windows", version = "0.35", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Devices_Geolocation",
+    "UI_Xaml",
+    "UI_Xaml_Controls",
+    "UI_Xaml_Controls_Maps",
+    "UI_Xaml_Hosting",
+    "Win32_Foundation",
+    "Win32_System_WinRT_Xaml",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [features]
 geisterhand = []
