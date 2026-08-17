@@ -37,15 +37,6 @@
       "linux"
     ]
   },
-  "test_class_field_layout": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_date_fns_format": {
     "issue": "8271",
     "added": "2026-08-17",

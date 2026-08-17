@@ -81,7 +81,7 @@ console.log(acct.getBalance());  // 100
 acct.deposit(50);
 console.log(acct.getBalance());  // 150
 console.log(acct.checkPin(1234)); // true
-console.log(acct.checkPin(0000)); // false
+console.log(acct.checkPin(0)); // false
 
 // === Multiple inheritance levels ===
 class Base {
