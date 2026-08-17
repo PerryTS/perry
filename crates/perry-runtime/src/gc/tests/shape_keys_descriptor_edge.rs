@@ -24,7 +24,7 @@
 //! alive by something else entirely".
 
 use super::super::*;
-use super::support::{collect_minor_trace, ptr_bits, CopyingNurseryTestGuard};
+use super::support::{collect_minor_trace, init_test_closure, ptr_bits, CopyingNurseryTestGuard};
 use crate::object::shapes;
 
 /// Facts the assertions compare, read exclusively through the descriptor.
@@ -268,4 +268,173 @@ fn a_keys_array_whose_last_carrier_died_is_still_reclaimed() {
          be reclaimed by the dead-key prune; it survived, which is what \
          unconditional table rooting would look like"
     );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecycledKeysReport {
+    replacement_before: usize,
+    replacement_after: usize,
+    copied_objects: usize,
+    old_index_exists: bool,
+    new_index_exists: bool,
+    descriptor_keys: Option<u64>,
+}
+
+/// Reproduce the two-cycle stale-key shape: a dead keys-array address is
+/// reused by a closure, then that closure moves on the next copying minor.
+/// Seeding after exact reuse isolates the cleanup under test from the earlier
+/// collection's ordinary dead-owner prune.
+fn collect_recycled_keys_report(suppress_type_check: bool) -> RecycledKeysReport {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    shapes::test_clear_shape_table();
+    gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_keys = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::array::ArrayHeader>(),
+        std::mem::align_of::<crate::array::ArrayHeader>(),
+        GC_TYPE_ARRAY,
+    ) as *mut crate::array::ArrayHeader;
+    unsafe {
+        (*dead_keys).length = 0;
+        (*dead_keys).capacity = 0;
+    }
+    let recycled_addr = dead_keys as usize;
+
+    // No roots: the array dies and the copied-minor Eden reset makes its first
+    // allocation address available again.
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+
+    let replacement = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(replacement) };
+    let replacement_before = replacement as usize;
+    assert_eq!(
+        replacement_before, recycled_addr,
+        "test premise: Eden must reuse the dead keys array's exact address"
+    );
+    js_shadow_slot_set(0, ptr_bits(replacement_before));
+
+    // This is the stale table state observed in the original workload: the
+    // keys address now names a live object of another type.
+    shapes::test_seed_shape_entry(recycled_addr);
+    let shape_id = shapes::test_shape_id_for_keys(recycled_addr)
+        .expect("the stale shape entry must include a descriptor");
+
+    let trace = {
+        let _sabotage = suppress_type_check.then(shapes::TestRecycledKeysCheckSuppression::new);
+        collect_minor_trace(GcTriggerKind::Direct)
+    };
+    let replacement_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let report = RecycledKeysReport {
+        replacement_before,
+        replacement_after,
+        copied_objects: trace.copying_nursery.copied_objects,
+        old_index_exists: shapes::test_shape_entry_exists(recycled_addr),
+        new_index_exists: shapes::test_shape_entry_exists(replacement_after),
+        descriptor_keys: shapes::shape_descriptor_by_id(shape_id).map(|descriptor| descriptor.keys),
+    };
+
+    shapes::test_clear_shape_table();
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    report
+}
+
+#[test]
+fn recycled_non_array_shape_keys_are_dropped_after_a_copying_minor() {
+    let report = collect_recycled_keys_report(false);
+    assert!(
+        report.copied_objects > 0,
+        "the fixture requires a copying minor; copied_objects was zero"
+    );
+    assert_ne!(
+        report.replacement_after, report.replacement_before,
+        "the replacement tenant must move for metadata rewrite to be exercised"
+    );
+    assert!(
+        !report.old_index_exists && !report.new_index_exists,
+        "a stale shape index must be neither retained at {:#x} nor rekeyed onto \
+         the replacement closure at {:#x}",
+        report.replacement_before,
+        report.replacement_after
+    );
+    assert_eq!(
+        report.descriptor_keys, None,
+        "a descriptor whose keys address was recycled by a closure must be removed"
+    );
+}
+
+#[test]
+fn recycled_non_array_shape_keys_sabotage_is_detected() {
+    let report = collect_recycled_keys_report(true);
+    assert!(
+        report.copied_objects > 0,
+        "the sabotage fixture requires a copying minor; copied_objects was zero"
+    );
+    assert_ne!(
+        report.replacement_after, report.replacement_before,
+        "the replacement tenant must move for the sabotage to discriminate"
+    );
+
+    // Suppressing the new type check re-creates the bug: metadata follows the
+    // closure's forwarding record and transfers both shape records onto it.
+    assert!(
+        report.new_index_exists && report.descriptor_keys == Some(report.replacement_after as u64),
+        "SABOTAGE ARM: suppressing recycled-address validation did not preserve \
+         and rekey the stale shape records, so the green fix arm proves nothing \
+         (report: {report:?})"
+    );
+}
+
+#[test]
+fn dead_owner_prune_rejects_a_non_forwarded_non_array_tenant() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    shapes::test_clear_shape_table();
+
+    let closure = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_CLOSURE) as usize;
+    let header = unsafe { header_from_user_ptr(closure as *const u8) };
+    assert_eq!(
+        unsafe { (*header).gc_flags } & GC_FLAG_FORWARDED,
+        0,
+        "test premise: the replacement tenant must not be forwarded"
+    );
+    shapes::test_seed_shape_entry(closure);
+
+    // The replacement is live according to the ordinary predicate. Its type,
+    // not a forwarding flag, must still prove that it is not the keys array.
+    shapes::prune_dead_shape_keys(&|_| false);
+
+    assert!(!shapes::test_shape_entry_exists(closure));
+    assert!(shapes::test_shape_id_for_keys(closure).is_none());
+    shapes::test_clear_shape_table();
+}
+
+#[test]
+fn metadata_rewrite_validates_the_post_visit_non_array_address() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    shapes::test_clear_shape_table();
+
+    let from = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_CLOSURE) as usize;
+    let valid_ptrs = build_valid_pointer_set();
+    let to = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_CLOSURE) as usize;
+    let from_header = unsafe { header_from_user_ptr(from as *const u8) as *mut GcHeader };
+    unsafe { set_forwarding_address(from_header, to as *mut u8) };
+    shapes::test_seed_shape_entry(from);
+
+    shapes::scan_shape_table_rekey_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
+
+    unsafe { (*from_header).gc_flags &= !GC_FLAG_FORWARDED };
+    assert!(
+        !shapes::test_shape_entry_exists(from) && !shapes::test_shape_entry_exists(to),
+        "the index must be dropped instead of following a closure's forwarding record"
+    );
+    assert!(
+        shapes::test_shape_id_for_keys(from).is_none()
+            && shapes::test_shape_id_for_keys(to).is_none(),
+        "the descriptor must validate the rewritten address before publishing it"
+    );
+    shapes::test_clear_shape_table();
 }

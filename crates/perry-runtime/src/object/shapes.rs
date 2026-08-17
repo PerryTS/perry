@@ -1213,6 +1213,25 @@ pub(crate) fn shape_drop(keys: *const ArrayHeader) {
     inner.indices.remove(&keys);
 }
 
+/// True when a shape's keys address is currently occupied by another GC type.
+/// A tracked non-array allocation proves that the original keys array died and
+/// its address was recycled; unreadable/off-arena addresses remain governed by
+/// the collector's ordinary dead-owner predicate.
+#[inline]
+fn shape_keys_address_is_recycled(addr: usize) -> bool {
+    #[cfg(test)]
+    if RECYCLED_KEYS_CHECK_SUPPRESSED.with(std::cell::Cell::get) {
+        return false;
+    }
+
+    unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
+            let obj_type = (*header.as_ptr()).obj_type;
+            obj_type != crate::gc::GC_TYPE_ARRAY && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
+        })
+    }
+}
+
 /// Post-trace weak-table prune: drop slot indices and by-id descriptors whose
 /// keys array is dead. A live object has already traced its authoritative
 /// header edge and synchronized the descriptor named by its ShapeId, so a
@@ -1220,13 +1239,29 @@ pub(crate) fn shape_drop(keys: *const ArrayHeader) {
 /// closed on a missing lookup, independently of pruning.
 pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    // A shape keys entry is keyed by the address of its keys array — a
+    // `GC_TYPE_ARRAY` (or `GC_TYPE_LAZY_ARRAY`). When the keys array dies
+    // and the arena recycles its address for a different object type
+    // (closure, string, …), the `is_dead_owner` predicate sees the NEW
+    // object's flags (MARKED/FORWARDED) and reports the address as alive,
+    // leaving a stale entry that makes property lookups on objects whose
+    // descriptor still points at the old address read the wrong shape.
+    // Guard the retain with a type check: if the object at the key address
+    // is not an array/lazy-array, the keys array is dead regardless of what
+    // `is_dead_owner` says about the recycled tenant.
     if !inner.indices.is_empty() {
-        inner.indices.retain(|keys_id, _| !is_dead_owner(*keys_id));
+        inner.indices.retain(|keys_id, _| {
+            !is_dead_owner(*keys_id) && !shape_keys_address_is_recycled(*keys_id)
+        });
     }
     let stale: Vec<u32> = inner
         .descriptors
         .iter()
-        .filter_map(|(&id, descriptor)| is_dead_owner(descriptor.keys as usize).then_some(id))
+        .filter_map(|(&id, descriptor)| {
+            let keys = descriptor.keys as usize;
+            (is_dead_owner(descriptor.keys as usize) || shape_keys_address_is_recycled(keys))
+                .then_some(id)
+        })
         .collect();
     if !stale.is_empty() {
         for id in stale {
@@ -1247,7 +1282,8 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let mut descriptor_moved = false;
-    for descriptor in inner.descriptors.values_mut() {
+    let mut dead_descriptor_ids: Vec<u32> = Vec::new();
+    for (id, descriptor) in inner.descriptors.iter_mut() {
         let mut addr = descriptor.keys as usize;
         // #8112 ephemeron gate. A shape with an OLD carrier is rooted here:
         // the minor that has to keep its keys array alive never enumerates the
@@ -1261,10 +1297,22 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
         } else {
             visitor.visit_metadata_usize_slot(&mut addr)
         };
-        if moved {
+        // Validate the POST-visit address. A stale shape key can follow the
+        // forwarding record of the non-array tenant that recycled its address;
+        // checking only an unmoved old address misses that case.
+        if visitor.is_metadata_rewrite_phase() && shape_keys_address_is_recycled(addr) {
+            dead_descriptor_ids.push(*id);
+        } else if moved {
             descriptor.keys = addr as u64;
             descriptor_moved = true;
         }
+    }
+    // Remove descriptors whose keys array was recycled.
+    if !dead_descriptor_ids.is_empty() {
+        for id in &dead_descriptor_ids {
+            inner.descriptors.remove(id);
+        }
+        descriptor_moved = true;
     }
     // Rebuild throughout rewrite phase even when this pass itself observed no
     // move: an immediate live-object header callback may already have rekeyed
@@ -1290,6 +1338,26 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
             inner.indices.insert(new, shape);
         }
     }
+    // Drop indices entries whose keys-array address was recycled: the
+    // forwarding record at the old address points to a DIFFERENT object
+    // (not a keys array), so `visit_metadata_usize_slot` either rekeyed
+    // it to the wrong address (caught above by the type mismatch on the
+    // new address) or returned false because the forwarding walk could
+    // not classify the address. Either way the keys array is dead; remove
+    // the stale entry so property lookups don't resolve the wrong shape.
+    let recycled: Vec<usize> = inner
+        .indices
+        .keys()
+        .filter(|&&keys_id| shape_keys_address_is_recycled(keys_id))
+        .copied()
+        .collect();
+    let recycled_count = recycled.len();
+    for old in recycled {
+        inner.indices.remove(&old);
+    }
+    if recycled_count > 0 {
+        rebuild_descriptor_reverse_indices(&mut inner);
+    }
 }
 
 // #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's
@@ -1302,6 +1370,7 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
 #[cfg(test)]
 thread_local! {
     static KEYS_EDGE_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RECYCLED_KEYS_CHECK_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -1331,6 +1400,30 @@ impl TestKeysEdgeSuppression {
 impl Drop for TestKeysEdgeSuppression {
     fn drop(&mut self) {
         KEYS_EDGE_SUPPRESSED.with(|c| c.set(self.edge));
+    }
+}
+
+/// Test-only sabotage of the recycled-address type check. Keeping this scoped
+/// and unshipped lets the regression fixture prove its detector would fail if
+/// both prune and metadata rewrite trusted the replacement tenant.
+#[cfg(test)]
+pub(crate) struct TestRecycledKeysCheckSuppression {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl TestRecycledKeysCheckSuppression {
+    pub(crate) fn new() -> Self {
+        Self {
+            previous: RECYCLED_KEYS_CHECK_SUPPRESSED.with(|cell| cell.replace(true)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestRecycledKeysCheckSuppression {
+    fn drop(&mut self) {
+        RECYCLED_KEYS_CHECK_SUPPRESSED.with(|cell| cell.set(self.previous));
     }
 }
 
