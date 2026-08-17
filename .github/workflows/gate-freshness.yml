@@ -1,6 +1,6 @@
 name: Gate Freshness
 
-# Alerts when a post-merge gate stops producing successful `main` runs.
+# Alerts when a post-merge gate stops producing completed `main` results.
 #
 # THE FAILURE THIS EXISTS FOR (#7856): every heavy gate in this repo produced zero
 # results on `main` for over two days. They were not failing and not cancelled --
@@ -74,9 +74,11 @@ jobs:
 
       # Structural failure first, and unconditionally: prove the detector can still
       # say no before trusting a green verdict from it. This plants a stale gate, a
-      # gate with no successful run at all, and -- the trap that made
-      # `gc-root-dominance` look healthy in #7856 -- a gate whose only recent
-      # successes are `pull_request` runs, then asserts the verdict for each.
+      # gate with no completed result at all, queued/in-progress/cancelled runs, and
+      # -- the trap that made `gc-root-dominance` look healthy in #7856 -- a gate
+      # whose only recent results are `pull_request` runs. It also proves that a
+      # completed failure is fresh execution evidence and is aged from completion,
+      # and that every configured job in a reusable-workflow call must complete.
       #
       # A green self-test means the detector works, not that nothing was tried.
       - name: Self-test the freshness checker (can this gate still fail?)

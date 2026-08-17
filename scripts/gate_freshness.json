@@ -14,10 +14,11 @@
     "that is still draining. A gate whose budget you keep having to RAISE is a gate",
     "that is still starving: raise capacity or cut demand instead of the number.",
     "",
-    "Entries are checked against the most recent SUCCESSFUL non-pull_request run on",
-    "the default branch. Pull-request runs are deliberately excluded -- counting them",
-    "is what made gc-root-dominance look healthy in #7856 while its `main` arm was",
-    "dark for two days."
+    "Entries are checked against the most recent COMPLETED non-pull_request result on",
+    "the default branch, aged from completion rather than queue creation. Pull-request",
+    "runs are deliberately excluded -- counting them is what made gc-root-dominance",
+    "look healthy in #7856 while its `main` arm was dark for two days. Failed results",
+    "count as fresh execution evidence; the red workflow run remains their failure signal."
   ],
   "default_branch": "main",
   "gates": [
@@ -74,12 +75,20 @@
     {
       "workflow": "npm-publish-freshness.yml",
       "max_age_hours": 30,
-      "why": "Daily comparison of npm's `latest` against this tree (#7491: users installed a month-old build and hit a linker bug fixed weeks earlier). Its own cron going dark would restore exactly the blind spot it was built to close. Note the overlap by design: while the registry is genuinely behind, this workflow fails, produces no successful run, and therefore also appears HERE -- one alarm is the release being overdue, the other is nobody watching."
+      "why": "Daily comparison of npm's `latest` against this tree (#7491: users installed a month-old build and hit a linker bug fixed weeks earlier). A completed failure is fresh execution evidence here; the workflow's own sticky issue carries the overdue-registry verdict."
     },
     {
       "workflow": "security-audit.yml",
+      "source_workflow": "test.yml",
+      "job_names": [
+        "security-audit / security-audit",
+        "security-audit / soak-gate",
+        "security-audit / agent-scan",
+        "security-audit / skills-scan",
+        "security-audit / cargo-deny"
+      ],
       "max_age_hours": 12,
-      "why": "Required status context, still on every merge. Included so that if IT starves too, this checker says so rather than staying silent."
+      "why": "Dependency, soak and supply-chain audit called from every main sweep. Reusable-workflow jobs live on test.yml's run, so freshness requires all five nested jobs to complete."
     }
   ]
 }

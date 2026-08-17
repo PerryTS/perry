@@ -147,8 +147,9 @@ merging. A crash may never be parked in the snapshot (`run_gap_tests.sh` refuses
 
 Required status checks on `main`: **`pr-gate`** only. Adding, removing or renaming a
 job in `test.yml` never needs a branch-protection edit again; the fan-in job carries
-the verdict. `gate-freshness.yml` (`scripts/gate_freshness.json`) still watches
-that each main-line sweep produces a *successful* run within its budget.
+the verdict. `gate-freshness.yml` (`scripts/gate_freshness.json`) watches that each
+main-line sweep produces a *completed* result within its budget; the gate's own run
+carries whether that result passed or failed.
 
 ## Release
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when a post-merge gate has not produced a successful `main` run recently.
+"""Fail when a post-merge gate has not produced a completed `main` result recently.
 
 #7856: every heavy gate in this repo produced zero results on `main` for over two
 days. They were not failing and not cancelled -- they never reached a runner, because
@@ -14,17 +14,24 @@ nobody has looked at. Rescheduling the gates
 stops firing fails in precisely the same way. This script is the detector for both.
 
 For each gate in scripts/gate_freshness.json it asks the Actions API for the most
-recent SUCCESSFUL run on the default branch, and fails when that run is older than the
-gate's budget.
+recent COMPLETED run on the default branch, and fails when that result is older than
+the gate's budget. The age starts when the run completed, not when it entered the
+queue: a run that waited twelve hours and finished now is fresh evidence that the gate
+reached a runner.
 
 Two things it deliberately does NOT count as evidence of health:
 
   * **pull_request runs.** PR runs supersede each other and therefore drain even when
     the queue is saturated. Counting them is exactly what made `gc-root-dominance`
     look healthy in #7856 while its `main` arm had been dark for two days.
-  * **runs that merely exist.** `queued`, `in_progress` and `cancelled` runs are not
-    results. A gate with 22 queued `main` runs and no successful one is a dark gate,
-    which is the whole point.
+  * **runs that merely exist.** `queued`, `in_progress`, `cancelled` and `skipped`
+    runs are not results. A gate with 22 queued `main` runs and no completed one is a
+    dark gate, which is the whole point.
+
+A completed failure DOES count as fresh. Its own red workflow run is the failure
+signal; classifying it as starvation too conflates two independent diagnoses. This is
+especially important for advisory workflows such as npm publish freshness, whose live
+check deliberately fails and maintains its own issue while the registry is behind.
 
 Usage:
     python3 scripts/check_gate_freshness.py --self-test   # prove it can still fail
@@ -55,6 +62,11 @@ ISSUE_MARKER = "CI gate freshness alert"
 # `pull_request` is excluded on purpose -- see the module docstring.
 POST_MERGE_EVENTS = frozenset({"push", "schedule", "workflow_dispatch"})
 
+# These terminal conclusions do not prove that a gate produced a verdict. Everything
+# else returned with status=completed did reach a terminal result; in particular,
+# failure and timed_out are visible gate failures rather than freshness failures.
+NON_RESULTS = frozenset({None, "action_required", "cancelled", "skipped", "stale"})
+
 
 def _utcnow() -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc)
@@ -69,14 +81,21 @@ class Gate:
     workflow: str
     max_age_hours: float
     why: str
+    source_workflow: str | None = None
+    job_names: tuple[str, ...] = ()
+
+    @property
+    def api_workflow(self) -> str:
+        return self.source_workflow or self.workflow
 
 
 @dataclass(frozen=True)
 class Verdict:
     gate: Gate
-    age_hours: float | None  # None => no qualifying successful run at all
-    last_success: str | None
+    age_hours: float | None  # None => no qualifying completed result at all
+    last_result: str | None
     last_sha: str | None
+    conclusion: str | None
 
     @property
     def stale(self) -> bool:
@@ -85,8 +104,11 @@ class Verdict:
     @property
     def detail(self) -> str:
         if self.age_hours is None:
-            return "NO successful post-merge run in the sampled window"
-        return f"last success {self.age_hours:.1f}h ago (budget {self.gate.max_age_hours:g}h)"
+            return "NO completed post-merge result in the sampled window"
+        return (
+            f"last {self.conclusion} result {self.age_hours:.1f}h ago "
+            f"(budget {self.gate.max_age_hours:g}h)"
+        )
 
 
 def load_gates(manifest: Path = MANIFEST) -> tuple[list[Gate], str]:
@@ -96,6 +118,8 @@ def load_gates(manifest: Path = MANIFEST) -> tuple[list[Gate], str]:
             workflow=g["workflow"],
             max_age_hours=float(g["max_age_hours"]),
             why=g.get("why", ""),
+            source_workflow=g.get("source_workflow"),
+            job_names=tuple(g.get("job_names", [])),
         )
         for g in data["gates"]
     ]
@@ -115,24 +139,63 @@ def _gh_json(path: str) -> dict:
     return json.loads(proc.stdout)
 
 
-def newest_post_merge_success(
-    repo: str, workflow: str, branch: str, fetch=_gh_json
-) -> tuple[str, str] | None:
-    """Return (created_at, head_sha) of the newest successful post-merge run, or None.
+def newest_post_merge_result(
+    repo: str, gate: Gate, branch: str, fetch=_gh_json
+) -> tuple[str, str, str] | None:
+    """Return (completed_at, head_sha, conclusion) for the newest result, or None.
 
-    Asks for successful runs on the branch and then filters by event. The API's
-    `?event=` parameter takes a single value, so filtering client-side is what lets one
-    request cover push + schedule + workflow_dispatch.
+    Asks for completed runs on the branch and then filters by event and conclusion.
+    The API's `?event=` parameter takes a single value, so filtering client-side is
+    what lets one request cover push + schedule + workflow_dispatch.
+
+    The API orders runs by creation time, not completion time. Deep queues can invert
+    those orders, so inspect the whole sampled page and choose the newest completion.
     """
     path = (
-        f"repos/{repo}/actions/workflows/{workflow}/runs"
-        f"?branch={branch}&status=success&per_page=50"
+        f"repos/{repo}/actions/workflows/{gate.api_workflow}/runs"
+        f"?branch={branch}&status=completed&per_page=50"
     )
     payload = fetch(path)
+    candidates: list[tuple[str, str, str]] = []
     for run in payload.get("workflow_runs", []):
-        if run.get("event") in POST_MERGE_EVENTS:
-            return run["created_at"], run.get("head_sha", "")
-    return None
+        if run.get("event") not in POST_MERGE_EVENTS:
+            continue
+        if run.get("status") != "completed":
+            continue
+        if gate.job_names:
+            jobs = fetch(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get(
+                "jobs", []
+            )
+            by_name = {job.get("name"): job for job in jobs}
+            selected = [by_name.get(name) for name in gate.job_names]
+            if any(job is None for job in selected):
+                continue
+            if any(
+                job.get("status") != "completed"
+                or job.get("conclusion") in NON_RESULTS
+                or not job.get("completed_at")
+                for job in selected
+                if job is not None
+            ):
+                continue
+            completed = max(
+                (job["completed_at"] for job in selected if job is not None),
+                key=_parse_ts,
+            )
+            conclusion = (
+                "success"
+                if all(job.get("conclusion") == "success" for job in selected if job is not None)
+                else "failure"
+            )
+        else:
+            if run.get("conclusion") in NON_RESULTS:
+                continue
+            completed = run.get("updated_at")
+            conclusion = run.get("conclusion")
+            if not completed or not conclusion:
+                continue
+        candidates.append((completed, run.get("head_sha", ""), conclusion))
+    return max(candidates, key=lambda row: _parse_ts(row[0])) if candidates else None
 
 
 def evaluate(
@@ -141,18 +204,18 @@ def evaluate(
     verdicts: list[Verdict] = []
     for gate in gates:
         try:
-            found = newest_post_merge_success(repo, gate.workflow, branch, fetch=fetch)
+            found = newest_post_merge_result(repo, gate, branch, fetch=fetch)
         except RuntimeError as exc:
             # A workflow file that no longer exists, or an API failure, must not be
             # silently treated as "fresh". Report it as stale with no timestamp.
             print(f"::warning::{gate.workflow}: {exc}", file=sys.stderr)
             found = None
         if found is None:
-            verdicts.append(Verdict(gate, None, None, None))
+            verdicts.append(Verdict(gate, None, None, None, None))
             continue
-        created, sha = found
-        age = (now - _parse_ts(created)).total_seconds() / 3600.0
-        verdicts.append(Verdict(gate, age, created, sha))
+        completed, sha, conclusion = found
+        age = (now - _parse_ts(completed)).total_seconds() / 3600.0
+        verdicts.append(Verdict(gate, age, completed, sha, conclusion))
     return verdicts
 
 
@@ -169,7 +232,7 @@ def render(verdicts: Iterable[Verdict]) -> str:
 def issue_body(verdicts: Sequence[Verdict], branch: str) -> str:
     stale = [v for v in verdicts if v.stale]
     out = [
-        f"The following post-merge gates have not produced a successful `{branch}` run "
+        f"The following post-merge gates have not produced a completed `{branch}` result "
         "within their freshness budget.",
         "",
         "**This usually means they are starved, not broken** — queued behind a merge "
@@ -246,7 +309,7 @@ def sync_issue(repo: str, verdicts: Sequence[Verdict], branch: str) -> None:
             print(f"closed sticky issue #{existing} (all gates fresh)")
         return
 
-    title = f"{ISSUE_MARKER}: {len(stale)} gate(s) have no recent successful `{branch}` run"
+    title = f"{ISSUE_MARKER}: {len(stale)} gate(s) have no recent completed `{branch}` result"
     body = issue_body(verdicts, branch)
     if existing is None:
         url = _gh(
@@ -275,28 +338,112 @@ def self_test() -> int:
     def stamp(hours_ago: float) -> str:
         return (now - _dt.timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def run(
+        event: str,
+        status: str,
+        conclusion: str | None,
+        created_hours_ago: float,
+        completed_hours_ago: float | None,
+        sha: str,
+    ) -> dict:
+        return {
+            "event": event,
+            "status": status,
+            "conclusion": conclusion,
+            "created_at": stamp(created_hours_ago),
+            "updated_at": stamp(completed_hours_ago) if completed_hours_ago is not None else None,
+            "head_sha": sha,
+        }
+
     fixtures = {
-        # fresh: 2h old scheduled success
-        "fresh.yml": [{"event": "schedule", "created_at": stamp(2), "head_sha": "aaa"}],
-        # stale: last success 3 days ago -- the #7856 shape
-        "stale.yml": [{"event": "push", "created_at": stamp(72), "head_sha": "bbb"}],
-        # no successful post-merge run at all
+        # Fresh: a scheduled success completed 2h ago.
+        "fresh.yml": [run("schedule", "completed", "success", 3, 2, "aaa")],
+        # A failure is still a fresh RESULT. It has its own red workflow signal.
+        # Its 72h-old creation time also proves age is measured from completion.
+        "failed.yml": [run("schedule", "completed", "failure", 72, 1, "aab")],
+        # Stale: last completed result was 3 days ago -- the #7856 shape.
+        "stale.yml": [run("push", "completed", "success", 73, 72, "bbb")],
+        # No completed post-merge result at all.
         "never.yml": [],
-        # THE TRAP: plenty of recent successes, but all of them pull_request runs.
+        # Merely queued or in-progress main-line runs are not results.
+        "pending.yml": [
+            run("schedule", "queued", None, 1, None, "bbc"),
+            run("push", "in_progress", None, 2, None, "bbd"),
+        ],
+        # A cancelled recent run is not a result; the older completion remains stale.
+        "cancelled.yml": [
+            run("schedule", "completed", "cancelled", 1, 0.5, "bbe"),
+            run("schedule", "completed", "success", 73, 72, "bbf"),
+        ],
+        # THE TRAP: plenty of recent results, but all of them pull_request runs.
         # This is what made gc-root-dominance look healthy while its main arm was dark.
         "pronly.yml": [
-            {"event": "pull_request", "created_at": stamp(0.5), "head_sha": "ccc"},
-            {"event": "pull_request", "created_at": stamp(1.0), "head_sha": "ddd"},
+            run("pull_request", "completed", "success", 1, 0.5, "ccc"),
+            run("pull_request", "completed", "failure", 2, 1, "ddd"),
         ],
         # boundary: exactly at budget is NOT stale; just past it is.
-        "boundary.yml": [{"event": "schedule", "created_at": stamp(12), "head_sha": "eee"}],
+        "boundary.yml": [run("schedule", "completed", "success", 13, 12, "eee")],
+        # Reusable workflows appear as jobs on the caller run, not as their own run.
+        # The caller may fail elsewhere; all configured child jobs still form a result.
+        "test.yml": [
+            {
+                **run("push", "completed", "failure", 3, 1, "fff"),
+                "id": 101,
+            }
+        ],
+        # A partial child-job group is not a result. Fall back to the older complete
+        # group, which is stale.
+        "partial.yml": [
+            {
+                **run("push", "completed", "failure", 2, 1, "ggg"),
+                "id": 102,
+            },
+            {
+                **run("push", "completed", "success", 73, 72, "hhh"),
+                "id": 103,
+            },
+        ],
+    }
+
+    job_fixtures = {
+        101: [
+            {"name": "audit / first", "status": "completed", "conclusion": "success", "completed_at": stamp(1.5)},
+            {"name": "audit / second", "status": "completed", "conclusion": "success", "completed_at": stamp(1)},
+        ],
+        102: [
+            {"name": "audit / first", "status": "completed", "conclusion": "success", "completed_at": stamp(1)},
+        ],
+        103: [
+            {"name": "audit / first", "status": "completed", "conclusion": "success", "completed_at": stamp(72.5)},
+            {"name": "audit / second", "status": "completed", "conclusion": "failure", "completed_at": stamp(72)},
+        ],
     }
 
     def fake_fetch(path: str) -> dict:
+        if "/actions/runs/" in path:
+            run_id = int(path.split("/actions/runs/")[1].split("/jobs")[0])
+            return {"jobs": job_fixtures[run_id]}
         wf = path.split("/actions/workflows/")[1].split("/runs")[0]
         return {"workflow_runs": fixtures[wf]}
 
-    gates = [Gate(w, 12, "self-test") for w in fixtures]
+    direct_workflows = [w for w in fixtures if w not in {"test.yml", "partial.yml"}]
+    gates = [Gate(w, 12, "self-test") for w in direct_workflows]
+    gates += [
+        Gate(
+            "nested.yml",
+            12,
+            "self-test",
+            source_workflow="test.yml",
+            job_names=("audit / first", "audit / second"),
+        ),
+        Gate(
+            "nested-partial.yml",
+            12,
+            "self-test",
+            source_workflow="partial.yml",
+            job_names=("audit / first", "audit / second"),
+        ),
+    ]
     verdicts = {v.gate.workflow: v for v in evaluate(gates, "o/r", "main", now, fetch=fake_fetch)}
 
     failures: list[str] = []
@@ -310,10 +457,15 @@ def self_test() -> int:
             )
 
     expect("fresh.yml", False, "a recent scheduled success is fresh")
-    expect("stale.yml", True, "a 3-day-old success is stale")
-    expect("never.yml", True, "no successful post-merge run at all is stale")
-    expect("pronly.yml", True, "pull_request runs alone do NOT count as fresh")
+    expect("failed.yml", False, "a recent completed failure is fresh execution evidence")
+    expect("stale.yml", True, "a 3-day-old completed result is stale")
+    expect("never.yml", True, "no completed post-merge result at all is stale")
+    expect("pending.yml", True, "queued and in-progress runs do NOT count as results")
+    expect("cancelled.yml", True, "cancelled runs do NOT count as results")
+    expect("pronly.yml", True, "pull_request results alone do NOT count as fresh")
     expect("boundary.yml", False, "exactly at budget is not yet stale")
+    expect("nested.yml", False, "all reusable-workflow jobs form a fresh result")
+    expect("nested-partial.yml", True, "a partial reusable-workflow job group is not fresh")
 
     # The renderer must actually say STALE, or a red verdict could print as green.
     table = render(verdicts.values())
@@ -381,8 +533,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if stale:
         print(
-            f"\n{len(stale)} of {len(verdicts)} gates have no recent successful "
-            f"`{branch}` run. See docs/src/testing/ci-gate-scheduling.md",
+            f"\n{len(stale)} of {len(verdicts)} gates have no recent completed "
+            f"`{branch}` result. See docs/src/testing/ci-gate-scheduling.md",
             file=sys.stderr,
         )
     return _exit_code(verdicts)

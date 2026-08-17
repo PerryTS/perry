@@ -186,10 +186,18 @@ silently stops firing fails the same way.
 
 `gate-freshness.yml` runs every two hours on `ubuntu-latest` and calls
 `scripts/check_gate_freshness.py`, which asks the Actions API for each gate's most
-recent **successful** non-PR run on the default branch and fails when it is older
-than that gate's budget in `scripts/gate_freshness.json`. On failure it opens — or
-updates, never duplicates — a single sticky issue, and closes it once every gate is
-fresh again.
+recent **completed** non-PR result on the default branch and fails when it is older
+than that gate's budget in `scripts/gate_freshness.json`. Age starts when the result
+completed, not when the run joined the queue. A completed failure counts as execution
+evidence here and remains red in its own workflow; treating it as starvation too
+conflates two diagnoses. On failure the checker opens — or updates, never duplicates
+— a single sticky issue, and closes it once every gate is fresh again.
+
+Reusable workflows do not get a separate Actions run: their jobs belong to the
+caller. The `security-audit.yml` manifest entry therefore reads `test.yml` runs and
+requires all five `security-audit / ...` jobs to complete. A caller that fails in an
+unrelated job is still fresh security-audit evidence; a caller that skips even one of
+the five is not.
 
 ```bash
 python3 scripts/check_gate_freshness.py --self-test   # proves it can still fail
@@ -201,10 +209,11 @@ is still draining. A gate whose budget you have to keep raising is a gate that i
 still starving; raise the *capacity* or lower the *demand* instead.
 
 **The checker is sabotage-tested, not merely exercised.** `--self-test` plants a
-stale gate, a fresh gate, a gate with no successful run at all, and a gate whose only
-recent success is a `pull_request` run (the exact shape that made `gc-root-dominance`
-look healthy while its `main` arm was dark), and asserts the verdict for each. A
-green `--self-test` means the detector works, not that nothing was tried.
+stale gate, a fresh gate, a recent failed result, a gate with no completed result,
+queued/in-progress/cancelled runs, and a gate whose only recent results are
+`pull_request` runs (the exact shape that made `gc-root-dominance` look healthy while
+its `main` arm was dark), and asserts the verdict for each. A green `--self-test`
+means the detector works, not that nothing was tried.
 
 ## The queue in front of the schedule (#7966)
 
