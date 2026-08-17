@@ -613,3 +613,191 @@ fn count_alloc_sites_in_expr(expr: &Expr, closure_id: Option<u32>, sites: &mut H
         count_alloc_sites_in_expr(child, closure_id, sites)
     });
 }
+
+/// #8175: `FuncId`s of this module's top-level functions that participate in
+/// direct recursion — a self-call, or membership in a cycle of `FuncRef`
+/// call edges among `hir.functions`.
+///
+/// Consumed by the specialization plan to decide which specialized clones
+/// get the `preserve_nonecc` calling convention: the convention's boundary
+/// cost (a normal-CC caller saves ~20 CSRs once per entry) amortizes only
+/// under a recursive tree, so a non-recursive clone must never pay it.
+///
+/// Approximation direction, both ways bounded: edges come from the same
+/// `HotCalleeScan` walker the inline heuristics use, so a call inside a
+/// nested closure counts as an edge from the enclosing function
+/// (over-inclusion: at worst an extra boundary prologue at the clone's
+/// non-recursive entries), while indirect calls and calls routed through
+/// class methods are invisible (under-inclusion: a mutually-recursive pair
+/// hiding behind an indirect hop keeps today's convention and forgoes the
+/// win). Neither direction affects correctness — every caller of the clone
+/// uses whatever convention the registry says, consistently.
+pub(crate) fn collect_recursion_participants(hir: &Module) -> HashSet<u32> {
+    let idx_of: HashMap<u32, usize> = hir
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id, i))
+        .collect();
+    let n = hir.functions.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut participants: HashSet<u32> = HashSet::new();
+    for (i, f) in hir.functions.iter().enumerate() {
+        let mut scan = HotCalleeScan::default();
+        walk_stmts(&f.body, false, &mut scan);
+        if scan.call_counts.contains_key(&f.id) {
+            participants.insert(f.id);
+        }
+        let mut callees: Vec<usize> = scan
+            .call_counts
+            .keys()
+            .filter_map(|id| idx_of.get(id).copied())
+            .collect();
+        callees.sort_unstable();
+        adj[i] = callees;
+    }
+
+    // Iterative Tarjan SCC — any component with more than one member is a
+    // mutual-recursion cycle. Iterative because a deep static call chain is
+    // user input, not something the compiler may overflow its stack on.
+    const UNVISITED: u32 = u32::MAX;
+    let mut index = vec![UNVISITED; n];
+    let mut low = vec![0u32; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next_index: u32 = 0;
+    // (node, next child position in adj[node])
+    let mut frames: Vec<(usize, usize)> = Vec::new();
+    for start in 0..n {
+        if index[start] != UNVISITED {
+            continue;
+        }
+        frames.push((start, 0));
+        index[start] = next_index;
+        low[start] = next_index;
+        next_index += 1;
+        stack.push(start);
+        on_stack[start] = true;
+        while let Some(&mut (v, ref mut ci)) = frames.last_mut() {
+            if let Some(&w) = adj[v].get(*ci) {
+                *ci += 1;
+                if index[w] == UNVISITED {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    frames.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+            frames.pop();
+            if let Some(&(parent, _)) = frames.last() {
+                low[parent] = low[parent].min(low[v]);
+            }
+            if low[v] == index[v] {
+                // Root of an SCC: pop the component.
+                let mut component: Vec<usize> = Vec::new();
+                while let Some(w) = stack.pop() {
+                    on_stack[w] = false;
+                    component.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                if component.len() > 1 {
+                    participants.extend(component.iter().map(|&w| hir.functions[w].id));
+                }
+            }
+        }
+    }
+    participants
+}
+
+#[cfg(test)]
+mod recursion_participant_tests {
+    use super::*;
+    use perry_hir::types::Type;
+    use perry_hir::{Function, Param};
+
+    fn func(id: u32, body: Vec<Stmt>) -> Function {
+        Function {
+            id,
+            name: format!("f{id}"),
+            type_params: Vec::new(),
+            params: vec![Param {
+                id: id * 10,
+                name: "n".to_string(),
+                ty: Type::Number,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            }],
+            return_type: Type::Number,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn call_stmt(fid: u32) -> Stmt {
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::FuncRef(fid)),
+            args: vec![Expr::Integer(1)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))
+    }
+
+    #[test]
+    fn self_call_cycle_pair_and_acyclic_chain_are_classified() {
+        let mut module = Module::new("recursion.ts");
+        // 1 calls itself; 2 <-> 3 mutual; 4 -> 5 -> 6 straight chain;
+        // 7 -> 1 calls INTO a cycle without being on one.
+        module.functions.push(func(1, vec![call_stmt(1)]));
+        module.functions.push(func(2, vec![call_stmt(3)]));
+        module.functions.push(func(3, vec![call_stmt(2)]));
+        module.functions.push(func(4, vec![call_stmt(5)]));
+        module.functions.push(func(5, vec![call_stmt(6)]));
+        module
+            .functions
+            .push(func(6, vec![Stmt::Return(Some(Expr::Integer(0)))]));
+        module.functions.push(func(7, vec![call_stmt(1)]));
+
+        let got = collect_recursion_participants(&module);
+        let mut got: Vec<u32> = got.into_iter().collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![1, 2, 3],
+            "participants are exactly the self-loop and the 2-cycle; \
+             a caller INTO a cycle and an acyclic chain stay out"
+        );
+    }
+
+    #[test]
+    fn a_long_static_call_chain_does_not_overflow_the_walker() {
+        // The SCC walk is iterative on purpose: chain depth is user input.
+        let mut module = Module::new("recursion.ts");
+        const N: u32 = 20_000;
+        for id in 1..=N {
+            let body = if id < N {
+                vec![call_stmt(id + 1)]
+            } else {
+                vec![call_stmt(1)] // close one giant cycle
+            };
+            module.functions.push(func(id, body));
+        }
+        let got = collect_recursion_participants(&module);
+        assert_eq!(got.len() as u32, N, "the whole ring is one SCC");
+    }
+}

@@ -15,6 +15,21 @@
 
 use crate::types::LlvmType;
 
+/// LLVM's `preserve_none` calling convention, textual token form (#8175).
+///
+/// Applied to recursion-participating specialized clones: with no
+/// callee-saved registers there is nothing for a param-derived live-across-
+/// call value to pin in the entry block, so LLVM shrink-wrapping can sink
+/// the whole frame into the recursive path and the leaf path runs
+/// frameless. The numeric C-API id lives in `dialect::LLVM_CC_PRESERVE_NONE`;
+/// the two must name the same convention.
+///
+/// A call site whose convention disagrees with its callee is UB — every
+/// consumer (define header, declare line, call, invoke) reads the ONE
+/// module-level registry (`LlModule` -> `RegCounter`), and
+/// `spec_preserve_none_tests` asserts define/call agreement module-wide.
+pub(crate) const PRESERVE_NONE_CC: &str = "preserve_nonecc";
+
 #[derive(Clone)]
 pub enum LoadFlavor {
     Plain,
@@ -103,6 +118,10 @@ pub enum LlInst {
         ret: LlvmType,
         callee: String,
         args: Vec<(LlvmType, String)>,
+        /// Explicit calling-convention token (`preserve_nonecc`), or `None`
+        /// for the default C convention. Must match the callee's define
+        /// header — a mismatch is UB, not a verifier error (#8175).
+        cconv: Option<&'static str>,
     },
     /// Pre-opaque-pointer indirect call, rendered `(T1, T2)*` exactly as the
     /// text emitter always has.
@@ -250,12 +269,20 @@ impl LlInst {
                 ret,
                 callee,
                 args,
+                cconv,
             } => {
                 out.push_str("  ");
                 if let Some(d) = dst {
                     let _ = write!(out, "{d} = ");
                 }
-                let _ = write!(out, "call {ret} @{callee}(");
+                match cconv {
+                    Some(cc) => {
+                        let _ = write!(out, "call {cc} {ret} @{callee}(");
+                    }
+                    None => {
+                        let _ = write!(out, "call {ret} @{callee}(");
+                    }
+                }
                 push_args(out, args);
                 out.push(')');
             }

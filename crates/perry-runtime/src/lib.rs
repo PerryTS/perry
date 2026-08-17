@@ -98,6 +98,7 @@ pub mod module_require;
 pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
+pub mod native_value_profile;
 pub mod navigator;
 pub mod net_validate;
 mod param_type_guard;

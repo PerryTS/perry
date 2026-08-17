@@ -785,6 +785,13 @@ pub(crate) struct CrossModuleCtx {
     /// the mutation usually lives in a *different* function (or a constructor,
     /// or a field initializer) than the `new`, so a per-function walk misses it.
     pub module_dispatch: crate::collectors::ModuleDispatchFacts,
+    /// #8103: inline array-callback element parameters whose enclosing region
+    /// proved an exact, stable element shape. Closures compile independently,
+    /// so this module pre-pass carries the fact across that boundary.
+    pub array_callback_shapes: std::collections::HashMap<
+        u32,
+        std::collections::HashMap<u32, crate::collectors::PtrShapeLocal>,
+    >,
     /// Functions with a 3-param clamp pattern: fid → true. Call sites
     /// emit `@llvm.smax.i32` + `@llvm.smin.i32` instead of a function call.
     pub clamp3_functions: std::collections::HashSet<u32>,

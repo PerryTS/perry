@@ -28,6 +28,14 @@ pub(crate) fn is_array_only_method_name(name: &str) -> bool {
     )
 }
 
+/// Array methods that are deliberately absent from `%TypedArray%.prototype`.
+pub(crate) fn typed_array_lacks_array_method(name: &str) -> bool {
+    matches!(
+        name,
+        "flat" | "flatMap" | "push" | "pop" | "shift" | "unshift" | "splice" | "toSpliced"
+    )
+}
+
 /// Whether an unproven receiver's argument count can use the selected static
 /// String lowering. Invalid counts must bypass the tag diamond because its
 /// String arm is emitted eagerly and may reject them before runtime dispatch.

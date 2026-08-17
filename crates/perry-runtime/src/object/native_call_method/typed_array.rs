@@ -1,5 +1,35 @@
 use super::*;
 
+pub(super) fn typed_array_lacks_array_method(name: &str) -> bool {
+    matches!(
+        name,
+        "flat" | "flatMap" | "push" | "pop" | "shift" | "unshift" | "splice" | "toSpliced"
+    )
+}
+
+/// Resolve an Array-only method name on a typed-array receiver. Although the
+/// intrinsic prototype lacks these methods, an own property or user-patched
+/// prototype may provide one and must win before the not-callable TypeError.
+pub(super) unsafe fn dispatch_absent_typed_array_array_method(
+    ta: *mut crate::typedarray::TypedArrayHeader,
+    method_name: &str,
+    arg_handles: &[crate::gc::RuntimeHandle],
+) -> f64 {
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name(ta as *const ObjectHeader, key);
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
+    let receiver = f64::from_bits(JSValue::pointer(ta as *mut u8).bits());
+    if let Some(result) = call_primitive_closure_value(receiver, value, args.as_ptr(), args.len()) {
+        return result;
+    }
+    crate::error::js_throw_type_error_not_a_function(
+        std::ptr::null(),
+        0,
+        method_name.as_ptr(),
+        method_name.len(),
+    )
+}
+
 /// Dispatch a `%TypedArray%` instance method on an already-resolved
 /// `TypedArrayHeader` pointer. Returns `Some(result)` when handled, `None` when
 /// the method isn't a typed-array method (caller falls through to the generic
