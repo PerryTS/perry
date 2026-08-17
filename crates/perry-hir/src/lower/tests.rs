@@ -273,14 +273,10 @@ export function perfHooksDefault() {
   return hooks.default;
 }
 "#;
-    let module = perry_parser::parse_typescript(source, "perf-hooks-default.ts")
-        .expect("source parses");
-    let hir = super::lower_module(
-        &module,
-        "perf-hooks-default",
-        "perf-hooks-default.ts",
-    )
-    .expect("source lowers");
+    let module =
+        perry_parser::parse_typescript(source, "perf-hooks-default.ts").expect("source parses");
+    let hir = super::lower_module(&module, "perf-hooks-default", "perf-hooks-default.ts")
+        .expect("source lowers");
     let function = hir
         .functions
         .iter()
