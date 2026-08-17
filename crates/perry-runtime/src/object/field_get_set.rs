@@ -330,8 +330,10 @@ pub(crate) use has_property::{
     wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
+#[cfg(test)]
+pub(crate) use ic_miss::primitive_proto_method_name_static;
 pub(crate) use ic_miss::{
-    is_array_method_value_name, is_primitive_proto_method, set_method_value_name,
+    bind_primitive_proto_method_static, is_array_method_value_name, set_method_value_name,
     timer_handle_method_name_static,
 };
 pub use ic_miss::{
