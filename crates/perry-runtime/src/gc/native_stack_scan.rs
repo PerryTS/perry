@@ -16,8 +16,16 @@ use crate::arena::classify_heap_space_in_range;
 use crate::gc::types::{forwarding_address, GC_FLAG_FORWARDED, GC_HEADER_SIZE};
 
 /// Is the native-stack diagnostic enabled?
+///
+/// **ABORT IMPLIES SCAN** — the same rule `fromspace_scan::resolve_scan_knobs`
+/// carries for #7154's pair. Without it `PERRY_GC_SCAN_NATIVE_STACK_ABORT=1`
+/// alone is completely inert: `run_native_stack_scan` returns at this gate, the
+/// scan never runs, there is nothing to abort, and the run reports success. A
+/// knob that reads as "abort on the first offender" and silently does nothing
+/// is exactly what the GC knob kill-policy exists to prevent, and exactly what
+/// an investigator reaching for the abort switch mid-hunt would be misled by.
 fn native_stack_scan_enabled() -> bool {
-    crate::gc::env_flag_enabled("PERRY_GC_SCAN_NATIVE_STACK")
+    crate::gc::env_flag_enabled("PERRY_GC_SCAN_NATIVE_STACK") || native_stack_scan_abort()
 }
 
 /// Should we abort on the first stale pointer found?
@@ -90,7 +98,8 @@ pub(super) fn run_native_stack_scan() {
         let nanboxed_addr = word & 0x0000_FFFF_FFFF_FFFF;
         let tag = word & 0xFFFF_0000_0000_0000;
         if tag == 0x7FFD_0000_0000_0000      // POINTER_TAG
-            || tag == 0x7FFF_0000_0000_0000  // STRING_TAG
+            || tag == 0x7FFF_0000_0000_0000
+        // STRING_TAG
         {
             if let Some(slot) = check_word_as_heap_pointer(nanboxed_addr, addr) {
                 offenders.push(slot);
@@ -131,11 +140,7 @@ pub(super) fn run_native_stack_scan() {
                 while a + 8 <= dump_end && off < 64 {
                     let w = unsafe { *(a as *const u64) };
                     if w != 0 {
-                        eprintln!(
-                            "  sp+{off:#04x}: 0x{w:016x}",
-                            off = (a - dump_start),
-                            w = w,
-                        );
+                        eprintln!("  sp+{off:#04x}: 0x{w:016x}", off = (a - dump_start), w = w,);
                     }
                     a += 8;
                     off += 1;
@@ -166,9 +171,9 @@ pub(super) fn run_native_stack_scan() {
 
     for (i, slot) in offenders.iter().enumerate() {
         // Find which frame this stale pointer belongs to.
-        let frame_idx = frames.iter().position(|f| {
-            slot.stack_addr >= f.sp && slot.stack_addr < f.sp + f.size
-        });
+        let frame_idx = frames
+            .iter()
+            .position(|f| slot.stack_addr >= f.sp && slot.stack_addr < f.sp + f.size);
         // Read the raw word for debugging.
         let raw_word = unsafe { *(slot.stack_addr as *const u64) };
         eprintln!(
@@ -287,12 +292,16 @@ fn resolve_symbol(addr: usize) -> String {
             let sym = if info.dli_sname.is_null() {
                 "?".to_string()
             } else {
-                std::ffi::CStr::from_ptr(info.dli_sname).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(info.dli_sname)
+                    .to_string_lossy()
+                    .into_owned()
             };
             let fname = if info.dli_fname.is_null() {
                 "?".to_string()
             } else {
-                std::ffi::CStr::from_ptr(info.dli_fname).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(info.dli_fname)
+                    .to_string_lossy()
+                    .into_owned()
             };
             let offset = addr - (info.dli_saddr as usize);
             format!("{sym}+{offset:#x} in {fname}")
@@ -321,7 +330,9 @@ fn check_word_as_heap_pointer(word: u64, stack_addr: usize) -> Option<StaleStack
     let addr = word as usize;
 
     // Check if this address is in a nursery space (from-space).
-    let (space, base) = classify_heap_space_in_range(addr)?;
+    // #8277 widened this to (space, base, object_start_bitmap); the diagnostic
+    // only needs the space and the block base.
+    let (space, base, _starts) = classify_heap_space_in_range(addr)?;
     if !space.is_nursery() {
         return None;
     }
