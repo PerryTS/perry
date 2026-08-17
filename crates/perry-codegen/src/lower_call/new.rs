@@ -955,6 +955,11 @@ fn lower_new_impl_inner<'a>(
     let has_own_ctor = class.constructor.is_some();
     let has_extends = class.extends_name.is_some();
     let has_imported_ctor = ctx.imported_class_ctors.contains_key(class_name);
+    // A local class whose imported parent is represented by both a static
+    // name and a runtime heritage value must construct through that runtime
+    // value. The source module's standalone ctor owns all imported-parent
+    // field initialization; this module must only replay the local leaf.
+    let defer_to_dynamic_parent = class.extends_expr.is_some() && !has_imported_ctor;
     let builtin_parent_runtime = if !has_own_ctor && !has_imported_ctor {
         match class.extends_name.as_deref() {
             Some("Writable") => Some("js_node_stream_writable_subclass_init"),
@@ -1372,7 +1377,23 @@ fn lower_new_impl_inner<'a>(
         // PgSerial needs to dispatch to Column_constructor (forwarding the
         // ctor args). Without this walk, `new PgSerial(table, config)`
         // produced an empty object since none of the chain's bodies ran.
-        if !found_inherited_ctor {
+        // An imported identifier used as a local class's heritage carries both
+        // `extends_name` (for static shape/field metadata) and `extends_expr`
+        // (the authoritative runtime parent value). Do not also call the
+        // imported constructor symbol here: its consumer-side metadata records
+        // only the source class's own constructor arity, which is zero for a
+        // default-derived constructor even though the emitted source symbol
+        // forwards its ancestor's arguments. Calling it therefore runs the
+        // parent once with missing arguments, then the dynamic-parent arm below
+        // runs it again with the real arguments. Drizzle's
+        // `MySqlInt extends MySqlColumnWithAutoIncrement` reaches
+        // `MySqlColumn(table, config)` first as `(undefined, undefined)` and
+        // throws while assigning `config.uniqueName`.
+        //
+        // Imported leaf classes (`new ImportedClass(...)`) still use their own
+        // imported constructor symbol; only a LOCAL leaf whose parent is the
+        // dynamic cross-module value defers to `js_fetch_or_value_super`.
+        if !found_inherited_ctor && !defer_to_dynamic_parent {
             let lookup_class = class_name.to_string();
             let mut effective_class_name = lookup_class.clone();
             let mut effective_extends = class.extends_name.clone();
@@ -1619,7 +1640,8 @@ fn lower_new_impl_inner<'a>(
     // static `extends_name`, so include the `extends_expr` case (SelfOnly,
     // mirroring the explicit-`SuperCall` dynamic-parent arm in this_super_call.rs).
     if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
-        if builtin_parent_runtime.is_some()
+        if defer_to_dynamic_parent
+            || builtin_parent_runtime.is_some()
             || fetch_parent_runtime.is_some()
             || promise_parent_runtime
             || usp_parent_runtime
