@@ -51,6 +51,7 @@ SENTINELS=(
   js_box_set_bits
   js_closure_get_capture_bits
   js_closure_set_capture_bits
+  js_closure_set_box_capture_ptr
   js_object_get_field_by_property_id_f64
   js_object_set_field_by_property_id
   js_native_call_method_by_id

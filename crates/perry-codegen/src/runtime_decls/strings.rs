@@ -197,6 +197,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[PTR, I32, PTR],
     );
     module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+    module.declare_function("js_closure_set_box_capture_ptr", VOID, &[I64, I32, I64]);
     module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
     module.declare_function("js_closure_set_capture_f64", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_closure_get_capture_f64", DOUBLE, &[I64, I32]);

@@ -131,6 +131,7 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // module factory these were 1,495 of 5,537 statepoints.
         | "js_closure_get_capture_bits"
         | "js_closure_set_capture_bits"
+        | "js_closure_set_box_capture_ptr"
         | "js_closure_get_capture_ptr"
         | "js_closure_set_capture_ptr"
         // Variable-box accessors and allocators (#8132), `box.rs`. Boxes are
@@ -435,6 +436,7 @@ mod tests {
         for name in [
             "js_closure_get_capture_bits",
             "js_closure_set_capture_bits",
+            "js_closure_set_box_capture_ptr",
             "js_closure_get_capture_ptr",
             "js_closure_set_capture_ptr",
             "js_box_alloc_bits",

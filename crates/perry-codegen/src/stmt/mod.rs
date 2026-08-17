@@ -595,10 +595,9 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         Stmt::PreallocateTdzBoxes(ids) => emit_preallocate_boxes(ctx, ids, true),
 
         // #7933 follow-up (async-state RSS accumulation): a plain-async
-        // activation's terminal states release the box cells the escape
-        // analysis proved unobservable — clear + de-register + park for
-        // reuse, so completed activations stop accumulating malloc-side
-        // memory (cell + registry entry) for the life of the process.
+        // activation's terminal states hand its complete frame to runtime
+        // lifetime tracking. Uncaptured cells publish after queued/running
+        // steps drain; captured cells wait for their last GC closure.
         Stmt::ReleaseBoxes(ids) => emit_release_boxes(ctx, ids),
 
         // #853: every current `perry_hir::Stmt` variant is matched above.

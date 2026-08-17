@@ -88,10 +88,9 @@ pub fn build_async_step_driver_direct(
     captures_new_target: bool,
     enclosing_class: Option<String>,
     is_strict: bool,
-    // #7933: boxed body locals of this activation that no closure can observe.
-    // Released (`js_box_set(cell, undefined)`) at the step machine's terminal
-    // states so a completed activation stops retaining its locals through the
-    // never-freed `BOX_REGISTRY`. See `generator/box_release.rs`.
+    // Boxed body and control locals in this activation. Named at terminal
+    // states; runtime closure lifetime tracking defers publication for any
+    // cell an escaped closure can still observe.
     release_ids: &[LocalId],
 ) -> Vec<Stmt> {
     // When `throw_closure_expr` is None, the function had no awaiting

@@ -6,6 +6,7 @@
 //!   - Followed by captured values (as f64 or i64 pointers)
 
 mod alloc;
+mod box_captures;
 mod dispatch;
 mod dynamic_props;
 mod registry;
@@ -20,10 +21,11 @@ pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_singleton, js_closure_alloc_with_captures_singleton,
     js_closure_get_capture_bits, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_get_func, js_closure_set_capture_bits, js_closure_set_capture_f64,
-    js_closure_set_capture_ptr, note_closure_capture_slot, rebuild_closure_layout_and_barriers,
-    scan_singleton_closure_roots_mut, ClosureHeader, CLOSURE_ALLOC_COUNT,
-    CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS, CLOSURE_TYPE_TAG_OFFSET,
+    js_closure_get_func, js_closure_set_box_capture_ptr, js_closure_set_capture_bits,
+    js_closure_set_capture_f64, js_closure_set_capture_ptr, note_closure_capture_slot,
+    rebuild_closure_layout_and_barriers, scan_singleton_closure_roots_mut, ClosureHeader,
+    CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
+    CLOSURE_TYPE_TAG_OFFSET,
 };
 
 pub use registry::{
@@ -55,6 +57,12 @@ pub(crate) use dispatch::{
 };
 pub use unbox::js_closure_unbox_callee_checked;
 
+#[cfg(test)]
+pub(crate) use box_captures::test_clear_closure_box_capture_indexes;
+pub(crate) use box_captures::{
+    box_capture_count, clone_closure_box_captures, closure_box_captures_owner_moved,
+    prune_dead_closure_box_capture_owners, visit_closure_box_payload_slots_mut,
+};
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{

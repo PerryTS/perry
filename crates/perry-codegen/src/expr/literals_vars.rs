@@ -724,15 +724,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 //
                 // #8208 added a release/reuse path for completed async
                 // activations, so "never freed" is no longer literally true and
-                // the argument is now stated on the two properties that ARE:
+                // the argument is now stated on the properties that ARE:
                 // (1) cell memory is never returned to the allocator, so the
                 // address never stops naming 8 bytes of box cell; (2) the
-                // release transform excludes closure-visible locals while a
-                // capture can remain reachable; and (3) a released cell stays
-                // PARKED until its owning activation has no queued or running
-                // async step. A capture from an enclosing activation therefore
-                // cannot become reusable inside the nested user frame
-                // `coerce_old`/`step_new` may enter.
+                // runtime counts each raw box capture; and (3) a
+                // terminal cell stays live until both queued/running steps and
+                // capturing closures are gone. A capture from an enclosing
+                // activation therefore cannot become reusable inside the
+                // nested user frame `coerce_old`/`step_new` may enter.
                 if ctx.boxed_vars.contains(id) {
                     let blk = ctx.block();
                     let box_ptr = blk.call(

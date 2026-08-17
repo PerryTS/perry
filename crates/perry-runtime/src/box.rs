@@ -172,30 +172,22 @@ crate::perry_thread_local! {
     /// #7933 follow-up: reusable cells for each box kind, plus the fallback
     /// quarantine used by release calls made outside a tracked activation.
     ///
-    /// `js_*box_release` (emitted at a plain-async activation's terminal
-    /// states, ONLY for cells the transform's escape analysis proved no
-    /// closure can observe — `perry-transform/src/generator/box_release.rs`)
-    /// clears the cell, removes it from its registry, and parks the address in
-    /// that activation's tagged release range. The async pump retains the
-    /// activation token for each queued/running `Task::AsyncStep`; the final
-    /// decrement publishes the range to these free lists. `js_*box_alloc*`
-    /// pops the matching list before touching `std::alloc`.
+    /// `js_*box_release` names every cell in a completed plain-async frame.
+    /// The async pump retains the activation token for queued/running steps.
+    /// When those drain, each uncaptured cell clears and publishes while a
+    /// closure-captured cell remains pending until its own capture count is
+    /// zero. `js_*box_alloc*` pops the matching free list before touching
+    /// `std::alloc`.
     ///
     /// ## Why the per-activation boundary is sound
     ///
-    /// A released cell's address can still be REACHED (not legitimately
-    /// read) by one thing: a duplicate resume of the already-terminal
-    /// activation, which can only exist as a `Task::AsyncStep` already
-    /// sitting in this thread's TASK_QUEUE (every suspend registers the step
-    /// on a native, settle-once Promise, so each registration fires at most
-    /// once; user thenables are assimilated first and cannot double-fire the
-    /// step). While parked, the address is INERT: it is out of the registry,
-    /// so `js_box_set` drops the write and `js_box_get` returns `undefined`,
-    /// which routes a stray resume into the dispatch loop's default
-    /// done-arm — byte-for-byte the behavior of the pre-existing cleared-cell
-    /// path. When this activation's reference count reaches zero, no queued or
-    /// running resume can still carry its step closure; reusing its cells is
-    /// unobservable even while unrelated tasks remain in the queue.
+    /// Before the activation reference count reaches zero, every terminal cell
+    /// remains registered and unchanged because a queued/running resume can
+    /// still observe the frame. At zero, the frame splits into independent
+    /// cells: GC closure capture indexes follow moves and keep only the exact
+    /// captured cells live until authoritative death pruning drops their final
+    /// counts. Clearing and reuse therefore happen at each exact reachability
+    /// boundary instead of one captured cell retaining the whole frame.
     ///
     /// Memory safety is unconditional either way: cells only ever move
     /// between the registry, the quarantine and the pool — they are never
@@ -206,7 +198,7 @@ crate::perry_thread_local! {
     /// live registered cell or an inert parked one) and #7906's positive
     /// pointer cache ("was a box" can never become "is another object").
     ///
-    /// NOT a GC root: parked cells are cleared before parking, and the
+    /// NOT a GC root: published cells are cleared before parking, and the
     /// addresses themselves are `std::alloc` memory, not GC-heap pointers.
     /// The root-holder census intentionally does not classify bare core-crate
     /// integer tables of this shape; its documented rule-B limit applies.
@@ -221,11 +213,11 @@ crate::perry_thread_local! {
     /// side table was ~1 MB and made small async workloads a net RSS
     /// REGRESSION; threading the list through the cells removes it entirely.
     ///
-    /// Overwriting the cell is why this list holds only cells that are PAST
-    /// their activation's reachability boundary. A parked cell must keep the
-    /// terminal value a stray duplicate resume reads (`-1` / `true` /
-    /// `undefined`); only the final activation decrement makes its bytes free
-    /// to become an intrusive link.
+    /// Overwriting the cell is why this list holds only cells that are past
+    /// their activation's reachability boundary. Pending cells retain their
+    /// real value while a closure can observe it; both the activation step
+    /// boundary and that cell's capture count must be clear before its bytes
+    /// become an intrusive link.
     static BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static I32_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BOOL_BOX_FREE_HEAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -251,15 +243,20 @@ crate::perry_thread_local! {
     /// activations plus one releasing frame rather than process history.
     static ASYNC_RELEASED_CELLS: std::cell::RefCell<Vec<usize>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// Cells already named by a terminal `ReleaseBoxes`. They remain live and
+    /// registered while an escaped closure can still read them. The value is
+    /// the cell-kind tag plus `ASYNC_RELEASE_DRAINED` once queued/running step
+    /// owners are gone; at that point a zero capture count publishes the cell.
+    static ASYNC_PENDING_RELEASES: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, usize>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Malloc-side reachability token for one lowered plain-async activation.
 ///
-/// `refs` counts the lifecycle owner plus every queued/running async-step
-/// owner. Released cells stay parked at their terminal values in the token's
-/// tagged range until the last owner goes away; that zero transition publishes
-/// the whole frame to the intrusive free pools. This is the exact reachability
-/// boundary that a global "task queue empty" flush could only approximate.
+/// `refs` counts the lifecycle owner plus queued/running async-step owners.
+/// At zero, unobserved terminal cells publish immediately; a closure-captured
+/// cell detaches from the activation and publishes independently when its own
+/// capture count reaches zero.
 pub(crate) struct AsyncBoxActivation {
     id: u64,
     refs: std::cell::Cell<usize>,
@@ -274,6 +271,7 @@ const ASYNC_RELEASE_JS: usize = 1;
 const ASYNC_RELEASE_I32: usize = 2;
 const ASYNC_RELEASE_BOOL: usize = 3;
 const ASYNC_RELEASE_TAG_MASK: usize = 0b11;
+const ASYNC_RELEASE_DRAINED: usize = 0b100;
 
 /// Create the stable token for a plain-async activation. The activation
 /// lifecycle owns the initial reference until a terminal release (or
@@ -359,6 +357,18 @@ pub(crate) fn retain_async_box_activation(ptr: *mut AsyncBoxActivation) {
     }
 }
 
+/// Resolve a raw closure-capture word to a currently registered box address.
+pub(crate) fn registered_box_capture_addr(addr: usize) -> Option<usize> {
+    if !is_plausible_box_ptr(addr as *mut Box) {
+        return None;
+    }
+    let ptr = addr as *mut Box;
+    let is_live_box = is_registered_box_ptr(ptr)
+        || is_registered_i32_box_ptr(ptr.cast::<I32Box>())
+        || is_registered_bool_box_ptr(ptr.cast::<BoolBox>());
+    is_live_box.then_some(addr)
+}
+
 #[inline]
 pub(crate) fn release_async_box_activation(ptr: *mut AsyncBoxActivation) {
     if ptr.is_null() {
@@ -412,6 +422,81 @@ fn push_free_cell(addr: usize, head: &'static crate::tls_hot::HotKey<std::cell::
     });
 }
 
+fn publish_box_cell(addr: usize, tag: usize) {
+    match tag {
+        ASYNC_RELEASE_JS => {
+            BOX_REGISTRY.with(|r| {
+                r.borrow_mut().remove(&addr);
+            });
+            box_ptr_cache_evict(&BOX_PTR_CACHE, addr);
+            unsafe { (*(addr as *mut Box)).value = crate::value::TAG_UNDEFINED };
+            push_free_cell(addr, &BOX_FREE_HEAD);
+        }
+        ASYNC_RELEASE_I32 => {
+            I32_BOX_REGISTRY.with(|r| {
+                r.borrow_mut().remove(&addr);
+            });
+            box_ptr_cache_evict(&I32_BOX_PTR_CACHE, addr);
+            unsafe { (*(addr as *mut I32Box)).value = -1 };
+            push_free_cell(addr, &I32_BOX_FREE_HEAD);
+        }
+        ASYNC_RELEASE_BOOL => {
+            BOOL_BOX_REGISTRY.with(|r| {
+                r.borrow_mut().remove(&addr);
+            });
+            box_ptr_cache_evict(&BOOL_BOX_PTR_CACHE, addr);
+            unsafe { (*(addr as *mut BoolBox)).value = true };
+            push_free_cell(addr, &BOOL_BOX_FREE_HEAD);
+        }
+        _ => unreachable!("invalid async released-cell tag"),
+    }
+    ASYNC_PENDING_RELEASES.with(|pending| {
+        pending.borrow_mut().remove(&addr);
+    });
+    BOX_FLUSH_PUBLISHED.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn box_capture_count_reached_zero(addr: usize) {
+    let pending = ASYNC_PENDING_RELEASES
+        .with(|releases| releases.borrow().get(&addr).copied())
+        .unwrap_or(0);
+    if pending & ASYNC_RELEASE_DRAINED != 0 {
+        publish_box_cell(addr, pending & ASYNC_RELEASE_TAG_MASK);
+    }
+}
+
+/// Expose a drained, closure-owned JS box's payload to the closure tracer.
+/// The exact-capture table may also contain i32/bool box addresses; requiring
+/// the pending JS tag is the authoritative type discriminator before the
+/// pointer is dereferenced as [`Box`].
+pub(crate) fn visit_pending_captured_js_box_payload_slot(
+    addr: usize,
+    visit: &mut dyn FnMut(*mut u64),
+) {
+    let is_pending_js = ASYNC_PENDING_RELEASES.with(|pending| {
+        pending
+            .borrow()
+            .get(&addr)
+            .is_some_and(|tag| *tag == (ASYNC_RELEASE_JS | ASYNC_RELEASE_DRAINED))
+    });
+    if is_pending_js && BOX_REGISTRY.with(|registry| registry.borrow().contains(&addr)) {
+        let ptr = addr as *mut Box;
+        unsafe { visit(&raw mut (*ptr).value) };
+    }
+}
+
+fn begin_pending_release(addr: usize, tag: usize) -> bool {
+    ASYNC_PENDING_RELEASES.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.contains_key(&addr) {
+            false
+        } else {
+            pending.insert(addr, tag);
+            true
+        }
+    })
+}
+
 fn publish_async_activation_cells(activation: *mut AsyncBoxActivation) {
     let (start, end) = unsafe {
         (
@@ -422,7 +507,6 @@ fn publish_async_activation_cells(activation: *mut AsyncBoxActivation) {
     if start == NO_RELEASE_RANGE {
         return;
     }
-    let mut published = 0u64;
     ASYNC_RELEASED_CELLS.with(|cells| {
         let mut cells = cells.borrow_mut();
         debug_assert!(start <= end && end <= cells.len());
@@ -432,20 +516,23 @@ fn publish_async_activation_cells(activation: *mut AsyncBoxActivation) {
                 continue;
             }
             let addr = value & !ASYNC_RELEASE_TAG_MASK;
-            match value & ASYNC_RELEASE_TAG_MASK {
-                ASYNC_RELEASE_JS => push_free_cell(addr, &BOX_FREE_HEAD),
-                ASYNC_RELEASE_I32 => push_free_cell(addr, &I32_BOX_FREE_HEAD),
-                ASYNC_RELEASE_BOOL => push_free_cell(addr, &BOOL_BOX_FREE_HEAD),
-                _ => unreachable!("invalid async released-cell tag"),
+            let tag = value & ASYNC_RELEASE_TAG_MASK;
+            if crate::closure::box_capture_count(addr) == 0 {
+                publish_box_cell(addr, tag);
+            } else {
+                ASYNC_PENDING_RELEASES.with(|pending| {
+                    let previous = pending
+                        .borrow_mut()
+                        .insert(addr, tag | ASYNC_RELEASE_DRAINED);
+                    debug_assert_eq!(previous, Some(tag));
+                });
             }
             *tagged = 0;
-            published += 1;
         }
         while cells.last() == Some(&0) {
             cells.pop();
         }
     });
-    BOX_FLUSH_PUBLISHED.fetch_add(published, Ordering::Relaxed);
 }
 
 /// Drop the activation lifecycle's owner at terminal state. Queued or running
@@ -551,7 +638,7 @@ fn box_ptr_cache_record(cache: &'static BoxPtrCache, addr: usize) {
 }
 
 /// Evict `addr` from its direct-mapped cache slot if it currently occupies
-/// it. Called on release so a parked cell is invisible to the positive cache
+/// it. Called on publication so a parked cell is invisible to the positive cache
 /// too — the parked-cell inertness argument in the QUARANTINE doc relies on
 /// every `js_box_get`/`js_box_set` on a parked address falling through to
 /// the registry probe and missing.
@@ -687,13 +774,10 @@ pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
 /// #7933 follow-up: release one JSValue box cell at a plain-async
 /// activation's terminal state.
 ///
-/// Emitted by codegen for `Stmt::ReleaseBoxes` — ONLY for cells the
-/// transform's escape analysis proved no closure can observe
-/// (`perry-transform/src/generator/box_release.rs`), which is the same
-/// precondition the pre-existing clear-to-`undefined` release relied on.
-/// Clears the cell, removes it from the registry, evicts the positive-cache
-/// slot, and parks the address for reuse after this activation's final queued
-/// or running async-step reference is released (see the pool doc above).
+/// Emitted by codegen for every cell in a completed plain-async frame. It
+/// records the cell in the activation's pending terminal release range.
+/// Clearing, de-registration and reuse wait for both async-step references and
+/// GC closures capturing the cell to disappear (see the pool doc above).
 ///
 /// Idempotent and foreign-pointer-safe by the same gate: a pointer that is
 /// not currently registered — already released, never a box, or a
@@ -707,6 +791,19 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
     if !is_plausible_box_ptr(ptr) {
         return;
     }
+    let activation = crate::promise::current_async_box_activation();
+    if !activation.is_null() {
+        if !BOX_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+            return;
+        }
+        if !begin_pending_release(addr, ASYNC_RELEASE_JS) {
+            return;
+        }
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_JS);
+        finish_async_box_activation(activation);
+        BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let was_registered = BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
     if !was_registered {
         return;
@@ -718,13 +815,7 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
         // root scanner only walks the registry, which no longer has it).
         (*ptr).value = crate::value::TAG_UNDEFINED;
     }
-    let activation = crate::promise::current_async_box_activation();
-    if activation.is_null() {
-        BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
-    } else {
-        park_async_activation_cell(activation, addr, ASYNC_RELEASE_JS);
-        finish_async_box_activation(activation);
-    }
+    BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -744,6 +835,19 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return;
     }
+    let activation = crate::promise::current_async_box_activation();
+    if !activation.is_null() {
+        if !I32_BOX_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+            return;
+        }
+        if !begin_pending_release(addr, ASYNC_RELEASE_I32) {
+            return;
+        }
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_I32);
+        finish_async_box_activation(activation);
+        BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let was_registered = I32_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
     if !was_registered {
         return;
@@ -752,13 +856,7 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     unsafe {
         (*ptr).value = -1;
     }
-    let activation = crate::promise::current_async_box_activation();
-    if activation.is_null() {
-        I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
-    } else {
-        park_async_activation_cell(activation, addr, ASYNC_RELEASE_I32);
-        finish_async_box_activation(activation);
-    }
+    I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -779,6 +877,19 @@ pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return;
     }
+    let activation = crate::promise::current_async_box_activation();
+    if !activation.is_null() {
+        if !BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+            return;
+        }
+        if !begin_pending_release(addr, ASYNC_RELEASE_BOOL) {
+            return;
+        }
+        park_async_activation_cell(activation, addr, ASYNC_RELEASE_BOOL);
+        finish_async_box_activation(activation);
+        BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let was_registered = BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
     if !was_registered {
         return;
@@ -787,13 +898,7 @@ pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     unsafe {
         (*ptr).value = true;
     }
-    let activation = crate::promise::current_async_box_activation();
-    if activation.is_null() {
-        BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
-    } else {
-        park_async_activation_cell(activation, addr, ASYNC_RELEASE_BOOL);
-        finish_async_box_activation(activation);
-    }
+    BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().push(addr));
     BOX_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -811,22 +916,39 @@ pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    BOX_REGISTRY.with(|r| {
-        let r = r.borrow();
-        for &addr in r.iter() {
-            let ptr = addr as *mut Box;
-            // Defensive: the registry should only contain valid live
-            // pointers, but if a stale entry slipped through we'd
-            // segfault on the deref. The tight bounds check on the
-            // address (alloc gives 8-aligned pointers in user space)
-            // matches `is_plausible_box_ptr` to keep this a no-op for
-            // any pathological entry.
-            if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
-                unsafe {
-                    visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
+    let full_trace = crate::gc::full_trace_active();
+    ASYNC_PENDING_RELEASES.with(|pending| {
+        let pending = pending.borrow();
+        BOX_REGISTRY.with(|r| {
+            let r = r.borrow();
+            for &addr in r.iter() {
+                // A drained box is retained only by exact closure-capture
+                // metadata. During a full trace its payload is reached from
+                // each live closure instead. Rooting it here as well would
+                // make `box -> closure -> same box` an uncollectable native
+                // cycle. Minors retain the old strong-root rule because they
+                // cannot adjudicate old-closure liveness.
+                if full_trace
+                    && pending
+                        .get(&addr)
+                        .is_some_and(|tag| *tag == (ASYNC_RELEASE_JS | ASYNC_RELEASE_DRAINED))
+                {
+                    continue;
+                }
+                let ptr = addr as *mut Box;
+                // Defensive: the registry should only contain valid live
+                // pointers, but if a stale entry slipped through we'd
+                // segfault on the deref. The tight bounds check on the
+                // address (alloc gives 8-aligned pointers in user space)
+                // matches `is_plausible_box_ptr` to keep this a no-op for
+                // any pathological entry.
+                if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
+                    unsafe {
+                        visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
+                    }
                 }
             }
-        }
+        });
     });
 }
 
@@ -1230,6 +1352,7 @@ static KEEP_JS_BOOL_BOX_SET: extern "C" fn(*mut BoolBox, i32) = js_bool_box_set;
 
 #[cfg(test)]
 pub(crate) fn test_clear_box_registry() {
+    crate::closure::test_clear_closure_box_capture_indexes();
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
@@ -1240,6 +1363,7 @@ pub(crate) fn test_clear_box_registry() {
     I32_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     BOOL_BOX_RELEASE_QUARANTINE.with(|q| q.borrow_mut().clear());
     ASYNC_RELEASED_CELLS.with(|cells| cells.borrow_mut().clear());
+    ASYNC_PENDING_RELEASES.with(|pending| pending.borrow_mut().clear());
     // Registry membership is not monotonic any more (#8208: `js_*box_release`
     // de-registers a completed activation's cells), so the positive cache is
     // kept coherent by an eviction on every un-registration rather than by
@@ -1611,6 +1735,207 @@ mod release_tests {
             released, after_zero,
             "the final decrement must publish immediately"
         );
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// #8213: a closure may outlive the async function that created it. Its
+    /// captured box remains readable after terminal release, and a child
+    /// closure created later increments that same cell's capture count. Only
+    /// death of the last such closure publishes the cell.
+    #[test]
+    fn escaped_closures_defer_activation_cell_publication_until_gc_death() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation); // running step
+        let previous = install_test_activation(activation);
+
+        let cell = js_box_alloc_bits(crate::value::JSValue::int32(41).bits() as i64);
+        let uncaptured = js_box_alloc_bits(crate::value::JSValue::int32(40).bits() as i64);
+        let outer = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(outer, 0, cell as i64);
+        crate::closure::js_closure_set_box_capture_ptr(outer, 0, cell as i64);
+        assert_eq!(
+            crate::closure::box_capture_count(cell as usize),
+            1,
+            "a singleton cache hit may redeclare the same slot idempotently"
+        );
+
+        js_box_release(cell); // terminal lifecycle owner drops
+        js_box_release(uncaptured);
+        release_async_box_activation(activation); // running step exits
+        assert!(is_registered_box_ptr(cell));
+        assert!(
+            !is_registered_box_ptr(uncaptured),
+            "one captured cell must not retain the rest of the async frame"
+        );
+        assert_eq!(
+            js_box_get_bits(cell) as u64,
+            crate::value::JSValue::int32(41).bits(),
+            "an escaped closure must still observe its captured value"
+        );
+
+        // Model invoking `outer` after the async activation returned: no
+        // ambient async token exists, but the registered pending cell still
+        // lets a nested closure acquire its own capture count.
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(crate::promise::InlineTrap::empty()));
+        let child = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(child, 0, cell as i64);
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == outer as usize);
+        assert!(
+            is_registered_box_ptr(cell),
+            "the child closure remains live"
+        );
+
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == child as usize);
+        assert!(!is_registered_box_ptr(cell));
+        let reused = js_box_alloc_bits(crate::value::JSValue::int32(42).bits() as i64);
+        assert_eq!(cell, reused, "the last closure death publishes the cell");
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// The two halves of the full-trace ownership rule must move together:
+    /// the drained box stops being a global root, while a closure already
+    /// proven live exposes that box's JSValue payload as its external child.
+    /// Otherwise a self-cycle is immortal (first half missing) or an escaped
+    /// closure observes a collected payload (second half missing).
+    #[test]
+    fn full_trace_treats_drained_closure_boxes_as_ephemeron_edges() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation);
+        let previous = install_test_activation(activation);
+        let cell = js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(closure, 0, cell as i64);
+        let closure_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+        js_box_set_bits(cell, closure_bits as i64);
+        js_box_release(cell);
+        release_async_box_activation(activation);
+        assert!(is_registered_box_ptr(cell));
+
+        crate::gc::begin_full_trace();
+        let mut rooted = Vec::new();
+        scan_box_roots(&mut |value| rooted.push(value.to_bits()));
+        assert!(
+            !rooted.contains(&closure_bits),
+            "the drained box must not root its own closure during a full trace"
+        );
+
+        let header = unsafe {
+            (closure as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+        };
+        let saved_flags = unsafe { (*header).gc_flags };
+        unsafe { (*header).gc_flags |= crate::gc::GC_FLAG_MARKED };
+        let slots = crate::gc::test_gc_rewrite_slot_addresses(closure as usize)
+            .expect("closure rewrite descriptor");
+        assert!(
+            slots.contains(&(cell as usize)),
+            "a marked closure must trace the drained box payload"
+        );
+        unsafe { (*header).gc_flags = saved_flags };
+        crate::gc::finish_full_trace();
+
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == closure as usize);
+        assert!(!is_registered_box_ptr(cell));
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// Pointer-shaped generic captures are common in runtime-created
+    /// closures. Even if their bits happen to equal a live box address, only
+    /// the compiler-declared setter may create a box lifetime edge.
+    #[test]
+    fn generic_pointer_capture_does_not_retain_an_async_box() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation);
+        let previous = install_test_activation(activation);
+        let cell = js_box_alloc_bits(crate::value::JSValue::int32(5).bits() as i64);
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+
+        crate::closure::js_closure_set_capture_ptr(closure, 0, cell as i64);
+        assert_eq!(crate::closure::box_capture_count(cell as usize), 0);
+        js_box_release(cell);
+        release_async_box_activation(activation);
+        assert!(!is_registered_box_ptr(cell));
+
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == closure as usize);
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    /// A closure created during an async step can also capture a mutable box
+    /// owned by an outer scope. The raw capture count must not make that box a
+    /// terminal-release candidate for the ambient activation.
+    #[test]
+    fn outer_scope_box_capture_is_not_bound_to_the_ambient_activation() {
+        test_clear_box_registry();
+        let outer_cell = js_box_alloc_bits(crate::value::JSValue::int32(7).bits() as i64);
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation);
+        let previous = install_test_activation(activation);
+
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(closure, 0, outer_cell as i64);
+        assert_eq!(crate::closure::box_capture_count(outer_cell as usize), 1);
+
+        let frame_cell = js_box_alloc_bits(crate::value::JSValue::int32(8).bits() as i64);
+        js_box_release(frame_cell);
+        release_async_box_activation(activation);
+        assert!(!is_registered_box_ptr(frame_cell));
+        assert!(is_registered_box_ptr(outer_cell));
+        assert_eq!(
+            js_box_get_bits(outer_cell) as u64,
+            crate::value::JSValue::int32(7).bits()
+        );
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == closure as usize);
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    #[test]
+    fn closure_move_rekeys_the_capture_count_before_death_pruning() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation);
+        let previous = install_test_activation(activation);
+        let cell = js_box_alloc_bits(crate::value::JSValue::int32(9).bits() as i64);
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(closure, 0, cell as i64);
+        js_box_release(cell);
+        release_async_box_activation(activation);
+
+        let moved = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::closure_box_captures_owner_moved(closure as usize, moved as usize);
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == closure as usize);
+        assert!(
+            is_registered_box_ptr(cell),
+            "the old address no longer owns the retain"
+        );
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == moved as usize);
+        assert!(!is_registered_box_ptr(cell));
+        crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
+    }
+
+    #[test]
+    fn runtime_closure_clone_copies_exact_box_capture_edges() {
+        test_clear_box_registry();
+        let activation = new_async_box_activation();
+        retain_async_box_activation(activation);
+        let previous = install_test_activation(activation);
+        let cell = js_box_alloc_bits(crate::value::JSValue::int32(10).bits() as i64);
+        let source = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::js_closure_set_box_capture_ptr(source, 0, cell as i64);
+        let cloned = crate::closure::js_closure_alloc(std::ptr::null(), 1);
+        crate::closure::clone_closure_box_captures(source, cloned);
+        assert_eq!(crate::closure::box_capture_count(cell as usize), 2);
+
+        js_box_release(cell);
+        release_async_box_activation(activation);
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == source as usize);
+        assert!(
+            is_registered_box_ptr(cell),
+            "the clone retains its exact edge"
+        );
+        crate::closure::prune_dead_closure_box_capture_owners(&|owner| owner == cloned as usize);
+        assert!(!is_registered_box_ptr(cell));
         crate::promise::INLINE_TRAP.with(|trap| trap.set(previous));
     }
 

@@ -186,27 +186,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // inner arrow `(eid, arch, compId) => ... changeset ...`
             // is created per-call but always with the same `this` (the
             // World) and same captures (`this._changeset`).
-            // Boxed captures still allow the cache path: the closure
-            // stores the BOX POINTER (a stable per-allocation address),
-            // and the box's contents are read dynamically inside the
-            // body via `js_box_get`. Two closure-literal sites that
-            // capture the same boxed local store identical box-pointer
-            // bits, so the cache (keyed on bit-equality of capture
-            // slots) still hits. The cache backing is a small LRU per
-            // func_ptr, which tolerates the parallel-instance pattern
-            // (50 concurrent unitOfWork calls each capturing a
-            // different `__async_step` box) by holding multiple
-            // captures rather than overwriting one slot per call.
-            //
-            // We previously bailed out when any captured local was
-            // boxed (`mutable_captures` non-empty). That made the
-            // async-to-generator transform's per-`await` `cb_v` /
-            // `cb_e` closures (which capture the boxed `__async_step`
-            // self-reference) miss the cache 100% of the time —
-            // 2 fresh closure allocs per await ≈ 300 ns of `gc_malloc`
-            // work even though the box pointers are stable across
-            // call sites. The relaxed gate plus the multi-slot LRU
-            // backing reclaims that overhead.
+            // Boxed captures may use the bulk cache helper, but codegen still
+            // follows it with `js_closure_set_box_capture_ptr` for only those
+            // slots. The idempotent write declares exact lifetime edges
+            // without guessing from arbitrary pointer-shaped values.
             //
             // IDENTITY CAVEAT (#4831 follow-up — Stripe `protoExtend`):
             // the singleton-sharing paths (`js_closure_alloc_singleton` /
@@ -231,25 +214,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // symptom.
             //
             // To preserve the hot-path optimizations while restoring identity,
-            // a closure is singleton-eligible only when sharing one instance is
-            // observationally safe:
-            //   - arrow functions: no own `.prototype`, not constructable, the
-            //     `.map`/ECS callbacks the cache targets; OR
-            //   - non-arrow closures all of whose captures are BOXED (mutable)
-            //     locals: the compiler-synthesized async-step `cb_v`/`cb_e`
-            //     per-await callbacks capture the boxed `__async_step` self-ref
-            //     and are never used as constructors — keeping them cached
-            //     avoids 2 `gc_malloc`s per `await`.
-            // A non-arrow closure capturing an UNBOXED value (Stripe's `Super`,
-            // or no captures at all) is treated as a potential constructor and
-            // always gets a fresh instance.
+            // arrow functions are singleton-eligible because they have no own
+            // `.prototype` and are not constructable. Compiler-synthesized
+            // non-arrow async callbacks whose captures are all boxes are also
+            // safe: they are never constructors and their cache key includes
+            // the box addresses. Other non-arrow closures are treated as
+            // potential constructors and always get a fresh instance.
             let mut write_ids = std::collections::HashSet::new();
             crate::boxed_vars::collect_write_ids_in_stmts(body, &mut write_ids);
             let writes_unboxed_capture = auto_captures
                 .iter()
                 .any(|cap_id| !ctx.boxed_vars.contains(cap_id) && write_ids.contains(cap_id));
-            // All captures boxed (and at least one), with no reserved `this` /
-            // `new.target` slot: the compiler-synthesized async-callback shape.
             let captures_all_boxed = !*captures_this
                 && !*captures_new_target
                 && !auto_captures.is_empty()
@@ -346,15 +321,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
             }
 
-            // The captured-singleton helper writes captures internally
-            // (so the cached layout matches a fresh allocation). The
-            // other paths still need explicit per-slot writes.
-            if !captured_singleton {
-                let blk = ctx.block();
-                for (idx, val_bits) in captured_value_bits.iter().enumerate() {
+            // The captured-singleton helper writes captures internally. Boxed
+            // slots still take the dedicated, idempotent setter afterward so
+            // their lifetime edges are declared; fresh closures need every
+            // slot initialized here.
+            let boxed_capture_slots = auto_captures
+                .iter()
+                .map(|cap_id| ctx.boxed_vars.contains(cap_id))
+                .collect::<Vec<_>>();
+            let blk = ctx.block();
+            for (idx, val_bits) in captured_value_bits.iter().enumerate() {
+                if !captured_singleton || boxed_capture_slots[idx] {
                     let idx_str = idx.to_string();
+                    let setter = if boxed_capture_slots[idx] {
+                        "js_closure_set_box_capture_ptr"
+                    } else {
+                        "js_closure_set_capture_bits"
+                    };
                     blk.call_void(
-                        "js_closure_set_capture_bits",
+                        setter,
                         &[(I64, &closure_handle), (I32, &idx_str), (I64, val_bits)],
                     );
                 }

@@ -1166,7 +1166,7 @@ impl GcCycleState {
             .expect("valid-pointer builder exists");
         self.valid_ptrs = Some(builder.finish());
         if self.minor.is_none() {
-            crate::proxy::gc_begin_full_trace();
+            begin_full_trace();
         }
         trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
         // Enable the incremental mark barrier for BOTH kinds. A budgeted
@@ -1692,7 +1692,7 @@ impl GcCycleState {
                 incremental_mark_barrier_disable();
             }
             if full_trace {
-                crate::proxy::gc_finish_full_trace();
+                finish_full_trace();
             }
 
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
