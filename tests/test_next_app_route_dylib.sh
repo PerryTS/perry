@@ -170,10 +170,18 @@ app="$providers/next-app-route.$library_extension"
 compile_log="$scratch/compile.log"
 (
     cd "$fixture"
+    # The backend is deliberately NOT pinned: this gate exists to exercise the
+    # configuration users get, which is the native in-process path (default ON
+    # wherever the runtime can walk the frames). It was pinned to the text
+    # transport while #8228 made the native path unable to compile five of this
+    # fixture's modules; #8241 fixed that, and a pin of `${VAR:-0}` cannot
+    # express "unset", so the pin left this gate structurally unable to test the
+    # default. `PERRY_LLVM_INPROCESS` is forwarded only when the caller sets it,
+    # so a bisection can still select a backend explicitly.
     env \
         PERRY_NO_AUTO_OPTIMIZE=1 \
         PERRY_DISABLE_WELL_KNOWN=1 \
-        PERRY_LLVM_INPROCESS="${PERRY_LLVM_INPROCESS:-0}" \
+        ${PERRY_LLVM_INPROCESS:+PERRY_LLVM_INPROCESS="$PERRY_LLVM_INPROCESS"} \
         PERRY_LLVM_CLANG="$llvm_clang" \
         PERRY_LLVM_OPT="$llvm_opt" \
         PERRY_LL_SIZE_OPT="${PERRY_LL_SIZE_OPT:-0}" \
