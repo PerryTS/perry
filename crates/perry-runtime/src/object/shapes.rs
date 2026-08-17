@@ -661,7 +661,17 @@ pub(crate) unsafe fn birth_stamp_object_shape(
         (*obj).parent_class_id = runtime_shape_id;
         debug_assert_object_shape_parity(obj);
     } else {
-        birth_publish_object_shape(obj, live_inline_slot_count);
+        // `current` was just published from the newborn's explicit keys edge
+        // and allocation bound, so it is already the exact descriptor.  The
+        // cached id can legitimately disagree when an object reserves hidden
+        // inline slots that have no public key (fs.Stats has 21 keys and four
+        // hidden Date slots).  Before #8047 this fallback rebuilt the same
+        // facts from the header's `keys_array` mirror.  With that mirror gone,
+        // rebuilding through `birth_publish_object_shape` would instead use a
+        // null edge and overwrite the exact 21/25 descriptor with a keyless
+        // 0/25 one.  Keep the exact descriptor already stamped by
+        // `set_object_keys_array_with_live`.
+        debug_assert_object_shape_parity(obj);
     }
 }
 

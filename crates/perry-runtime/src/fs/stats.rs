@@ -378,6 +378,40 @@ pub(crate) fn metadata_nlink(meta: &fs::Metadata) -> f64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #8047/#8313: Stats reserves four hidden Date slots beyond its public
+    /// keys.  Its cached canonical shape is therefore 21/21 while the object
+    /// descriptor is 21/25.  Rejecting the cached id must retain that exact
+    /// descriptor; rebuilding it without the removed header keys mirror made
+    /// every named field, including `isFile`, disappear.
+    #[test]
+    fn stats_hidden_slots_retain_public_method_keys() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let value = build_stats_object(
+                true, false, false, 14, 0o644, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, false, None,
+            );
+            let obj =
+                crate::value::js_nanbox_get_pointer(value) as *mut crate::object::ObjectHeader;
+            let descriptor = crate::object::shapes::object_shape_descriptor(obj)
+                .expect("Stats must carry a shape descriptor");
+            assert_eq!(descriptor.logical_key_count, 21);
+            assert_eq!(descriptor.live_inline_slot_count, STATS_REGULAR_COUNT);
+            assert!(!crate::object::object_keys_array(obj).is_null());
+
+            let key = crate::string::js_string_from_bytes(b"isFile".as_ptr(), 6);
+            let method = crate::object::js_object_get_field_by_name_f64(obj, key);
+            assert_ne!(method.to_bits(), crate::value::TAG_UNDEFINED);
+            assert!(crate::closure::is_closure_ptr(
+                crate::value::js_nanbox_get_pointer(method) as usize
+            ));
+        }
+    }
+}
+
 pub(crate) fn metadata_node_extra_fields(meta: Option<&fs::Metadata>) -> (u64, u64, u64, u64, u64) {
     #[cfg(unix)]
     {
