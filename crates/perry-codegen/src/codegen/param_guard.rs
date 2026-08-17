@@ -582,35 +582,36 @@ fn encode_node(node: &GuardNode) -> Option<Vec<u8>> {
 /// runtime-sized object graph. Everything else visits a fixed graph of fields
 /// and union arms whose size the compiler owns.
 fn descriptor_walk_is_bounded(nodes: &[GuardNode], root: u32) -> bool {
-    fn visit(nodes: &[GuardNode], node: u32, state: &mut [u8]) -> bool {
-        let index = node as usize;
-        let Some(entry) = state.get_mut(index) else {
+    let children: Vec<Vec<u32>> = nodes.iter().map(node_children).collect();
+    let cycle = cycle_members(&children);
+    let mut seen = vec![false; nodes.len()];
+    let mut work = vec![root];
+    while let Some(node) = work.pop() {
+        let Ok(index) = usize::try_from(node) else {
             return false;
         };
-        match *entry {
-            1 => return false,
-            2 => return true,
-            _ => *entry = 1,
-        }
-        let Some(node) = nodes.get(index) else {
+        let (Some(entry), Some(children), Some(on_cycle), Some(visited)) = (
+            nodes.get(index),
+            children.get(index),
+            cycle.get(index),
+            seen.get_mut(index),
+        ) else {
             return false;
         };
-        if matches!(
-            node,
-            GuardNode::Array(_) | GuardNode::Map { .. } | GuardNode::Set(_)
-        ) {
+        if std::mem::replace(visited, true) {
+            continue;
+        }
+        if *on_cycle
+            || matches!(
+                entry,
+                GuardNode::Array(_) | GuardNode::Map { .. } | GuardNode::Set(_)
+            )
+        {
             return false;
         }
-        for child in node_children(node) {
-            if !visit(nodes, child, state) {
-                return false;
-            }
-        }
-        state[index] = 2;
-        true
+        work.extend(children);
     }
-
-    visit(nodes, root, &mut vec![0; nodes.len()])
+    true
 }
 
 fn descriptor_for_type_with_walk_bound(
@@ -851,11 +852,13 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
 }
 
 /// A single-node scalar descriptor whose predicate an existing typed-abi
-/// leaf guard already decides EXACTLY (#8079: the interpretive
-/// `js_param_type_guard` costs ~450 instructions per call — descriptor
-/// parse plus a 768-byte `GuardState` init — which measured as 16-34% of
-/// ALL retired instructions on the tree/tree_wide/interp/iso_miss corpus
-/// rows, because every unproven call routes through the public wrapper):
+/// leaf guard already decides exactly. Before #8201, a single-node
+/// `js_param_type_guard` call cost ~450 instructions and measured as 16-34%
+/// of ALL retired instructions on the
+/// tree/tree_wide/interp/iso_miss corpus rows, because every unproven call
+/// routes through the public wrapper. The descriptor parse is only a small
+/// part of that cost, and LLVM already elides the inline visited array's
+/// initialization; the win here comes from avoiding the interpretive call:
 ///
 /// * `OP_NUMBER` (1) = `js_typed_f64_arg_guard` = `is_number || is_int32`
 /// * `OP_INT32` (2) — the validator literally calls `js_typed_i32_arg_guard`
