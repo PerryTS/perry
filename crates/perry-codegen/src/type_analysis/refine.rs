@@ -259,12 +259,64 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             is_async: *is_async,
             is_generator: *is_generator,
         })),
-        // A constructor can explicitly return a different object, so `new C`
-        // proves only Object, never C's class-specific layout.
+        // #8222: native constructors have a compiler-owned runtime contract,
+        // so their result keeps its canonical class identity. This matters for
+        // aliased named imports (`Socket as Sk`): HIR canonicalizes `new Sk()`
+        // to `New { class_name: "Socket" }`, and method-value reads need that
+        // runtime proof to bind `socket.connect` instead of doing a missing
+        // dynamic-property lookup. The manifest class gate keeps this narrower
+        // than arbitrary `new C()`; user constructors can explicitly return a
+        // different object and therefore remain proven only as Object.
+        Expr::New { class_name, .. }
+            if is_imported_native_constructor_class(
+                ctx.imported_class_sources,
+                ctx.imported_class_original_names,
+                class_name,
+            ) =>
+        {
+            Some(HirType::Named(class_name.clone()))
+        }
+        // A user constructor can explicitly return a different object, so
+        // `new C` proves only Object, never C's class-specific layout.
         Expr::New { .. } => Some(HirType::Object(Default::default())),
         Expr::BigInt(_) => Some(HirType::BigInt),
         _ => None,
     }
+}
+
+pub(crate) fn is_imported_native_constructor_class(
+    imported_class_sources: &std::collections::HashMap<String, String>,
+    imported_class_original_names: &std::collections::HashMap<String, String>,
+    class_name: &str,
+) -> bool {
+    let alias_sources = imported_class_original_names
+        .iter()
+        .filter(|(_, original)| original.as_str() == class_name)
+        .filter_map(|(local, _)| imported_class_sources.get(local));
+    let candidates = imported_class_sources
+        .get(class_name)
+        .into_iter()
+        .chain(alias_sources);
+    let mut resolved_module = None;
+    for source in candidates {
+        let module = source.strip_prefix("node:").unwrap_or(source);
+        if resolved_module.is_some_and(|resolved| resolved != module) {
+            // The canonical name can be imported from multiple sources in one
+            // module. Once HIR has erased an alias to the canonical name, that
+            // shape is ambiguous and must not become a class-specific proof.
+            return false;
+        }
+        resolved_module = Some(module);
+    }
+    let Some(module) = resolved_module else {
+        return false;
+    };
+
+    perry_api_manifest::API_MANIFEST.iter().any(|entry| {
+        entry.module == module
+            && entry.name == class_name
+            && matches!(entry.kind, perry_api_manifest::ApiKind::Class)
+    })
 }
 
 /// Refine an `Any`-typed local's static type based on its initializer
