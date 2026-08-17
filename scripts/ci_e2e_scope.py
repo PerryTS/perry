@@ -122,6 +122,7 @@ _CODEGEN_SUITES = [
     "destructure_call_location",
     "i64_spec_ternary_recursion",
     "large_object_barriers",
+    "loop_safepoint_purity",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
     # #7506/#7245: held out until its one failing test was triaged. The
@@ -169,12 +170,6 @@ SOURCE_SUITE_MAP = {
 # 262 tests, and holding all 262 out for one of them is how 261 tests' worth of
 # coverage went dark.
 SUITE_EXCLUSIONS = [
-    (
-        "perry-codegen",
-        "loop_safepoint_purity",
-        "proven_numeric_counted_loop_emits_no_back_edge_poll",
-        "#8263 — red on main; current codegen emits guarded polls in this fixture.",
-    ),
     (
         "perry-codegen",
         "native_proof_buffer_views",

@@ -430,13 +430,16 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 ///    a genuine local and not for a global, so a global is never inert.
 ///
 /// A declaration is deliberately absent from this judgment. The type arm uses
-/// only runtime-derived initializer evidence; `integer_locals` is the separate
-/// whole-write structural proof for literal-seeded recurrences. A lying scalar
-/// annotation therefore retains its root and cannot make coercion look inert.
+/// only runtime-derived evidence; `integer_locals` and
+/// `number_by_construction_locals` are the separate whole-write structural
+/// proofs for integer recurrences and general Number-valued accumulators. A
+/// lying scalar annotation therefore retains its root and cannot make coercion
+/// look inert.
 pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
         && (ctx.integer_locals.contains(&id)
+            || ctx.number_by_construction_locals.contains(&id)
             || matches!(
                 ctx.stable_local_type_proof(&id),
                 Some(

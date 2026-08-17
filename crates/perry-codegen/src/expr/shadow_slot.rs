@@ -47,7 +47,7 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             // annotation and remains valid at every read, including loop
             // counters whose back-edge update makes an initializer-only
             // proof ineligible.
-            if ctx.integer_locals.contains(id) {
+            if ctx.integer_locals.contains(id) || ctx.number_by_construction_locals.contains(id) {
                 return true;
             }
             // A reserved shadow slot means the local is pointer-possible even

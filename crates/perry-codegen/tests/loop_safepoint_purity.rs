@@ -5,14 +5,15 @@
 //! whether a deferred minor collection could be waiting to be drained. Its
 //! whitelist used to omit relational comparisons, arithmetic `Binary` and
 //! `Update`, so `for (let i = 0; i < n; i++) { sum = sum + 1; }` failed the
-//! test on its own condition, body AND update — three runtime calls per
+//! test on its own condition, body AND update — three poll call sites per
 //! iteration in a loop that allocates nothing.
 //!
 //! The widening reuses `expr_is_inert_primitive` (#6975): those operators run
 //! ToPrimitive / ToNumeric, and a user-defined `valueOf` is arbitrary JS that
 //! allocates. The unit tests in `loop_purity.rs` pin the walk with an injected
-//! predicate; these compile real HIR so the REAL predicate — `local_types`,
-//! `shadow_slot_map`, `module_globals` and all — is the thing under test.
+//! predicate; these compile real HIR so the REAL predicate — runtime-derived
+//! stable types, whole-write numeric proofs, `shadow_slot_map`,
+//! `module_globals` and all — is the thing under test.
 //!
 //! Every "no poll" assertion below is paired with a case that differs in one
 //! operand and MUST keep its poll. That pairing is the point, and it was
