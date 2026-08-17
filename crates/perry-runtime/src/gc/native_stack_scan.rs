@@ -60,7 +60,10 @@ pub(super) fn run_native_stack_scan() {
         (top - size, top)
     };
     #[cfg(not(target_os = "macos"))]
-    let (stack_lo, stack_hi) = {
+    // `_stack_lo`: same unused-on-this-arm shape #8298 underscore-fixed on the
+    // macOS arm; the Linux arm kept the bare name and turned `warnings`
+    // (-D warnings, host-compatible scope) red on main.
+    let (_stack_lo, stack_hi) = {
         // Fallback: use a local variable address and scan 256KB upward.
         let marker: usize = 0;
         let sp = std::ptr::addr_of!(marker) as usize;
