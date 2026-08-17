@@ -38,12 +38,12 @@ Deno and Bun. We did not add a case just because upstream had many files.
 
 ## Coverage
 
-The suite contains 52 fixtures, up from 19:
+The suite contains 53 fixtures, up from 19:
 
 | Area                                 | Fixtures | Contracts                                                                                                                                           |
 | ------------------------------------ | -------: | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | exports                              |        9 | methods, status codes, helper tail, classes, inheritance, descriptors, WebSocket event constructors, and receiver checks                            |
-| request                              |        9 | URL and options overloads, `get()` auto-end, callback order, method/path/protocol/agent/signal validation, and coercion                             |
+| request                              |       10 | URL and options overloads, raw header arrays, `get()` auto-end, callback order, method/path/protocol/agent/signal validation, and coercion          |
 | `ClientRequest`                      |        4 | constructor state, header operations and validation, `flushHeaders()`, aliases, controls, and clean errors                                          |
 | `IncomingMessage`                    |        4 | constructor defaults, request and response metadata, raw/distinct headers, encoding, body state, and trailers                                       |
 | `ServerResponse` / `OutgoingMessage` |        5 | header mutation, `setHeaders()`, status and informational validation, and lifecycle state                                                           |
@@ -64,7 +64,7 @@ Every fixture maps to a Node 26.5.0 implementation file or upstream test family:
 | `agent/request-create-connection.ts`, `agent/request-create-socket.ts`                                                                                        | `Agent.prototype.addRequest`, `createSocket`, and `createConnection` in `lib/_http_agent.js`               |
 | `client-request/constructor-surface.ts`                                                                                                                       | `ClientRequest` in `lib/_http_client.js` and `OutgoingMessage` in `lib/_http_outgoing.js`                  |
 | `client-request/header-operations.ts`, `client-request/header-validation.ts`, `client-request/flush-headers-state.ts`                                         | `lib/_http_outgoing.js`; `test-http-invalidheaderfield`                                                    |
-| `request/url-options-overload.ts`, `request/url-validation.ts`, `request/get-auto-end.ts`, `request/callback-validation-order.ts`                             | `lib/http.js`, `lib/_http_client.js`; `test-http-request-url`                                              |
+| `request/url-options-overload.ts`, `request/header-array-options.ts`, `request/url-validation.ts`, `request/get-auto-end.ts`, `request/callback-validation-order.ts` | `lib/http.js`, `lib/_http_client.js`; `test-http-request-url`, `test-http-client-headers-array`             |
 | `request/method-validation.ts`, `request/path-validation.ts`, `request/protocol-validation.ts`, `request/agent-validation.ts`, `request/signal-validation.ts` | `ClientRequest` option validation in `lib/_http_client.js`; `test-http-request-invalid-method-error`       |
 | `incoming-message/constructor-defaults.ts`, `incoming-message/response-metadata.ts`                                                                           | `IncomingMessage` in `lib/_http_incoming.js` and response parsing in `lib/_http_client.js`                 |
 | `incoming-message/client-set-encoding.ts`, `incoming-message/server-headers-body.ts`                                                                          | `lib/_http_incoming.js`, `lib/_http_common.js`; `test-http-trailers`                                       |
@@ -91,7 +91,7 @@ The adjacent suites keep ownership of generic behavior:
 
 ## Repeated comparison
 
-All final runtime comparisons ran three times. Each runtime produced the same
+The original 52-fixture audit ran three times. Each runtime produced the same
 classification and output digest on every run:
 
 | Runtime     | Pass | Diff | Error | Compile failure | Crash | Timeout |
@@ -100,6 +100,9 @@ classification and output digest on every run:
 | Perry       |   22 |   29 |     0 |               1 |     0 |       0 |
 | Deno 2.9.3  |   42 |    6 |     4 |             n/a |     0 |       0 |
 | Bun 1.2.18  |   23 |   26 |     3 |             n/a |     0 |       0 |
+
+The raw-header-array fixture added for #4975 was checked separately under Node
+and Perry and produced byte-for-byte identical output.
 
 Deno's four clean errors come from missing Node 26.5.0 export-tail entries. Its
 six output differences cover only server disposal, close errors, parser options,

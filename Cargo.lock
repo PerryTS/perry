@@ -5903,6 +5903,7 @@ dependencies = [
 name = "perry-ext-http"
 version = "0.5.1512"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "h2",
  "http-body-util",

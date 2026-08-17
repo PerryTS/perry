@@ -402,3 +402,36 @@ fn headers_from_options_extracts() {
     assert_eq!(h.get("X-Foo"), Some(&"bar".to_string()));
     assert_eq!(h.get("Authorization"), Some(&"Bearer x".to_string()));
 }
+
+#[test]
+fn headers_from_options_normalizes_arrays_and_auth() {
+    let object: serde_json::Value = serde_json::from_str(
+        r#"{"auth":"foo:bar","headers":{"x-foo":"boom","cookie":["a=1","b=2","c=3"]}}"#,
+    )
+    .unwrap();
+    let object_headers = headers_from_options(&object);
+    assert_eq!(object_headers.get("x-foo"), Some(&"boom".to_string()));
+    assert_eq!(
+        object_headers.get("cookie"),
+        Some(&"a=1; b=2; c=3".to_string())
+    );
+    assert_eq!(
+        object_headers.get("Authorization"),
+        Some(&"Basic Zm9vOmJhcg==".to_string())
+    );
+
+    let raw: serde_json::Value = serde_json::from_str(
+        r#"{"auth":"foo:bar","headers":[["x-foo","boom"],["cookie","a=1"],["cookie",["b=2","c=3"]],["Host","example.com"]]}"#,
+    )
+    .unwrap();
+    let raw_headers = headers_from_options(&raw);
+    assert_eq!(raw_headers.get("x-foo"), Some(&"boom".to_string()));
+    assert_eq!(
+        raw_headers.get("cookie"),
+        Some(&"a=1; b=2; c=3".to_string())
+    );
+    assert_eq!(raw_headers.get("Host"), Some(&"example.com".to_string()));
+    assert!(!raw_headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("authorization")));
+}

@@ -1,0 +1,3 @@
+### Fixed
+
+**`http.request()` and `https.request()` now accept Node's raw header-pair array form.** Perry previously read `options.headers` only when it was an object, so `[[name, value], ...]` was silently discarded and array-valued object headers were serialized as JSON text. Request headers now normalize both forms, join duplicate cookies with `; `, derive Basic authorization from `options.auth` for object headers, and preserve Node's rule that raw header arrays suppress that implicit authorization header. This advances the behavioral parity tail tracked in #4975 and makes Node's `test-http-client-headers-array` contract pass end to end.

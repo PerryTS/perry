@@ -92,6 +92,11 @@ mod transport_error;
 mod response_headers;
 use response_headers::build_response_headers_object;
 
+// Client request-header normalization (object and raw-pair forms), extracted
+// so this file stays below the workspace's 2000-line source ceiling.
+mod request_headers;
+use request_headers::headers_from_options;
+
 use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
@@ -569,22 +574,6 @@ fn url_from_options(opts: &serde_json::Value, default_protocol: &str) -> String 
         Some(p) if !p.is_empty() => format!("{}://{}:{}{}", protocol, hostname, p, path),
         _ => format!("{}://{}{}", protocol, hostname, path),
     }
-}
-
-fn headers_from_options(opts: &serde_json::Value) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    if let Some(headers) = opts.get("headers").and_then(|v| v.as_object()) {
-        for (k, v) in headers {
-            if let Some(s) = v.as_str() {
-                out.insert(k.clone(), s.to_string());
-            } else if let Some(n) = v.as_i64() {
-                out.insert(k.clone(), n.to_string());
-            } else {
-                out.insert(k.clone(), v.to_string());
-            }
-        }
-    }
-    out
 }
 
 fn timeout_from_options(opts: &serde_json::Value) -> Option<u64> {
