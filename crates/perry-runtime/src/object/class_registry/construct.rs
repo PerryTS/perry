@@ -537,12 +537,15 @@ pub unsafe extern "C" fn js_new_function_construct(
                     options,
                 );
             }
-            #[cfg(feature = "global-webfetch")]
             // Global builtins reached through a VALUE (alias variable,
             // intrinsic lookup, cross-module re-export) rather than by name.
+            // This arm must stay independent of the optional globalThis member-
+            // table features: it also owns always-available collection aliases,
+            // while URL/Text aliases have their own feature selection.
             n if builtin_alias_construct::handles(n) => {
                 return builtin_alias_construct::construct(n, args);
             }
+            #[cfg(feature = "global-webfetch")]
             "Headers" => {
                 let init = args
                     .first()
