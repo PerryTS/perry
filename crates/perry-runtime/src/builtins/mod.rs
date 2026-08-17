@@ -109,6 +109,7 @@ pub use globals::{
     scan_queued_microtask_roots_mut,
 };
 
+pub(crate) use globals::scan_structured_clone_memo_roots_mut;
 pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pending};
 
 /// #6943: inertness predicate for the `js_string_coerce`-as-property-key

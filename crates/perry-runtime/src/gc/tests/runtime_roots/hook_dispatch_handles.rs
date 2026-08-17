@@ -342,6 +342,14 @@ fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
+    // The harness clears MUTABLE_ROOT_SCANNERS so a collection sees exactly the
+    // roots the test installs. structuredClone's source->clone memo is one of
+    // them, so without this the memo is decorative here and the clone's address
+    // is never rewritten across the copying minor this test forces.
+    crate::gc::gc_register_named_mutable_root_scanner(
+        "scan_structured_clone_memo_roots_mut",
+        crate::builtins::scan_structured_clone_memo_roots_mut,
+    );
 
     let outer_key = test_string_value(b"clone-map-outer-key");
     let outer_key_original = (outer_key.to_bits() & POINTER_MASK) as usize;

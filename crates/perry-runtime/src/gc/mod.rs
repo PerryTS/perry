@@ -952,6 +952,7 @@ pub fn gc_init() {
     reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
+    reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
     reg_scanner!(crate::builtins::scan_boxed_primitive_payload_roots_mut);
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current

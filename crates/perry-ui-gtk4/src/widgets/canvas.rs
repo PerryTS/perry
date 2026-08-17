@@ -135,6 +135,7 @@ fn image_handle_from_arg(image: i64) -> i64 {
 
 /// Create a Canvas widget with given dimensions.
 pub fn create(width: f64, height: f64) -> i64 {
+    crate::app::ensure_gtk_init();
     let area = DrawingArea::new();
     area.set_content_width(width as i32);
     area.set_content_height(height as i32);
@@ -315,6 +316,43 @@ pub fn create(width: f64, height: f64) -> i64 {
     });
 
     handle
+}
+
+#[cfg(test)]
+mod tests {
+    fn init_precedes_drawing_area(source: &str) -> bool {
+        let start = source
+            .find("pub fn create(width: f64, height: f64) -> i64")
+            .expect("Canvas create function must exist");
+        let body = &source[start..];
+        let end = body
+            .find("\n/// Clear all drawing commands.")
+            .expect("Canvas create function terminator must exist");
+        let body = &body[..end];
+
+        let init = body.find("crate::app::ensure_gtk_init();");
+        let constructor = body.find("DrawingArea::new();");
+        matches!((init, constructor), (Some(init), Some(constructor)) if init < constructor)
+    }
+
+    #[test]
+    fn canvas_initializes_gtk_before_constructing_drawing_area() {
+        assert!(
+            init_precedes_drawing_area(include_str!("canvas.rs")),
+            "Canvas must initialize GTK before DrawingArea::new() (#7995)"
+        );
+        assert!(
+            !init_precedes_drawing_area(
+                "pub fn create(width: f64, height: f64) -> i64 {\n\
+                 let area = DrawingArea::new();\n\
+                 crate::app::ensure_gtk_init();\n\
+                 area\n\
+                 }\n\
+                 /// Clear all drawing commands."
+            ),
+            "the ordering check must reject the pre-fix constructor order"
+        );
+    }
 }
 
 /// Clear all drawing commands.
