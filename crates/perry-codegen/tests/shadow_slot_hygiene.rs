@@ -1107,9 +1107,22 @@ fn canonical_str_shadow_module() -> Module {
                         right: Box::new(Expr::String("x".to_string())),
                     }),
                 )),
-                // acc.length — the canonical `.length` tag dispatch.
+                // `src` is never reassigned, so `stable_local_type_proof`
+                // returns `String` and the `.length` tag dispatch fires.
+                // (#8033: a reassigned local's declared type is not proof,
+                // so `acc.length` would fall through to the generic pget
+                // tower. Use a separate non-reassigned local for the
+                // `.length` assertion.)
+                Stmt::Let {
+                    id: 2,
+                    name: "src".to_string(),
+                    ty: Type::String,
+                    mutable: false,
+                    init: Some(Expr::String("measure me".to_string())),
+                },
+                // src.length — the canonical `.length` tag dispatch.
                 Stmt::Return(Some(Expr::PropertyGet {
-                    object: Box::new(Expr::LocalGet(1)),
+                    object: Box::new(Expr::LocalGet(2)),
                     property: "length".to_string(),
                     byte_offset: 0,
                 })),
