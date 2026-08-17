@@ -92,7 +92,8 @@ pub(crate) fn preserve_none_target_ok(triple: &str) -> bool {
         || triple.starts_with("arm64")
         || triple.starts_with("x86_64"))
         && !triple.starts_with("arm64_32");
-    let windows_ok = !triple.contains("windows") || triple.starts_with("x86_64");
+    let windows_ok =
+        (!triple.contains("windows") && !triple.contains("mingw")) || triple.starts_with("x86_64");
     arch_ok && windows_ok
 }
 

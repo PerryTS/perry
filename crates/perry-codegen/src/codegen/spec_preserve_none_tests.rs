@@ -331,7 +331,11 @@ fn unsupported_targets_keep_the_default_convention() {
     // Same predicate family as the RS4GC target-awareness: watchOS arm64_32
     // and ARM64 Windows never see the convention, everything the runtime can
     // walk does.
-    for triple in ["arm64_32-apple-watchos", "aarch64-pc-windows-msvc"] {
+    for triple in [
+        "arm64_32-apple-watchos",
+        "aarch64-pc-windows-msvc",
+        "aarch64-w64-mingw32",
+    ] {
         let ir = compile_ir_for(&recursive_module(), Some(triple));
         assert!(
             ir.contains("$spec_i32(i32"),
@@ -344,7 +348,11 @@ fn unsupported_targets_keep_the_default_convention() {
     }
     // And a supported non-host pair, so the gate isn't accidentally
     // host-shaped.
-    for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+    for triple in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-w64-mingw32",
+    ] {
         let ir = compile_ir_for(&recursive_module(), Some(triple));
         assert!(
             ir.contains("preserve_nonecc double @perry_fn_spec_preserve_none_ts__f$spec_i32"),
