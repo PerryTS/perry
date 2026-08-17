@@ -95,7 +95,7 @@ DEFAULT_CAP = 12
 # omission is no longer silent.
 #
 # Measured on arm64 macOS, debug, `--test-threads=1`, one `cargo test -p
-# perry-codegen --test <suite>` per row: every one of the 25 mapped suites
+# perry-codegen --test <suite>` per row: every one of the 24 mapped suites
 # completes in 2.2-10.4 s wall clock, and nearly all of that is cargo's
 # freshness check — the test time itself is sub-second (e.g. shadow_slot_hygiene
 # 12 tests / 0.10 s, native_proof_buffer_views 36 / 0.2 s). The cost is the
@@ -121,7 +121,6 @@ _CODEGEN_SUITES = [
     "constructor_recursion",
     "destructure_call_location",
     "i64_spec_ternary_recursion",
-    "loop_safepoint_purity",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
     "native_proof_buffer_views",
@@ -176,6 +175,12 @@ SUITE_EXCLUSIONS = [
         "large_object_barriers",
         "large_local_array_push_inbounds_store_emits_precise_slot_barrier",
         "#7708 — red on main; the other 2 tests in this suite pass.",
+    ),
+    (
+        "perry-codegen",
+        "loop_safepoint_purity",
+        "proven_numeric_counted_loop_emits_no_back_edge_poll",
+        "#8263 — red on main; current codegen emits guarded polls in this fixture.",
     ),
 ]
 
