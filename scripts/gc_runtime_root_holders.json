@@ -1138,6 +1138,14 @@
       "name": "WEBVIEW_STATES"
     },
     {
+      "file": "crates/perry-ui-ios/src/widgets/wheel_picker.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/wheel_picker.rs",
+      "name": "SELECTED"
+    },
+    {
       "file": "crates/perry-ui-macos/src/app.rs",
       "name": "APPS"
     },
@@ -1936,6 +1944,14 @@
     {
       "file": "crates/perry-ui-visionos/src/widgets/webview.rs",
       "name": "WEBVIEW_STATES"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/wheel_picker.rs",
+      "name": "CALLBACKS"
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/wheel_picker.rs",
+      "name": "SELECTED"
     },
     {
       "file": "crates/perry-ui-watchos/src/audio_playback.rs",
