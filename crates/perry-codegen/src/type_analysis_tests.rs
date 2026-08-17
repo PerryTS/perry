@@ -3,6 +3,57 @@ use perry_hir::infer_expr_type;
 use std::collections::{HashMap, HashSet};
 
 #[test]
+fn imported_native_constructor_proof_recovers_canonical_alias() {
+    let aliased_sources = HashMap::from([("Sk".to_string(), "net".to_string())]);
+    let aliased_names = HashMap::from([("Sk".to_string(), "Socket".to_string())]);
+    assert!(is_imported_native_constructor_class(
+        &aliased_sources,
+        &aliased_names,
+        "Socket"
+    ));
+
+    let direct_sources = HashMap::from([("Socket".to_string(), "node:net".to_string())]);
+    assert!(is_imported_native_constructor_class(
+        &direct_sources,
+        &HashMap::new(),
+        "Socket"
+    ));
+}
+
+#[test]
+fn imported_native_constructor_proof_rejects_non_native_or_non_class_imports() {
+    let local_sources = HashMap::from([("Sk".to_string(), "./dep".to_string())]);
+    let socket_alias = HashMap::from([("Sk".to_string(), "Socket".to_string())]);
+    assert!(!is_imported_native_constructor_class(
+        &local_sources,
+        &socket_alias,
+        "Socket"
+    ));
+
+    let net_sources = HashMap::from([("c".to_string(), "net".to_string())]);
+    let function_alias = HashMap::from([("c".to_string(), "connect".to_string())]);
+    assert!(!is_imported_native_constructor_class(
+        &net_sources,
+        &function_alias,
+        "connect"
+    ));
+
+    let ambiguous_sources = HashMap::from([
+        ("Sk".to_string(), "net".to_string()),
+        ("LocalSocket".to_string(), "./dep".to_string()),
+    ]);
+    let ambiguous_aliases = HashMap::from([
+        ("Sk".to_string(), "Socket".to_string()),
+        ("LocalSocket".to_string(), "Socket".to_string()),
+    ]);
+    assert!(!is_imported_native_constructor_class(
+        &ambiguous_sources,
+        &ambiguous_aliases,
+        "Socket"
+    ));
+}
+
+#[test]
 fn hir_inferred_refinable_type_reuses_codegen_local_types() {
     let mut local_types = HashMap::new();
     local_types.insert(7, HirType::String);

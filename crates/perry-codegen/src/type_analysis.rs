@@ -51,6 +51,8 @@ pub(crate) use predicates::{
 // `super::*`) can keep calling `tuple_index_literal` directly.
 #[cfg(test)]
 pub(crate) use predicates::tuple_index_literal;
+#[cfg(test)]
+pub(crate) use refine::is_imported_native_constructor_class;
 pub(crate) use refine::{
     compute_auto_captures, declared_array_property_claim, is_crypto_digest_chain,
     is_global_constructor_expr, is_process_namespace_version_property, proven_type_from_init,
