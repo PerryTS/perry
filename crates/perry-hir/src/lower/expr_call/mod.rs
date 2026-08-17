@@ -19,8 +19,38 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
+use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
+
+fn is_typed_array_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name)
+            if matches!(
+                name.as_str(),
+                "Int8Array"
+                    | "Int16Array"
+                    | "Int32Array"
+                    | "Uint8Array"
+                    | "Uint8ClampedArray"
+                    | "Uint16Array"
+                    | "Uint32Array"
+                    | "Float16Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            )
+    )
+}
+
+fn typed_array_lacks_array_method(name: &str) -> bool {
+    matches!(
+        name,
+        "flat" | "flatMap" | "push" | "pop" | "shift" | "unshift" | "splice" | "toSpliced"
+    )
+}
 
 mod array_only_methods;
 mod crypto;
