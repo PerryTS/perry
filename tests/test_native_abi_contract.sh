@@ -228,6 +228,23 @@ function throughDynamicBoundary(value: any): any {
   return value;
 }
 
+// Keep the Buffer-read representation proof in a function with no native ABI
+// calls. Whole-function escape analysis must conservatively deopt views in the
+// ABI exercise below; this helper makes the BufferNumericRead assertion test a
+// genuinely non-escaping buffer instead of depending on unrelated call order.
+function readNativeBufferChecksum(): number {
+  const readBuf = Buffer.alloc(8);
+  readBuf[0] = 18;
+  readBuf[1] = 52;
+  readBuf[2] = 86;
+  readBuf[3] = 120;
+  readBuf[4] = 0;
+  readBuf[5] = 0;
+  readBuf[6] = 200;
+  readBuf[7] = 64;
+  return readBuf.readUInt32BE(0) + readBuf.readFloatLE(4);
+}
+
 export function runNativeAbiContract(): number {
   const buf = Buffer.alloc(12);
   buf[0] = 18;
@@ -249,8 +266,7 @@ export function runNativeAbiContract(): number {
   const promise = Promise.resolve(1);
   const packet: AbiPacket = { tag: 7, gain: 1.5, total: 2.25, count: 4 };
   const bufferLen = buf.length;
-  const bufferU32 = buf.readUInt32BE(0);
-  const bufferF32 = buf.readFloatLE(4);
+  const bufferReadChecksum = readNativeBufferChecksum();
 
   if (abi_contract_check_all(u32Value, u64Value, usizeValue, f32Value, bufferLen, buf, handle, promise) !== 777) {
     return 10;
@@ -268,8 +284,7 @@ export function runNativeAbiContract(): number {
   if (nativeBufferLen !== 12) return 70;
   if (!nativePromise) return 75;
   if (bufferLen !== 12) return 80;
-  if (bufferU32 !== 305419896) return 90;
-  if (bufferF32 !== 6.25) return 100;
+  if (bufferReadChecksum !== 305419902.25) return 90;
   return 1;
 }
 EOF

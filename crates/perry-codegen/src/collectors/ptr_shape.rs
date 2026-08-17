@@ -1945,7 +1945,13 @@ pub(in crate::collectors) use numeric::collect_numeric_by_construction_locals as
 /// Conservative "cannot be a BigInt" for the spec Number-path argument.
 fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {
     match e {
-        Expr::Number(_) | Expr::Integer(_) | Expr::String(_) | Expr::Bool(_) => true,
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::Bool(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::LocalGet(id) => not_bigint_locals.contains(id),
         Expr::Unary { op, operand } => match op {
             perry_hir::UnaryOp::Pos => true, // `+x` throws for BigInt

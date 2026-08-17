@@ -437,6 +437,18 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     let mut writes: HashMap<u32, Vec<Option<&'a Expr>>> = HashMap::new();
     let mut let_bound: HashSet<u32> = HashSet::new();
     super::super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut let_bound);
+    // The standalone #8105 consumer does not run the Ptr<Shape> provenance
+    // walk that normally supplies `const_local_inits`. Reconstruct the same
+    // safe fact from the shared exhaustive write set: one initialized write
+    // means the binding's value is stable even when its source spelling was
+    // `let`. This lets the Add proof inspect compiler-owned typed-view
+    // constructors without trusting their erased annotation.
+    let mut stable_local_inits = const_local_inits.clone();
+    for (&id, local_writes) in &writes {
+        if let [Some(init)] = local_writes.as_slice() {
+            stable_local_inits.entry(id).or_insert(Some(*init));
+        }
+    }
     let empty_members: HashSet<u32> = HashSet::new();
     let empty_fields: HashSet<String> = HashSet::new();
     let mut numeric: HashSet<u32> = let_bound
@@ -457,7 +469,7 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
                             &empty_members,
                             &empty_fields,
                             not_bigint_locals,
-                            const_local_inits,
+                            &stable_local_inits,
                             &numeric,
                             0,
                         ),
@@ -511,8 +523,46 @@ pub(super) fn expr_numeric_by_construction(
             depth + 1,
         )
     };
+    // A numeric index into one of these compiler-owned constructors can only
+    // produce a Number or `undefined` (for an out-of-bounds read). Either is
+    // safe on one side of `+` once the other operand has the same property:
+    // neither operand can select string concatenation, and ToNumber(undefined)
+    // produces the Number NaN. Keep this weaker fact local to the Add rule;
+    // an out-of-bounds read is not itself a Number and must not become a
+    // general raw-f64 proof.
+    let numeric_view_value_or_undefined = |x: &Expr| {
+        let Expr::IndexGet { object, index } = x else {
+            return false;
+        };
+        let Expr::LocalGet(view_id) = object.as_ref() else {
+            return false;
+        };
+        let Some(Some(init)) = const_local_inits.get(view_id) else {
+            return false;
+        };
+        let numeric_storage = matches!(
+            init,
+            Expr::BufferAlloc { .. }
+                | Expr::BufferAllocUnsafe(_)
+                | Expr::Uint8ArrayNew(_)
+                | Expr::Uint8ArrayFrom(_)
+                | Expr::TypedArrayNew { .. }
+                | Expr::NativeArenaView { .. }
+        ) || matches!(
+            init,
+            Expr::Array(elements)
+                if elements
+                    .iter()
+                    .all(|element| matches!(element, Expr::Integer(_) | Expr::Number(_)))
+        );
+        numeric_storage && rec(index)
+    };
     match e {
-        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::Unary { op, operand } => match op {
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot => {
                 rec(operand)
@@ -521,7 +571,10 @@ pub(super) fn expr_numeric_by_construction(
         },
         Expr::Binary { op, left, right } => match op {
             // `+` concatenates strings; both sides must be numbers.
-            BinaryOp::Add => rec(left) && rec(right),
+            BinaryOp::Add => {
+                (rec(left) || numeric_view_value_or_undefined(left))
+                    && (rec(right) || numeric_view_value_or_undefined(right))
+            }
             // `- * / %` produce a BigInt only for BigInt⊗BigInt; mixing a
             // BigInt with anything else THROWS (no value is stored). ONE
             // provably-non-BigInt operand therefore forces the completed

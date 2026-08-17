@@ -8,7 +8,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{access_facts_for_spec, BufferAccessSpec, FnCtx};
+use crate::expr::{access_facts_for_spec, attach_buffer_view_facts, BufferAccessSpec, FnCtx};
 use crate::native_value::{BufferEndian, LoweredValue};
 use crate::types::{F32, I32};
 
@@ -479,6 +479,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         proof.may_emit_noalias,
         vec![format!("width_bytes={}", spec.width_bytes)],
     );
+    attach_buffer_view_facts(ctx, &proof.view);
     let result_consumer = match result.rep.name() {
         "i32" => "BufferNumericRead.native_i32",
         "u32" => "BufferNumericRead.native_u32",
@@ -506,6 +507,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
             format!("endian={:?}", spec.endian),
         ],
     );
+    attach_buffer_view_facts(ctx, &proof.view);
     Ok(Some(result))
 }
 

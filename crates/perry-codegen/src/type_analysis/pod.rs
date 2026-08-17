@@ -555,6 +555,19 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
                     return false;
                 }
+                if ctx.native_facts.num_array_local(*arr_id).is_some() {
+                    return false;
+                }
+                // #8225: a live BufferViewSlot is compiler-owned runtime
+                // evidence for a typed-array/buffer representation. Its
+                // element load cannot produce a string: the checked slow arm
+                // is at worst `undefined` (coerced separately when needed),
+                // while a proven native-owned access is a raw numeric load.
+                // Do not discard that stronger fact and reclassify the read
+                // from its erasable source annotation.
+                if ctx.buffer_view_slots.contains_key(arr_id) {
+                    return false;
+                }
             }
             // A typed array's storage is native bytes — a non-numeric store is
             // converted on the way in, so the read cannot surface one.

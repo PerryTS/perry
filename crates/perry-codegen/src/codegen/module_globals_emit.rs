@@ -46,6 +46,26 @@ fn module_global_runtime_type(
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
             Some(Type::String)
         }
+        // Compiler-owned allocation HIR establishes these runtime classes
+        // independently of the erased binding annotation. Keep module-global
+        // facts aligned with `proven_type_from_init`; otherwise a value that
+        // becomes global only because a helper references it loses the same
+        // constructor proof that a function-local binding retains (#8225).
+        Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => {
+            Some(Type::Named("Buffer".to_string()))
+        }
+        Expr::Uint8ArrayNew(_) | Expr::Uint8ArrayFrom(_) => {
+            Some(Type::Named("Uint8Array".to_string()))
+        }
+        Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. } => {
+            super::spec_abi::spec_ta_kind_class_name(*kind)
+                .map(|class| Type::Named(class.to_string()))
+        }
+        Expr::NativeArenaAlloc(_) => Some(Type::Named("NativeArenaOwner".to_string())),
+        Expr::NativePodView {
+            view_type: Some(view_type),
+            ..
+        } => Some(view_type.clone()),
         Expr::New { class_name, .. }
             if class_name == "SharedArrayBuffer" && shared_array_buffer_is_intrinsic =>
         {

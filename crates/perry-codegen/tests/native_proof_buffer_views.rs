@@ -628,6 +628,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
                 && record["native_rep_name"] == "u32"
                 && record["llvm_ty"] == "i32"
                 && record["native_value_state"] == "region_local"
+                && record["buffer_view_pointer_state"]["state"] == "stable"
         }),
         "expected region-local u32 buffer numeric read record:\n{artifact:#}"
     );
@@ -1097,6 +1098,58 @@ fn artifact_records_native_owned_typed_array_facts() {
         "expected native-owned f64 typed-array store record:\n{artifact:#}"
     );
     assert_eq!(artifact["summary"]["native_owned_view_count"], 4);
+}
+
+#[test]
+fn native_owned_view_identity_keeps_numeric_add_on_the_native_path() {
+    let layout_ty = pod_type(&[("value", Type::Named("PerryU32".to_string()))]);
+    let body = vec![
+        native_arena_owner_let(1, "owner", int(64), false),
+        native_arena_view_let(
+            2,
+            "view",
+            1,
+            "Float64Array",
+            perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+            int(0),
+            int(8),
+        ),
+        number_let(
+            5,
+            "layoutIndex",
+            false,
+            Expr::Binary {
+                op: BinaryOp::Div,
+                left: Box::new(Expr::PodLayoutSizeOf {
+                    ty: layout_ty.clone(),
+                }),
+                right: Box::new(Expr::PodLayoutSizeOf { ty: layout_ty }),
+            },
+        ),
+        number_let(
+            3,
+            "sum",
+            true,
+            add(index_get(2, local(5)), index_get(2, int(1))),
+        ),
+        for_loop(
+            4,
+            int(8),
+            vec![Stmt::Expr(Expr::LocalSet(
+                3,
+                Box::new(add(local(3), index_get(2, local(4)))),
+            ))],
+        ),
+        Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
+        Stmt::Return(Some(local(3))),
+    ];
+
+    let ir = compile_ir("native_owned_view_numeric_add.ts", body);
+    assert!(
+        !ir.contains("call double @js_dynamic_string_or_number_add")
+            && !ir.contains("call double @js_number_coerce"),
+        "a compiler-owned typed view is a runtime type proof, not an erasable annotation:\n{ir}"
+    );
 }
 
 #[test]

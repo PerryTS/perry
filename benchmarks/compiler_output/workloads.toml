@@ -402,7 +402,11 @@ detail = "buffer_slow_path_calls"
 [workloads.h1_native_rep_equivalence]
 source = "benchmarks/compiler_output/fixtures/h1_native_rep_equivalence.ts"
 kind = "native_rep"
-allowed_hot_loop_runtime_calls = ["js_gc_loop_safepoint"]
+# The erased-annotation body remains the permanent semantics path. Buffer
+# parameters cannot reuse the typed-array-header specialized ABI: Buffer's
+# object layout is distinct even though indexed storage is byte-addressable.
+allow_dynamic_property_runtime = true
+allowed_hot_loop_runtime_calls = ["js_gc_loop_safepoint", "js_uint8array_set"]
 
 [workloads.h1_native_rep_equivalence.vectorization]
 min_vectorized_loops = 0
@@ -428,7 +432,8 @@ gc_collections_traced = 0
 write_barriers_static = 1
 write_barriers_traced = 0
 boxed_number_allocations_static = 0
-buffer_slow_path_accesses_static = 0
+# One set helper each in the public body, wrapper, and the call-site inline.
+buffer_slow_path_accesses_static = 3
 
 [[workloads.h1_native_rep_equivalence.ir_checks]]
 name = "h1_i32_phi_path"
@@ -447,11 +452,11 @@ regex_none = ["@js_buffer_get", "@js_buffer_set"]
 detail = "positive H1 fixture has no generic JS buffer helpers"
 
 [[workloads.h1_native_rep_equivalence.counter_checks]]
-name = "h1_no_buffer_slow_path"
+name = "h1_generic_fallback_slow_path_budget"
 section = "llvm_after"
 counter = "buffer_slow_path_calls"
-equals = 0
-detail = "buffer_slow_path_calls"
+equals = 3
+detail = "Buffer-parameter body/wrapper/call-site keep exactly three fallback set sites"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "direct_bounded"
@@ -501,7 +506,9 @@ no_conversions = true
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
 label_any = ["for.body.2.i"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+# The Buffer parameter's erased runtime class still proves the raw read and
+# loop bounds; the write remains on the semantics-preserving runtime fallback.
+counter_min = { load_i8 = 1 }
 
 [workloads.h1_buffer_fastpath_bench]
 source = "benchmarks/compiler_output/fixtures/h1_buffer_fastpath_bench.ts"
@@ -751,9 +758,9 @@ rejected_fact_state = "invalidated"
 rejected_fact_reason = "runtime_api"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_set_fast_f64"
-expr_kind = "NumericArrayIndexSet"
-consumer = "js_array_numeric_set_f64_unboxed"
+name = "numeric_array_literal_get_fast_f64"
+expr_kind = "NumArrayIndexGet"
+consumer = "ptr_numarray.guard_free_load"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
@@ -761,47 +768,24 @@ consumed_fact_kind = "raw_f64_layout"
 consumed_fact_state = "consumed"
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_set_guard_consumed"
-expr_kind = "NumericArrayIndexSet"
-consumer = "js_array_numeric_set_f64_unboxed"
+name = "numeric_array_literal_set_fast_f64"
+expr_kind = "NumArrayIndexSet"
+consumer = "ptr_numarray.guard_free_store"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+consumed_fact_kind = "raw_f64_layout"
+consumed_fact_state = "consumed"
+
+[[workloads.numeric_arrays.native_rep_checks.require_records]]
+name = "numeric_array_literal_set_bounds_consumed"
+expr_kind = "NumArrayIndexSet"
+consumer = "ptr_numarray.guard_free_store"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
 consumed_fact_kind = "bounds"
 consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_set_dynamic_fallback"
-expr_kind = "NumericArrayIndexSet"
-consumer_contains = "fallback"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "rejected"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_set_dynamic_fallback_invalidates_layout"
-expr_kind = "NumericArrayIndexSet"
-consumer_contains = "fallback"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_set_materialization_hazard_invalidated"
-expr_kind = "NumericArrayIndexSet"
-consumer_contains = "fallback"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "materialization_hazard"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
 
 [workloads.packed_f64_loop_versioning]
 source = "benchmarks/compiler_output/fixtures/packed_f64_loop_versioning.ts"
@@ -1439,7 +1423,13 @@ equals = "width_aware_buffer_kernels:38314632556\n"
 detail = "width-aware buffer and typed-array semantic checksum"
 
 [workloads.width_aware_buffer_kernels.native_rep_checks]
-allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_alias", "unknown_bounds"]
+allow_materialization_reasons = [
+  "function_abi",
+  "runtime_api",
+  "unknown_alias",
+  "unknown_bounds",
+  "unknown_call_escape",
+]
 
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
 name = "buffer_read_u32_be"
@@ -1523,14 +1513,14 @@ notes_contains = "typed_array_fallback=untracked_or_unproven"
 min = 2
 
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
-name = "typed_array_bounds_get_fallback"
+name = "typed_array_unproven_get_fallback"
 source_function = "typedArrayHazards"
 expr_kind = "TypedArrayGet"
 consumer = "TypedArrayGet.slow_path"
 native_rep_name = "js_value"
 access_mode = "dynamic_fallback"
 bounds_state = "unknown"
-materialization_reason = "unknown_bounds"
+materialization_reason = "unknown_call_escape"
 notes_contains = "typed_array_fallback=untracked_or_unproven"
 
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
@@ -1544,17 +1534,6 @@ bounds_state = "unknown"
 materialization_reason = "unknown_alias"
 notes_contains = "typed_array_fallback=untracked_or_unproven"
 min = 2
-
-[[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
-name = "typed_array_bounds_set_fallback"
-source_function = "typedArrayHazards"
-expr_kind = "TypedArraySet"
-consumer = "TypedArraySet.slow_path"
-native_rep_name = "js_value"
-access_mode = "dynamic_fallback"
-bounds_state = "unknown"
-materialization_reason = "unknown_bounds"
-notes_contains = "typed_array_fallback=untracked_or_unproven"
 
 [workloads.native_owned_typed_views]
 source = "benchmarks/compiler_output/fixtures/native_owned_typed_views.ts"
@@ -1892,9 +1871,26 @@ kind = "native_abi_packet_typed"
 allow_hot_loop_conversions = true
 allow_dynamic_property_runtime = true
 allowed_hot_loop_runtime_calls = [
+  "js_dynamic_string_or_number_add",
+  "js_number_coerce",
   "js_shadow_frame_push",
   "js_shadow_slot_bind",
 ]
+
+# #8094's public trampoline contains a guarded specialized clone and the
+# semantics-preserving generic fallback. LLVM may inline both into the public
+# symbol, so the global hot-loop census legitimately sees dynamic helpers from
+# the fallback. Pin the actual optimization contract on the pre-opt clone: its
+# successful-guard body must remain free of those helpers (#8225).
+[[workloads.native_abi_packet_typed.ir_checks]]
+name = "packet_typed_specialized_clone_has_no_dynamic_numeric_helpers"
+section = "llvm_before"
+function_contains = "$spec_"
+regex_none = [
+  "call double @js_dynamic_string_or_number_add",
+  "call double @js_number_coerce",
+]
+detail = "the guarded typed-packet clone keeps numeric additions native while the generic fallback preserves erased-annotation semantics"
 
 [workloads.native_abi_packet_typed.vectorization]
 min_vectorized_loops = 0

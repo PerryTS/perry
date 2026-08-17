@@ -248,6 +248,27 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::Uint8ArrayNew(_) | Expr::Uint8ArrayFrom(_) => {
             Some(HirType::Named("Uint8Array".to_string()))
         }
+        // Buffer shares Uint8Array's byte storage, but its runtime class
+        // identity is stronger: losing it makes Buffer-only numeric methods
+        // such as readUInt32BE fall through to generic property dispatch.
+        Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => {
+            Some(HirType::Named("Buffer".to_string()))
+        }
+        // #8225: NativeArena views are compiler-owned HIR constructors, not
+        // calls selected from erasable TypeScript metadata. Losing this
+        // runtime-derived identity when annotation trust was tightened made
+        // every numeric read look declared-only: the cold `+` arm regained
+        // js_dynamic_string_or_number_add/js_number_coerce and the native ABI
+        // evidence packet went red. The kind is the allocation contract, so it
+        // is the same strength of proof as Uint8ArrayNew above.
+        Expr::TypedArrayNew { .. } | Expr::NativeArenaView { .. } => {
+            hir_inferred_refinable_type(ctx, init)
+        }
+        Expr::NativeArenaAlloc(_) => Some(HirType::Named("NativeArenaOwner".to_string())),
+        Expr::NativePodView {
+            view_type: Some(view_type),
+            ..
+        } => Some(view_type.clone()),
         Expr::Object(_) | Expr::ObjectSpread { .. } => Some(HirType::Object(Default::default())),
         Expr::Closure {
             is_async,
