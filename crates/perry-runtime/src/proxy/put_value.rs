@@ -749,16 +749,17 @@ fn trace_object_array_numeric_write_stage<T>(value: Option<T>, reason: &'static 
 /// receiver, key, or layout state that could require ordinary `[[Set]]`
 /// semantics. The fixed array is stack-only; no descriptor allocation is
 /// introduced on the preflight path.
-fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Option<[u16; 4]> {
+fn object_array_numeric_write_slots(
+    array: f64,
+    keys: &[f64],
+    receiver_start: u32,
+    receiver_end: u32,
+) -> Option<[u16; 4]> {
     // Reuse the process gate js_gc_init disables for typed-feedback tracing,
     // typed-layout verification, and the explicit inline-field escape hatch.
     // This loop bypasses the same observations/checks as the class-field
     // inline clone and therefore must honor the identical gate.
-    if count == 0
-        || keys.is_empty()
-        || keys.len() > 4
-        || !crate::object::class_field_inline_guard_enabled()
-    {
+    if keys.is_empty() || keys.len() > 4 || !crate::object::class_field_inline_guard_enabled() {
         trace_object_array_numeric_write_rejection("disabled gate or invalid field/count bound");
         return None;
     }
@@ -793,12 +794,16 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
     // checks above, before the 16M cap below, so the emitter's fast nest
     // (which loads the same header length after guard-ok) can never outrun
     // the proven prefix. An empty array is not worth the fast path.
-    let count = if count == u32::MAX { length } else { count };
-    if count == 0 {
-        trace_object_array_numeric_write_rejection("empty dynamic-length prefix");
+    let receiver_end = if receiver_end == u32::MAX {
+        length
+    } else {
+        receiver_end
+    };
+    if receiver_start >= receiver_end {
+        trace_object_array_numeric_write_rejection("empty or reversed receiver range");
         return None;
     }
-    if length > 16_000_000 || capacity > 16_000_000 || length > capacity || count > length {
+    if length > 16_000_000 || capacity > 16_000_000 || length > capacity || receiver_end > length {
         trace_object_array_numeric_write_rejection("array length/capacity/prefix bound");
         return None;
     }
@@ -903,7 +908,7 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
     let elements = unsafe {
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64
     };
-    let first_bits = unsafe { (*elements).to_bits() };
+    let first_bits = unsafe { (*elements.add(receiver_start as usize)).to_bits() };
     if first_bits == crate::value::TAG_HOLE {
         trace_object_array_numeric_write_rejection("first receiver is a hole");
         return None;
@@ -996,7 +1001,7 @@ fn object_array_numeric_write_slots(array: f64, keys: &[f64], count: u32) -> Opt
         }
     }
 
-    for i in 1..count as usize {
+    for i in (receiver_start as usize + 1)..receiver_end as usize {
         let bits = unsafe { (*elements.add(i)).to_bits() };
         if bits == crate::value::TAG_HOLE {
             trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
@@ -1117,7 +1122,7 @@ pub extern "C" fn js_object_array_keytable_write_guard(
     }
     let keys: Vec<f64> = key_handles.iter().map(|h| h.get_nanbox_f64()).collect();
     let Some(slots) =
-        object_array_numeric_write_slots(array_handle.get_nanbox_f64(), &keys, receiver_count)
+        object_array_numeric_write_slots(array_handle.get_nanbox_f64(), &keys, 0, receiver_count)
     else {
         return 0;
     };
@@ -1156,8 +1161,43 @@ pub extern "C" fn js_object_array_numeric_write_guard(
     }
     let keys = [key_1, key_2, key_3, key_4];
     let Some(slots) =
-        object_array_numeric_write_slots(array, &keys[..field_count as usize], receiver_count)
+        object_array_numeric_write_slots(array, &keys[..field_count as usize], 0, receiver_count)
     else {
+        return 0;
+    };
+    slots[..field_count as usize]
+        .iter()
+        .enumerate()
+        .fold(0, |packed, (index, slot)| {
+            packed | ((u64::from(*slot) + 1) << (index * 16))
+        })
+}
+
+/// Range variant for a constant non-zero inner loop start. The result has the
+/// same packed-lane ABI as [`js_object_array_numeric_write_guard`], but proves
+/// exactly `receiver_start..receiver_end`; generated code retains the array
+/// base pointer and uses the original absolute element index.
+#[no_mangle]
+pub extern "C" fn js_object_array_numeric_write_range_guard(
+    array: f64,
+    key_1: f64,
+    key_2: f64,
+    key_3: f64,
+    key_4: f64,
+    field_count: u32,
+    receiver_start: u32,
+    receiver_end: u32,
+) -> u64 {
+    if !(1..=4).contains(&field_count) {
+        return 0;
+    }
+    let keys = [key_1, key_2, key_3, key_4];
+    let Some(slots) = object_array_numeric_write_slots(
+        array,
+        &keys[..field_count as usize],
+        receiver_start,
+        receiver_end,
+    ) else {
         return 0;
     };
     slots[..field_count as usize]
@@ -1178,7 +1218,7 @@ pub extern "C" fn js_object_array_numeric_write2_guard(
     key_2: f64,
     receiver_count: u32,
 ) -> u64 {
-    let Some(slots) = object_array_numeric_write_slots(array, &[key_1, key_2], receiver_count)
+    let Some(slots) = object_array_numeric_write_slots(array, &[key_1, key_2], 0, receiver_count)
     else {
         return 0;
     };

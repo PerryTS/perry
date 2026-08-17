@@ -577,13 +577,50 @@ fn encode_node(node: &GuardNode) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn descriptor_for_type(
+/// Whether validation has a value-independent upper bound. Arrays, maps and
+/// sets walk a runtime-sized collection; a descriptor cycle can walk a
+/// runtime-sized object graph. Everything else visits a fixed graph of fields
+/// and union arms whose size the compiler owns.
+fn descriptor_walk_is_bounded(nodes: &[GuardNode], root: u32) -> bool {
+    let children: Vec<Vec<u32>> = nodes.iter().map(node_children).collect();
+    let cycle = cycle_members(&children);
+    let mut seen = vec![false; nodes.len()];
+    let mut work = vec![root];
+    while let Some(node) = work.pop() {
+        let Ok(index) = usize::try_from(node) else {
+            return false;
+        };
+        let (Some(entry), Some(children), Some(on_cycle), Some(visited)) = (
+            nodes.get(index),
+            children.get(index),
+            cycle.get(index),
+            seen.get_mut(index),
+        ) else {
+            return false;
+        };
+        if std::mem::replace(visited, true) {
+            continue;
+        }
+        if *on_cycle
+            || matches!(
+                entry,
+                GuardNode::Array(_) | GuardNode::Map { .. } | GuardNode::Set(_)
+            )
+        {
+            return false;
+        }
+        work.extend(children);
+    }
+    true
+}
+
+fn descriptor_for_type_with_walk_bound(
     ty: &Type,
     type_aliases: &HashMap<String, Type>,
     interfaces: &HashMap<String, perry_hir::Interface>,
     classes: &HashMap<String, &perry_hir::Class>,
     class_ids: &HashMap<String, u32>,
-) -> Option<Vec<u8>> {
+) -> Option<(Vec<u8>, bool)> {
     let mut builder = GuardGraphBuilder {
         nodes: Vec::new(),
         named: HashMap::new(),
@@ -594,6 +631,7 @@ fn descriptor_for_type(
         class_ids,
     };
     let root = builder.build_type(ty, false)?;
+    let walk_is_bounded = descriptor_walk_is_bounded(&builder.nodes, root);
     let mut bodies = builder
         .nodes
         .iter()
@@ -624,13 +662,69 @@ fn descriptor_for_type(
     for body in bodies {
         out.extend_from_slice(&body);
     }
-    Some(out)
+    Some((out, walk_is_bounded))
+}
+
+#[cfg(test)]
+fn descriptor_for_type(
+    ty: &Type,
+    type_aliases: &HashMap<String, Type>,
+    interfaces: &HashMap<String, perry_hir::Interface>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    class_ids: &HashMap<String, u32>,
+) -> Option<Vec<u8>> {
+    descriptor_for_type_with_walk_bound(ty, type_aliases, interfaces, classes, class_ids)
+        .map(|(descriptor, _)| descriptor)
+}
+
+/// A loop makes the body's own work potentially unbounded, so a collection or
+/// recursive graph walk can still be amortizable. With no loop, validating an
+/// unbounded input to enter a bounded body cannot win as the input grows.
+/// Nested closure bodies are not part of the enclosing function's work.
+fn body_contains_loop(stmts: &[perry_hir::Stmt]) -> bool {
+    use perry_hir::Stmt;
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            body_contains_loop(then_branch)
+                || else_branch.as_deref().is_some_and(body_contains_loop)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body_contains_loop(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| body_contains_loop(&catch.body))
+                || finally.as_deref().is_some_and(body_contains_loop)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|case| body_contains_loop(&case.body)),
+        Stmt::Labeled { body, .. } => body_contains_loop(std::slice::from_ref(body.as_ref())),
+        Stmt::Expr(_)
+        | Stmt::Throw(_)
+        | Stmt::Return(_)
+        | Stmt::Let { .. }
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => false,
+    })
 }
 
 pub(crate) fn declaration_guards(
     function_id: u32,
     module_prefix: &str,
     params: &[perry_hir::Param],
+    body: &[perry_hir::Stmt],
     demoted_params: &[bool],
     // (#8094) Guard-only ineligibility, kept SEPARATE from `demoted_params`
     // because that mask also drives raw representation selection: a reference
@@ -642,6 +736,7 @@ pub(crate) fn declaration_guards(
     classes: &HashMap<String, &perry_hir::Class>,
     class_ids: &HashMap<String, u32>,
 ) -> Vec<Option<SpecParamGuard>> {
+    let body_can_amortize_unbounded_walk = body_contains_loop(body);
     params
         .iter()
         .zip(demoted_params.iter())
@@ -651,19 +746,31 @@ pub(crate) fn declaration_guards(
             if *demoted || *blocked || matches!(param.ty, Type::Any | Type::Unknown | Type::Never) {
                 return None;
             }
+            let (descriptor, walk_is_bounded) = descriptor_for_type_with_walk_bound(
+                &param.ty,
+                type_aliases,
+                interfaces,
+                classes,
+                class_ids,
+            )?;
+            // #8202: `peek(p: Parser)` walked every token to enter an O(1)
+            // body, while `asNum(v: Value)` admitted a recursive 123-node
+            // graph to read one discriminant and one field. The validator was
+            // 9.8-12% of those programs and the clone it licensed was worth
+            // only 0.1-0.2%. Do not emit a guard whose work grows with the
+            // input when the guarded body itself is statically bounded. A
+            // loop leaves the decision unchanged: array reducers and similar
+            // consumers can amortize validation over their own traversal.
+            if !walk_is_bounded && !body_can_amortize_unbounded_walk {
+                return None;
+            }
             Some(SpecParamGuard {
                 proof: param.ty.clone(),
                 descriptor_name: format!(
                     "perry_param_guard_{}_{}_{}",
                     module_prefix, function_id, index
                 ),
-                descriptor: descriptor_for_type(
-                    &param.ty,
-                    type_aliases,
-                    interfaces,
-                    classes,
-                    class_ids,
-                )?,
+                descriptor,
             })
         })
         .collect()
@@ -745,11 +852,13 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
 }
 
 /// A single-node scalar descriptor whose predicate an existing typed-abi
-/// leaf guard already decides EXACTLY (#8079: the interpretive
-/// `js_param_type_guard` costs ~450 instructions per call — descriptor
-/// parse plus a 768-byte `GuardState` init — which measured as 16-34% of
-/// ALL retired instructions on the tree/tree_wide/interp/iso_miss corpus
-/// rows, because every unproven call routes through the public wrapper):
+/// leaf guard already decides exactly. Before #8201, a single-node
+/// `js_param_type_guard` call cost ~450 instructions and measured as 16-34%
+/// of ALL retired instructions on the
+/// tree/tree_wide/interp/iso_miss corpus rows, because every unproven call
+/// routes through the public wrapper. The descriptor parse is only a small
+/// part of that cost, and LLVM already elides the inline visited array's
+/// initialization; the win here comes from avoiding the interpretive call:
 ///
 /// * `OP_NUMBER` (1) = `js_typed_f64_arg_guard` = `is_number || is_int32`
 /// * `OP_INT32` (2) — the validator literally calls `js_typed_i32_arg_guard`
@@ -846,6 +955,76 @@ mod tests {
         assert_eq!(scalar_descriptor_rep(&build(&Type::Null)), None);
         assert_eq!(scalar_descriptor_rep(&build(&Type::Number)[..20]), None);
         assert_eq!(scalar_descriptor_rep(b"PGT1"), None);
+    }
+
+    fn declaration_guard_for(
+        ty: Type,
+        body: &[perry_hir::Stmt],
+        aliases: &HashMap<String, Type>,
+    ) -> Option<SpecParamGuard> {
+        let params = [perry_hir::Param {
+            id: 1,
+            name: "value".to_string(),
+            ty,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+        declaration_guards(
+            1,
+            "walk_bound_test",
+            &params,
+            body,
+            &[false],
+            &[false],
+            aliases,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .into_iter()
+        .next()
+        .flatten()
+    }
+
+    /// #8202: a runtime-sized validation walk cannot amortize against a body
+    /// with statically bounded work. Keep bounded structural objects and the
+    /// existing loop-consumer case, but decline arrays and recursive graphs
+    /// for constant-work helpers such as `peek` and `asNum`.
+    #[test]
+    fn constant_work_bodies_decline_unbounded_descriptor_walks() {
+        let flat = object_alias("Flat", &[("value", Type::Number)]);
+        let flat_aliases = HashMap::from([flat]);
+        assert!(
+            declaration_guard_for(Type::Named("Flat".to_string()), &[], &flat_aliases).is_some(),
+            "a fixed field walk remains eligible"
+        );
+
+        let array = Type::Array(Box::new(Type::Number));
+        assert!(declaration_guard_for(array.clone(), &[], &HashMap::new()).is_none());
+
+        let loop_body = [perry_hir::Stmt::While {
+            condition: perry_hir::Expr::Bool(false),
+            body: Vec::new(),
+        }];
+        assert!(
+            declaration_guard_for(array, &loop_body, &HashMap::new()).is_some(),
+            "a loop consumer keeps the existing structural specialization"
+        );
+
+        let recursive_aliases = HashMap::from([object_alias(
+            "Link",
+            &[(
+                "next",
+                Type::Union(vec![Type::Named("Link".to_string()), Type::Null]),
+            )],
+        )]);
+        assert!(
+            declaration_guard_for(Type::Named("Link".to_string()), &[], &recursive_aliases)
+                .is_none(),
+            "a recursive value walk is runtime-sized too"
+        );
     }
 
     fn object_alias(name: &str, fields: &[(&str, Type)]) -> (String, Type) {

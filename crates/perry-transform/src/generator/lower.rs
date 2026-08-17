@@ -316,27 +316,6 @@ pub fn transform_generator_function_with_extra_captures(
     // must be boxed captures like any other cross-state local.
     let prologue_hoist = collect_hoisted_vars(&param_prologue);
 
-    // #7933: every local a closure in this body can observe. Read from the
-    // ORIGINAL body (before hoisting/linearization move statements around) —
-    // those passes rewrite references but never introduce a user closure, and
-    // the ones that do rewrite closure bodies (`rewrite_written_captures_to_cells`,
-    // `snapshot_suspended_loop_captures`) only ever redirect a closure onto a
-    // *different* id, which leaves the pre-pass answer conservative. `None`
-    // means the analysis is unusable (sloppy `with`) and nothing may be
-    // released. See `box_release.rs` for why closure visibility is the exact
-    // condition.
-    // Consumed only by the `was_plain_async` arm below — a generator's
-    // `{next, return, throw}` object is user-visible, so "done" is not the end
-    // of observability there and nothing is ever released.
-    let closure_visible_before: Option<std::collections::HashSet<LocalId>> = {
-        closure_visible_ids(&func.body).and_then(|mut ids| {
-            closure_visible_ids(&param_prologue).map(|p| {
-                ids.extend(p);
-                ids
-            })
-        })
-    };
-
     // #321: hoist `yield` / `yield*` that live inside a larger expression
     // (`return (yield 1) + (yield 2)`, call args, array/object literals, etc.)
     // into ordered `let __ygen_N = yield E;` temps so the linearizer below only
@@ -885,67 +864,29 @@ pub fn transform_generator_function_with_extra_captures(
         // emit `Stmt::Throw(value)` inline in its is-error arm, saving one
         // closure allocation per async-fn invocation (50k/run on the
         // promise_all_chains kernel).
-        // #7933: the activation's boxed body locals that no closure can
-        // observe, released (set to `undefined`) at the state machine's
-        // terminal states. Second, independent scan of the POST-linearization
-        // bodies, unioned with the pre-pass one: an id either scan calls
-        // closure-visible is kept.
+        // Every cell in the activation is named at its terminal states. The
+        // runtime publishes unobserved cells immediately; closure-visible
+        // cells remain registered until the GC proves the final capturing
+        // closure dead, so an escaped closure remains fully observable.
         let release_ids: Vec<LocalId> = {
-            let post_visible = closure_visible_ids(&next_resume_body).and_then(|mut ids| {
-                let routes_ok =
-                    catches
-                        .iter()
-                        .all(|route| match closure_visible_ids(&route.body) {
-                            Some(r) => {
-                                ids.extend(r);
-                                true
-                            }
-                            None => false,
-                        });
-                if routes_ok {
-                    Some(ids)
-                } else {
-                    None
-                }
-            });
-            match (&closure_visible_before, &post_visible) {
-                (Some(before), Some(after)) => {
-                    let machinery = [state_id, done_id, executing_id].into_iter().chain(
-                        if has_yielding_finally {
-                            vec![pending_type_id, pending_value_id]
-                        } else {
-                            Vec::new()
-                        },
-                    );
-                    let mut ids: Vec<LocalId> = hoisted
-                        .iter()
-                        .map(|(id, _, _)| *id)
-                        .chain(extra_local_ids.iter().copied())
-                        // `__gen_sent` holds the value the last `await`
-                        // delivered — a first-class retainer, and re-entry
-                        // overwrites it before any read.
-                        .chain(std::iter::once(sent_id))
-                        // The state-machine control locals release too, now
-                        // that a release parks the cell instead of writing
-                        // `undefined` (#7933 follow-up). A stray duplicate
-                        // resume stays on today's exact path via the PARKED
-                        // VALUES: generated code reads the control cells with
-                        // raw loads, `js_bool_box_release` parks
-                        // `__gen_done`-shaped cells as `true` (the terminal
-                        // short-circuit), and `js_i32_box_release` parks
-                        // `__gen_state`-shaped cells as `-1` (matches no
-                        // dispatch case, no catch route, no completion-check
-                        // state). User closures cannot name these locals, so
-                        // the visibility filter below is pure defense.
-                        .chain(machinery)
-                        .filter(|id| !before.contains(id) && !after.contains(id))
-                        .collect();
-                    ids.sort();
-                    ids.dedup();
-                    ids
-                }
-                _ => Vec::new(),
-            }
+            let machinery =
+                [state_id, done_id, executing_id]
+                    .into_iter()
+                    .chain(if has_yielding_finally {
+                        vec![pending_type_id, pending_value_id]
+                    } else {
+                        Vec::new()
+                    });
+            let mut ids: Vec<LocalId> = hoisted
+                .iter()
+                .map(|(id, _, _)| *id)
+                .chain(extra_local_ids.iter().copied())
+                .chain(std::iter::once(sent_id))
+                .chain(machinery)
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
         };
         let throw_routes_for_step = if catches.is_empty() {
             None

@@ -58,6 +58,8 @@ mod hot_tls;
 pub(crate) use hot_tls::*;
 mod roots;
 pub use roots::*;
+mod full_trace;
+pub(crate) use full_trace::*;
 #[cfg(test)]
 /// Rewrite runtime-handle roots only; this deliberately does not rewrite the
 /// installed `INLINE_TRAP`, whose scanner is exercised separately.

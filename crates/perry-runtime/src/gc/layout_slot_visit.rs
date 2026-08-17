@@ -15,6 +15,21 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
 ) {
     let mut child_slots = gc_child_slots(header);
+    // #8213: drained async box cells are weak registry entries during a full
+    // trace. A closure proven live by the mark set is their owner, so enumerate
+    // the malloc-side JSValue payload as an external child slot. Requiring a
+    // marked/pinned closure prevents generic descriptor walks over dead old
+    // objects from accidentally resurrecting the cycle this edge is meant to
+    // break.
+    if (*header).obj_type == GC_TYPE_CLOSURE
+        && (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0
+        && full_trace_active()
+    {
+        let closure = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        crate::closure::visit_closure_box_payload_slots_mut(closure, |slot| {
+            visit(fixed_slot(slot));
+        });
+    }
     // #8112: the authoritative ordered-keys edge, taken from the descriptor
     // `gc_child_slots` already resolved for this receiver. It is the boxed
     // record's OWN `keys` word, so the collector marks through it and rewrites

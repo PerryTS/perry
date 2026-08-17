@@ -772,6 +772,7 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         }
         GcMoveHookKind::ClosureDynamicProps => {
             crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
+            crate::closure::closure_box_captures_owner_moved(old_user, new_user);
         }
         GcMoveHookKind::MapSideTables => {
             crate::map::map_header_moved_for_gc(old_user, new_user);

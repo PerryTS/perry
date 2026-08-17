@@ -352,37 +352,38 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
 #[test]
 fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     // Renamed from `guarded_discriminant_branch_routes_recursive_field_to_clone`.
-    // The routing half of that name described a RECURSIVE union walk, which
-    // `guard_blocked` no longer admits: a call in the body can reach the
-    // guarded object through an alias the caller arranged before entry, so a
-    // reference-typed parameter cannot keep a descriptor proof across it. The
-    // narrowing machinery it was really exercising survives on a call-free
-    // body, and the recursive shape is kept below as the negative that pins
-    // the rule.
-    let node = Type::Union(vec![
-        Type::Object(ObjectType {
-            name: None,
-            properties: HashMap::from([
-                (
-                    "kind".to_string(),
-                    PropertyInfo {
-                        ty: Type::StringLiteral("num".to_string()),
-                        optional: false,
-                        readonly: false,
-                    },
-                ),
-                (
-                    "num".to_string(),
-                    PropertyInfo {
-                        ty: Type::Number,
-                        optional: false,
-                        readonly: false,
-                    },
-                ),
-            ]),
-            property_order: Some(vec!["kind".to_string(), "num".to_string()]),
-            index_signature: None,
-        }),
+    // The routing half of that name described a recursive CALL, which
+    // `guard_blocked` does not admit for a reference parameter: a call can
+    // reach the guarded object through an alias the caller arranged before
+    // entry, so a reference-typed parameter cannot keep a descriptor proof
+    // across it. The narrowing machinery it was really exercising survives
+    // on a call-free body, and the recursive call is kept below as the
+    // negative that pins the rule.
+    let numeric_node = Type::Object(ObjectType {
+        name: None,
+        properties: HashMap::from([
+            (
+                "kind".to_string(),
+                PropertyInfo {
+                    ty: Type::StringLiteral("num".to_string()),
+                    optional: false,
+                    readonly: false,
+                },
+            ),
+            (
+                "num".to_string(),
+                PropertyInfo {
+                    ty: Type::Number,
+                    optional: false,
+                    readonly: false,
+                },
+            ),
+        ]),
+        property_order: Some(vec!["kind".to_string(), "num".to_string()]),
+        index_signature: None,
+    });
+    let flat_node = Type::Union(vec![
+        numeric_node,
         Type::Object(ObjectType {
             name: None,
             properties: HashMap::from([
@@ -397,7 +398,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
                 (
                     "left".to_string(),
                     PropertyInfo {
-                        ty: Type::Named("Node".to_string()),
+                        ty: Type::Number,
                         optional: false,
                         readonly: false,
                     },
@@ -427,7 +428,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         params: vec![Param {
             id: 310,
             name: "node".to_string(),
-            ty: Type::Named("Node".to_string()),
+            ty: Type::Named("FlatNode".to_string()),
             default: None,
             decorators: Vec::new(),
             is_rest: false,
@@ -476,7 +477,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         params: vec![Param {
             id: 320,
             name: "node".to_string(),
-            ty: Type::Named("Node".to_string()),
+            ty: Type::Named("FlatNode".to_string()),
             default: None,
             decorators: Vec::new(),
             is_rest: false,
@@ -493,11 +494,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
                 },
                 then_branch: vec![Stmt::Return(Some(Expr::Call {
                     callee: Box::new(Expr::FuncRef(32)),
-                    args: vec![Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(320)),
-                        property: "left".to_string(),
-                        byte_offset: 0,
-                    }],
+                    args: vec![Expr::LocalGet(320)],
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }))],
@@ -517,9 +514,9 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     let mut module = Module::new("recursive_guard_narrowing.ts");
     module.type_aliases.push(TypeAlias {
         id: 31,
-        name: "Node".to_string(),
+        name: "FlatNode".to_string(),
         type_params: Vec::new(),
-        ty: node.clone(),
+        ty: flat_node.clone(),
         is_exported: false,
     });
     module.functions.push(eval);
@@ -536,7 +533,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         output_type: "executable".to_string(),
         ..Default::default()
     };
-    opts.type_aliases.insert("Node".to_string(), node);
+    opts.type_aliases.insert("FlatNode".to_string(), flat_node);
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
         .expect("LLVM IR is UTF-8");
     let public = function_ir(&ir, "@perry_fn_recursive_guard_narrowing_ts__evalNode(");

@@ -2606,6 +2606,27 @@ mod tests {
         )
     }
 
+    fn object_array_numeric_write_range_guard(
+        array: f64,
+        keys: &[f64],
+        start: u32,
+        end: u32,
+    ) -> u64 {
+        assert!((1..=4).contains(&keys.len()));
+        let mut padded = [0.0; 4];
+        padded[..keys.len()].copy_from_slice(keys);
+        put_value::js_object_array_numeric_write_range_guard(
+            array,
+            padded[0],
+            padded[1],
+            padded[2],
+            padded[3],
+            keys.len() as u32,
+            start,
+            end,
+        )
+    }
+
     /// #6809/#6812: the whole-loop preflight may only publish raw slot indexes
     /// when every array element has the same writable data layout. The
     /// generated clone performs no checks after this result, so heterogeneous
@@ -2757,6 +2778,35 @@ mod tests {
             object_array_numeric_write_guard(boxed_object(mixed.cast()), &[c, d], 2),
             0,
             "content-equal but distinct shape keys arrays must not share raw slots"
+        );
+
+        let ranged_values = [
+            boxed_object(other),
+            boxed_object(first),
+            boxed_object(second),
+        ];
+        let ranged =
+            crate::array::js_array_from_f64(ranged_values.as_ptr(), ranged_values.len() as u32);
+        let ranged_box = boxed_object(ranged.cast());
+        assert_eq!(
+            object_array_numeric_write_range_guard(ranged_box, &[c, d], 1, 3),
+            (4u64 << 16) | 3,
+            "a non-zero range must ignore an ineligible receiver before its source start"
+        );
+        assert_eq!(
+            object_array_numeric_write_guard(ranged_box, &[c, d], 3),
+            0,
+            "the legacy prefix ABI must continue proving from element zero"
+        );
+        assert_eq!(
+            object_array_numeric_write_range_guard(ranged_box, &[c, d], 3, 3),
+            0,
+            "an empty receiver range must reject"
+        );
+        assert_eq!(
+            object_array_numeric_write_range_guard(ranged_box, &[c, d], 1, 4),
+            0,
+            "a receiver range may not outrun the array"
         );
 
         unsafe {

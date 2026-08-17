@@ -218,6 +218,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_typed_feedback_closure_direct_call_guard",
     // verified non-allocating bookkeeping stores/reads
     "js_closure_set_capture_bits",
+    "js_closure_set_box_capture_ptr",
     "js_closure_get_capture_bits",
     "js_closure_set_capture_ptr",
     "js_closure_get_capture_ptr",
@@ -274,14 +275,19 @@ const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", 
 /// Re-CALLING it below a collection point is sound under the same argument #7664's string-handle
 /// reload uses: the closure struct is a first-class root (rooted at `current_closure_slot`,
 /// relocated/rewritten on evacuation), so re-reading its capture array returns the
-/// post-relocation value — UNLESS a `js_closure_set_capture_bits` to the same index ran in the
-/// window, which is the store side-condition below.
+/// post-relocation value — UNLESS a generic or declared-box capture setter to
+/// the same index ran in the window, which is the store side-condition below.
 const CAPTURE_GET_CALLEE: &str = "js_closure_get_capture_bits";
 /// The write half. Not itself collecting (`NON_COLLECTING` above), but its side effect on the
 /// closure's capture slot must invalidate a [`CAPTURE_GET_CALLEE`] reload the same way a `store`
 /// invalidates a shadow-slot one — `stores_to` carries a synthetic per-index key for exactly
 /// that (#7725).
-const CAPTURE_SET_CALLEE: &str = "js_closure_set_capture_bits";
+fn is_capture_set_callee(callee: &str) -> bool {
+    matches!(
+        callee,
+        "js_closure_set_capture_bits" | "js_closure_set_box_capture_ptr"
+    )
+}
 
 /// A synthetic "location" key for capture-slot index `idx` — never a real pointer token (no `%`
 /// / `@` sigil), so it cannot collide with an actual shadow-slot register or handle-global name.
@@ -935,7 +941,7 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
                     transparent = true;
                     capture_get_key = Some(capture_slot_key(idx));
                 }
-            } else if callee == CAPTURE_SET_CALLEE {
+            } else if is_capture_set_callee(callee) {
                 if let Some(idx) = literal_capture_idx(args) {
                     stores_to = Some(capture_slot_key(idx));
                 }
@@ -1109,7 +1115,7 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
                         transparent = true;
                         capture_get_key = Some(capture_slot_key(&idx));
                     }
-                } else if name == CAPTURE_SET_CALLEE {
+                } else if is_capture_set_callee(&name) {
                     if let Some(idx) = raw_call_literal_arg(rhs, &name, 1) {
                         stores_to = Some(capture_slot_key(&idx));
                     }

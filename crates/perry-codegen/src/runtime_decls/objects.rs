@@ -491,6 +491,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32, I32],
     );
     module.declare_function(
+        "js_object_array_numeric_write_range_guard",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32, I32, I32],
+    );
+    module.declare_function(
         "js_super_put_value_set",
         DOUBLE,
         &[I32, DOUBLE, DOUBLE, DOUBLE, I32],

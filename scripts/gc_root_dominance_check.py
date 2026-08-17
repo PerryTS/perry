@@ -479,6 +479,7 @@ NONCOLLECTING = {
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
     # verified non-allocating bookkeeping stores/reads (perry-runtime)
     "js_closure_set_capture_bits",   # closure/alloc.rs:477 raw slot write + layout note
+    "js_closure_set_box_capture_ptr", # declared box edge + same raw slot write
     "js_closure_get_capture_bits",   # closure/alloc.rs:463 raw slot read
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
     "js_box_set_bits", "js_box_get_bits",           # box.rs:317 raw cell write
@@ -2693,9 +2694,18 @@ def _probe_boxes_outside_the_gc_heap():
                        "zero-reference transition")
     publish = rust_fn_body("crates/perry-runtime/src/box.rs",
                            "publish_async_activation_cells")
-    if publish is None or "push_free_cell" not in publish:
+    publish_cell = rust_fn_body("crates/perry-runtime/src/box.rs",
+                                "publish_box_cell")
+    if publish is None or "publish_box_cell" not in publish \
+            or publish_cell is None or "push_free_cell" not in publish_cell:
         return (False, "the activation zero-reference publisher no longer "
                        "feeds the intrusive free pools")
+    capture_zero = rust_fn_body("crates/perry-runtime/src/box.rs",
+                                "box_capture_count_reached_zero")
+    if capture_zero is None or "ASYNC_RELEASE_DRAINED" not in capture_zero \
+            or "publish_box_cell" not in capture_zero:
+        return (False, "closure-death publication is no longer gated on an "
+                       "already-drained async activation")
     try:
         with open("crates/perry-runtime/src/promise/async_step.rs",
                   encoding="utf-8", errors="replace") as fh:

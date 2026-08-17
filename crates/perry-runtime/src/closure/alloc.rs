@@ -490,6 +490,20 @@ pub extern "C" fn js_closure_set_capture_bits(
     }
 }
 
+/// Set a capture slot which codegen has proven contains a raw variable-box
+/// pointer. Keeping this separate from the generic setter prevents arbitrary
+/// pointer-shaped JS values from becoming false box-lifetime edges.
+#[no_mangle]
+pub extern "C" fn js_closure_set_box_capture_ptr(
+    closure: *mut ClosureHeader,
+    index: u32,
+    value: i64,
+) {
+    js_closure_set_capture_bits(closure, index, value as u64);
+    let cell = crate::r#box::registered_box_capture_addr(value as usize);
+    super::box_captures::set_closure_box_capture(closure, index, cell);
+}
+
 /// Get a captured value (as i64 pointer) by index
 #[no_mangle]
 pub extern "C" fn js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64 {
@@ -510,3 +524,7 @@ static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern "C" fn(*const ClosureHeader, u32
 #[used]
 static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern "C" fn(*mut ClosureHeader, u32, u64) =
     js_closure_set_capture_bits;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_CLOSURE_SET_BOX_CAPTURE_PTR: extern "C" fn(*mut ClosureHeader, u32, i64) =
+    js_closure_set_box_capture_ptr;
