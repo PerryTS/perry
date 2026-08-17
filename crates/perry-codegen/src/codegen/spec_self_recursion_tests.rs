@@ -95,6 +95,99 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
     module
 }
 
+/// The same recursive body reached through an ordinary `number` parameter
+/// guard. The `Number(...)` construction gives the outer call a runtime
+/// Number proof without creating a viable raw-i32 tuple, so the emitted clone
+/// is the boxed `$spec_b` shape whose recursive routing #8169 exercises.
+fn guarded_recursive_module(lhs: Expr, rhs: Expr) -> Module {
+    let mut module = recursive_module(lhs, rhs);
+    module.init.clear();
+    module.init.push(Stmt::Let {
+        id: 20,
+        name: "k".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::NumberCoerce(Box::new(Expr::Undefined))),
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::LocalGet(20)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+    module
+}
+
+/// A guarded Number parameter plus an unconstrained value whose arithmetic
+/// may produce a BigInt. The recursive first argument must keep the public
+/// guard: when `x` is a BigInt, `x * x` is a BigInt too.
+fn bigint_capable_guarded_recursive_module() -> Module {
+    let f = Function {
+        id: 1,
+        name: "f".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            Param {
+                id: 10,
+                name: "n".to_string(),
+                ty: Type::Number,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            },
+            Param {
+                id: 11,
+                name: "x".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            },
+        ],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Conditional {
+            condition: Box::new(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::Integer(1)),
+            }),
+            then_expr: Box::new(Expr::LocalGet(10)),
+            else_expr: Box::new(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![
+                    Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(Expr::LocalGet(11)),
+                        right: Box::new(Expr::LocalGet(11)),
+                    },
+                    Expr::LocalGet(11),
+                ],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("spec_self_recursion_bigint.ts");
+    module.functions.push(f);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::Undefined, Expr::Undefined],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+    module
+}
+
 fn compile_ir(module: &Module) -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
@@ -232,5 +325,75 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
             .count(),
         2,
         "the unprovable edge plus the in-range arm's fallback:\n{clone}"
+    );
+}
+
+#[test]
+fn derived_recursive_number_argument_re_enters_the_guarded_clone() {
+    let ir = compile_ir(&guarded_recursive_module(
+        arith(BinaryOp::Sub, 1),
+        arith(BinaryOp::Sub, 2),
+    ));
+    let public = function_ir(&ir, "@perry_fn_spec_self_recursion_ts__f(");
+    let clone = function_ir(&ir, "$spec_b(");
+
+    // Keep both halves of the subject live: this must be the ordinary boxed
+    // clone selected by the public Number guard, not the raw-i32 Tier-A path.
+    assert!(public.contains("call i32 @js_typed_f64_arg_guard("));
+    assert!(
+        clone.starts_with("define internal")
+            && clone.contains("double @perry_fn_spec_self_recursion_ts__f$spec_b(double"),
+        "expected a guarded boxed clone to specialize:\n{clone}"
+    );
+
+    // #8203 gives recursion-participating clones `preserve_nonecc`, which lands
+    // between `call` and the return type, so match the call LINE rather than a
+    // fixed prefix.
+    assert_eq!(
+        clone
+            .lines()
+            .filter(|l| l.contains("call")
+                && l.contains("@perry_fn_spec_self_recursion_ts__f$spec_b(double"))
+            .count(),
+        2,
+        "both derived Number arguments must re-enter the guarded clone directly:\n{clone}"
+    );
+    assert_eq!(
+        clone
+            .lines()
+            .filter(
+                |l| l.contains("call") && l.contains("@perry_fn_spec_self_recursion_ts__f(double")
+            )
+            .count(),
+        0,
+        "a constructively numeric recursive argument must not re-run the public guard:\n{clone}"
+    );
+}
+
+#[test]
+fn bigint_capable_recursive_argument_keeps_the_public_guard() {
+    let ir = compile_ir(&bigint_capable_guarded_recursive_module());
+    let public = function_ir(&ir, "@perry_fn_spec_self_recursion_bigint_ts__f(");
+    let clone = function_ir(&ir, "$spec_b_b(");
+
+    assert!(public.contains("call i32 @js_typed_f64_arg_guard("));
+    assert!(
+        clone.starts_with("define internal")
+            && clone.contains("double @perry_fn_spec_self_recursion_bigint_ts__f$spec_b_b(double"),
+        "expected a guarded boxed clone to specialize:\n{clone}"
+    );
+    assert_eq!(
+        clone
+            .matches("call double @perry_fn_spec_self_recursion_bigint_ts__f$spec_b_b(double")
+            .count(),
+        0,
+        "BigInt-capable arithmetic must not bypass the Number guard:\n{clone}"
+    );
+    assert_eq!(
+        clone
+            .matches("call double @perry_fn_spec_self_recursion_bigint_ts__f(double")
+            .count(),
+        1,
+        "the unproven recursive edge must retain the public guarded ABI:\n{clone}"
     );
 }

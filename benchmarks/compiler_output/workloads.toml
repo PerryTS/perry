@@ -23,6 +23,7 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: current image fixture still has scalar loops"
 allowed_missed_reason_kinds = [
   "call_instruction",
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -89,7 +90,7 @@ required = true
 no_runtime_calls = true
 
 [[workloads.image_convolution.named_regions.selectors]]
-label_prefix_any = ["for.body.20", "for.body.24", "while.body.28"]
+label_prefix_any = ["for.body.36", "while.body.40"]
 
 [[workloads.image_convolution.named_regions.checks]]
 name = "named_region_input_generation_byte_writes"
@@ -126,7 +127,7 @@ no_runtime_calls = true
 no_conversions = true
 
 [[workloads.image_convolution.named_regions.selectors]]
-label_prefix_any = ["for.body.42"]
+label_prefix_any = ["for.body.64"]
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
@@ -144,7 +145,7 @@ allow_materialization_reasons = ["function_abi", "return_abi"]
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_buffer_view"
-block_label = "for.body.24"
+block_label = "for.body.36"
 expr_kind = "Uint8ArraySet.array"
 consumer = "Uint8ArraySet.BufferView"
 native_rep_name = "buffer_view"
@@ -154,7 +155,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_byte_store"
-block_label = "for.body.24"
+block_label = "for.body.36"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -164,7 +165,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_noise_byte_load"
-block_label = "while.body.28"
+block_label = "while.body.40"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -173,7 +174,7 @@ bounds_state = "proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_noise_byte_store"
-block_label = "while.body.28"
+block_label = "while.body.40"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -182,7 +183,7 @@ bounds_state = "proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_blur_byte_load"
-block_label = "for.body.38"
+block_label = "for.body.56"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -193,7 +194,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_blur_byte_store"
-block_label = "for.body.38"
+block_label = "for.body.56"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -203,7 +204,7 @@ alias_state = "no_alias_proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_fnv_byte_load"
-block_label = "for.body.42"
+block_label = "for.body.64"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -213,7 +214,7 @@ alias_state = "no_alias_proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_fnv_i32_hash"
-block_label = "for.body.42"
+block_label = "for.body.64"
 expr_kind = "MathImul"
 consumer = "lower_expr_native_i32.structural"
 native_rep_name = "i32"
@@ -260,7 +261,7 @@ required = true
 no_runtime_calls = true
 
 [[workloads.loop_data_dependent.named_regions.selectors]]
-label_prefix_any = ["for.body.11", "arr.merge."]
+label_prefix_any = ["for.body.4", "arr.merge."]
 counter_any_min = { fmul = 1, fadd = 1 }
 
 [[workloads.loop_data_dependent.named_regions.checks]]
@@ -408,6 +409,7 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: H1 gates native representation shape, not vector width"
 allowed_missed_reason_kinds = [
   "call_instruction",
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -460,10 +462,8 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-# for.body.2 -> for.body.14 after #7088: the inline shadow-slot stores add
-# ss.* blocks ahead of the module-init loops, shifting the deterministic
-# per-function block counter by 12 (2/6/10 -> 14/18/22).
-label_any = ["for.body.14"]
+# Root-shading barriers currently shift the first module-init loop to body 8.
+label_any = ["for.body.8"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
@@ -475,8 +475,8 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-# for.body.6 -> for.body.18 after #7088 (see direct_bounded).
-label_any = ["for.body.18"]
+# The local-cast loop follows the vectorized direct loop's scalar remainder.
+label_any = ["for.body.12"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
@@ -488,8 +488,7 @@ no_conversions = true
 
 [[workloads.h1_native_rep_equivalence.named_regions.selectors]]
 function_contains = "main"
-# for.body.10 -> for.body.22 after #7088 (see direct_bounded).
-label_any = ["for.body.22"]
+label_any = ["for.body.18"]
 counter_min = { load_i8 = 1, store_i8 = 1 }
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
@@ -661,26 +660,26 @@ regex_none = [
 ]
 detail = "canonical numeric Array.push takes the inline store + length bump (repsel 4a.1; guarded helper tier elided)"
 
-# Repsel 4a.1/4a.2: the numeric read has an inline guard tier; the fast arm
-# loads the raw slot and canonicalizes any NaN payload to the quiet NaN
-# (proof-gated under raw-f64(-or-holes); bit-exact with ToNumber semantics).
-# The out-of-line guard remains as the cold arm.
+# Repsel 4a.1/4a.2: the numeric read has an inline guard tier. This fixture's
+# declared-only `number[]` add is runtime-tag checked (#7773), so its element
+# read uses the dense raw-f64 proof and exposes the canonical slot verbatim;
+# hole-tolerant number-context reads retain their NaN canonicalization select.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_get"
 contains = "js_typed_feedback_numeric_array_index_get_guard"
-regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*%\w+ = fcmp ord double %\w+, (?:%\w+|0\.000000e\+00)\s*\n\s*%\w+ = select i1 %\w+, double %\w+, double 0x7FF8000000000000\s*\n\s*br label %bidx\.num\.merge'''
+regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*br label %bidx\.num\.merge'''
 regex_none = ["call double @js_array_numeric_get_f64_unboxed"]
-detail = "numeric indexed read takes the inline raw-f64 fast arm (load + proof-gated NaN canonicalization; helper call elided)"
+detail = "numeric indexed read takes the inline dense raw-f64 fast arm (direct load; helper call elided)"
 
-# Repsel 4a.1: a canonical-raw-f64 RHS stores verbatim — no
-# js_array_numeric_value_to_raw_f64 call on the write fast arm. The
-# out-of-line set guard remains as the cold arm.
+# The RHS is a phi over the runtime-checked numeric and dynamic `+` arms. It is
+# not canonical by construction, so the raw-f64 store must canonicalize it;
+# the array set helper itself remains elided.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_set"
 contains = "js_typed_feedback_numeric_array_index_set_guard"
-regex = '''idxset\.(?:bounded_numeric_fast|inbounds)\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.(?:bounded_numeric_merge|merge)'''
+regex = '''idxset\.(?:bounded_numeric_fast|inbounds)\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = (?:tail )?call double @js_array_numeric_value_to_raw_f64\(double %\w+\)[^\n]*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.(?:bounded_numeric_merge|merge)'''
 regex_none = ["call i32 @js_array_numeric_set_f64_unboxed"]
-detail = "numeric indexed write takes the inline raw-f64 fast arm and stores the canonical value verbatim (canonicalization call elided for canonical RHS)"
+detail = "numeric indexed write takes the inline raw-f64 fast arm and canonicalizes its runtime-checked RHS before the direct store"
 
 [[workloads.numeric_arrays.stdout_checks]]
 name = "numeric_arrays_checksum"

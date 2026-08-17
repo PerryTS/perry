@@ -571,7 +571,6 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
-                inline.object_starts = block.object_starts_ptr();
             }
         });
     });

@@ -232,6 +232,56 @@ pub(crate) fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: 
         .is_some_and(|range| range.min >= i32::MIN as i64 && range.max <= i32::MAX as i64)
 }
 
+/// Can this access take the native buffer-view path without executing a
+/// runtime call while evaluating its receiver or index?
+///
+/// This is the read-only counterpart of [`lower_buffer_access_proof`].  The
+/// rooting classifier uses it for nested byte reads in a store RHS: when a
+/// proven `buf[i]` load is call-free, evaluating `(buf[i] + 1) & 255` cannot
+/// collect and therefore cannot stale the cached view used by the enclosing
+/// `buf[i] = ...` store.  Keep the eligibility checks in lockstep with the
+/// lowering below; a false negative only loses the store fast path, while a
+/// false positive could reuse a stale external-view cache.
+pub(crate) fn can_lower_buffer_access_without_calls(
+    ctx: &FnCtx<'_>,
+    buffer_expr: &Expr,
+    index_expr: &Expr,
+    spec: BufferAccessSpec,
+) -> bool {
+    if ctx.disable_buffer_fast_path {
+        return false;
+    }
+
+    let (buffer_local_id, view) = match buffer_expr {
+        Expr::LocalGet(id) => match ctx.buffer_view_slots.get(id) {
+            Some(view) => (*id, view),
+            None => return false,
+        },
+        _ => return false,
+    };
+    if !view.pointer_state.is_stable() {
+        return false;
+    }
+    if !view.storage_inline_proven && rooting::operand_may_collect(ctx, index_expr) {
+        return false;
+    }
+    if ctx.closure_captures.contains_key(&buffer_local_id)
+        || matches!(
+            ctx.buffer_hazard_reasons.get(&buffer_local_id),
+            Some(MaterializationReason::ClosureCapture)
+        )
+    {
+        return false;
+    }
+    if !bounds_for_buffer_access_width(ctx, buffer_local_id, index_expr, spec.bounds_width_units())
+        .allows_inbounds()
+    {
+        return false;
+    }
+    let alias = effective_alias_state_for_access(ctx, view);
+    view.native_owned.is_none() || alias.allows_noalias()
+}
+
 pub(crate) fn lower_buffer_access_proof(
     ctx: &mut FnCtx<'_>,
     buffer_expr: &Expr,

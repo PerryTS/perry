@@ -545,7 +545,12 @@ pub(super) fn take_mark_seeds() -> Vec<*mut GcHeader> {
 
 #[inline]
 pub(super) fn clear_mark_seeds() {
-    MARK_SEEDS.with(|cell| unsafe {
+    // An unfinished budgeted cycle is owned by another TLS value. During
+    // thread teardown its Drop may run after MARK_SEEDS has already been
+    // destroyed; at that point there is no surviving mutator that could
+    // consume these seeds. `try_with` keeps normal cleanup identical while
+    // making the teardown path order-independent.
+    let _ = MARK_SEEDS.try_with(|cell| unsafe {
         (*cell.get()).clear();
     });
 }

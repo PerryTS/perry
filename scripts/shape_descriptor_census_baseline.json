@@ -37,8 +37,6 @@
     "crates/perry-runtime/src/dyn_eval/env.rs|keys_array|access|let keys = (*o).keys_array;": 1,
     "crates/perry-runtime/src/fs/dirent.rs|keys_array|access|let keys = (*obj_ptr).keys_array;": 1,
     "crates/perry-runtime/src/gc/heap_snapshot.rs|keys_array|access|.unwrap_or((*obj).keys_array as u64);": 1,
-    "crates/perry-runtime/src/gc/layout.rs|keys_array|access|.unwrap_or((*object).keys_array as usize);": 1,
-    "crates/perry-runtime/src/gc/layout/typed_shape.rs|keys_array|access|.unwrap_or((*obj_header).keys_array as usize);": 1,
     "crates/perry-runtime/src/gc/tests/copying.rs|keys_array|access|let keys = (*obj_after).keys_array;": 1,
     "crates/perry-runtime/src/gc/tests/cycle_state.rs|keys_array|access|(*child).keys_array = std::ptr::null_mut();": 1,
     "crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs|keys_array|access|(*a).keys_array = keys;": 1,
@@ -180,9 +178,9 @@
   },
   "summary": {
     "codegen_object_header_size_sites": 34,
-    "raw_member_files": 67,
+    "raw_member_files": 65,
     "raw_member_sites": {
-      "keys_array": 184
+      "keys_array": 182
     }
   }
 }

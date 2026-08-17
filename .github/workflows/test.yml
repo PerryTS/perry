@@ -516,11 +516,24 @@ jobs:
           python3 scripts/unrooted_local_shape.py --self-test
           python3 scripts/unrooted_local_shape.py --check
 
-      # #7659: the step above compares the count against a baseline the SAME
-      # DIFF is free to move -- add bare reads, raise the recorded number to
-      # match, and it passes. `--update` refuses to raise, but nothing made CI
-      # run `--update`. This compares the recorded files against the pull
-      # request's merge base, so the number can only fall across a PR boundary.
+      # The checked-out baseline above is controlled by the same diff it
+      # measures. Compare its recorded ceilings with the merge base too, so a
+      # PR cannot add findings and raise the baseline to hide them.
+      - name: Unrooted-local shape ratchet vs. merge base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/unrooted_local_shape.py --no-raise-vs "$BASE_SHA"
+
+      # #7659: the raw-handle check above compares the count against a baseline
+      # the SAME DIFF is free to move -- add bare reads, raise the recorded
+      # number to match, and it passes. `--update` refuses to raise, but nothing
+      # made CI run `--update`. This compares the recorded files against the
+      # pull request's merge base, so the number can only fall across a PR
+      # boundary.
       #
       # Gated on the event rather than on an empty variable: a `push` build has
       # no merge base, but a `pull_request` build with an unresolvable one is a

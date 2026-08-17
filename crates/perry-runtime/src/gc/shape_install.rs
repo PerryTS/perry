@@ -6,14 +6,14 @@
 //! object literal and every `new` of a class with a typed field layout. Since
 //! #6893 the descriptor it installs is per-*shape*, not per-object: all
 //! same-shape objects share one canonical `TypedLayoutDescriptor` in
-//! `SHAPE_LAYOUTS`, keyed by the shared `keys_array`. The per-object work that
-//! remains is two header bits — `GC_OBJ_TYPED_LAYOUT_INTACT`, and
+//! `SHAPE_LAYOUTS`, keyed by their immutable runtime ShapeId. The per-object
+//! work that remains is two header bits — `GC_OBJ_TYPED_LAYOUT_INTACT`, and
 //! `GC_LAYOUT_POINTER_FREE`/`GC_LAYOUT_SIDE_MASK`.
 //!
 //! The call did not know that. For the 20-millionth `{v, w}` literal it still
 //! built a `TypedLayoutDescriptor` (72 bytes, two `Vec`-carrying enums, cloned
 //! once and dropped), took a `RefCell` borrow on the thread-local
-//! `SHAPE_LAYOUTS`, hashed the `keys_array` pointer, and compared the freshly
+//! `SHAPE_LAYOUTS`, hashed the shape key, and compared the freshly
 //! built descriptor field-by-field against the one already stored — to conclude
 //! what the first construction had already concluded. Measured after #7525,
 //! `js_gc_init_typed_shape_layout` + `shape_install_shared` were ~13% of self
@@ -23,8 +23,8 @@
 //!
 //! One thing, and nothing else:
 //!
-//! > `SHAPE_LAYOUTS[keys]` currently holds `Some(D)`, where `D` is exactly the
-//! > descriptor that `(slot_count, raw_words, pointer_words)` describes.
+//! > `SHAPE_LAYOUTS[shape_id]` currently holds `Some(D)`, where `D` is exactly
+//! > the descriptor that `(slot_count, raw_words, pointer_words)` describes.
 //!
 //! That is the *entire* content of a successful `shape_install_shared` on a
 //! shape that is already installed — its `Some(Some(existing)) if existing ==
@@ -34,11 +34,11 @@
 //!
 //! # What the memo deliberately does NOT assert
 //!
-//! **Anything about the object.** The caller still re-derives, per instance,
-//! every fact its header declaration rests on that depends on the *object*:
-//! `field_count == slot_count`, and — for the validating entry point — the
-//! per-slot check that each raw-f64 slot holds a plain double and no
-//! pointer-bearing slot sits outside the pointer mask.
+//! **Anything mutable about the object.** For the validating entry point the
+//! caller still checks, per instance, that each raw-f64 slot holds a plain
+//! double and no pointer-bearing slot sits outside the pointer mask. The
+//! immutable `field_count == slot_count` fact is re-used from the ShapeId: an
+//! entry is recorded only after the authoritative descriptor established it.
 //!
 //! This split is the soundness bar. A wrong `POINTER_FREE` is a
 //! use-after-free factory: `heap_payload_slot_selection` skips the whole
@@ -72,29 +72,28 @@
 //!
 //! # Self-healing
 //!
-//! A memo entry is falsified by exactly one transition: `SHAPE_LAYOUTS[keys]`
-//! going from `Some(D)` to something else. `shape_install_shared` is the only
-//! writer of that map, and its only such transition is the ambiguity poison
-//! (`Some(Some(_)) => insert(None)` — two live layouts sharing one key set).
+//! A memo entry is falsified by exactly one transition:
+//! `SHAPE_LAYOUTS[shape_id]` going from `Some(D)` to something else.
+//! `shape_install_shared` is the only writer of that map, and its only such
+//! transition is the ambiguity poison (`Some(Some(_)) => insert(None)` — two
+//! live layouts sharing one key set).
 //! That branch calls [`invalidate`], which drops every entry. Entries are
 //! never removed from `SHAPE_LAYOUTS` and never overwritten with a *different*
 //! `Some`, so there is no other way to go stale.
 //!
 //! Everything else already degrades safely without help:
 //!
-//! - A moving GC relocates the `keys_array` ⟹ objects report the new address,
-//!   which no entry matches ⟹ miss ⟹ the slow path re-installs and re-records.
-//! - The old address is recycled by an unrelated shape ⟹ its constructions
-//!   arrive with different mask globals ⟹ miss. If they arrive with the *same*
-//!   mask globals and slot count, the memo's claim is still true of them (the
-//!   stored descriptor describes them exactly), so the hit is correct.
+//! - A moving GC relocates the `keys_array` ⟹ the ShapeId and its map entry do
+//!   not change; neither stores a heap address.
+//! - A structural or semantic shape transition mints a new process-unique ID
+//!   ⟹ the old entry cannot match the changed object.
 //! - `PERRY_SHAPE_LAYOUT_KEYED=0` ⟹ [`record`] is unreachable (it is only
 //!   called after a successful `shape_install_shared`, which that knob gates)
 //!   ⟹ the table stays empty and every lookup misses.
 //!
 //! # Keying
 //!
-//! Entries are keyed by `(keys_array, raw_words, pointer_words, slot_count,
+//! Entries are keyed by `(ShapeId, raw_words, pointer_words, slot_count,
 //! word counts)`. The two mask pointers are the addresses of codegen-emitted
 //! `private unnamed_addr constant` globals — one per class
 //! (`mask_global_name_from_keys_global`) or per object-literal site — so
@@ -105,26 +104,10 @@
 //!
 //! # This table is NOT a GC root
 //!
-//! Worth stating explicitly, because a runtime-side cache of a raw heap
-//! pointer usually *is* one and the static root-dominance checker cannot see
-//! it (`gc_register_mutable_root_scanner`, CLAUDE.md). `keys` holds the
-//! address of a live `keys_array`, but it is only ever **compared as an
-//! integer** against the `keys_array` the object under construction reports —
-//! never dereferenced, never handed to the mutator, never used to keep
-//! anything alive.
-//!
-//! Both ways it can go stale are already safe:
-//!
-//! - The array **moves**: every live object reports the new address, so the
-//!   old entry simply stops matching. It is dead weight until evicted, not a
-//!   dangling read.
-//! - The old address is **recycled** by a different shape's keys array, and
-//!   that shape's constructions happen to arrive with the same mask globals
-//!   and slot count. Then the entry's claim is still true — `SHAPE_LAYOUTS`
-//!   is keyed by the same address, its entries are never removed, and the
-//!   descriptor stored there describes those objects exactly. If instead they
-//!   arrive with different masks the entry does not match, and the install
-//!   they fall through to poisons the shape and clears the table.
+//! It contains a ShapeId plus addresses of immutable code-image constants, but
+//! no heap pointer. ShapeIds are process-global, monotonic, and never reused;
+//! mask globals are never written or freed. Nothing here needs marking or
+//! rewriting by a collector.
 
 use std::cell::UnsafeCell;
 
@@ -203,17 +186,16 @@ const MEMO_SLOTS: usize = 32;
 /// that does not fit, so a packed value is never ambiguous.
 #[derive(Clone, Copy)]
 struct Entry {
-    keys: usize,
+    shape_id: u32,
     raw_words: *const u64,
     pointer_words: *const u64,
     dims: u64,
 }
 
-/// `keys == 0` is the empty marker: no live object ever reports a null
-/// `keys_array` to the lookup (the caller checks first), so an empty slot can
-/// never be mistaken for a hit.
+/// `shape_id == 0` is the empty marker: runtime ShapeIds occupy a disjoint,
+/// nonzero range, so an empty slot can never be mistaken for a hit.
 const EMPTY: Entry = Entry {
-    keys: 0,
+    shape_id: 0,
     raw_words: std::ptr::null(),
     pointer_words: std::ptr::null(),
     dims: 0,
@@ -257,10 +239,10 @@ fn pack_dims(
     )
 }
 
-/// Which entry a `(shape, mask globals)` tuple lives in.
+/// Which entry a `(ShapeId, mask globals)` tuple lives in.
 ///
 /// The mask-global addresses are mixed in, not just the shape. Two object
-/// literal sites with the same key names share one `keys_array` but get
+/// literal sites with the same structural ShapeId can get
 /// separate mask globals unless LLVM's constant merger folds them (they are
 /// `private unnamed_addr constant`, so it may — but the table must not depend
 /// on that). Keying the slot on the shape alone would put both sites in one
@@ -268,19 +250,18 @@ fn pack_dims(
 /// builds both. Any index function is *correct* — the full tuple is compared
 /// on the way out — so this is purely about not colliding.
 ///
-/// The low bits of a heap address are allocation-granularity noise, hence the
-/// shifts; the two mask pointers use different ones so a shape whose masks are
+/// The two mask pointers use different shifts so a shape whose masks are
 /// both empty (one shared dangling `&[]` address) does not cancel itself out.
 #[inline(always)]
-fn slot_index(keys: usize, raw_words: *const u64, pointer_words: *const u64) -> usize {
-    let mixed = (keys >> 4) ^ (raw_words as usize >> 4) ^ (pointer_words as usize >> 3);
+fn slot_index(shape_id: u32, raw_words: *const u64, pointer_words: *const u64) -> usize {
+    let mixed = shape_id as usize ^ (raw_words as usize >> 4) ^ (pointer_words as usize >> 3);
     mixed & (MEMO_SLOTS - 1)
 }
 
 thread_local! {
     /// Per-thread, mirroring `SHAPE_LAYOUTS`'s own thread-locality — an entry
-    /// names an address in this thread's arena and a fact about this thread's
-    /// map, and neither means anything on another thread.
+    /// names a process-global ShapeId and a fact about this thread's map. The
+    /// latter does not carry across threads.
     ///
     /// `UnsafeCell` rather than `Cell<[Entry; N]>`: a `Cell` get/set would copy
     /// the whole table on every probe. Access is single-threaded by
@@ -305,8 +286,8 @@ fn table() -> &'static UnsafeCell<[Entry; MEMO_SLOTS]> {
     }
 }
 
-/// `Some(pointer_mask_empty)` when `SHAPE_LAYOUTS[keys]` is already known to
-/// hold exactly the descriptor that `(slot_count, raw_words, pointer_words)`
+/// `Some(pointer_mask_empty)` when `SHAPE_LAYOUTS[shape_id]` is already known
+/// to hold exactly the descriptor that `(slot_count, raw_words, pointer_words)`
 /// describes; `None` otherwise.
 ///
 /// `None` is never an error — it just means the caller must take the ordinary
@@ -320,14 +301,14 @@ fn table() -> &'static UnsafeCell<[Entry; MEMO_SLOTS]> {
 /// the two agree on the empty-mask representation by construction.
 #[inline(always)]
 pub(super) fn hit(
-    keys: usize,
+    shape_id: u32,
     slot_count: usize,
     raw_words: *const u64,
     raw_word_count: u32,
     pointer_words: *const u64,
     pointer_word_count: u32,
 ) -> Option<bool> {
-    debug_assert!(keys != 0, "the null keys_array is the empty-slot marker");
+    debug_assert!(shape_id != 0, "zero is the empty ShapeId marker");
     let dims = pack_dims(
         slot_count,
         raw_word_count as usize,
@@ -336,26 +317,40 @@ pub(super) fn hit(
     )?;
     // SAFETY: `table()` is this thread's own storage; the reference does not
     // escape and nothing re-enters between the read and its use.
-    let entry = unsafe { (*table().get())[slot_index(keys, raw_words, pointer_words)] };
-    let matched = entry.keys == keys
+    let entry = unsafe { (*table().get())[slot_index(shape_id, raw_words, pointer_words)] };
+    let matched = entry.shape_id == shape_id
         && entry.dims & !POINTER_MASK_EMPTY_BIT == dims
         && std::ptr::eq(entry.raw_words, raw_words)
         && std::ptr::eq(entry.pointer_words, pointer_words);
     if !matched {
         return None;
     }
-    #[cfg(test)]
-    counters::note_hit();
     Some(entry.dims & POINTER_MASK_EMPTY_BIT != 0)
 }
 
+/// Count a memo result only once the caller has completed any per-object slot
+/// validation and is about to consume it. Keeping this separate from [`hit`]
+/// preserves the testable guarantee that a contradictory object never takes
+/// the fast path.
+#[inline(always)]
+pub(super) fn note_hit() {
+    #[cfg(test)]
+    counters::note_hit();
+}
+
+#[cfg(test)]
+#[inline]
+pub(super) fn note_descriptor_probe() {
+    counters::note_descriptor_probe();
+}
+
 /// Record that `shape_install_shared` just confirmed (or established)
-/// `SHAPE_LAYOUTS[keys] == Some(D)` for the descriptor these mask words
+/// `SHAPE_LAYOUTS[shape_id] == Some(D)` for the descriptor these mask words
 /// describe, together with the `POINTER_FREE`/`SIDE_MASK` choice that
 /// descriptor's pointer mask selects.
 #[inline]
 pub(super) fn record(
-    keys: usize,
+    shape_id: u32,
     slot_count: usize,
     raw_words: *const u64,
     raw_word_count: u32,
@@ -363,7 +358,7 @@ pub(super) fn record(
     pointer_word_count: u32,
     pointer_mask_empty: bool,
 ) {
-    if keys == 0 {
+    if shape_id == 0 {
         return;
     }
     let Some(dims) = pack_dims(
@@ -378,8 +373,8 @@ pub(super) fn record(
     counters::note_record();
     // SAFETY: as in `hit` — this thread's own storage, no escaping reference.
     unsafe {
-        (*table().get())[slot_index(keys, raw_words, pointer_words)] = Entry {
-            keys,
+        (*table().get())[slot_index(shape_id, raw_words, pointer_words)] = Entry {
+            shape_id,
             raw_words,
             pointer_words,
             dims,
@@ -417,6 +412,7 @@ pub(super) mod counters {
     thread_local! {
         static HITS: Cell<u64> = const { Cell::new(0) };
         static RECORDS: Cell<u64> = const { Cell::new(0) };
+        static DESCRIPTOR_PROBES: Cell<u64> = const { Cell::new(0) };
     }
 
     #[inline]
@@ -429,14 +425,24 @@ pub(super) mod counters {
         RECORDS.with(|c| c.set(c.get() + 1));
     }
 
+    #[inline]
+    pub(in crate::gc) fn note_descriptor_probe() {
+        DESCRIPTOR_PROBES.with(|c| c.set(c.get() + 1));
+    }
+
     /// `(hits, records)` since [`reset`].
     pub(in crate::gc) fn snapshot() -> (u64, u64) {
         (HITS.with(|c| c.get()), RECORDS.with(|c| c.get()))
     }
 
+    pub(in crate::gc) fn descriptor_probes() -> u64 {
+        DESCRIPTOR_PROBES.with(|c| c.get())
+    }
+
     pub(in crate::gc) fn reset() {
         HITS.with(|c| c.set(0));
         RECORDS.with(|c| c.set(0));
+        DESCRIPTOR_PROBES.with(|c| c.set(0));
     }
 }
 
@@ -503,9 +509,9 @@ mod tests {
 
     /// `record`/`hit` take raw `(pointer, word count)` pairs (#7578); these two
     /// keep the tests reading like the slice API they replaced.
-    fn put(keys: usize, slot_count: usize, raw: &[u64], pointers: &[u64], empty: bool) {
+    fn put(shape_id: u32, slot_count: usize, raw: &[u64], pointers: &[u64], empty: bool) {
         record(
-            keys,
+            shape_id,
             slot_count,
             raw.as_ptr(),
             raw.len() as u32,
@@ -514,9 +520,9 @@ mod tests {
             empty,
         );
     }
-    fn get(keys: usize, slot_count: usize, raw: &[u64], pointers: &[u64]) -> Option<bool> {
+    fn get(shape_id: u32, slot_count: usize, raw: &[u64], pointers: &[u64]) -> Option<bool> {
         hit(
-            keys,
+            shape_id,
             slot_count,
             raw.as_ptr(),
             raw.len() as u32,
@@ -533,35 +539,35 @@ mod tests {
         let raw: [u64; 1] = [0b01];
         let other_raw: [u64; 1] = [0b10];
         let pointers: [u64; 1] = [0b10];
-        let keys = 0x4000usize;
+        let shape_id = crate::object::shapes::SHAPE_ID_BASE + 1;
 
         invalidate();
-        put(keys, 2, &raw, &pointers, false);
-        assert!(get(keys, 2, &raw, &pointers).is_some());
+        put(shape_id, 2, &raw, &pointers, false);
+        assert!(get(shape_id, 2, &raw, &pointers).is_some());
         assert!(
-            get(keys + 16, 2, &raw, &pointers).is_none(),
+            get(shape_id + 1, 2, &raw, &pointers).is_none(),
             "a different shape"
         );
         assert!(
-            get(keys, 3, &raw, &pointers).is_none(),
+            get(shape_id, 3, &raw, &pointers).is_none(),
             "a different slot count"
         );
         assert!(
-            get(keys, 2, &other_raw, &pointers).is_none(),
+            get(shape_id, 2, &other_raw, &pointers).is_none(),
             "a different raw mask"
         );
         assert!(
-            get(keys, 2, &raw, &raw).is_none(),
+            get(shape_id, 2, &raw, &raw).is_none(),
             "a different pointer mask"
         );
         assert!(
-            get(keys, 2, &raw, &[]).is_none(),
+            get(shape_id, 2, &raw, &[]).is_none(),
             "a different pointer word count"
         );
 
         invalidate();
         assert!(
-            get(keys, 2, &raw, &pointers).is_none(),
+            get(shape_id, 2, &raw, &pointers).is_none(),
             "invalidate must drop entries"
         );
     }
@@ -578,28 +584,37 @@ mod tests {
         let raw: [u64; 1] = [0b01];
         let pointers: [u64; 1] = [0b10];
         let empty_pointers: [u64; 1] = [0];
-        let keys_masked = 0xC000usize;
-        let keys_free = 0xD000usize;
+        let shape_masked = crate::object::shapes::SHAPE_ID_BASE + 2;
+        // The table is deliberately direct-mapped. Stack layout can make two
+        // adjacent ShapeIds' complete keys select the same slot, in which case
+        // the second `put` correctly evicts the first. Pick a distinct slot so
+        // this test isolates the per-entry payload bit it is meant to pin.
+        let masked_slot = slot_index(shape_masked, raw.as_ptr(), pointers.as_ptr());
+        let shape_free = (shape_masked + 1..=shape_masked + MEMO_SLOTS as u32)
+            .find(|&candidate| {
+                slot_index(candidate, raw.as_ptr(), empty_pointers.as_ptr()) != masked_slot
+            })
+            .expect("a full index cycle must contain a distinct memo slot");
 
         invalidate();
-        put(keys_masked, 2, &raw, &pointers, false);
-        put(keys_free, 2, &raw, &empty_pointers, true);
+        put(shape_masked, 2, &raw, &pointers, false);
+        put(shape_free, 2, &raw, &empty_pointers, true);
 
         assert_eq!(
-            get(keys_masked, 2, &raw, &pointers),
+            get(shape_masked, 2, &raw, &pointers),
             Some(false),
             "a shape with a live pointer mask must replay SIDE_MASK"
         );
         assert_eq!(
-            get(keys_free, 2, &raw, &empty_pointers),
+            get(shape_free, 2, &raw, &empty_pointers),
             Some(true),
             "a shape with an empty pointer mask must replay POINTER_FREE"
         );
 
         // The bit is payload, not key: it must not make a matching tuple miss.
         invalidate();
-        put(keys_free, 2, &raw, &empty_pointers, true);
-        assert_eq!(get(keys_free, 2, &raw, &empty_pointers), Some(true));
+        put(shape_free, 2, &raw, &empty_pointers, true);
+        assert_eq!(get(shape_free, 2, &raw, &empty_pointers), Some(true));
     }
 
     /// A `slot_count` that overflows the packed key is refused by both halves,
@@ -608,14 +623,14 @@ mod tests {
     #[test]
     fn unpackable_dimensions_are_never_memoised() {
         let raw: [u64; 1] = [0b01];
-        let keys = 0x8000usize;
+        let shape_id = crate::object::shapes::SHAPE_ID_BASE + 4;
         let huge = 1usize << SLOT_COUNT_BITS;
 
         invalidate();
-        put(keys, huge, &raw, &[], true);
-        assert!(get(keys, huge, &raw, &[]).is_none());
+        put(shape_id, huge, &raw, &[], true);
+        assert!(get(shape_id, huge, &raw, &[]).is_none());
         // …and it did not land in the slot a packable shape would use.
-        assert!(get(keys, 0, &raw, &[]).is_none());
+        assert!(get(shape_id, 0, &raw, &[]).is_none());
     }
 
     /// The word-count fields narrowed from 20 bits to 19 to make room for

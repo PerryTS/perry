@@ -370,8 +370,13 @@ pub(crate) fn gc_finish_full_trace() -> usize {
 
 /// Cancel observation when an in-progress GC cycle is dropped.
 pub(crate) fn gc_abort_full_trace() {
-    PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(false));
-    PROXY_FULL_TRACE_LIVE.with(|live| {
+    // A parked budgeted cycle can be dropped by the GC cycle TLS destructor.
+    // Darwin does not guarantee an order between independent TLS destructors,
+    // so the proxy trace cells may already be unavailable during thread exit.
+    // There is no trace left to observe once that thread is gone; ordinary
+    // cycle cancellation still takes the same cleanup path.
+    let _ = PROXY_FULL_TRACE_ACTIVE.try_with(|active| active.set(false));
+    let _ = PROXY_FULL_TRACE_LIVE.try_with(|live| {
         live.borrow_mut().take();
     });
 }

@@ -681,6 +681,18 @@ pub(crate) fn guarded_path_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<perry_hi
         Expr::Null => Some(Type::Null),
         Expr::Undefined | Expr::Void(_) => Some(Type::Void),
         Expr::Call { .. } => guarded_call_return_proof(ctx, expr),
+        // #8169: a Tier-B clone's entry guard gives its boxed Number
+        // parameters real runtime proofs, and arithmetic derived from those
+        // parameters constructs another Number. Let a recursive `f(n - 1)`
+        // therefore re-enter `$spec_b` instead of paying the public guard on
+        // every edge.
+        //
+        // Use the canonical-value predicate rather than `is_numeric_expr`
+        // alone. The latter deliberately admits some dynamic/BigInt-capable
+        // arithmetic for lowering decisions; this proof is used to BYPASS a
+        // runtime type guard, so it must exclude values that can still be a
+        // boxed BigInt or arise only from an unenforced annotation.
+        _ if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr) => Some(Type::Number),
         _ => None,
     }
 }
