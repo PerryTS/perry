@@ -2395,7 +2395,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build compiler
-        run: cargo build --release
+        # #8224: `--release` with no `-p` builds default-members only and
+        # NEVER emits libperry_{runtime,stdlib}.a (rlib-only since #5422), so
+        # the precompile fixtures that link the archives directly could not
+        # pass — masked for weeks by continue-on-error. Name the wrapper
+        # crates explicitly (same set the parity harness builds).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
 
       - name: Issue #945 scalar method IR guard
         run: |
@@ -2478,6 +2483,8 @@ jobs:
             test_ui_phase4 \
             test_ui_adbanner_smoke \
             test_ui_on_keydown_smoke \
+            test_ui_drag_drop \
+            test_ui_text_alignment \
             test_issue_1495_image_systemname \
             test_issue_1867_audio_playback \
             test_issue_2022_canvas_draw_image \
@@ -2498,6 +2505,7 @@ jobs:
             test_take_screenshot \
             test_issue_842_side_effect_dynamic_import \
             test_jose_signverify_roundtrip \
+            test_jwt_sign_dynamic_alg \
             test_parity_assert \
             test_parity_async_hooks \
             test_parity_buffer \
