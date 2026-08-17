@@ -37,6 +37,7 @@ pub mod toggle;
 pub mod tree_view;
 pub mod vstack;
 pub mod webview;
+pub mod wheel_picker;
 pub mod zstack;
 
 use objc2::rc::Retained;

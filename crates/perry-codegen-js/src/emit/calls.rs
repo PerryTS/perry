@@ -152,6 +152,10 @@ impl JsEmitter {
             "ProgressView" | "progressview_create" => "perry_ui_progressview_create",
             "Image" | "image_create" => "perry_ui_image_create",
             "Picker" | "picker_create" => "perry_ui_picker_create",
+            "WheelPicker" | "wheel_picker_create" => "perry_ui_wheel_picker_create",
+            "wheelPickerAddItem" => "perry_ui_wheel_picker_add_item",
+            "wheelPickerSetSelected" => "perry_ui_wheel_picker_set_selected",
+            "wheelPickerGetSelected" => "perry_ui_wheel_picker_get_selected",
             // Table (issue #192)
             "Table" | "table_create" => "perry_ui_table_create",
             "tableSetColumnHeader" => "perry_ui_table_set_column_header",

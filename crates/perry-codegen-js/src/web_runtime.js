@@ -343,6 +343,20 @@ function perry_ui_picker_create(items_json, selected, callback) {
     return wrapWidget(allocHandle(el));
 }
 
+// Issue #5873: persistent wheel/list selector. This follows the native
+// one-callback ABI and receives options through wheelPickerAddItem.
+function perry_ui_wheel_picker_create(callback) {
+    const el = document.createElement("select");
+    el.size = 5;
+    el.className = "perry-wheel-picker";
+    el.style.overflowY = "auto";
+    el.style.scrollSnapType = "y mandatory";
+    if (typeof callback === "function") {
+        el.addEventListener("change", () => callback(el.selectedIndex));
+    }
+    return wrapWidget(allocHandle(el));
+}
+
 function perry_ui_form_create() {
     const el = document.createElement("form");
     el.addEventListener("submit", e => e.preventDefault());
@@ -1499,6 +1513,26 @@ function perry_ui_picker_set_selected(h, index) {
 }
 
 function perry_ui_picker_get_selected(h) {
+    const el = getHandle(h);
+    return el ? el.selectedIndex : -1;
+}
+
+function perry_ui_wheel_picker_add_item(h, title) {
+    const el = getHandle(h);
+    if (!el) return;
+    const opt = document.createElement("option");
+    opt.value = el.children.length;
+    opt.textContent = title;
+    opt.style.scrollSnapAlign = "center";
+    el.appendChild(opt);
+}
+
+function perry_ui_wheel_picker_set_selected(h, index) {
+    const el = getHandle(h);
+    if (el) el.selectedIndex = index;
+}
+
+function perry_ui_wheel_picker_get_selected(h) {
     const el = getHandle(h);
     return el ? el.selectedIndex : -1;
 }
@@ -3601,6 +3635,7 @@ window.__perry = {
     perry_ui_progressview_create,
     perry_ui_image_create,
     perry_ui_picker_create,
+    perry_ui_wheel_picker_create,
     perry_ui_form_create,
     perry_ui_section_create,
     perry_ui_navigationstack_create,
@@ -3686,6 +3721,9 @@ window.__perry = {
     perry_ui_picker_add_item,
     perry_ui_picker_set_selected,
     perry_ui_picker_get_selected,
+    perry_ui_wheel_picker_add_item,
+    perry_ui_wheel_picker_set_selected,
+    perry_ui_wheel_picker_get_selected,
     // Image
     perry_ui_image_create_symbol,
     perry_ui_image_create_url,

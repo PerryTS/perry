@@ -195,6 +195,27 @@ pub(crate) fn emit_picker(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     )
 }
 
+/// `WheelPicker(onChange)` -> ArkUI's native looping `TextPicker`.
+pub(crate) fn emit_wheel_picker(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
+    let onchange = match args.first() {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(
+                ".onChange((_value: string, index: number) => {{\n    \
+                 perryEntry.invokeCallback1({}, index);\n    \
+                 {drain}\
+                 }})",
+                idx,
+                drain = drain_loop_body()
+            )
+        }
+        _ => String::new(),
+    };
+
+    format!("TextPicker({{ range: [], value: '' }}).canLoop(true){onchange}")
+}
+
 /// Issue #475 — `Combobox(initial, onChange)` → ArkUI `Select([...])` with
 /// `.value()` / `.selected()` / `.onSelect()`. ArkUI's Select takes a
 /// `SelectOption[]` (each option is `{value: string}`); `.value()` sets

@@ -2832,6 +2832,18 @@ function perry_ui_picker_create(items_json, selected, callback) {
   if (selected !== undefined) el.selectedIndex = selected;
   return uiAlloc(el);
 }
+function perry_ui_wheel_picker_create(callback) {
+  const el = document.createElement("select");
+  el.size = 5;
+  el.className = "perry-wheel-picker";
+  el.style.overflowY = "auto";
+  el.style.scrollSnapType = "y mandatory";
+  el._perryCallback = callback;
+  el.addEventListener("change", () => {
+    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.selectedIndex);
+  });
+  return uiAlloc(el);
+}
 function perry_ui_form_create() {
   const el = document.createElement("fieldset");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
@@ -3351,6 +3363,13 @@ function perry_ui_picker_add_item(h, title) {
 }
 function perry_ui_picker_set_selected(h, index) { const el = uiGet(h); if (el) el.selectedIndex = index; }
 function perry_ui_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
+function perry_ui_wheel_picker_add_item(h, title) {
+  const el = uiGet(h); if (!el) return;
+  const opt = document.createElement("option");
+  opt.textContent = title; opt.style.scrollSnapAlign = "center"; el.appendChild(opt);
+}
+function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if (el) el.selectedIndex = index; }
+function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
 
 // ---------- Image ----------
 function perry_ui_image_create_symbol(name) { return perry_ui_text_create("⬜ " + name); }
@@ -4677,6 +4696,7 @@ const __perryUiDispatch = {
   perry_ui_text_create, perry_ui_button_create, perry_ui_textfield_create, perry_ui_securefield_create,
   perry_ui_toggle_create, perry_ui_toggle_set_state, perry_ui_slider_create, perry_ui_scrollview_create, perry_ui_spacer_create,
   perry_ui_divider_create, perry_ui_progressview_create, perry_ui_image_create, perry_ui_picker_create,
+  perry_ui_wheel_picker_create,
   perry_ui_form_create, perry_ui_section_create, perry_ui_navigationstack_create, perry_ui_canvas_create,
   perry_ui_bloomview_create, perry_ui_bloomview_get_hwnd,
   perry_ui_lazyvstack_create, perry_ui_lazyvstack_update, perry_ui_table_create,
@@ -4739,6 +4759,7 @@ const __perryUiDispatch = {
   perry_ui_navstack_push, perry_ui_navstack_pop,
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
+  perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,
   // Image
   perry_ui_image_create_symbol, perry_ui_image_create_url,
     perry_ui_load_image, perry_ui_image_set_size, perry_ui_image_set_tint,

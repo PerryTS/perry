@@ -528,6 +528,12 @@ export function cancelFrame(id: number): void;
 /** Dropdown picker. */
 export function Picker(onChange: (index: number) => void): Widget;
 
+/**
+ * Wheel-style picker for long sequential lists. Uses the native spinning
+ * selector on iOS and Android and a scrollable selection control elsewhere.
+ */
+export function WheelPicker(onChange: (index: number) => void): Widget;
+
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
@@ -1439,6 +1445,14 @@ export function navstackPop(navStack: Widget): void;
 export function pickerAddItem(picker: Widget, title: string): void;
 export function pickerGetSelected(picker: Widget): number;
 export function pickerSetSelected(picker: Widget, index: number): void;
+
+// ---------------------------------------------------------------------------
+// WheelPicker
+// ---------------------------------------------------------------------------
+
+export function wheelPickerAddItem(picker: Widget, title: string): void;
+export function wheelPickerGetSelected(picker: Widget): number;
+export function wheelPickerSetSelected(picker: Widget, index: number): void;
 
 // ---------------------------------------------------------------------------
 // TabBar

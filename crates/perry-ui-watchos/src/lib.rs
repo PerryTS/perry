@@ -282,6 +282,24 @@ pub extern "C" fn perry_ui_picker_get_selected(handle: i64) -> i64 {
     tree::with_node(handle, |n| n.picker_selected).unwrap_or(0)
 }
 
+// SwiftUI's Picker renders as the native watchOS wheel-style selector.
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_create(on_change: f64) -> i64 {
+    perry_ui_picker_create(on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_add_item(handle: i64, title_ptr: i64) {
+    perry_ui_picker_add_item(handle, title_ptr);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_set_selected(handle: i64, index: i64) {
+    perry_ui_picker_set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
+    perry_ui_picker_get_selected(handle)
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_progressview_set_value(handle: i64, value: f64) {
     tree::with_node_mut(handle, |node| {

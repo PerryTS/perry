@@ -141,3 +141,22 @@ pub extern "C" fn perry_ui_picker_set_selected(handle: i64, index: i64) {
 pub extern "C" fn perry_ui_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
+
+// GtkDropDown's popover is scrollable for long models, making it the native
+// desktop fallback for WheelPicker.
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_create(on_change: f64) -> i64 {
+    widgets::picker::create(std::ptr::null(), on_change, 0)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_add_item(handle: i64, title_ptr: i64) {
+    widgets::picker::add_item(handle, title_ptr as *const u8);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_set_selected(handle: i64, index: i64) {
+    widgets::picker::set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
+    widgets::picker::get_selected(handle)
+}

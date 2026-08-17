@@ -1866,6 +1866,7 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "LazyVStack"
             | "NavigationStack"
             | "Picker"
+            | "WheelPicker"
             | "Table"
             | "TabBar"
     )

@@ -90,6 +90,21 @@ A numeric slider.
 
 A dropdown selection control. Items are added with `pickerAddItem`.
 
+## WheelPicker
+
+A wheel-style selector for long sequential lists such as hours, minutes, or
+quantities. It uses `UIPickerView` on iOS/visionOS, `NumberPicker` on Android,
+and the platform's scroll-capable selection control on desktop and web.
+
+```typescript,no-test
+import { WheelPicker, wheelPickerAddItem } from "perry/ui";
+
+const hours = WheelPicker((index) => console.log("hour:", index));
+for (let hour = 0; hour < 24; hour++) {
+  wheelPickerAddItem(hours, hour.toString().padStart(2, "0"));
+}
+```
+
 ```typescript,no-test
 {{#include ../../examples/ui/widgets/picker.ts}}
 ```

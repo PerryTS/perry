@@ -47,6 +47,7 @@ Input control signatures:
 - `Toggle(label, onChange)` — boolean toggle, `onChange: (value: boolean) => void`
 - `Slider(min, max, onChange)` — numeric slider, `onChange: (value: number) => void`
 - `Picker(onChange)` — dropdown, `onChange: (index: number) => void`; items via `pickerAddItem`
+- `WheelPicker(onChange)` — spinning selector on touch platforms and a scrollable selector elsewhere; items via `wheelPickerAddItem`
 
 For programmatic-to-UI sync (state-drives-widget) use the dedicated binders:
 `stateBindTextfield`, `stateBindSlider`, `stateBindToggle`, `stateBindTextNumeric`,

@@ -22,6 +22,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "ProgressView" | "progressview_create" => "perry_ui_progressview_create",
         "Image" | "image_create" => "perry_ui_image_create",
         "Picker" | "picker_create" => "perry_ui_picker_create",
+        "WheelPicker" | "wheel_picker_create" => "perry_ui_wheel_picker_create",
         "Form" | "form_create" => "perry_ui_form_create",
         "Section" | "section_create" => "perry_ui_section_create",
         "NavigationStack" | "navigationstack_create" => "perry_ui_navigationstack_create",
@@ -178,6 +179,9 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "pickerAddItem" => "perry_ui_picker_add_item",
         "pickerSetSelected" => "perry_ui_picker_set_selected",
         "pickerGetSelected" => "perry_ui_picker_get_selected",
+        "wheelPickerAddItem" => "perry_ui_wheel_picker_add_item",
+        "wheelPickerSetSelected" => "perry_ui_wheel_picker_set_selected",
+        "wheelPickerGetSelected" => "perry_ui_wheel_picker_get_selected",
         // Camera (issue #191) — Web has no live-camera FFI yet, so the
         // wasm_runtime.js stubs return 0 / -1. The dispatch entries here
         // exist so user code calling `CameraView()` from a browser build

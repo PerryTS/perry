@@ -383,6 +383,31 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    // ---- WheelPicker (issue #5873) ----
+    MethodRow {
+        method: "WheelPicker",
+        runtime: "perry_ui_wheel_picker_create",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "wheelPickerAddItem",
+        runtime: "perry_ui_wheel_picker_add_item",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "wheelPickerGetSelected",
+        runtime: "perry_ui_wheel_picker_get_selected",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "wheelPickerSetSelected",
+        runtime: "perry_ui_wheel_picker_set_selected",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     // ---- NavigationStack ----
     MethodRow {
         method: "NavStack",

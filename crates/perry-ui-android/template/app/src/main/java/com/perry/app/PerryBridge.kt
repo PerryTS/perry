@@ -458,6 +458,15 @@ object PerryBridge {
         }
     }
 
+    // --- NumberPicker (WheelPicker) callback ---
+
+    @JvmStatic
+    fun setNumberPickerCallback(picker: NumberPicker, callbackKey: Long) {
+        picker.setOnValueChangedListener { _, _, newValue ->
+            nativeInvokeCallback1(callbackKey, newValue.toDouble())
+        }
+    }
+
     // --- Context menu ---
 
     @JvmStatic

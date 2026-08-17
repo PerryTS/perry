@@ -142,6 +142,7 @@ pub(crate) fn emit_widget(
                     mutations,
                 ),
                 "Picker" => emit_picker(args, callbacks),
+                "WheelPicker" => emit_wheel_picker(args, callbacks),
                 // Issue #475 — Combobox(initial, onChange) maps to ArkUI
                 // Select. Runtime-added items (`comboboxAddItem`) are
                 // currently not folded into the static options array;

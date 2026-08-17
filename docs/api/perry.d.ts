@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2019 entries across 123 modules
+// Coverage: 2023 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3004,6 +3004,8 @@ declare module "perry/ui" {
   /** stdlib */
   export function WebView(...args: any[]): any;
   /** stdlib */
+  export function WheelPicker(...args: any[]): any;
+  /** stdlib */
   export function Window(...args: any[]): any;
   /** stdlib */
   export function ZStack(...args: any[]): any;
@@ -3173,6 +3175,12 @@ declare module "perry/ui" {
   export function webviewLoadUrl(...args: any[]): any;
   /** stdlib */
   export function webviewReload(...args: any[]): any;
+  /** stdlib */
+  export function wheelPickerAddItem(...args: any[]): any;
+  /** stdlib */
+  export function wheelPickerGetSelected(...args: any[]): any;
+  /** stdlib */
+  export function wheelPickerSetSelected(...args: any[]): any;
 }
 
 declare module "perry/updater" {

@@ -92,6 +92,25 @@ pub extern "C" fn perry_ui_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
 
+// AppKit has no persistent wheel control; NSPopUpButton supplies a native,
+// scrollable menu for long lists while retaining the WheelPicker API.
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_create(on_change: f64) -> i64 {
+    widgets::picker::create(std::ptr::null(), on_change, 0)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_add_item(handle: i64, title_ptr: i64) {
+    widgets::picker::add_item(handle, title_ptr as *const u8);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_set_selected(handle: i64, index: i64) {
+    widgets::picker::set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
+    widgets::picker::get_selected(handle)
+}
+
 /// Create a Combobox (NSComboBox: editable filterable text field +
 /// dropdown). `initial_ptr` is the starting text (may be null/empty);
 /// `on_change` fires with the current string value when the user picks
