@@ -7,7 +7,10 @@
 //! on Android where TypeScript runs on the perry-native thread but the
 //! timer pump fires on the UI thread.
 
+mod async_lifecycle;
+
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
+use async_lifecycle::{enqueue_destroy_ids, IntervalCallback};
 use std::any::Any;
 use std::os::raw::c_int;
 use std::sync::{
@@ -1002,11 +1005,7 @@ fn schedule_callback_timer(
 
     let id = next_timer_id();
 
-    let ids = crate::async_hooks::init_resource(
-        type_name,
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-        false,
-    );
+    let ids = crate::async_hooks::init_resource(type_name, timer_handle_value(id), true);
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
@@ -1307,24 +1306,25 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
 #[no_mangle]
 pub extern "C" fn clearTimeout(timer_id: i64) {
     mock_clear_timeout(timer_id);
-    {
+    let callback_async_id = {
         let mut timers = CALLBACK_TIMERS.lock().unwrap();
-        for timer in timers.iter_mut() {
-            if timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout {
-                timer.cleared = true;
-                break;
-            }
-        }
-        timers.retain(|t| !t.cleared);
-    }
-    let mut intervals = INTERVAL_TIMERS.lock().unwrap();
-    for timer in intervals.iter_mut() {
-        if timer.id == timer_id {
-            timer.cleared = true;
-            break;
-        }
-    }
-    intervals.retain(|t| !t.cleared);
+        let async_id = timers
+            .iter()
+            .find(|timer| timer.id == timer_id && timer.kind == CallbackTimerKind::Timeout)
+            .map(|timer| timer.async_id);
+        timers.retain(|timer| timer.id != timer_id || timer.kind != CallbackTimerKind::Timeout);
+        async_id
+    };
+    let interval_async_id = {
+        let mut intervals = INTERVAL_TIMERS.lock().unwrap();
+        let async_id = intervals
+            .iter()
+            .find(|timer| timer.id == timer_id)
+            .map(|timer| timer.async_id);
+        intervals.retain(|timer| timer.id != timer_id);
+        async_id
+    };
+    enqueue_destroy_ids([callback_async_id, interval_async_id]);
 }
 
 /// Clear an Immediate by ID. Timeout/Interval handles are distinct and are not
@@ -1332,14 +1332,16 @@ pub extern "C" fn clearTimeout(timer_id: i64) {
 #[no_mangle]
 pub extern "C" fn clearImmediate(timer_id: i64) {
     mock_clear_immediate(timer_id);
-    let mut timers = CALLBACK_TIMERS.lock().unwrap();
-    for timer in timers.iter_mut() {
-        if timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate {
-            timer.cleared = true;
-            break;
-        }
-    }
-    timers.retain(|t| !t.cleared);
+    let async_id = {
+        let mut timers = CALLBACK_TIMERS.lock().unwrap();
+        let async_id = timers
+            .iter()
+            .find(|timer| timer.id == timer_id && timer.kind == CallbackTimerKind::Immediate)
+            .map(|timer| timer.async_id);
+        timers.retain(|timer| timer.id != timer_id || timer.kind != CallbackTimerKind::Immediate);
+        async_id
+    };
+    enqueue_destroy_ids([async_id, None]);
 }
 
 /// Resolve a `clearTimeout`/`clearInterval` argument to a timer id. Accepts
@@ -1408,6 +1410,8 @@ struct IntervalTimer {
     args: Vec<f64>,
     /// AsyncLocalStorage context captured when the interval was scheduled.
     context: crate::async_context::AsyncContextSnapshot,
+    async_id: u64,
+    trigger_async_id: u64,
     /// Whether this interval has been cleared
     cleared: bool,
     /// #6185: agent that owns `callback` / `args`. See `CallbackTimer::owner`.
@@ -1434,18 +1438,29 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
     }
     ensure_initialized();
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
     let interval = normalize_timer_delay(interval_ms);
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
     let id = next_timer_id();
 
+    let mut context = crate::async_context::capture_context();
+    let context_roots = crate::async_context::root_snapshot(&scope, &context);
+    let ids = crate::async_hooks::init_resource("Timeout", timer_handle_value(id), true);
+    crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
+
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
         id,
-        callback,
+        callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
         interval_ms: interval,
         next_deadline,
-        args,
-        context: crate::async_context::capture_context(),
+        args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
+        context,
+        async_id: ids.async_id,
+        trigger_async_id: ids.trigger_async_id,
         cleared: false,
         // #6185: the scheduling agent owns the callback closure + args.
         owner: crate::agent::current_agent(),
@@ -1476,24 +1491,26 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
 #[no_mangle]
 pub extern "C" fn clearInterval(interval_id: i64) {
     mock_clear_interval(interval_id);
-    {
+    let interval_async_id = {
         let mut timers = INTERVAL_TIMERS.lock().unwrap();
-        for timer in timers.iter_mut() {
-            if timer.id == interval_id {
-                timer.cleared = true;
-                break;
-            }
-        }
-        timers.retain(|t| !t.cleared);
-    }
-    let mut callbacks = CALLBACK_TIMERS.lock().unwrap();
-    for timer in callbacks.iter_mut() {
-        if timer.id == interval_id && timer.kind == CallbackTimerKind::Timeout {
-            timer.cleared = true;
-            break;
-        }
-    }
-    callbacks.retain(|t| !t.cleared);
+        let async_id = timers
+            .iter()
+            .find(|timer| timer.id == interval_id)
+            .map(|timer| timer.async_id);
+        timers.retain(|timer| timer.id != interval_id);
+        async_id
+    };
+    let callback_async_id = {
+        let mut callbacks = CALLBACK_TIMERS.lock().unwrap();
+        let async_id = callbacks
+            .iter()
+            .find(|timer| timer.id == interval_id && timer.kind == CallbackTimerKind::Timeout)
+            .map(|timer| timer.async_id);
+        callbacks
+            .retain(|timer| timer.id != interval_id || timer.kind != CallbackTimerKind::Timeout);
+        async_id
+    };
+    enqueue_destroy_ids([interval_async_id, callback_async_id]);
 }
 
 /// Process any expired interval timers
@@ -1513,12 +1530,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     let allow_unref = should_run_unref_callback_interval_timers();
 
     // Collect callbacks to call and update deadlines
-    let callbacks_to_call: Vec<(
-        i64,
-        i64,
-        Vec<f64>,
-        crate::async_context::AsyncContextSnapshot,
-    )> = {
+    let callbacks_to_call: Vec<IntervalCallback> = {
         let mut timers = INTERVAL_TIMERS.lock().unwrap();
         let mut callbacks = Vec::new();
 
@@ -1535,6 +1547,8 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
                     timer.callback,
                     timer.args.clone(),
                     timer.context.clone(),
+                    timer.async_id,
+                    timer.trigger_async_id,
                 ));
                 timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
             }
@@ -1547,7 +1561,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 
     let mut fired = 0;
     // Call the callbacks outside of the lock
-    for (id, callback, args, context) in callbacks_to_call {
+    for (id, callback, args, context, async_id, trigger_async_id) in callbacks_to_call {
         let scope = crate::gc::RuntimeHandleScope::new();
         let callback_handle =
             scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
@@ -1555,11 +1569,12 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let previous = crate::async_context::enter_context(&context);
         let mut previous = previous;
         let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-        let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-        let cb = callback_handle.get_raw_const_ptr();
         let prev_this = crate::object::js_implicit_this_set(timer_handle_value(id));
         enter_timer_callback_dispatch();
+        crate::async_hooks::before(async_id, trigger_async_id);
         with_timer_uncaught_trap(|| {
+            let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+            let cb = callback_handle.get_raw_const_ptr();
             match a.len() {
                 0 => js_closure_call0(cb),
                 1 => js_closure_call1(cb, a[0]),
@@ -1573,6 +1588,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
                 _ => js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]),
             };
         });
+        crate::async_hooks::after(async_id);
         leave_timer_callback_dispatch();
         crate::object::js_implicit_this_set(prev_this);
         crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
@@ -1803,6 +1819,8 @@ pub(crate) fn test_seed_timer_scanner_roots(
         next_deadline: deadline,
         args: Vec::new(),
         context,
+        async_id: 0,
+        trigger_async_id: 0,
         cleared: false,
     });
 }

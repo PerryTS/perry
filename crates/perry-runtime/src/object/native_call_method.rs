@@ -1717,11 +1717,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             return 0.0;
         }
 
-        // AsyncResource handles are raw Box pointers under POINTER_TAG, not
-        // GC heap objects — recognize them by registry membership BEFORE the
-        // gc_header read below (which would read foreign allocator memory).
-        // Covers receivers whose static type the codegen lost, e.g. a
-        // closure-captured `let resource: AsyncResource` (#789).
+        // AsyncHook/AsyncResource handles are raw Box pointers under
+        // POINTER_TAG, not GC heap objects — recognize them by registry
+        // membership BEFORE the gc_header read below (which would read foreign
+        // allocator memory). Covers receivers whose static type the codegen
+        // lost through a helper return, closure capture, or `any` binding.
+        if let Some(r) = crate::async_hooks::try_async_hook_method_dispatch(obj as i64, method_name)
+        {
+            return r;
+        }
         if let Some(r) = crate::async_hooks::try_async_resource_method_dispatch(
             obj as i64,
             method_name,

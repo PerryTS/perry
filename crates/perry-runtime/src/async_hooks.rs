@@ -135,6 +135,14 @@ static ASYNC_RESOURCE_HANDLES: LazyLock<Mutex<HashSet<i64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static ASYNC_RESOURCE_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// Live `AsyncHook` handles, for the same dynamic-receiver reason as
+/// `ASYNC_RESOURCE_HANDLES`. A helper that returns
+/// `createHook(options).enable()` erases the static `AsyncHook` class before
+/// its caller later invokes `disable()`.
+static ASYNC_HOOK_HANDLES: LazyLock<Mutex<HashSet<i64>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static ASYNC_HOOK_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 thread_local! {
     static EXECUTION_STACK: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
     static CURRENT_EXECUTION_ID: Cell<u64> = const { Cell::new(0) };
@@ -393,7 +401,27 @@ pub extern "C" fn js_async_hooks_create_hook(options: f64) -> i64 {
         callbacks,
         enabled: false,
     });
-    Box::into_raw(Box::new(AsyncHookHandle { index })) as i64
+    let handle = Box::into_raw(Box::new(AsyncHookHandle { index })) as i64;
+    ASYNC_HOOK_HANDLES.lock().unwrap().insert(handle);
+    ASYNC_HOOK_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
+    handle
+}
+
+/// Dynamic method dispatch for `AsyncHook` values whose static class was lost
+/// through a helper return or `any`-typed binding.
+pub fn try_async_hook_method_dispatch(handle: i64, method_name: &str) -> Option<f64> {
+    if ASYNC_HOOK_HANDLE_COUNT.load(Ordering::Relaxed) == 0
+        || !matches!(method_name, "enable" | "disable")
+        || !ASYNC_HOOK_HANDLES.lock().unwrap().contains(&handle)
+    {
+        return None;
+    }
+    let result = match method_name {
+        "enable" => js_async_hook_enable(handle),
+        "disable" => js_async_hook_disable(handle),
+        _ => unreachable!("gated above"),
+    };
+    Some(crate::value::js_nanbox_pointer(result))
 }
 
 #[no_mangle]
@@ -450,8 +478,37 @@ fn with_hook_callbacks(mut f: impl FnMut(HookCallbacks)) {
             return;
         }
         guard.set(true);
-        for callbacks in enabled_callbacks() {
-            f(callbacks);
+        let callbacks = enabled_callbacks();
+
+        // Hook membership is snapshotted once per lifecycle phase: disabling
+        // a hook from another hook callback must not remove it from the phase
+        // already in progress, and enabling one must not add it. The callback
+        // pointers in that snapshot still have to remain moving-GC roots,
+        // though. A callback can allocate arbitrary JS objects; previously the
+        // first hook could therefore evacuate the remaining hooks while their
+        // copied raw pointers stayed in this Rust Vec. Dispatching the next
+        // stale pointer caused the multi-hook #6764 fixtures to segfault.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted: Vec<_> = callbacks
+            .iter()
+            .map(|callbacks| {
+                [
+                    scope.root_raw_const_ptr(callbacks.init),
+                    scope.root_raw_const_ptr(callbacks.before),
+                    scope.root_raw_const_ptr(callbacks.after),
+                    scope.root_raw_const_ptr(callbacks.destroy),
+                    scope.root_raw_const_ptr(callbacks.promise_resolve),
+                ]
+            })
+            .collect();
+        for callbacks in rooted {
+            f(HookCallbacks {
+                init: callbacks[0].get_raw_const_ptr(),
+                before: callbacks[1].get_raw_const_ptr(),
+                after: callbacks[2].get_raw_const_ptr(),
+                destroy: callbacks[3].get_raw_const_ptr(),
+                promise_resolve: callbacks[4].get_raw_const_ptr(),
+            });
         }
         guard.set(false);
     });

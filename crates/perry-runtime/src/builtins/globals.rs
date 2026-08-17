@@ -1065,19 +1065,27 @@ pub unsafe extern "C" fn js_queue_next_tick_args(callback: i64, args_ptr: *const
 }
 
 fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
-    let context = crate::async_context::capture_context();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handle =
+        scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
+    let resource = crate::object::js_object_alloc(0, 0);
+    let resource_handle = scope.root_raw_mut_ptr(resource);
+    let mut context = crate::async_context::capture_context();
+    let context_roots = crate::async_context::root_snapshot(&scope, &context);
     let ids = crate::async_hooks::init_resource(
         type_name,
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-        false,
+        crate::value::js_nanbox_pointer(resource_handle.get_raw_mut_ptr::<u8>() as i64),
+        true,
     );
+    crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     QUEUED_MICROTASKS.with(|q| {
         q.borrow_mut().push_back(QueuedMicrotask {
-            callback,
+            callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,
-            args,
+            args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         });
     });
 }
