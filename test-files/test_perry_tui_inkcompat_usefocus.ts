@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI fixture; requires piped keypresses and has no Node oracle
 // #679 Phase 4 — ink source-compat test #5: useFocus + Tab cycle.
 //
 // ink's useFocus pattern: multiple form inputs cycle via Tab/Shift-Tab.

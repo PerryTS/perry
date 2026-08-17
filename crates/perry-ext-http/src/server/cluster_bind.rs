@@ -1,8 +1,7 @@
 //! #4914 — `node:cluster` worker port sharing for the HTTP/HTTPS/HTTP2
 //! listen sites.
 //!
-//! When this process is a `cluster.fork()`ed worker (Node's convention:
-//! non-empty `NODE_UNIQUE_ID` in the environment), every TCP bind goes
+//! When this process is a `cluster.fork()`ed worker, every TCP bind goes
 //! through SO_REUSEPORT so N workers can share one port, and the bound
 //! address is reported to the primary over the fork IPC channel so
 //! `cluster.on('listening')` fires Node-style. Kernel SO_REUSEPORT
@@ -12,9 +11,7 @@
 use std::net::{SocketAddr, TcpListener};
 
 pub(crate) fn is_cluster_worker() -> bool {
-    std::env::var("NODE_UNIQUE_ID")
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
+    unsafe { perry_cluster_is_worker() != 0 }
 }
 
 /// Bind `addr`, with SO_REUSEPORT (+SO_REUSEADDR) when running as a cluster
@@ -38,6 +35,7 @@ extern "C" {
     // Defined in perry-runtime's cluster.rs / cluster_sched.rs. This crate has
     // no Cargo dep on perry-runtime (dev-dep only); the symbols resolve at
     // final link, the same way perry-ffi's runtime helpers do.
+    fn perry_cluster_is_worker() -> i32;
     fn perry_cluster_worker_listening(
         addr_ptr: *const u8,
         addr_len: u32,

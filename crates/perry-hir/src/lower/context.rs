@@ -188,7 +188,6 @@ impl LoweringContext {
             proxy_locals: HashSet::new(),
             proxy_local_ids: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
-            wasm_instance_locals: HashSet::new(),
             plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
             class_expr_aliases: HashMap::new(),

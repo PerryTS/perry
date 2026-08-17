@@ -1,3 +1,4 @@
+// parity-skip: background Fastify server requiring an HTTP client lifecycle
 // Issue #915 regression: jwt.sign after a resumed async Fastify route body
 // must not route through the generic native-module ABI.
 

@@ -170,19 +170,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             let mutable = var_decl.kind != ast::VarDeclKind::Const;
             let is_var = var_decl.kind == ast::VarDeclKind::Var;
             for decl in &var_decl.decls {
-                // Issue #76 — pre-tag locals that hold the result of
-                // `WebAssembly.instantiate(...)` so the standard
-                // `inst.exports.<method>(...)` syntactic match in
-                // `lower/expr_call.rs` only fires for genuine wasm
-                // instances (not CJS-style `module.exports.foo()`).
-                if let (ast::Pat::Ident(binding), Some(init_expr)) =
-                    (&decl.name, decl.init.as_deref())
-                {
-                    if init_is_webassembly_instantiate(init_expr) {
-                        ctx.wasm_instance_locals
-                            .insert(binding.id.sym.as_ref().to_string());
-                    }
-                }
                 // Record chained-assignment class self-aliases (`let Logger =
                 // Logger_1 = class …`) so the self-reference isn't captured (see
                 // `synthesize_class_captures`). Function / CJS-module body path.

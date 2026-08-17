@@ -1,3 +1,4 @@
+// parity-skip: requires a live MySQL fixture; unit-covered in perry-stdlib
 // Regression test for issue #414:
 // `db.query(sql, [param])` against MySQL failed with `1835 (HY000):
 // Malformed communication packet` and left the connection unusable.

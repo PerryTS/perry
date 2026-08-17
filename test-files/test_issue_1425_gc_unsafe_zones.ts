@@ -1,3 +1,4 @@
+// parity-skip: background servers; driven by tests/test_issue_1425_gc_unsafe_zones.sh
 // Regression for issue #1425: a long-running Fastify + ws server must not
 // keep the runtime in a process-lifetime GC unsafe zone. Manual gc() calls
 // should run while both servers are listening.

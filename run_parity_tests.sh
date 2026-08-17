@@ -1287,6 +1287,7 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    parity_skip_reason=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-skip:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     test_argv=()
     if [[ -n "$parity_argv_line" ]]; then
         read -r -a test_argv <<< "$parity_argv_line"
@@ -1300,9 +1301,20 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         read -r -a parity_env <<< "$parity_env_line"
     fi
 
+    # Lifecycle-driven fixtures (interactive programs, background servers, or
+    # external-service repros) are compile-smoked elsewhere but are not valid
+    # one-shot byte-parity programs. Keep the reason beside the fixture so a
+    # future editor sees why the full sweep must not execute it directly.
+    if [[ -n "$parity_skip_reason" ]]; then
+        echo -e "${YELLOW}SKIP${NC}  $test_id ($parity_skip_reason)"
+        ((SKIPPED++))
+        record_result "$test_id" "skipped"
+        continue
+    fi
+
     # Check if test should be skipped
     if should_skip "$test_name"; then
-        echo -e "${YELLOW}SKIP${NC}  $test_id (async/timer test)"
+        echo -e "${YELLOW}SKIP${NC}  $test_id (suite skip list)"
         ((SKIPPED++))
         record_result "$test_id" "skipped"
         continue

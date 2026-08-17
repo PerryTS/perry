@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI fixture; requires piped keypresses and has no Node oracle
 // #679 Phase 4 — ink source-compat test #7: useEffect with deps array.
 //
 // useEffect(fn, []) runs fn once on first render; useEffect(fn) (no

@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI fixture; requires piped keypresses and has no Node oracle
 // #679 Phase 4 — ink source-compat test #6: useMemo caching.
 //
 // useMemo(fn, deps) caches fn() across renders when deps don't change.

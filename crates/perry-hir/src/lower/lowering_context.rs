@@ -702,12 +702,6 @@ pub struct LoweringContext {
     /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
     /// identifier, not a member/literal) and synthesize `arr.map(...)`.
     pub(crate) builtin_proto_method_locals: HashMap<String, String>,
-    /// Issue #76 — locals known to hold a WebAssembly instance handle (i.e.
-    /// `const x = WebAssembly.instantiate(...)`). Used to route
-    /// `x.exports.<method>(...)` to `Expr::WebAssemblyCallExport` only when
-    /// the receiver is a tracked instance, avoiding false matches against
-    /// CJS-style `module.exports.foo()` patterns.
-    pub(crate) wasm_instance_locals: HashSet<String>,
     /// #809: locals whose initializer is an object literal or
     /// `Object.create(...)` — i.e. provably a plain object, never a Date.
     /// Consulted by `static_receiver_class` so `obj.toJSON()` /

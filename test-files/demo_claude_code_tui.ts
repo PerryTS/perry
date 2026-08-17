@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI demo; requires terminal input and has no Node oracle
 // Demo: a Claude-Code-style TUI built entirely on perry/tui.
 import {
     Box, Text, Spinner,
