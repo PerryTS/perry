@@ -33,7 +33,7 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
     set_object_field(
         obj,
         "once",
-        port_bound_closure(port_on as *const u8, 2, port_id),
+        port_bound_closure(port_once as *const u8, 2, port_id),
     );
     set_object_field(
         obj,
@@ -47,8 +47,13 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
     );
     set_object_field(
         obj,
+        "listenerCount",
+        port_bound_closure(port_listener_count as *const u8, 1, port_id),
+    );
+    set_object_field(
+        obj,
         "addEventListener",
-        port_bound_closure(port_add_event_listener as *const u8, 2, port_id),
+        port_bound_closure(port_add_event_listener as *const u8, 3, port_id),
     );
     set_object_field(
         obj,
@@ -121,15 +126,31 @@ extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _tran
     js_undefined()
 }
 
-/// port.on(event, callback) / addListener / once (#3157).
+/// port.on(event, callback) / addListener (#3157).
 extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+    port_add_node_listener(closure, event, callback, false)
+}
+
+/// port.once(event, callback) (#6763).
+extern "C" fn port_once(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+    port_add_node_listener(closure, event, callback, true)
+}
+
+fn port_add_node_listener(
+    closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+    once: bool,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
         return js_worker_threads_on(event.to_bits() as i64, callback_ptr);
     }
-    let cb_bits = callback.to_bits();
+    let Some(cb_bits) = callback_bits_from_value(callback) else {
+        return js_undefined();
+    };
     // A program that only uses MessageChannel never calls spawn_for_promise, so
     // the runtime pump would otherwise never be registered and `main` would
     // return before any queued `message` is delivered. Register it here (mirrors
@@ -139,11 +160,31 @@ extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) 
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
                 "message" => {
-                    state.message_cb = Some(cb_bits);
+                    if !state
+                        .message_cbs
+                        .iter()
+                        .any(|listener| listener.callback_bits == cb_bits)
+                    {
+                        state.message_cbs.push(EventListener {
+                            callback_bits: cb_bits,
+                            once,
+                        });
+                    }
                     // Attaching a `message` listener implicitly starts the port.
                     state.started = true;
                 }
-                "close" => state.close_cb = Some(cb_bits),
+                "close" => {
+                    if !state
+                        .close_cbs
+                        .iter()
+                        .any(|listener| listener.callback_bits == cb_bits)
+                    {
+                        state.close_cbs.push(EventListener {
+                            callback_bits: cb_bits,
+                            once,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -152,7 +193,7 @@ extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) 
 }
 
 /// port.off(event) / removeListener (#3157).
-extern "C" fn port_off(closure: *const ClosureHeader, event: f64, _callback: f64) -> f64 {
+extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
@@ -163,11 +204,18 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, _callback: f64
         }
         return js_undefined();
     }
+    let Some(cb_bits) = callback_bits_from_value(callback) else {
+        return js_undefined();
+    };
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
-                "message" => state.message_cb = None,
-                "close" => state.close_cb = None,
+                "message" => state
+                    .message_cbs
+                    .retain(|listener| listener.callback_bits != cb_bits),
+                "close" => state
+                    .close_cbs
+                    .retain(|listener| listener.callback_bits != cb_bits),
                 _ => {}
             }
         }
@@ -175,11 +223,28 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, _callback: f64
     js_undefined()
 }
 
+extern "C" fn port_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let event_name = string_value_to_string(event).unwrap_or_default();
+    MESSAGE_PORTS.with(|ports| {
+        let ports = ports.borrow();
+        let Some(state) = ports.get(&port_id) else {
+            return 0.0;
+        };
+        match event_name.as_str() {
+            "message" => (state.message_cbs.len() + state.message_event_cbs.len()) as f64,
+            "close" => (state.close_cbs.len() + state.close_event_cbs.len()) as f64,
+            _ => 0.0,
+        }
+    })
+}
+
 /// port.addEventListener(event, callback) (#3598).
 extern "C" fn port_add_event_listener(
     closure: *const ClosureHeader,
     event: f64,
     callback: f64,
+    options: f64,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
@@ -192,13 +257,27 @@ extern "C" fn port_add_event_listener(
             match event_name.as_str() {
                 "message" => {
                     state.started = true;
-                    if !state.message_event_cbs.contains(&cb_bits) {
-                        state.message_event_cbs.push(cb_bits);
+                    if !state
+                        .message_event_cbs
+                        .iter()
+                        .any(|listener| listener.callback_bits == cb_bits)
+                    {
+                        state.message_event_cbs.push(EventListener {
+                            callback_bits: cb_bits,
+                            once: listener_once(options),
+                        });
                     }
                 }
                 "close" => {
-                    if !state.close_event_cbs.contains(&cb_bits) {
-                        state.close_event_cbs.push(cb_bits);
+                    if !state
+                        .close_event_cbs
+                        .iter()
+                        .any(|listener| listener.callback_bits == cb_bits)
+                    {
+                        state.close_event_cbs.push(EventListener {
+                            callback_bits: cb_bits,
+                            once: listener_once(options),
+                        });
                     }
                 }
                 _ => {}
@@ -222,8 +301,12 @@ extern "C" fn port_remove_event_listener(
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
-                "message" => state.message_event_cbs.retain(|cb| *cb != cb_bits),
-                "close" => state.close_event_cbs.retain(|cb| *cb != cb_bits),
+                "message" => state
+                    .message_event_cbs
+                    .retain(|listener| listener.callback_bits != cb_bits),
+                "close" => state
+                    .close_event_cbs
+                    .retain(|listener| listener.callback_bits != cb_bits),
                 _ => {}
             }
         }

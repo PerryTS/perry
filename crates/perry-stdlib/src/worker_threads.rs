@@ -124,14 +124,14 @@ struct MessagePortState {
     object_bits: u64,
     /// Queue of delivered structured-clone snapshots (oldest first).
     inbox: VecDeque<SerializedMessage>,
-    /// `message` event listener (NaN-boxed closure value bits), if registered.
-    message_cb: Option<u64>,
-    /// `close` event listener (NaN-boxed closure value bits), if registered.
-    close_cb: Option<u64>,
+    /// Node-style `message` listeners registered through on()/once().
+    message_cbs: Vec<EventListener>,
+    /// Node-style `close` listeners registered through on()/once().
+    close_cbs: Vec<EventListener>,
     /// `message` listeners registered through addEventListener().
-    message_event_cbs: Vec<u64>,
+    message_event_cbs: Vec<EventListener>,
     /// `close` listeners registered through addEventListener().
-    close_event_cbs: Vec<u64>,
+    close_event_cbs: Vec<EventListener>,
     /// Whether `.start()` (or a `message` listener) has been attached. Until a
     /// port is started, queued messages are not dispatched to the listener
     /// (Node semantics), though `receiveMessageOnPort` still drains them.
@@ -152,9 +152,15 @@ struct BroadcastChannelState {
     /// Queue of delivered structured-clone snapshots (oldest first).
     inbox: VecDeque<SerializedMessage>,
     /// `message` listeners registered through addEventListener().
-    message_event_cbs: Vec<u64>,
+    message_event_cbs: Vec<EventListener>,
     /// Whether `close()` has detached this BroadcastChannel.
     closed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct EventListener {
+    callback_bits: u64,
+    once: bool,
 }
 
 static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
@@ -230,26 +236,27 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
     MESSAGE_PORTS.with(|ports| {
         for state in ports.borrow_mut().values_mut() {
             visitor.visit_nanbox_u64_slot(&mut state.object_bits);
-            if let Some(cb) = state.message_cb.as_mut() {
-                visitor.visit_nanbox_u64_slot(cb);
+            for listener in state
+                .message_cbs
+                .iter_mut()
+                .chain(state.close_cbs.iter_mut())
+            {
+                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
             }
-            if let Some(cb) = state.close_cb.as_mut() {
-                visitor.visit_nanbox_u64_slot(cb);
-            }
-            for cb in state
+            for listener in state
                 .message_event_cbs
                 .iter_mut()
                 .chain(state.close_event_cbs.iter_mut())
             {
-                visitor.visit_nanbox_u64_slot(cb);
+                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
             }
         }
     });
     BROADCAST_CHANNELS.with(|channels| {
         for state in channels.borrow_mut().values_mut() {
             visitor.visit_nanbox_u64_slot(&mut state.object_bits);
-            for cb in state.message_event_cbs.iter_mut() {
-                visitor.visit_nanbox_u64_slot(cb);
+            for listener in state.message_event_cbs.iter_mut() {
+                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
             }
         }
     });
@@ -478,6 +485,13 @@ fn callback_bits_from_value(value: f64) -> Option<u64> {
     perry_runtime::closure::is_closure_ptr(ptr).then_some(bits)
 }
 
+fn listener_once(options: f64) -> bool {
+    let Some(options) = object_ptr_from_value(options) else {
+        return false;
+    };
+    perry_runtime::value::js_is_truthy(get_object_field(options, "once")) != 0
+}
+
 extern "C" fn worker_threads_noop0(_closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
@@ -689,16 +703,6 @@ fn message_value_is_uncloneable(value: f64, visited: &mut HashSet<usize>) -> boo
         let field = perry_runtime::object::js_object_get_field(object, index);
         message_value_is_uncloneable(f64::from_bits(field.bits()), visited)
     })
-}
-
-fn call_callback0(callback_bits: u64, this_bits: u64) {
-    let closure = closure_ptr_from_bits(callback_bits);
-    if closure.is_null() {
-        return;
-    }
-    let prev_this = perry_runtime::object::js_implicit_this_set(f64::from_bits(this_bits));
-    perry_runtime::closure::js_closure_call0(closure);
-    perry_runtime::object::js_implicit_this_set(prev_this);
 }
 
 fn call_callback1(callback_bits: u64, this_bits: u64, arg: f64) {

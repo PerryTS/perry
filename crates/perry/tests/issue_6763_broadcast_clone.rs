@@ -1,5 +1,5 @@
-//! Focused worker_threads structured-clone regressions from the #6763 parity
-//! umbrella. These assertions keep the already-fixed increments in the normal
+//! Focused worker_threads regressions from the #6763 parity umbrella. These
+//! assertions keep the already-fixed increments in the normal
 //! integration suite instead of relying only on the full Node differential run.
 
 use std::path::PathBuf;
@@ -165,6 +165,106 @@ channel.port2.close();
             "marked-nested DataCloneError 25\n",
             "arraybuffer-post ok\n",
             "arraybuffer-clone true 4 4\n",
+        )
+    );
+}
+
+#[test]
+fn channel_event_target_once_listeners_are_removed_before_dispatch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+    std::fs::write(
+        &entry,
+        r#"
+import { BroadcastChannel, MessageChannel } from "node:worker_threads";
+
+const channel = new MessageChannel();
+const nodePortEvents: string[] = [];
+const portEvents: string[] = [];
+function removed(value: string) {
+  nodePortEvents.push(`removed:${value}`);
+}
+channel.port2.on("message", removed);
+channel.port2.off("message", removed);
+channel.port2.once("message", (value) => nodePortEvents.push(`once:${value}`));
+channel.port2.on("message", (value) => {
+  nodePortEvents.push(`regular:${value}`);
+  if (value === "second") {
+    console.log("node port:", nodePortEvents.join(","));
+  }
+});
+channel.port2.on("close", (event) => console.log("close:", event.type));
+channel.port2.addEventListener(
+  "message",
+  (event) => portEvents.push(`once:${event.data}`),
+  { once: true },
+);
+channel.port2.addEventListener("message", (event) => {
+  portEvents.push(`regular:${event.data}`);
+  if (event.data === "second") {
+    console.log("port:", portEvents.join(","));
+    channel.port1.close();
+    channel.port2.close();
+  }
+});
+channel.port1.postMessage("first");
+channel.port1.postMessage("second");
+
+const sender = new BroadcastChannel("once-regression");
+const receiver = new BroadcastChannel("once-regression");
+const broadcastEvents: string[] = [];
+receiver.addEventListener(
+  "message",
+  (event) => broadcastEvents.push(`once:${event.data}`),
+  { once: true },
+);
+receiver.addEventListener("message", (event) => {
+  broadcastEvents.push(`regular:${event.data}`);
+  if (event.data === "second") {
+    console.log("broadcast:", broadcastEvents.join(","));
+    sender.close();
+    receiver.close();
+  }
+});
+sender.postMessage("first");
+sender.postMessage("second");
+"#,
+    )
+    .expect("write fixture");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output)
+        .output()
+        .expect("run compiled fixture");
+    assert!(
+        run.status.success(),
+        "compiled fixture failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "node port: once:first,regular:first,regular:second\n",
+            "port: once:first,regular:first,regular:second\n",
+            "broadcast: once:first,regular:first,regular:second\n",
+            "close: close\n",
         )
     );
 }

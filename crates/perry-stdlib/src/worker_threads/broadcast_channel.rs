@@ -58,6 +58,7 @@ extern "C" fn broadcast_add_event_listener(
     closure: *const ClosureHeader,
     event: f64,
     callback: f64,
+    options: f64,
 ) -> f64 {
     let channel_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
@@ -67,8 +68,16 @@ extern "C" fn broadcast_add_event_listener(
     super::async_shim::ensure_pump_registered();
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
-            if event_name == "message" && !state.message_event_cbs.contains(&cb_bits) {
-                state.message_event_cbs.push(cb_bits);
+            if event_name == "message"
+                && !state
+                    .message_event_cbs
+                    .iter()
+                    .any(|listener| listener.callback_bits == cb_bits)
+            {
+                state.message_event_cbs.push(EventListener {
+                    callback_bits: cb_bits,
+                    once: listener_once(options),
+                });
             }
         }
     });
@@ -88,7 +97,9 @@ extern "C" fn broadcast_remove_event_listener(
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
             if event_name == "message" {
-                state.message_event_cbs.retain(|cb| *cb != cb_bits);
+                state
+                    .message_event_cbs
+                    .retain(|listener| listener.callback_bits != cb_bits);
             }
         }
     });
@@ -139,7 +150,7 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     set_object_field(
         obj,
         "addEventListener",
-        port_bound_closure(broadcast_add_event_listener as *const u8, 2, id),
+        port_bound_closure(broadcast_add_event_listener as *const u8, 3, id),
     );
     set_object_field(
         obj,
