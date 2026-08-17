@@ -920,6 +920,7 @@ pub(crate) fn lower_expr_native(
         ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
         ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
         ExpectedNativeRep::I64 => lower_expr_native_i64(ctx, e),
+        ExpectedNativeRep::U8 => lower_expr_native_u8(ctx, e),
         ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
         ExpectedNativeRep::U64 => lower_expr_native_u64(ctx, e),
         ExpectedNativeRep::USize => lower_expr_native_usize(ctx, e),
@@ -950,6 +951,10 @@ fn i64_lowered(value: String) -> LoweredValue {
 
 fn u32_lowered(value: String) -> LoweredValue {
     LoweredValue::u32(value)
+}
+
+fn u8_lowered(value: String) -> LoweredValue {
+    LoweredValue::u8(value)
 }
 
 fn u64_lowered(value: String) -> LoweredValue {
@@ -1665,6 +1670,30 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         native_expr_kind(e),
         None,
         "lower_expr_native_u32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_u8(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = match e {
+        Expr::Integer(n) if u8::try_from(*n).is_ok() => (*n as u8).to_string(),
+        _ => {
+            let value = lower_expr(ctx, e)?;
+            ctx.block().fptoui(DOUBLE, &value, I8)
+        }
+    };
+    let lowered = u8_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_u8",
         &lowered,
         None,
         None,

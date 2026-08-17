@@ -3,6 +3,15 @@
 // native representation pipeline; the legacy ambient `Perry*` names remain
 // available for compatibility.
 
+/** Exact-width unsigned 8-bit integer when used in a native/POD contract. */
+export type u8 = number & { readonly __perryU8?: never };
+
+/** Convert a non-negative finite integer to `u8`, throwing when out of range. */
+export declare function u8(value: number): u8;
+
+/** Byte-sized native value; an alias for `u8`. */
+export type byte = u8;
+
 /** Exact-width signed 32-bit integer when used in a native/POD contract. */
 export type i32 = number & { readonly __perryI32?: never };
 

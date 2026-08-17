@@ -447,6 +447,7 @@ fn coerce_js_double_to_native(
     field: &PodLayoutField,
 ) -> LoweredValue {
     let value = match field.native_rep {
+        NativeRep::U8 => ctx.block().fptoui(DOUBLE, value_js, I8),
         NativeRep::I32 => ctx.block().fptosi(DOUBLE, value_js, I32),
         NativeRep::I64 => ctx.block().fptosi(DOUBLE, value_js, I64),
         NativeRep::U32 | NativeRep::BufferLen => ctx.block().toint32(value_js),
@@ -483,6 +484,7 @@ fn pod_field_write_compatibility_guard(
 
 fn pod_scalar_guard_rep_id(rep: &NativeRep) -> i32 {
     match rep {
+        NativeRep::U8 => 10,
         NativeRep::I32 => 1,
         NativeRep::I64 => 2,
         NativeRep::U32 => 3,

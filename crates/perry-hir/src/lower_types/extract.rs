@@ -175,7 +175,8 @@ pub(crate) fn extract_ts_type_with_ctx(
 
             if matches!(
                 name.as_str(),
-                "PerryU32"
+                "PerryU8"
+                    | "PerryU32"
                     | "PerryU64"
                     | "PerryUSize"
                     | "PerryF32"

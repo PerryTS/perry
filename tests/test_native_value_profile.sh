@@ -30,7 +30,7 @@ cp "$SCRIPT_DIR/fixtures/native_value_profile.ts" "$TEST_TMPDIR/main.ts"
 cd "$TEST_TMPDIR"
 "$PERRY" compile main.ts --output native_value_profile --no-cache >/dev/null
 
-EXPECTED="size=24,align=8,sequence=8,length=1,flags=4294967295,sequenceValue=9007199254740991,gainRounded=true,header=7:42:true,rejectedFraction=true,rejectedType=true"
+EXPECTED="size=24,align=8,sequence=8,length=1,flags=4294967295,sequenceValue=9007199254740991,gainRounded=true,tiny=2:1:255:255:7,header=7:42:true,rejectedFraction=true,rejectedType=true,rejectedOctet=true"
 ACTUAL=$(./native_value_profile)
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "FAIL: perry/native output mismatch"

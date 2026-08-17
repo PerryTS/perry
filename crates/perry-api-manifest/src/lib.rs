@@ -554,6 +554,7 @@ mod tests {
             "sizeof",
             "alignof",
             "offsetof",
+            "u8",
             "i32",
             "i64",
             "u32",
@@ -577,7 +578,7 @@ mod tests {
             assert_eq!(entry.returns, TypeSpec::Number, "{name}");
         }
 
-        for name in ["i32", "i64", "u32", "u64", "usize", "f32", "f64"] {
+        for name in ["u8", "i32", "i64", "u32", "u64", "usize", "f32", "f64"] {
             let entry = module_has_symbol("perry/native", name)
                 .unwrap_or_else(|| panic!("perry/native missing conversion {name}"));
             assert!(matches!(entry.kind, ApiKind::Method { .. }));

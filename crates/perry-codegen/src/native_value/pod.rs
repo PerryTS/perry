@@ -172,6 +172,10 @@ fn pod_init_value_roundtrips_exact(rep: &NativeRep, value: &Expr) -> bool {
     }
 
     match rep {
+        NativeRep::U8 => {
+            literal_i64(value).is_some_and(|n| u8::try_from(n).is_ok())
+                || literal_f64(value).is_some_and(|n| uint_roundtrips_exact(n, 256.0))
+        }
         NativeRep::I32 => {
             literal_i64(value).is_some_and(|n| i32::try_from(n).is_ok())
                 || literal_f64(value).is_some_and(|n| {
@@ -225,7 +229,8 @@ fn checked_native_scalar_conversion_matches(rep: &NativeRep, value: &Expr) -> bo
 
     matches!(
         (rep, method.as_str()),
-        (NativeRep::I32, "i32")
+        (NativeRep::U8, "u8")
+            | (NativeRep::I32, "i32")
             | (NativeRep::I64, "i64")
             | (NativeRep::U32, "u32")
             | (NativeRep::U64, "u64")
@@ -278,6 +283,7 @@ pub(crate) fn llvm_type_for_native_rep(rep: &NativeRep) -> Option<&'static str> 
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
         NativeRep::F32 => F32,
+        NativeRep::U8 => crate::types::I8,
         NativeRep::I64 | NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => I64,
         NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => I32,
         _ => return None,
@@ -286,6 +292,7 @@ pub(crate) fn llvm_type_for_native_rep(rep: &NativeRep) -> Option<&'static str> 
 
 pub(crate) fn expected_rep_for_native_rep(rep: &NativeRep) -> Option<ExpectedNativeRep> {
     Some(match rep {
+        NativeRep::U8 => ExpectedNativeRep::U8,
         NativeRep::I32 => ExpectedNativeRep::I32,
         NativeRep::I64 => ExpectedNativeRep::I64,
         NativeRep::U32 => ExpectedNativeRep::U32,
@@ -366,6 +373,7 @@ fn layout_for_manifest_pod_with_prefix(
 
 pub(crate) fn scalar_size_align(rep: &NativeRep) -> Option<(u32, u32)> {
     Some(match rep {
+        NativeRep::U8 => (1, 1),
         NativeRep::I32 | NativeRep::U32 | NativeRep::F32 | NativeRep::BufferLen => (4, 4),
         NativeRep::I64
         | NativeRep::U64
@@ -690,6 +698,7 @@ fn field_native_rep(ctx: &FnCtx<'_>, ty: &Type, depth: u8) -> Result<NativeRep, 
     }
     match ty {
         Type::Named(name) => match name.as_str() {
+            "PerryU8" => Ok(NativeRep::U8),
             "PerryU32" => Ok(NativeRep::U32),
             "PerryU64" => Ok(NativeRep::U64),
             "PerryUSize" => Ok(NativeRep::USize),

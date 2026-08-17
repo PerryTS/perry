@@ -1,7 +1,8 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2023 entries across 123 modules
+// Coverage: 2024 entries across 123 modules
 
+type PerryU8 = number & { readonly __perryU8?: never };
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
 type PerryUSize = number & { readonly __perryUSize?: never };
@@ -2690,6 +2691,8 @@ declare module "perry/native" {
   export function u32(value: number): number;
   /** stdlib */
   export function u64(value: number): number;
+  /** stdlib */
+  export function u8(value: number): number;
   /** stdlib */
   export function usize(value: number): number;
 }

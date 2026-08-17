@@ -1517,6 +1517,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     )),
     method_sig(
         "perry/native",
+        "u8",
+        false,
+        None,
+        &[p_num("value")],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "perry/native",
         "i32",
         false,
         None,

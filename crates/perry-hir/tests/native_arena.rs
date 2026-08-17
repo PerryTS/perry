@@ -316,6 +316,8 @@ fn perry_native_imports_reuse_canonical_pod_lowering() {
     let module = lower_src(
         r#"
         import {
+            type u8 as Octet,
+            type byte as Byte,
             type u32 as Word,
             type f32,
             type pod as NativeRecord,
@@ -326,7 +328,7 @@ fn perry_native_imports_reuse_canonical_pod_lowering() {
             offsetof as offsetOf,
         } from "perry/native";
 
-        type Packet = NativeRecord<{ tag: Word; gain: f32; }>;
+        type Packet = NativeRecord<{ kind: Octet; marker: Byte; tag: Word; gain: f32; }>;
         const packetSize = sizeOf<Packet>();
         const packetAlign = alignOf<Packet>();
         const gainOffset = offsetOf<Packet>("gain");
@@ -657,13 +659,19 @@ fn native_arena_public_view_rejects_dynamic_kind() {
 fn native_scalar_conversion_imports_lower_as_native_module_calls() {
     let module = lower_src(
         r#"
-        import { u32 as word, f32 } from "perry/native";
+        import { u8 as octet, u32 as word, f32 } from "perry/native";
+        const kind = octet(255);
         const count = word(42);
         const ratio = f32(0.1);
         "#,
     )
     .expect("native scalar conversions should lower");
 
+    assert!(module_any(&module, |expr| matches!(
+        expr,
+        Expr::NativeMethodCall { module, method, args, .. }
+            if module == "perry/native" && method == "u8" && args.len() == 1
+    )));
     assert!(module_any(&module, |expr| matches!(
         expr,
         Expr::NativeMethodCall { module, method, args, .. }

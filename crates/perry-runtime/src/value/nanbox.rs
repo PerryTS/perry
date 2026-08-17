@@ -16,6 +16,7 @@ const POD_REP_F64: i32 = 6;
 const POD_REP_F32: i32 = 7;
 const POD_REP_BUFFER_LEN: i32 = 8;
 const POD_REP_HANDLE_ID: i32 = 9;
+const POD_REP_U8: i32 = 10;
 
 // FFI functions for creating NaN-boxed values from raw pointers
 
@@ -35,6 +36,7 @@ pub extern "C" fn js_pod_scalar_write_compatible(value: f64, native_rep: i32) ->
 
     let number = js_value.as_number();
     let compatible = match native_rep {
+        POD_REP_U8 => uint_roundtrips_exact(number, 256.0),
         POD_REP_I32 => int_roundtrips_exact(number, i32::MIN as f64, (i32::MAX as f64) + 1.0),
         POD_REP_I64 => int_roundtrips_exact(number, i64::MIN as f64, 9_223_372_036_854_775_808.0),
         POD_REP_U32 | POD_REP_BUFFER_LEN => uint_roundtrips_exact(number, 4_294_967_296.0),

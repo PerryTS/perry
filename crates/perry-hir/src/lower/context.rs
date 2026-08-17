@@ -1360,6 +1360,7 @@ impl LoweringContext {
         imported_name: &str,
     ) {
         let canonical = match imported_name {
+            "u8" | "byte" => "PerryU8",
             "u32" => "PerryU32",
             "u64" => "PerryU64",
             "usize" => "PerryUSize",

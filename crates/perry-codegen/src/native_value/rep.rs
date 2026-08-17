@@ -123,6 +123,7 @@ pub(crate) enum ExpectedNativeRep {
     JsValueBits,
     I32,
     I64,
+    U8,
     U32,
     U64,
     USize,
@@ -275,6 +276,7 @@ impl LoweredValue {
             (ExpectedNativeRep::JsValueBits, NativeRep::JsValueBits)
                 | (ExpectedNativeRep::I32, NativeRep::I32)
                 | (ExpectedNativeRep::I64, NativeRep::I64)
+                | (ExpectedNativeRep::U8, NativeRep::U8)
                 | (ExpectedNativeRep::U32, NativeRep::U32)
                 | (ExpectedNativeRep::U64, NativeRep::U64)
                 | (ExpectedNativeRep::USize, NativeRep::USize)

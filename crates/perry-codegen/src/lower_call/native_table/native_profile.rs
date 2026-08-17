@@ -4,6 +4,15 @@ pub(super) const NATIVE_PROFILE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "perry/native",
         has_receiver: false,
+        method: "u8",
+        class_filter: None,
+        runtime: "js_perry_native_u8",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/native",
+        has_receiver: false,
         method: "i32",
         class_filter: None,
         runtime: "js_perry_native_i32",
