@@ -8,7 +8,7 @@
 //! `pub use tls::*` glob in `lib.rs`) keep resolving them unchanged.
 
 use perry_runtime::array::js_array_get_f64;
-use perry_runtime::{js_array_length, js_nanbox_pointer, js_object_alloc, JSValue, ObjectHeader};
+use perry_runtime::{js_array_length, js_nanbox_pointer, JSValue, ObjectHeader};
 
 use super::secure_context::{
     ca_store, cert_list_from_array_value, make_secure_context, root_certificates,
@@ -113,30 +113,9 @@ fn split_subject_alt_names(san: &str) -> Vec<(String, String)> {
             out.push(("DNS".to_string(), rest.trim().to_string()));
         } else if let Some(rest) = item.strip_prefix("IP Address:") {
             out.push(("IP".to_string(), rest.trim().to_string()));
-        } else if let Some(rest) = item.strip_prefix("IP:") {
-            out.push(("IP".to_string(), rest.trim().to_string()));
         }
     }
     out
-}
-
-fn hostname_is_ip(host: &str) -> bool {
-    host.parse::<std::net::IpAddr>().is_ok()
-}
-
-fn dns_matches(pattern: &str, host: &str) -> bool {
-    let pattern = pattern.trim_end_matches('.').to_ascii_lowercase();
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if pattern == host {
-        return true;
-    }
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        let Some(rest) = host.strip_suffix(suffix) else {
-            return false;
-        };
-        return rest.ends_with('.') && rest[..rest.len().saturating_sub(1)].find('.').is_none();
-    }
-    false
 }
 
 unsafe fn cn_values(subject_value: f64) -> Vec<String> {
@@ -162,14 +141,15 @@ unsafe fn cn_values(subject_value: f64) -> Vec<String> {
 
 unsafe fn make_altname_error(reason: String, host: &str, cert: f64) -> f64 {
     let message = format!("Hostname/IP does not match certificate's altnames: {reason}");
-    let obj = js_object_alloc(perry_runtime::error::CLASS_ID_ERROR, 0);
-    set_str_field(obj, "name", "Error");
-    set_str_field(obj, "message", &message);
+    let message_ptr =
+        perry_runtime::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = perry_runtime::error::js_error_new_with_message(message_ptr);
+    let obj = error as *mut ObjectHeader;
     set_str_field(obj, "code", "ERR_TLS_CERT_ALTNAME_INVALID");
     set_str_field(obj, "reason", &reason);
     set_str_field(obj, "host", host);
     set_field(obj, "cert", cert);
-    js_nanbox_pointer(obj as i64)
+    js_nanbox_pointer(error as i64)
 }
 
 pub unsafe extern "C" fn js_tls_get_ciphers() -> *mut perry_runtime::ArrayHeader {
@@ -243,13 +223,14 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
     let hostname_value = f64_from_raw_bits(hostname_bits);
     let cert = f64_from_raw_bits(cert_bits);
     let host = value_to_string(hostname_value).unwrap_or_default();
-    let host_is_ip = hostname_is_ip(&host);
+    let match_host = perry_runtime::tls::tls_domain_to_ascii(&host);
     let san = object_field_string(cert, "subjectaltname").unwrap_or_default();
     let san_entries = split_subject_alt_names(&san);
     let ip_names: Vec<String> = san_entries
         .iter()
         .filter(|(kind, _)| kind == "IP")
-        .map(|(_, value)| value.clone())
+        .filter_map(|(_, value)| value.parse::<std::net::IpAddr>().ok())
+        .map(|value| value.to_string())
         .collect();
     let dns_names: Vec<String> = san_entries
         .iter()
@@ -257,8 +238,11 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
         .map(|(_, value)| value.clone())
         .collect();
 
-    if host_is_ip {
-        if ip_names.iter().any(|ip| ip == &host) {
+    if let Ok(ip) = match_host.parse::<std::net::IpAddr>() {
+        if ip_names
+            .iter()
+            .any(|candidate| candidate == &ip.to_string())
+        {
             return undefined();
         }
         let reason = format!(
@@ -269,7 +253,10 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
     }
 
     if !dns_names.is_empty() {
-        if dns_names.iter().any(|pattern| dns_matches(pattern, &host)) {
+        if dns_names
+            .iter()
+            .any(|pattern| perry_runtime::tls::tls_dns_name_matches(&match_host, pattern))
+        {
             return undefined();
         }
         let reason = format!("Host: {host}. is not in the cert's altnames: {san}");
@@ -278,11 +265,14 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
 
     let subject = object_field(cert, "subject");
     let cns = cn_values(subject);
-    if cns.iter().any(|cn| dns_matches(cn, &host)) {
+    if cns
+        .iter()
+        .any(|cn| perry_runtime::tls::tls_dns_name_matches(&match_host, cn))
+    {
         return undefined();
     }
     let reason = if cns.is_empty() {
-        format!("Host: {host}. is not cert's CN: ")
+        "Cert does not contain a DNS name".to_string()
     } else {
         format!("Host: {host}. is not cert's CN: {}", cns.join(","))
     };

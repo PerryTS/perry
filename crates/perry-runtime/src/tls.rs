@@ -8,7 +8,7 @@ mod roots;
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
-use crate::value::{JSValue, TAG_NULL, TAG_UNDEFINED};
+use crate::value::{JSValue, TAG_UNDEFINED};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub const CLASS_ID_TLS_SECURE_CONTEXT: u32 = 0xFFFF_00B5;
@@ -470,19 +470,96 @@ pub(crate) fn is_secure_context_instance(value: f64) -> bool {
         .unwrap_or(false)
 }
 
-fn dns_name_matches(host: &str, pattern: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    let pattern = pattern.to_ascii_lowercase();
-    if host == pattern {
-        return true;
+/// Canonicalize a `checkServerIdentity` host using Node's `domainToASCII` rules.
+pub fn tls_domain_to_ascii(host: &str) -> String {
+    let normalized = host
+        .replace(['\u{3002}', '\u{ff0e}', '\u{ff61}'], ".")
+        .trim_end_matches('.')
+        .to_string();
+
+    if normalized.contains(':')
+        || normalized.chars().any(|c| {
+            c.is_ascii_control()
+                || matches!(
+                    c,
+                    ' ' | '#' | '/' | '<' | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '|'
+                )
+        })
+    {
+        return String::new();
     }
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        return host.ends_with(&format!(".{}", suffix))
-            && host[..host.len().saturating_sub(suffix.len() + 1)]
-                .find('.')
-                .is_none();
+
+    #[cfg(feature = "url-engine")]
+    {
+        return idna::domain_to_ascii(&normalized)
+            .ok()
+            .and_then(|ascii| crate::url::whatwg_canonicalize_host(&ascii))
+            .unwrap_or_default();
     }
-    false
+
+    #[cfg(not(feature = "url-engine"))]
+    {
+        // The reduced TLS runtime deliberately omits the URL/IDNA tables. Keep
+        // Node's important numeric-host coercion and reject non-ASCII input
+        // conservatively instead of treating it as a literal DNS label.
+        if normalized.bytes().all(|byte| byte.is_ascii_digit()) {
+            return normalized
+                .parse::<u32>()
+                .map(std::net::Ipv4Addr::from)
+                .map(|ip| ip.to_string())
+                .unwrap_or_default();
+        }
+        if normalized.is_ascii() {
+            normalized
+        } else {
+            String::new()
+        }
+    }
+}
+
+fn split_dns_name(name: &str) -> Vec<String> {
+    name.trim_end_matches('.')
+        .split('.')
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
+}
+
+/// Match a canonical host against a certificate DNS pattern using RFC 6125 rules.
+pub fn tls_dns_name_matches(host: &str, pattern: &str) -> bool {
+    if pattern.is_empty() {
+        return false;
+    }
+
+    let host_parts = split_dns_name(host);
+    let pattern_parts = split_dns_name(pattern);
+    if host_parts.len() != pattern_parts.len()
+        || pattern_parts.iter().any(String::is_empty)
+        || pattern_parts
+            .iter()
+            .any(|part| part.bytes().any(|byte| !(0x21..=0x7f).contains(&byte)))
+    {
+        return false;
+    }
+
+    if host_parts[1..] != pattern_parts[1..] {
+        return false;
+    }
+
+    let host_label = &host_parts[0];
+    let pattern_label = &pattern_parts[0];
+    let wildcard_parts: Vec<&str> = pattern_label.splitn(3, '*').collect();
+    if wildcard_parts.len() == 1 || pattern_label.contains("xn--") {
+        return host_label == pattern_label;
+    }
+    if wildcard_parts.len() > 2 || pattern_parts.len() <= 2 {
+        return false;
+    }
+
+    let prefix = wildcard_parts[0];
+    let suffix = wildcard_parts[1];
+    prefix.len() + suffix.len() <= host_label.len()
+        && host_label.starts_with(prefix)
+        && host_label.ends_with(suffix)
 }
 
 fn san_entries(subject_alt_name: &str, prefix: &str) -> Vec<String> {
@@ -493,11 +570,19 @@ fn san_entries(subject_alt_name: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-fn cert_common_name(cert: *mut ObjectHeader) -> Option<String> {
+fn cert_common_names(cert: *mut ObjectHeader) -> Vec<String> {
     let subject = get_field(cert, "subject");
-    let subject_obj = object_ptr(subject)?;
+    let Some(subject_obj) = object_ptr(subject) else {
+        return Vec::new();
+    };
     let cn = get_field(subject_obj, "CN");
-    value_to_string(cn)
+    if let Some(array) = array_ptr(cn) {
+        let len = crate::array::js_array_length(array);
+        return (0..len)
+            .filter_map(|index| value_to_string(crate::array::js_array_get_f64(array, index)))
+            .collect();
+    }
+    value_to_string(cn).into_iter().collect()
 }
 
 fn altname_error(host: &str, cert_value: f64, reason: String) -> f64 {
@@ -505,17 +590,17 @@ fn altname_error(host: &str, cert_value: f64, reason: String) -> f64 {
         "Hostname/IP does not match certificate's altnames: {}",
         reason
     );
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_ERROR, 6);
+    let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_error_new_with_message(message_ptr);
+    let obj = error as *mut ObjectHeader;
     let set = |name: &str, value: f64| {
         crate::object::js_object_set_field_by_name(obj, key(name), value);
     };
-    set("name", string_value("Error"));
-    set("message", string_value(&message));
     set("code", string_value("ERR_TLS_CERT_ALTNAME_INVALID"));
     set("reason", string_value(&reason));
     set("host", string_value(host));
     set("cert", cert_value);
-    ptr_value(obj)
+    ptr_value(error)
 }
 
 #[no_mangle]
@@ -524,43 +609,71 @@ pub extern "C" fn js_tls_check_server_identity(hostname: f64, cert: f64) -> f64 
     let Some(cert_obj) = object_ptr(cert) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    let subject_alt_name = get_field(cert_obj, "subjectaltname");
-    if let Some(san) = value_to_string(subject_alt_name) {
-        let host_is_ip = host.parse::<std::net::IpAddr>().is_ok();
-        if host_is_ip {
-            if san_entries(&san, "IP Address:")
-                .iter()
-                .any(|candidate| candidate == &host)
-            {
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-        } else if san_entries(&san, "DNS:")
+    let match_host = tls_domain_to_ascii(&host);
+    let san = value_to_string(get_field(cert_obj, "subjectaltname")).unwrap_or_default();
+    let dns_names = if san.is_empty() {
+        Vec::new()
+    } else {
+        san_entries(&san, "DNS:")
+    };
+    let ip_names: Vec<String> = if san.is_empty() {
+        Vec::new()
+    } else {
+        san_entries(&san, "IP Address:")
+            .into_iter()
+            .filter_map(|candidate| candidate.parse::<std::net::IpAddr>().ok())
+            .map(|candidate| candidate.to_string())
+            .collect()
+    };
+
+    if let Ok(ip) = match_host.parse::<std::net::IpAddr>() {
+        let canonical_ip = ip.to_string();
+        if ip_names.iter().any(|candidate| candidate == &canonical_ip) {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return altname_error(
+            &host,
+            cert,
+            format!(
+                "IP: {} is not in the cert's list: {}",
+                host,
+                ip_names.join(", ")
+            ),
+        );
+    }
+
+    let common_names = cert_common_names(cert_obj);
+    if !dns_names.is_empty() || !common_names.is_empty() {
+        if dns_names
             .iter()
-            .any(|candidate| dns_name_matches(&host, candidate))
+            .any(|candidate| tls_dns_name_matches(&match_host, candidate))
+        {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        if !dns_names.is_empty() {
+            return altname_error(
+                &host,
+                cert,
+                format!("Host: {}. is not in the cert's altnames: {}", host, san),
+            );
+        }
+        if common_names
+            .iter()
+            .any(|candidate| tls_dns_name_matches(&match_host, candidate))
         {
             return f64::from_bits(TAG_UNDEFINED);
         }
         return altname_error(
             &host,
             cert,
-            format!("Host: {}. is not in the cert's altnames: {}", host, san),
+            format!(
+                "Host: {}. is not cert's CN: {}",
+                host,
+                common_names.join(",")
+            ),
         );
     }
 
-    if let Some(cn) = cert_common_name(cert_obj) {
-        if dns_name_matches(&host, &cn) {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return altname_error(
-            &host,
-            cert,
-            format!("Host: {}. is not cert's CN: {}", host, cn),
-        );
-    }
-
-    if JSValue::from_bits(cert.to_bits()).is_null() {
-        return f64::from_bits(TAG_NULL);
-    }
     altname_error(&host, cert, "Cert does not contain a DNS name".to_string())
 }
 
@@ -613,7 +726,29 @@ mod tests {
 
     #[test]
     fn wildcard_dns_match_is_single_label() {
-        assert!(dns_name_matches("api.example.com", "*.example.com"));
-        assert!(!dns_name_matches("deep.api.example.com", "*.example.com"));
+        assert!(tls_dns_name_matches("api.example.com", "*.example.com"));
+        assert!(!tls_dns_name_matches(
+            "deep.api.example.com",
+            "*.example.com"
+        ));
+        assert!(tls_dns_name_matches("a-cb.a.com", "*b.a.com"));
+        assert!(!tls_dns_name_matches("a.com", "*.com"));
+        assert!(tls_dns_name_matches("a.co.uk", "*.co.uk"));
+        assert!(tls_dns_name_matches("a.example", "A.EXAMPLE."));
+        assert!(!tls_dns_name_matches(
+            "bad.x.example.com",
+            "bad..example.com"
+        ));
+        assert!(!tls_dns_name_matches("x.example.com", "café.example.com"));
+    }
+
+    #[test]
+    fn tls_hostname_canonicalization_matches_node_identity_inputs() {
+        assert_eq!(tls_domain_to_ascii("123"), "0.0.0.123");
+        assert_eq!(tls_domain_to_ascii("::1"), "");
+        assert_eq!(
+            tls_domain_to_ascii("foo。bar.example.com"),
+            "foo.bar.example.com"
+        );
     }
 }
