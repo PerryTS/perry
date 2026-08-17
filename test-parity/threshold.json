@@ -1,52 +1,157 @@
 {
-  "_schema": {
-    "description": "Global and per-category thresholds for scripts/parity_threshold_gate.py. The global threshold preserves the historical aggregate gate. The category default keeps currently passing domains pinned at 100%, while configured exceptions document known broad inventory gaps that are tracked elsewhere.",
-    "min_parity_pct": "Minimum aggregate parity percentage from test-parity/reports/latest.json.",
-    "default_category_min_parity_pct": "Minimum percentage for any category not listed in categories.",
-    "categories": "Category-specific minimums keyed by scripts/parity_threshold_gate.py category names."
+ "_schema": {
+  "description": "Global and per-category thresholds for scripts/parity_threshold_gate.py. The global threshold preserves the historical aggregate gate. The category default keeps currently passing domains pinned at 100%, while configured exceptions document known broad inventory gaps that are tracked elsewhere.",
+  "min_parity_pct": "Minimum aggregate parity percentage from test-parity/reports/latest.json.",
+  "default_category_min_parity_pct": "Minimum percentage for any category not listed in categories.",
+  "categories": "Category-specific minimums keyed by scripts/parity_threshold_gate.py category names."
+ },
+ "min_parity_pct": 83.0,
+ "default_category_min_parity_pct": 100.0,
+ "categories": {
+  "parity/http": {
+   "min_parity_pct": 100.0,
+   "issue": "793",
+   "reason": "Measured 100% on the 2026-08-17 merged 8-shard report (#8271); raised from the stale 0% floor per the #7582 both-directions doctrine."
   },
-  "min_parity_pct": 83.0,
-  "default_category_min_parity_pct": 100.0,
-  "categories": {
-    "parity/http": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:http module-inventory gap tracked in known_failures.json."
-    },
-    "parity/http2": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:http2 module-inventory gap tracked in known_failures.json."
-    },
-    "parity/https": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:https module-inventory gap tracked in known_failures.json."
-    },
-    "parity/sqlite": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:sqlite module-inventory gap tracked in known_failures.json."
-    },
-    "parity/stream": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:stream module-inventory gap tracked in known_failures.json."
-    },
-    "parity/stream_web": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:stream/web module-inventory gap tracked in known_failures.json."
-    },
-    "parity/zlib": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:zlib module-inventory gap tracked in known_failures.json."
-    },
-    "node-suite/stream": {
-      "min_parity_pct": 0.0,
-      "issue": "1545",
-      "reason": "Known node-suite stream/web abort-during-pipeto failure tracked in known_failures.json."
-    }
+  "parity/http2": {
+   "min_parity_pct": 100.0,
+   "issue": "793",
+   "reason": "Measured 100% on the 2026-08-17 merged 8-shard report (#8271); raised from the stale 0% floor per the #7582 both-directions doctrine."
+  },
+  "parity/https": {
+   "min_parity_pct": 100.0,
+   "issue": "793",
+   "reason": "Measured 100% on the 2026-08-17 merged 8-shard report (#8271); raised from the stale 0% floor per the #7582 both-directions doctrine."
+  },
+  "parity/sqlite": {
+   "min_parity_pct": 100.0,
+   "issue": "793",
+   "reason": "Measured 100% on the 2026-08-17 merged 8-shard report (#8271); raised from the stale 0% floor per the #7582 both-directions doctrine."
+  },
+  "parity/stream": {
+   "min_parity_pct": 0.0,
+   "issue": "793",
+   "reason": "Known node:stream module-inventory gap tracked in known_failures.json."
+  },
+  "parity/stream_web": {
+   "min_parity_pct": 0.0,
+   "issue": "793",
+   "reason": "Known node:stream/web module-inventory gap tracked in known_failures.json."
+  },
+  "parity/zlib": {
+   "min_parity_pct": 0.0,
+   "issue": "793",
+   "reason": "Known node:zlib module-inventory gap tracked in known_failures.json."
+  },
+  "node-suite/stream": {
+   "min_parity_pct": 0.0,
+   "issue": "1545",
+   "reason": "Known node-suite stream/web abort-during-pipeto failure tracked in known_failures.json."
+  },
+  "parity/argon2": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/buffer": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/cluster": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/commander": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/cron": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/crypto": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/date_fns": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/dayjs": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/decimal": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/dotenv": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/lodash": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/lru_cache": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/moment": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/nanoid": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/util": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/uuid": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/validator": {
+   "min_parity_pct": 0.0,
+   "issue": "8271",
+   "reason": "Single-test category; its test is triaged in test-parity/known_failures.json under the 2026-08-17 dark-debt audit (#8271). Floor returns to 100 in the same PR that fixes the test and deletes its known_failures entry."
+  },
+  "parity/test": {
+   "min_parity_pct": 0.0,
+   "issue": "6767",
+   "reason": "Single-test category (node:test); 53 node-suite failures tracked in #6767; the parity-suite test is triaged under #8271."
+  },
+  "legacy/gap": {
+   "min_parity_pct": 98.5,
+   "issue": "8271",
+   "reason": "Floored at the 2026-08-17 measured rate (merged 8-shard parity report; #8271 dark-debt audit). This floor only ratchets UP: raise it in the PR that fixes debt in this bucket."
+  },
+  "legacy/issue": {
+   "min_parity_pct": 81.0,
+   "issue": "8271",
+   "reason": "Floored at the 2026-08-17 measured rate (merged 8-shard parity report; #8271 dark-debt audit). This floor only ratchets UP: raise it in the PR that fixes debt in this bucket."
+  },
+  "legacy/other": {
+   "min_parity_pct": 87.5,
+   "issue": "8271",
+   "reason": "Floored at the 2026-08-17 measured rate (merged 8-shard parity report; #8271 dark-debt audit). This floor only ratchets UP: raise it in the PR that fixes debt in this bucket."
   }
+ }
 }
