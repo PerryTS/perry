@@ -76,14 +76,14 @@ async function finallyBothArms(i: number): Promise<string> {
 // 6. loop-created closures capturing a per-iteration binding across a suspend.
 // If two iterations ever share one cell (or a cell is released and reused
 // while a closure still holds it) these print the wrong values.
-async function loopClosures(i: number): Promise<string> {
+async function loopClosures(i: number): Promise<Array<() => number>> {
   const fns: Array<() => number> = [];
   for (let k = 0; k < 6; k++) {
     const j = k * 10 + (i % 4);
     await Promise.resolve(k);
     fns.push(() => j);
   }
-  return fns.map((f) => f()).join("-");
+  return fns;
 }
 
 // 7. generator .return() / .throw() on an async generator
@@ -115,8 +115,16 @@ async function main(): Promise<void> {
     const f = await finallyBothArms(i);
     if (i === 5 || i === 6) samples.push(f);
 
-    const lc = await loopClosures(i);
-    if (i === 2) samples.push(lc);
+    const retainedClosures = await loopClosures(i);
+    if (i === 2) {
+      // Keep the completed activation's captures alive across a real task-queue
+      // drain, then allocate another async frame before reading them. Reusing a
+      // closure-visible cell here would silently substitute the new frame's
+      // value for the retained per-iteration binding.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await normalReturn(1000 + i);
+      samples.push(retainedClosures.map((fn) => fn()).join("-"));
+    }
 
     // async generator: early .return() on some iterations, full drain on others
     const g = agen(i);

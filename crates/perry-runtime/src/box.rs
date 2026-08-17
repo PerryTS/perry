@@ -63,7 +63,7 @@ pub fn report_box_stats_at_exit() {
         "[box-stats] allocs={allocs} pool_reuses={reuses} releases={releases} \
          resident_cells={} registry_len={reg} i32_registry_len={i32_reg} \
          bool_registry_len={bool_reg} flushes={} published={}",
-        allocs - reuses,
+        allocs.saturating_sub(reuses),
         BOX_FLUSH_COUNT.load(Ordering::Relaxed),
         BOX_FLUSH_PUBLISHED.load(Ordering::Relaxed),
     );
@@ -207,8 +207,9 @@ crate::perry_thread_local! {
     /// pointer cache ("was a box" can never become "is another object").
     ///
     /// NOT a GC root: parked cells are cleared before parking, and the
-    /// addresses themselves are `std::alloc` memory, not GC-heap pointers
-    /// (see `scripts/gc_runtime_root_holders.json`).
+    /// addresses themselves are `std::alloc` memory, not GC-heap pointers.
+    /// The root-holder census intentionally does not classify bare core-crate
+    /// integer tables of this shape; its documented rule-B limit applies.
     /// Head of the per-kind INTRUSIVE free list; 0 is the empty list.
     ///
     /// A free cell's own 8 bytes hold the address of the next free cell, so
@@ -1866,7 +1867,7 @@ mod release_tests {
         // also allocate boxes, so assert lower bounds and give the residue
         // bound slack instead of demanding exact equality.
         let total_allocs = (a1 - a0) as usize;
-        let residue = total_allocs - (r1 - r0) as usize;
+        let residue = total_allocs.saturating_sub((r1 - r0) as usize);
         let own_allocs = TURNS * ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
         assert!(
             total_allocs >= own_allocs,

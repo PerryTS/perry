@@ -726,14 +726,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // activations, so "never freed" is no longer literally true and
                 // the argument is now stated on the two properties that ARE:
                 // (1) cell memory is never returned to the allocator, so the
-                // address never stops naming 8 bytes of box cell; (2) a
-                // released cell is only PARKED, and becomes reusable solely at
-                // the outermost microtask-pump exit with an empty task queue —
-                // a boundary that is by construction unreachable from inside
-                // the nested user frame `coerce_old`/`step_new` may enter. And
-                // this id belongs to the *currently executing* activation,
-                // whose own release is emitted only at a terminal state, after
-                // which no body code runs at all.
+                // address never stops naming 8 bytes of box cell; (2) the
+                // release transform excludes closure-visible locals while a
+                // capture can remain reachable; and (3) a released cell stays
+                // PARKED until its owning activation has no queued or running
+                // async step. A capture from an enclosing activation therefore
+                // cannot become reusable inside the nested user frame
+                // `coerce_old`/`step_new` may enter.
                 if ctx.boxed_vars.contains(id) {
                     let blk = ctx.block();
                     let box_ptr = blk.call(

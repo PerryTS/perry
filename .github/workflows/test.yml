@@ -1116,16 +1116,16 @@ jobs:
     # level up, exactly what `timeout 1500` below exists to prevent.
     #   DEFAULT_CAP (ci_e2e_scope.py) = 12 diff-named suites
     #   NAMED_SUITE_TIMEOUT_S         = 1500s = 25 min  -> 12 x 25 = 300
-    #   #7708 mapped perry-codegen    = 22 suites, uncapped, but in-process:
-    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 22 x 5  = 110
+    #   #7708 mapped perry-codegen    = 25 suites, uncapped, but in-process:
+    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 25 x 5  = 125
     #   + 2 known-failure checks at 5 min                          = 10
     #   + 30 min for toolchain/cache/staticlib build
-    #                                                     total    = 450
+    #                                                     total    = 465
     # Keep these in sync with ci_e2e_scope.py. This is a backstop, not a budget:
     # every mapped suite measured 2.2-10.4 s wall clock, each suite is
     # independently bounded, and the common case selects zero suites and exits
     # in ~20-30s.
-    timeout-minutes: 450
+    timeout-minutes: 465
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"

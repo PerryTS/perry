@@ -95,7 +95,7 @@ DEFAULT_CAP = 12
 # omission is no longer silent.
 #
 # Measured on arm64 macOS, debug, `--test-threads=1`, one `cargo test -p
-# perry-codegen --test <suite>` per row: every one of the 22 mapped suites
+# perry-codegen --test <suite>` per row: every one of the 25 mapped suites
 # completes in 2.2-10.4 s wall clock, and nearly all of that is cargo's
 # freshness check — the test time itself is sub-second (e.g. shadow_slot_hygiene
 # 12 tests / 0.10 s, native_proof_buffer_views 36 / 0.2 s). The cost is the
@@ -135,6 +135,7 @@ _CODEGEN_SUITES = [
     "node_test_mock_property_presence",
     "perry_builtin_name_collision",
     "private_guard_declaring_class",
+    "release_boxes_lowering",
     "scalar_replaced_slot_roots",
     "shadow_slot_hygiene",
     "spec_abi_typed_array_local_length",
