@@ -16,6 +16,26 @@ pub(crate) enum BufferElem {
     F64,
 }
 
+impl BufferElem {
+    /// Whether an indexed read produces a JavaScript Number. Keep this
+    /// exhaustive so adding a BigInt-backed element representation cannot
+    /// silently broaden numeric-expression proofs.
+    pub(crate) fn is_number_valued(&self) -> bool {
+        matches!(
+            self,
+            Self::I8
+                | Self::U8
+                | Self::U8Clamped
+                | Self::I16
+                | Self::U16
+                | Self::I32
+                | Self::U32
+                | Self::F32
+                | Self::F64
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BufferIndexUnit {

@@ -688,6 +688,50 @@ fn numeric_accumulator_is_numeric_by_construction() {
     assert!(numeric_locals_of(&stmts).contains(&3));
 }
 
+#[test]
+fn bigint_typed_view_addition_is_not_numeric_by_construction() {
+    for (offset, kind) in [
+        perry_hir::TYPED_ARRAY_KIND_BIGINT64,
+        perry_hir::TYPED_ARRAY_KIND_BIGUINT64,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let view_id = 30 + offset as u32 * 2;
+        let sum_id = view_id + 1;
+        let stmts = vec![
+            Stmt::Let {
+                id: view_id,
+                name: format!("bigint_view_{offset}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::TypedArrayNew {
+                    kind,
+                    arg: Some(Box::new(Expr::Integer(1))),
+                }),
+            },
+            Stmt::Let {
+                id: sum_id,
+                name: format!("mixed_sum_{offset}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(view_id)),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+            },
+        ];
+        assert!(
+            !numeric_locals_of(&stmts).contains(&sum_id),
+            "BigInt typed-array reads must retain mixed-addition TypeError semantics"
+        );
+    }
+}
+
 /// The poisons, one per rule: a no-init `Let` (undefined until assigned), a
 /// string write anywhere, a boxed id, and a param-like id with no `Let`.
 #[test]

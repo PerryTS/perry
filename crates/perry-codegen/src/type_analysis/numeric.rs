@@ -432,7 +432,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // Buffer/typed-array constructors (including NativeArena views),
             // and every representable element kind is numeric. This runtime
             // fact is stronger than the erasable declaration consulted below.
-            if ctx.buffer_view_slots.contains_key(arr_id) {
+            if ctx
+                .buffer_view_slots
+                .get(arr_id)
+                .is_some_and(|view| view.elem.is_number_valued())
+            {
                 return true;
             }
             match ctx.stable_local_type_proof(arr_id) {

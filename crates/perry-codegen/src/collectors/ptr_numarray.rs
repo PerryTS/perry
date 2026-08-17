@@ -4,7 +4,7 @@
 //!
 //! ## What this proves
 //!
-//! A function-local `let a = new Array(n)` / numeric array literal qualifies
+//! A function-local `let a = new Array(n)` / `let a: number[] = []` qualifies
 //! as a **numeric-array pointer local** when static analysis proves that for
 //! the local's entire lifetime:
 //!
@@ -24,9 +24,9 @@
 //! * **Provenance**: the local is initialized by exactly one `Stmt::Let` whose
 //!   init is `new Array(<static n>)` (runtime hole-fills every slot, sets
 //!   `GC_ARRAY_RAW_F64_HOLES`, and stamps the pointer-free GC layout —
-//!   `js_array_constructor_single`) or an all-numeric array literal (the
-//!   literal classifier allocates packed raw-f64 storage). Density:
-//!   `new Array(n)` ⇒ `HolesOK`; a numeric literal ⇒ `Dense`.
+//!   `js_array_constructor_single`) or an EMPTY array literal `[]` (length 0;
+//!   nothing to observe until a numeric push). Density: `new Array(n)` ⇒
+//!   `HolesOK`; `[]` ⇒ `Dense`.
 //! * **Containment**: every use of the local is an element read, an element
 //!   write whose VALUE is numeric-by-construction (a non-number store would
 //!   break invariant 1 — such a local is disqualified outright, not just
@@ -412,20 +412,12 @@ impl<'a> UseWalk<'a> {
                 }),
                 _ => None,
             },
-            // All-numeric literals allocate packed raw-f64 storage. The use
-            // walk below proves every later write remains numeric, so a
-            // non-empty literal has the same Dense invariant as `[]` rather
-            // than needing the guarded tier to rediscover its layout (#8225).
-            Expr::Array(elems)
-                if elems
-                    .iter()
-                    .all(|elem| matches!(elem, Expr::Integer(_) | Expr::Number(_))) =>
-            {
-                Some(NumArrayLocal {
-                    density: NumArrayDensity::Dense,
-                    proven_initial_length: elems.len() as i64,
-                })
-            }
+            // Empty array literal: length 0, nothing to observe until a
+            // (numeric-only, by containment) push.
+            Expr::Array(elems) if elems.is_empty() => Some(NumArrayLocal {
+                density: NumArrayDensity::Dense,
+                proven_initial_length: 0,
+            }),
             _ => None,
         }
     }
@@ -1010,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn promotes_alloc_and_numeric_literal_provenance() {
+    fn promotes_alloc_and_empty_literal_provenance() {
         let alloc = collect(&[
             alloc_let(8),
             Stmt::Expr(index_set(ARR, Expr::Integer(0), Expr::Number(1.5))),
@@ -1026,17 +1018,6 @@ mod tests {
         let fact = empty.get(&ARR).expect("[] should promote");
         assert_eq!(fact.density, NumArrayDensity::Dense);
         assert_eq!(fact.proven_initial_length, 0);
-
-        let nonempty = collect(&[let_with(
-            ARR,
-            num_array_ty(),
-            Expr::Array(vec![Expr::Number(1.25), Expr::Integer(2)]),
-        )]);
-        let fact = nonempty
-            .get(&ARR)
-            .expect("an all-numeric literal should promote");
-        assert_eq!(fact.density, NumArrayDensity::Dense);
-        assert_eq!(fact.proven_initial_length, 2);
     }
 
     #[test]
@@ -1181,12 +1162,11 @@ mod tests {
             num_array_ty(),
             new_array(vec![Expr::LocalGet(OTHER)])
         )]));
-        // A non-numeric literal does not establish packed raw-f64 storage,
-        // even when its erased declaration says `number[]`.
+        // Non-empty literal (first-increment scope).
         assert!(!is_promoted(&[let_with(
             ARR,
             num_array_ty(),
-            Expr::Array(vec![Expr::String("not a number".to_string())])
+            Expr::Array(vec![Expr::Number(1.0)])
         )]));
         // Re-declared binding: provenance is not single-Let.
         assert!(!is_promoted(&[alloc_let(4), alloc_let(4)]));

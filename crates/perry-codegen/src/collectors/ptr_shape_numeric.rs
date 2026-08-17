@@ -540,14 +540,31 @@ pub(super) fn expr_numeric_by_construction(
         let Some(Some(init)) = const_local_inits.get(view_id) else {
             return false;
         };
+        let number_valued_typed_array_kind = |kind: u8| {
+            matches!(
+                kind,
+                perry_hir::TYPED_ARRAY_KIND_INT8
+                    | perry_hir::TYPED_ARRAY_KIND_UINT8
+                    | perry_hir::TYPED_ARRAY_KIND_UINT8_CLAMPED
+                    | perry_hir::TYPED_ARRAY_KIND_INT16
+                    | perry_hir::TYPED_ARRAY_KIND_UINT16
+                    | perry_hir::TYPED_ARRAY_KIND_INT32
+                    | perry_hir::TYPED_ARRAY_KIND_UINT32
+                    | perry_hir::TYPED_ARRAY_KIND_FLOAT16
+                    | perry_hir::TYPED_ARRAY_KIND_FLOAT32
+                    | perry_hir::TYPED_ARRAY_KIND_FLOAT64
+            )
+        };
         let numeric_storage = matches!(
             init,
             Expr::BufferAlloc { .. }
                 | Expr::BufferAllocUnsafe(_)
                 | Expr::Uint8ArrayNew(_)
                 | Expr::Uint8ArrayFrom(_)
-                | Expr::TypedArrayNew { .. }
-                | Expr::NativeArenaView { .. }
+        ) || matches!(
+            init,
+            Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. }
+                if number_valued_typed_array_kind(*kind)
         ) || matches!(
             init,
             Expr::Array(elements)

@@ -1153,6 +1153,37 @@ fn native_owned_view_identity_keeps_numeric_add_on_the_native_path() {
 }
 
 #[test]
+fn bigint_typed_view_addition_keeps_dynamic_bigint_dispatch() {
+    for (class_name, kind) in [
+        ("BigInt64Array", perry_hir::TYPED_ARRAY_KIND_BIGINT64),
+        ("BigUint64Array", perry_hir::TYPED_ARRAY_KIND_BIGUINT64),
+    ] {
+        let module = module_with_classes_and_params(
+            &format!("{}_addition.ts", class_name.to_ascii_lowercase()),
+            Vec::new(),
+            Vec::new(),
+            Type::Any,
+            vec![
+                typed_array_let(1, "view", class_name, kind, int(1)),
+                Stmt::Let {
+                    id: 2,
+                    name: "sum".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(add(index_get(1, int(0)), int(1))),
+                },
+                Stmt::Return(Some(local(2))),
+            ],
+        );
+        let ir = compile_ir_for_module_with_opts(module, empty_opts());
+        assert!(
+            ir.contains("call double @js_dynamic_string_or_number_add"),
+            "{class_name} indexed reads are BigInt values and must preserve mixed-addition TypeError semantics:\n{ir}"
+        );
+    }
+}
+
+#[test]
 fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
     let dispose_through_alias = compile_artifact_json(
         "artifact_native_owned_dispose_through_alias.ts",
