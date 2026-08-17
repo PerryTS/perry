@@ -341,22 +341,29 @@ fn derived_recursive_number_argument_re_enters_the_guarded_clone() {
     // clone selected by the public Number guard, not the raw-i32 Tier-A path.
     assert!(public.contains("call i32 @js_typed_f64_arg_guard("));
     assert!(
-        clone.starts_with(
-            "define internal double @perry_fn_spec_self_recursion_ts__f$spec_b(double"
-        ),
+        clone.starts_with("define internal")
+            && clone.contains("double @perry_fn_spec_self_recursion_ts__f$spec_b(double"),
         "expected a guarded boxed clone to specialize:\n{clone}"
     );
 
+    // #8203 gives recursion-participating clones `preserve_nonecc`, which lands
+    // between `call` and the return type, so match the call LINE rather than a
+    // fixed prefix.
     assert_eq!(
         clone
-            .matches("call double @perry_fn_spec_self_recursion_ts__f$spec_b(double")
+            .lines()
+            .filter(|l| l.contains("call")
+                && l.contains("@perry_fn_spec_self_recursion_ts__f$spec_b(double"))
             .count(),
         2,
         "both derived Number arguments must re-enter the guarded clone directly:\n{clone}"
     );
     assert_eq!(
         clone
-            .matches("call double @perry_fn_spec_self_recursion_ts__f(double")
+            .lines()
+            .filter(
+                |l| l.contains("call") && l.contains("@perry_fn_spec_self_recursion_ts__f(double")
+            )
             .count(),
         0,
         "a constructively numeric recursive argument must not re-run the public guard:\n{clone}"
@@ -371,9 +378,8 @@ fn bigint_capable_recursive_argument_keeps_the_public_guard() {
 
     assert!(public.contains("call i32 @js_typed_f64_arg_guard("));
     assert!(
-        clone.starts_with(
-            "define internal double @perry_fn_spec_self_recursion_bigint_ts__f$spec_b_b(double"
-        ),
+        clone.starts_with("define internal")
+            && clone.contains("double @perry_fn_spec_self_recursion_bigint_ts__f$spec_b_b(double"),
         "expected a guarded boxed clone to specialize:\n{clone}"
     );
     assert_eq!(
