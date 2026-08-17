@@ -23,6 +23,7 @@ mod http_client;
 mod http_http2;
 mod http_server;
 mod media;
+mod native_profile;
 mod net_classes_state;
 mod net_events;
 mod node_core;
@@ -173,6 +174,7 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(thread_lodash::THREAD_LODASH_ROWS);
     v.extend_from_slice(dates::DATES_ROWS);
     v.extend_from_slice(media::MEDIA_ROWS);
+    v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
     v.extend_from_slice(yoga::YOGA_ROWS);
     v.extend_from_slice(extras::EXTRAS_ROWS);

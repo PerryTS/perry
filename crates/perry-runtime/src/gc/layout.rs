@@ -71,7 +71,7 @@ pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 //   intact bit set  ⟹  a canonical typed descriptor exists for this object,
 //                      either per-object in `TYPED_LAYOUTS` OR (the #6893 common
 //                      case) shared by shape in `SHAPE_LAYOUTS`, keyed by the
-//                      object's `keys_array`
+//                      object's immutable runtime ShapeId
 // holds at all times.
 //
 // #7834 introduced ONE producer that sets the bit without installing a
@@ -158,22 +158,22 @@ thread_local! {
 // #6893: SHAPE-keyed canonical typed layout. Replaces the per-OBJECT
 // TYPED_LAYOUTS + LAYOUT_SLOT_MASKS storage for the common case where an
 // object's live layout matches its shape (header `GC_OBJ_TYPED_LAYOUT_INTACT`).
-// Keyed by the shared `keys_array` pointer — all same-shape objects share ONE
-// canonical keys array ("shared keys_array IS a shape"), so this is O(shapes),
-// not O(objects). Measured: object churn stores a per-object descriptor for
-// every one of ~2M `{v,w}` objects (all identical) → ~392 MB; keying by the
-// (single) shared keys_array collapses that to one entry (churn peak RSS
-// 830→262 MB, behaviour-identical).
+// Keyed by the immutable runtime ShapeId stamped on every shaped object, so
+// this is O(shapes), not O(objects). Measured: object churn stores a per-object
+// descriptor for every one of ~2M `{v,w}` objects (all identical) → ~392 MB;
+// keying by their single shared shape collapses that to one entry (churn peak
+// RSS 830→262 MB, behaviour-identical).
 //
 // Value `None` = AMBIGUOUS: two live layouts share the same key NAMES but
 // different value TYPES (`{v:1,w:2}` vs `{v:"a",w:"b"}`); those objects fall
-// back to the per-object maps. ACCELERATOR ONLY: a miss, a stale entry
-// (keys_array relocated/recycled by a moving GC), an ambiguous shape, or a
-// field-count mismatch all fall back to the per-object map and then the
+// back to the per-object maps. ACCELERATOR ONLY: a miss, an ambiguous shape,
+// or a field-count mismatch all fall back to the per-object map and then the
 // conservative scan — never a wrong descriptor (mirrors the ShapeTable trust
-// model). Nothing to prune on object death (entries are per-shape, shared).
+// model). ShapeIds are process-unique and never recycled, so moving a keys
+// array cannot stale this index. Nothing to prune on object death (entries are
+// per-shape, shared).
 thread_local! {
-    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>> =
+    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<u32, Option<TypedLayoutDescriptor>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -236,11 +236,8 @@ unsafe fn with_shape_shared_descriptor_from<R>(
         return None;
     }
     let object = user_ptr as *const crate::object::ObjectHeader;
-    // Keys edge: the descriptor's when stamped, else the header mirror.
-    let keys = descriptor
-        .map(|descriptor| descriptor.keys as usize)
-        .unwrap_or((*object).keys_array as usize);
-    if keys == 0 {
+    let shape_id = crate::object::shapes::object_shape_stamp(object);
+    if shape_id == 0 {
         return None;
     }
     // Defense-in-depth: both descriptor families must agree on the exact live
@@ -250,7 +247,7 @@ unsafe fn with_shape_shared_descriptor_from<R>(
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
         .unwrap_or(0);
     let map = hot_shape_layouts().borrow();
-    let desc = map.get(&keys)?.as_ref()?;
+    let desc = map.get(&shape_id)?.as_ref()?;
     if desc.slot_count != field_count {
         return None;
     }
@@ -332,27 +329,28 @@ unsafe fn shape_shared_pointer_mask_from(
     with_shape_shared_descriptor_from(user_ptr, descriptor, |d| d.pointer_mask.clone())
 }
 
-/// Install `descriptor` as the canonical layout for `keys` and set the object's
-/// header state (INTACT + POINTER_FREE/SIDE_MASK), WITHOUT any per-object map
-/// entry. Returns `true` if the object now rides the shared shape descriptor;
-/// `false` if the shape is ambiguous (caller falls back to per-object).
+/// Install `descriptor` as the canonical layout for `shape_id` and set the
+/// object's header state (INTACT + POINTER_FREE/SIDE_MASK), WITHOUT any
+/// per-object map entry. Returns `true` if the object now rides the shared
+/// shape descriptor; `false` if the shape is ambiguous (caller falls back to
+/// per-object).
 unsafe fn shape_install_shared(
-    keys: usize,
+    shape_id: u32,
     header: *mut GcHeader,
     descriptor: &TypedLayoutDescriptor,
 ) -> bool {
     let shared_ok = {
         let mut m = hot_shape_layouts().borrow_mut();
-        match m.get(&keys) {
+        match m.get(&shape_id) {
             None => {
-                m.insert(keys, Some(descriptor.clone()));
+                m.insert(shape_id, Some(descriptor.clone()));
                 true
             }
             Some(Some(existing)) if existing == descriptor => true,
             Some(Some(_)) => {
                 // Same keys, different layout ⟹ ambiguous. Poison the entry so
                 // future lookups (and any still-INTACT siblings) fall back.
-                m.insert(keys, None);
+                m.insert(shape_id, None);
                 // #7510: `Some(D)` → `None` is the ONE transition that can
                 // falsify a construction memo (see `gc::shape_install`). It is
                 // also the only transition this map has, since entries are
@@ -1113,9 +1111,9 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     // #6964: the canonical descriptor may live in EITHER map, exactly as the
     // query helpers resolve it (#6957/#6963). The per-object `TYPED_LAYOUTS`
     // entry is keyed by ADDRESS, so it has to be moved (above). The shape-keyed
-    // `SHAPE_LAYOUTS` entry (#6893) is keyed by the shared `keys_array`, which
-    // the relocated copy carries verbatim — it needs no move, but it only
-    // describes THIS object while the object is still INTACT.
+    // `SHAPE_LAYOUTS` entry (#6893/#8289) is keyed by immutable runtime
+    // ShapeId, which the relocated copy carries verbatim — it needs no move,
+    // but it only describes THIS object while the object is still INTACT.
     //
     // Probing only `TYPED_LAYOUTS` missed for every object #6893 actually moved
     // (i.e. every class instance: it carries a keys_array and therefore has NO

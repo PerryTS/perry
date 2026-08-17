@@ -1,6 +1,52 @@
 use super::super::handle::*;
 use super::*;
 
+/// `js_class_method_bind` retains the name pointer in the closure, so make a
+/// non-static forwarded property slice impossible to pass accidentally.
+unsafe fn bind_static_handle_method(handle: i64, method: &'static [u8]) -> f64 {
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
+}
+
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+fn event_emitter_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "on" => Some(b"on"),
+        "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "prependListener" => Some(b"prependListener"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
+        "off" => Some(b"off"),
+        "removeListener" => Some(b"removeListener"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
+        "emit" => Some(b"emit"),
+        "listenerCount" => Some(b"listenerCount"),
+        "listeners" => Some(b"listeners"),
+        "rawListeners" => Some(b"rawListeners"),
+        "eventNames" => Some(b"eventNames"),
+        "setMaxListeners" => Some(b"setMaxListeners"),
+        "getMaxListeners" => Some(b"getMaxListeners"),
+        _ => None,
+    }
+}
+
+fn async_local_storage_method_name_static(property: &str) -> Option<&'static [u8]> {
+    match property {
+        "run" => Some(b"run"),
+        "getStore" => Some(b"getStore"),
+        "enterWith" => Some(b"enterWith"),
+        "exit" => Some(b"exit"),
+        "disable" => Some(b"disable"),
+        _ => None,
+    }
+}
+
 /// Dynamic dispatch for `AsyncLocalStorage` receivers whose static type the
 /// codegen lost (`any`-typed bindings, closure captures). Gated on registry
 /// type membership so no other subsystem's handle is claimed (#788).
@@ -162,17 +208,6 @@ pub(crate) unsafe fn dispatch_event_emitter_property(handle: i64, property: &str
         return None;
     }
 
-    let bind_method = |method: &[u8]| -> f64 {
-        extern "C" {
-            fn js_class_method_bind(
-                instance: f64,
-                method_name_ptr: *const u8,
-                method_name_len: usize,
-            ) -> f64;
-        }
-        js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
-    };
-
     #[cfg(feature = "bundled-events")]
     if crate::events::is_event_emitter_async_resource_handle(handle) {
         match property {
@@ -189,31 +224,14 @@ pub(crate) unsafe fn dispatch_event_emitter_property(handle: i64, property: &str
             "asyncResource" => {
                 return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
             }
-            "emitDestroy" => return Some(bind_method(b"emitDestroy")),
+            "emitDestroy" => return Some(bind_static_handle_method(handle, b"emitDestroy")),
             _ => {}
         }
     }
 
-    let method = match property {
-        "on"
-        | "addListener"
-        | "once"
-        | "prependListener"
-        | "prependOnceListener"
-        | "off"
-        | "removeListener"
-        | "removeAllListeners"
-        | "emit"
-        | "listenerCount"
-        | "listeners"
-        | "rawListeners"
-        | "eventNames"
-        | "setMaxListeners"
-        | "getMaxListeners" => Some(property.as_bytes()),
-        _ => None,
-    }?;
+    let method = event_emitter_method_name_static(property)?;
 
-    Some(bind_method(method))
+    Some(bind_static_handle_method(handle, method))
 }
 
 /// `AsyncLocalStorage` METHOD-VALUE reads (the property-read counterpart of
@@ -230,26 +248,62 @@ pub(crate) unsafe fn dispatch_async_local_storage_property(
     handle: i64,
     property: &str,
 ) -> Option<f64> {
-    if !matches!(
-        property,
-        "run" | "getStore" | "enterWith" | "exit" | "disable"
-    ) {
-        return None;
-    }
+    let method = async_local_storage_method_name_static(property)?;
     if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
         return None;
     }
-    extern "C" {
-        fn js_class_method_bind(
-            instance: f64,
-            method_name_ptr: *const u8,
-            method_name_len: usize,
-        ) -> f64;
+    Some(bind_static_handle_method(handle, method))
+}
+
+#[cfg(test)]
+mod static_method_name_tests {
+    use super::*;
+
+    fn assert_static_lookup(lookup: fn(&str) -> Option<&'static [u8]>, names: &[&str]) {
+        for name in names {
+            let owned = (*name).to_owned();
+            let found = lookup(&owned).expect("known method must resolve");
+            assert_eq!(found, name.as_bytes());
+            assert_ne!(
+                found.as_ptr(),
+                owned.as_ptr(),
+                "lookup borrowed the forwarded property name for {name}"
+            );
+            assert_eq!(found.as_ptr(), lookup(name).unwrap().as_ptr());
+        }
+        assert!(lookup("notAHandleMethod").is_none());
     }
-    let m = property.as_bytes();
-    Some(js_class_method_bind(
-        nanbox_handle_value(handle),
-        m.as_ptr(),
-        m.len(),
-    ))
+
+    #[test]
+    fn async_local_storage_method_name_lookup_returns_static_literals() {
+        assert_static_lookup(
+            async_local_storage_method_name_static,
+            &["run", "getStore", "enterWith", "exit", "disable"],
+        );
+    }
+
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    #[test]
+    fn event_emitter_method_name_lookup_returns_static_literals() {
+        assert_static_lookup(
+            event_emitter_method_name_static,
+            &[
+                "on",
+                "addListener",
+                "once",
+                "prependListener",
+                "prependOnceListener",
+                "off",
+                "removeListener",
+                "removeAllListeners",
+                "emit",
+                "listenerCount",
+                "listeners",
+                "rawListeners",
+                "eventNames",
+                "setMaxListeners",
+                "getMaxListeners",
+            ],
+        );
+    }
 }

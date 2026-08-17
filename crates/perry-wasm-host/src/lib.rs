@@ -72,10 +72,25 @@ struct InstanceInner {
     _module: WasmModuleHandle,
 }
 
-#[derive(Default)]
 struct WasmHostState {
     exit_code: Option<i32>,
+    import_callback: Option<WasmImportCallback>,
+    import_context: u64,
 }
+
+pub type WasmImportCallback = unsafe extern "C" fn(
+    context: u64,
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    arg_kinds: *const u8,
+    arg_bits: *const u64,
+    arg_count: usize,
+    result_kinds: *const u8,
+    result_bits: *mut u64,
+    result_count: usize,
+) -> i32;
 
 #[derive(Debug)]
 pub enum WasmHostError {
@@ -116,11 +131,27 @@ pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
     Ok(WasmModuleHandle(Arc::new(ModuleInner { engine, module })))
 }
 
-/// Instantiate with the module's imported functions linked to no-op host
-/// functions. `proc_exit` records its status so the JS WASI wrapper can
-/// return it after `_start` completes.
+/// Instantiate with the module's imported numeric functions routed through an
+/// optional embedding callback. Missing callbacks keep the historical typed
+/// zero-result fallback. `proc_exit` records its status so the JS WASI wrapper
+/// can return it after `_start` completes.
 pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, WasmHostError> {
-    let mut store = Store::new(&module.0.engine, WasmHostState::default());
+    instantiate_with_import_callback(module, None, 0)
+}
+
+fn instantiate_with_import_callback(
+    module: &WasmModuleHandle,
+    import_callback: Option<WasmImportCallback>,
+    import_context: u64,
+) -> Result<WasmInstanceHandle, WasmHostError> {
+    let mut store = Store::new(
+        &module.0.engine,
+        WasmHostState {
+            exit_code: None,
+            import_callback,
+            import_context,
+        },
+    );
     let mut linker = <Linker<WasmHostState>>::new(&module.0.engine);
     for import in module.0.module.imports() {
         let ExternType::Func(ty) = import.ty() else {
@@ -147,6 +178,57 @@ pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, Wasm
                     {
                         if let Some(Val::I32(code)) = params.first() {
                             caller.data_mut().exit_code = Some(*code);
+                        }
+                    }
+                    if let Some(callback) = caller.data().import_callback {
+                        let mut arg_kinds = Vec::with_capacity(params.len());
+                        let mut arg_bits = Vec::with_capacity(params.len());
+                        let mut numeric = true;
+                        for param in params {
+                            if let Some((kind, bits)) = val_kind_bits(param) {
+                                arg_kinds.push(kind);
+                                arg_bits.push(bits);
+                            } else {
+                                numeric = false;
+                                break;
+                            }
+                        }
+                        let mut result_kinds = Vec::with_capacity(results.len());
+                        let mut result_bits = vec![0u64; results.len()];
+                        for result in results.iter() {
+                            if let Some((kind, _)) = val_kind_bits(result) {
+                                result_kinds.push(kind);
+                            } else {
+                                numeric = false;
+                                break;
+                            }
+                        }
+                        if numeric {
+                            let called = unsafe {
+                                callback(
+                                    caller.data().import_context,
+                                    callback_module.as_ptr(),
+                                    callback_module.len(),
+                                    callback_name.as_ptr(),
+                                    callback_name.len(),
+                                    arg_kinds.as_ptr(),
+                                    arg_bits.as_ptr(),
+                                    arg_bits.len(),
+                                    result_kinds.as_ptr(),
+                                    result_bits.as_mut_ptr(),
+                                    result_bits.len(),
+                                )
+                            };
+                            if called != 0 {
+                                for ((result, kind), bits) in results
+                                    .iter_mut()
+                                    .zip(result_kinds.iter())
+                                    .zip(result_bits.iter())
+                                {
+                                    *result = val_from_kind_bits(*kind, *bits);
+                                }
+                                return Ok(());
+                            }
                         }
                     }
                     for result in results {
@@ -333,6 +415,45 @@ pub extern "C" fn perry_wasm_host_module_export_at(
     1
 }
 
+fn val_kind_bits(value: &Val) -> Option<(u8, u64)> {
+    match value {
+        Val::I32(value) => Some((WASM_VAL_KIND_I32, *value as u32 as u64)),
+        Val::I64(value) => Some((WASM_VAL_KIND_I64, *value as u64)),
+        Val::F32(value) => Some((WASM_VAL_KIND_F32, value.to_bits() as u64)),
+        Val::F64(value) => Some((WASM_VAL_KIND_F64, value.to_bits())),
+        _ => None,
+    }
+}
+
+fn val_from_kind_bits(kind: u8, bits: u64) -> Val {
+    match kind {
+        WASM_VAL_KIND_I32 => Val::I32(bits as u32 as i32),
+        WASM_VAL_KIND_I64 => Val::I64(bits as i64),
+        WASM_VAL_KIND_F32 => Val::F32(wasmi::F32::from_bits(bits as u32)),
+        WASM_VAL_KIND_F64 => Val::F64(wasmi::F64::from_bits(bits)),
+        _ => Val::I32(0),
+    }
+}
+
+/// Return the declared parameter count for a function export. `usize::MAX`
+/// denotes either a non-function export or an invalid module/index.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_module_export_func_arity(
+    module: *mut WasmModuleHandle,
+    index: usize,
+) -> usize {
+    let Some(module) = (unsafe { module.as_ref() }) else {
+        return usize::MAX;
+    };
+    let Some(export) = module.0.module.exports().nth(index) else {
+        return usize::MAX;
+    };
+    match export.ty() {
+        ExternType::Func(ty) => ty.params().len(),
+        _ => usize::MAX,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_module_imports_len(module: *mut WasmModuleHandle) -> usize {
     if module.is_null() {
@@ -442,6 +563,8 @@ pub extern "C" fn perry_wasm_host_module_custom_section_at(
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_new(
     module: *mut WasmModuleHandle,
+    import_callback: Option<WasmImportCallback>,
+    import_context: u64,
     out_err: *mut *mut c_char,
 ) -> *mut WasmInstanceHandle {
     if module.is_null() {
@@ -449,12 +572,22 @@ pub extern "C" fn perry_wasm_host_instance_new(
         return std::ptr::null_mut();
     }
     let module = unsafe { &*module };
-    match instantiate(module) {
+    match instantiate_with_import_callback(module, import_callback, import_context) {
         Ok(i) => Box::into_raw(Box::new(i)),
         Err(e) => {
             capture_err(out_err, e);
             std::ptr::null_mut()
         }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_set_import_context(
+    inst: *mut WasmInstanceHandle,
+    import_context: u64,
+) {
+    if let Some(inst) = unsafe { inst.as_mut() } {
+        inst.inner.store.data_mut().import_context = import_context;
     }
 }
 
@@ -670,6 +803,38 @@ mod tests {
         assert_eq!(result, Some(WasmVal::F64(0.0)));
     }
 
+    unsafe extern "C" fn f64_import_callback(
+        context: u64,
+        module: *const u8,
+        module_len: usize,
+        name: *const u8,
+        name_len: usize,
+        _arg_kinds: *const u8,
+        _arg_bits: *const u64,
+        arg_count: usize,
+        result_kinds: *const u8,
+        result_bits: *mut u64,
+        result_count: usize,
+    ) -> i32 {
+        assert_eq!(std::slice::from_raw_parts(module, module_len), b"env");
+        assert_eq!(std::slice::from_raw_parts(name, name_len), b"f");
+        assert_eq!(arg_count, 0);
+        assert_eq!(result_count, 1);
+        assert_eq!(*result_kinds, WASM_VAL_KIND_F64);
+        *result_bits = f64::from_bits(context).to_bits();
+        1
+    }
+
+    #[test]
+    fn imported_functions_route_through_embedding_callback() {
+        let module = compile(IMPORT_F64_RESULT_WASM).expect("compile");
+        let mut inst =
+            instantiate_with_import_callback(&module, Some(f64_import_callback), 6.5f64.to_bits())
+                .expect("instantiate with callback");
+        let result = call_export(&mut inst, "call", &[]).expect("call import");
+        assert_eq!(result, Some(WasmVal::F64(6.5)));
+    }
+
     #[test]
     fn c_abi_reports_module_exports_imports_and_custom_sections() {
         let mut err = std::ptr::null_mut();
@@ -689,6 +854,7 @@ mod tests {
                 .unwrap();
         assert_eq!(export_name, "add");
         assert_eq!(kind, WASM_EXTERN_KIND_FUNCTION);
+        assert_eq!(perry_wasm_host_module_export_func_arity(add, 0), 2);
         perry_wasm_host_module_drop(add);
 
         let imports =

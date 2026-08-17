@@ -550,7 +550,19 @@ mod tests {
 
     #[test]
     fn perry_native_public_value_surface_is_manifested() {
-        for name in ["sizeof", "alignof", "offsetof", "NativeArena"] {
+        for name in [
+            "sizeof",
+            "alignof",
+            "offsetof",
+            "i32",
+            "i64",
+            "u32",
+            "u64",
+            "usize",
+            "f32",
+            "f64",
+            "NativeArena",
+        ] {
             assert!(
                 module_has_public_named_export("perry/native", name),
                 "perry/native missing public value export {name}"
@@ -562,6 +574,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("perry/native missing intrinsic {name}"));
             assert!(matches!(entry.kind, ApiKind::Method { .. }));
             assert_eq!(entry.source, ApiSource::Intrinsic, "{name}");
+            assert_eq!(entry.returns, TypeSpec::Number, "{name}");
+        }
+
+        for name in ["i32", "i64", "u32", "u64", "usize", "f32", "f64"] {
+            let entry = module_has_symbol("perry/native", name)
+                .unwrap_or_else(|| panic!("perry/native missing conversion {name}"));
+            assert!(matches!(entry.kind, ApiKind::Method { .. }));
+            assert_eq!(entry.source, ApiSource::Stdlib, "{name}");
             assert_eq!(entry.returns, TypeSpec::Number, "{name}");
         }
 

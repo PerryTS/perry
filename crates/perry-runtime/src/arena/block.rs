@@ -624,7 +624,6 @@ impl Arena {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
-                inline.object_starts = block.object_starts_ptr();
             }
         });
     }
@@ -1058,19 +1057,18 @@ thread_local! {
         UnsafeCell::new(Arena::new_lazy(HeapGeneration::Old, HeapSpace::Old));
 
     /// Inline allocator state — a cache of the current arena block's
-    /// `(data, offset, size, object_starts)` tuple, exposed via a stable pointer so
+    /// `(data, offset, size)` tuple, exposed via a stable pointer so
     /// codegen can emit inline bump-allocate IR without going through
     /// any function call or `LocalKey::with` wrapper.
     ///
     /// `#[repr(C)]` on `InlineArenaState` keeps the field offsets stable
-    /// (data=0, offset=8, size=16, object_starts=24). The codegen reads/writes these fields
+    /// (data=0, offset=8, size=16). The codegen reads/writes these fields
     /// directly via fixed GEPs, so changing the struct layout would
     /// silently break every emitted `new ClassName()`.
     pub(crate) static INLINE_STATE: UnsafeCell<InlineArenaState> = const { UnsafeCell::new(InlineArenaState {
         data: std::ptr::null_mut(),
         offset: 0,
         size: 0,
-        object_starts: std::ptr::null_mut(),
     }) };
 }
 

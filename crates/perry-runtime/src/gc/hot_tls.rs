@@ -75,7 +75,7 @@ pub(super) fn hot_incremental_mark_minor_only() -> &'static Cell<bool> {
 
 type SlotMaskMap = crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>;
 type TypedLayoutMap = crate::fast_hash::PtrHashMap<usize, TypedLayoutDescriptor>;
-type ShapeLayoutMap = crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>;
+type ShapeLayoutMap = crate::fast_hash::PtrHashMap<u32, Option<TypedLayoutDescriptor>>;
 
 /// Address of this thread's `LAYOUT_SLOT_MASKS`.
 pub(crate) fn layout_slot_masks_hot_addr() -> *mut u8 {

@@ -202,6 +202,8 @@ mod opts;
 mod ordinary_param_guard_tests;
 mod param_guard;
 mod spec_abi;
+#[cfg(test)]
+mod spec_preserve_none_tests;
 mod spec_return_proof;
 #[cfg(test)]
 mod spec_self_recursion_tests;
@@ -1987,6 +1989,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
         module_dispatch: module_dispatch_facts,
+        array_callback_shapes: std::collections::HashMap::new(),
         // Inline-hot-small pre-pass (#6850 follow-up): FuncIds with an in-loop
         // call site AND few total call sites, so small hot callees can earn
         // `inlinehint` while the call-site cap bounds duplication.
@@ -2334,6 +2337,29 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+
+    // #8103: closure bodies are emitted before their enclosing regions. Prove
+    // inline array-callback element shapes module-wide now, while both sides
+    // of the boundary are available, then inject the vetted parameter facts
+    // when each closure is compiled.
+    let mut array_callback_shapes = crate::collectors::collect_array_callback_shapes(
+        hir,
+        &closures,
+        &module_boxed_vars,
+        &module_globals,
+        &module_receiver_types,
+        &class_table,
+        &cross_module.module_dispatch,
+    );
+    // Async/generator transforms clear the flags on the closure expression,
+    // but preserve the original identity in these module sets. Their callback
+    // parameters outlive the synchronous array HOF invocation and therefore
+    // cannot inherit its region-local containment fact.
+    array_callback_shapes.retain(|func_id, _| {
+        !cross_module.async_step_closures.contains(func_id)
+            && !cross_module.local_generator_funcs.contains(func_id)
+    });
+    cross_module.array_callback_shapes = array_callback_shapes;
 
     cross_module.typed_f64_closures.clear();
     cross_module.typed_i32_closures.clear();
@@ -2729,6 +2755,38 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     &param_guard::descriptor_llvm_literal(&guard.descriptor),
                 );
             }
+        }
+
+        // #8175: recursion-participating specialized clones take LLVM's
+        // `preserve_none` convention. Registered HERE — after the plan is
+        // final and before any function body compiles — so every dispatch
+        // tier (static, guarded/range-checked, the public trampoline's fast
+        // arm, and the clone's own self-recursion) stamps the call-site
+        // convention through the one `LlBlock::call` choke point, and the
+        // clone's define/declare render it from the same registry. Spec
+        // entries are `internal` and direct-call-only by construction
+        // (`spec_abi_symbol_reachability`), so the convention cannot escape
+        // the module. Gated to recursion because the boundary cost is real:
+        // a normal-CC caller saves ~20 CSRs once per entry, which amortizes
+        // under a recursive tree and pessimizes a cheap non-recursive callee
+        // in a hot loop.
+        if spec_abi::spec_preserve_none_enabled()
+            && spec_abi::preserve_none_target_ok(&triple)
+            && !cross_module.spec_abi_functions.is_empty()
+        {
+            let recursive = crate::collectors::collect_recursion_participants(hir);
+            let mut preserve_none: Vec<String> = hir
+                .functions
+                .iter()
+                .filter(|f| recursive.contains(&f.id))
+                .filter_map(|f| {
+                    let plan = cross_module.spec_abi_functions.get(&f.id)?;
+                    let public = func_names.get(&f.id)?;
+                    Some(spec_function_name(public, &plan.reps))
+                })
+                .collect();
+            preserve_none.sort_unstable();
+            llmod.set_preserve_none_fns(preserve_none);
         }
     }
 

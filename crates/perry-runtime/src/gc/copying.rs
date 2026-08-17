@@ -1523,6 +1523,12 @@ pub(super) fn run_copied_minor_attempt(
     // the root enumeration the rewrite pass and the evacuation verifier share.
     super::fromspace_scan::run_fromspace_scan(&snapshot);
 
+    // #8220 diagnostic: scan the native (Rust) stack for stale from-space
+    // pointers — raw pointers held in Rust frame locals that the precise root
+    // map can't see and the conservative scan is disabled in production. MUST
+    // run here, same window as fromspace_scan (after rewrite, before reset).
+    super::native_stack_scan::run_native_stack_scan();
+
     crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
     finalize_dead_copied_minor_from_space_side_allocations();
     // #7742: on a promoting cycle the young blocks are handed to old-gen

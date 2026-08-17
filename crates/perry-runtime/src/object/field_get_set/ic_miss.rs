@@ -94,16 +94,28 @@ pub extern "C" fn js_object_get_field_by_name_boxed(
 /// dispatchable through `js_native_call_method` (every name here has a
 /// corresponding dispatch arm). `constructor` is excluded: it is a property
 /// holding the `Number` function, not a bound method.
-pub(crate) fn is_primitive_proto_method(key: &[u8]) -> bool {
-    matches!(
-        key,
-        b"toString"
-            | b"valueOf"
-            | b"hasOwnProperty"
-            | b"isPrototypeOf"
-            | b"propertyIsEnumerable"
-            | b"toLocaleString"
-    )
+pub(crate) fn primitive_proto_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
+    match key {
+        b"toString" => Some(b"toString"),
+        b"valueOf" => Some(b"valueOf"),
+        b"hasOwnProperty" => Some(b"hasOwnProperty"),
+        b"isPrototypeOf" => Some(b"isPrototypeOf"),
+        b"propertyIsEnumerable" => Some(b"propertyIsEnumerable"),
+        b"toLocaleString" => Some(b"toLocaleString"),
+        _ => None,
+    }
+}
+
+/// Bind a primitive receiver's inherited method without allowing the closure
+/// to retain the caller's key storage. Both finite-number guards route through
+/// this helper so the pointer-lifetime rule has a single implementation.
+pub(crate) unsafe fn bind_primitive_proto_method_static(
+    receiver: f64,
+    key: &[u8],
+) -> Option<JSValue> {
+    let method = primitive_proto_method_name_static(key)?;
+    let result = super::super::js_class_method_bind(receiver, method.as_ptr(), method.len());
+    Some(JSValue::from_bits(result.to_bits()))
 }
 
 /// Static-name lowering traffics in immutable AOT descriptors instead of

@@ -823,6 +823,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return v;
                     }
+                    if let Some(bound) =
+                        bind_primitive_proto_method_static(f64::from_bits(bits), key_bytes)
+                    {
+                        return bound;
+                    }
                 }
             }
             return JSValue::undefined();
@@ -1562,9 +1567,8 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(v) = primitive_builtin_prototype_property(b"Number", key, f) {
                     return v;
                 }
-                if is_primitive_proto_method(name_bytes) {
-                    let result = super::super::js_class_method_bind(f, name_ptr, name_len);
-                    return JSValue::from_bits(result.to_bits());
+                if let Some(bound) = bind_primitive_proto_method_static(f, name_bytes) {
+                    return bound;
                 }
             }
             return JSValue::undefined();

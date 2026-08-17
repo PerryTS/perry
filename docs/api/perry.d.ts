@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2011 entries across 123 modules
+// Coverage: 2019 entries across 123 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2417,6 +2417,9 @@ declare module "perf_hooks" {
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const performance: any;
   /** stdlib */
   export function createHistogram(...args: any[]): any;
@@ -2671,10 +2674,24 @@ declare module "perry/native" {
   export const NativeArena: any;
   /** intrinsic */
   export function alignof(): number;
+  /** stdlib */
+  export function f32(value: number): number;
+  /** stdlib */
+  export function f64(value: number): number;
+  /** stdlib */
+  export function i32(value: number): number;
+  /** stdlib */
+  export function i64(value: number): number;
   /** intrinsic */
   export function offsetof(field: string): number;
   /** intrinsic */
   export function sizeof(): number;
+  /** stdlib */
+  export function u32(value: number): number;
+  /** stdlib */
+  export function u64(value: number): number;
+  /** stdlib */
+  export function usize(value: number): number;
 }
 
 declare module "perry/plugin" {

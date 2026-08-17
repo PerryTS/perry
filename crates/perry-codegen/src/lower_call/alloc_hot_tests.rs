@@ -342,9 +342,14 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         ir.contains(HEADER_IMAGE_STORE),
         "the inline allocation site must store the `<2 x i64>` header image:\n{ir}"
     );
+    let merge_at = ir.find("\nalloc.merge").unwrap();
+    let merge_end = ir[merge_at + 1..]
+        .find("\nshadow.root.barrier")
+        .map_or(ir.len(), |at| merge_at + 1 + at);
+    let allocation_merge = &ir[merge_at..merge_end];
     assert!(
-        ir.contains("shl i64 1,") && ir.contains("lshr i64") && ir.contains(", 6"),
-        "the inline allocation site must set its exact boundary in the arena object-start bitmap:\n{ir}"
+        !allocation_merge.contains("shl i64 1,") && !allocation_merge.contains("lshr i64"),
+        "ordinary inline objects must not pay to update the Map-only object-start bitmap:\n{allocation_merge}"
     );
     // The compose lives beside the ShapeId mint in module init, i.e. after the
     // mint call and outside the allocating function's own body.

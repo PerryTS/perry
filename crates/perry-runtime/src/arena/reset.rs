@@ -31,7 +31,6 @@ pub fn arena_reset_all_blocks_to_zero() {
                 inline.data = block.data;
                 inline.offset = 0;
                 inline.size = block.size;
-                inline.object_starts = block.object_starts_ptr();
             }
         });
     });
@@ -219,7 +218,6 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
-                inline.object_starts = block.object_starts_ptr();
             }
         });
     });
@@ -495,7 +493,6 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                         inline.data = block.data;
                         inline.offset = block.offset;
                         inline.size = block.size;
-                        inline.object_starts = block.object_starts_ptr();
                     }
                 }
             });
@@ -745,7 +742,6 @@ impl ArenaResetEmptyBlocksState {
                             inline.data = block.data;
                             inline.offset = block.offset;
                             inline.size = block.size;
-                            inline.object_starts = block.object_starts_ptr();
                         }
                     }
                 }

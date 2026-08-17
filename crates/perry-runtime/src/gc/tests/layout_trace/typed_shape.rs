@@ -118,7 +118,7 @@ fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
 /// #6957 regression guard: the typed descriptor of a **shape-keyed** object must
 /// be visible to the layout query helpers.
 ///
-/// #6893 keys the canonical descriptor by the shared `keys_array` (`SHAPE_LAYOUTS`)
+/// #6893 shares the canonical descriptor by shape in `SHAPE_LAYOUTS`
 /// and deletes the per-object `TYPED_LAYOUTS` entry — so every class instance
 /// (the only objects that carry a keys_array) moved to the shared map. Every
 /// other test in this file allocates with `js_object_alloc` (class 0, no
@@ -265,7 +265,7 @@ fn test_shape_keyed_typed_layout_survives_layout_transfer() {
     assert!(
         layout_typed_intact_for_user(dst as usize),
         "a relocated shape-keyed object must keep GC_OBJ_TYPED_LAYOUT_INTACT — its \
-         SHAPE_LAYOUTS descriptor is keyed by the shared keys_array, which the copy carries"
+         SHAPE_LAYOUTS descriptor is keyed by the immutable ShapeId, which the copy carries"
     );
     assert!(
         layout_typed_raw_f64_slot_for_user(dst as usize, 0),

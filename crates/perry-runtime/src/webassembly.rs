@@ -140,6 +140,20 @@ const WASM_EXTERN_KIND_TABLE: u8 = 1;
 const WASM_EXTERN_KIND_MEMORY: u8 = 2;
 const WASM_EXTERN_KIND_GLOBAL: u8 = 3;
 
+type WasmImportCallback = unsafe extern "C" fn(
+    context: u64,
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    arg_kinds: *const u8,
+    arg_bits: *const u64,
+    arg_count: usize,
+    result_kinds: *const u8,
+    result_bits: *mut u64,
+    result_count: usize,
+) -> i32;
+
 extern "C" {
     fn perry_wasm_host_string_free(s: *mut c_char);
     fn perry_wasm_host_validate(bytes: *const u8, len: usize) -> i32;
@@ -157,6 +171,7 @@ extern "C" {
         out_name_len: *mut usize,
         out_kind: *mut u8,
     ) -> i32;
+    fn perry_wasm_host_module_export_func_arity(module: *mut c_void, index: usize) -> usize;
     fn perry_wasm_host_module_imports_len(module: *mut c_void) -> usize;
     fn perry_wasm_host_module_import_at(
         module: *mut c_void,
@@ -180,7 +195,13 @@ extern "C" {
         out_data: *mut *const u8,
         out_data_len: *mut usize,
     ) -> i32;
-    fn perry_wasm_host_instance_new(module: *mut c_void, out_err: *mut *mut c_char) -> *mut c_void;
+    fn perry_wasm_host_instance_new(
+        module: *mut c_void,
+        import_callback: Option<WasmImportCallback>,
+        import_context: u64,
+        out_err: *mut *mut c_char,
+    ) -> *mut c_void;
+    fn perry_wasm_host_instance_set_import_context(inst: *mut c_void, import_context: u64);
     #[allow(dead_code)]
     fn perry_wasm_host_instance_drop(inst: *mut c_void);
     fn perry_wasm_host_instance_memory_len(inst: *mut c_void) -> usize;
@@ -604,13 +625,109 @@ fn copy_instance_memory(inst: *mut c_void, buffer: f64) {
     }
 }
 
-extern "C" fn js_wasm_export_call_0(closure: *const crate::closure::ClosureHeader) -> f64 {
+unsafe extern "C" fn call_wasm_import(
+    context: u64,
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    arg_kinds: *const u8,
+    arg_bits: *const u64,
+    arg_count: usize,
+    result_kinds: *const u8,
+    result_bits: *mut u64,
+    result_count: usize,
+) -> i32 {
+    if module.is_null()
+        || name.is_null()
+        || (arg_count != 0 && (arg_kinds.is_null() || arg_bits.is_null()))
+        || (result_count != 0 && (result_kinds.is_null() || result_bits.is_null()))
+    {
+        return 0;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let imports = scope.root_nanbox_f64(f64::from_bits(context));
+    let imports_value = JSValue::from_bits(imports.get_nanbox_f64().to_bits());
+    if !imports_value.is_pointer() {
+        return 0;
+    }
+
+    let module_bytes = std::slice::from_raw_parts(module, module_len);
+    let module_key = scope.root_string_ptr(named_key(module_bytes));
+    let module_value = scope.root_nanbox_f64(crate::object::js_object_get_field_by_name_f64(
+        imports_value.as_pointer::<crate::object::ObjectHeader>(),
+        module_key.get_raw_const_ptr::<crate::string::StringHeader>(),
+    ));
+    let module_object = JSValue::from_bits(module_value.get_nanbox_f64().to_bits());
+    if !module_object.is_pointer() {
+        return 0;
+    }
+
+    let name_bytes = std::slice::from_raw_parts(name, name_len);
+    let name_key = scope.root_string_ptr(named_key(name_bytes));
+    let callback = scope.root_nanbox_f64(crate::object::js_object_get_field_by_name_f64(
+        module_object.as_pointer::<crate::object::ObjectHeader>(),
+        name_key.get_raw_const_ptr::<crate::string::StringHeader>(),
+    ));
+
+    let kinds = if arg_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(arg_kinds, arg_count)
+    };
+    let bits = if arg_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(arg_bits, arg_count)
+    };
+    let args: Vec<f64> = kinds
+        .iter()
+        .zip(bits.iter())
+        .map(|(kind, bits)| match *kind {
+            WASM_VAL_KIND_I32 => (*bits as u32 as i32) as f64,
+            WASM_VAL_KIND_I64 => (*bits as i64) as f64,
+            WASM_VAL_KIND_F32 => f32::from_bits(*bits as u32) as f64,
+            WASM_VAL_KIND_F64 => f64::from_bits(*bits),
+            _ => f64::from_bits(TAG_UNDEFINED),
+        })
+        .collect();
+    let result =
+        crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), args.len());
+
+    let result_kinds = if result_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(result_kinds, result_count)
+    };
+    let result_bits = if result_count == 0 {
+        &mut []
+    } else {
+        std::slice::from_raw_parts_mut(result_bits, result_count)
+    };
+    for (kind, bits) in result_kinds.iter().zip(result_bits.iter_mut()) {
+        *bits = match *kind {
+            WASM_VAL_KIND_I32 => result as i32 as u32 as u64,
+            WASM_VAL_KIND_I64 => result as i64 as u64,
+            WASM_VAL_KIND_F32 => (result as f32).to_bits() as u64,
+            WASM_VAL_KIND_F64 => result.to_bits(),
+            _ => 0,
+        };
+    }
+    1
+}
+
+fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args: &[f64]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst = crate::closure::js_closure_get_capture_f64(closure, 0) as usize as *mut c_void;
     let name = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
     let buffer = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
     let instance = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 3));
-    let result = call_export_n(nanbox_pointer_raw(inst), name.get_nanbox_f64(), &[]);
+    let imports = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 4));
+    unsafe {
+        perry_wasm_host_instance_set_import_context(inst, imports.get_nanbox_f64().to_bits())
+    };
+    let result = call_export_n(nanbox_pointer_raw(inst), name.get_nanbox_f64(), args);
     copy_instance_memory(inst, buffer.get_nanbox_f64());
     let mut exit_code = 0;
     if unsafe { perry_wasm_host_instance_take_exit_code(inst, &mut exit_code) } != 0 {
@@ -624,27 +741,75 @@ extern "C" fn js_wasm_export_call_0(closure: *const crate::closure::ClosureHeade
     }
 }
 
-fn make_export_function(inst: *mut c_void, name: &[u8], memory_buffer: f64, instance: f64) -> f64 {
+extern "C" fn js_wasm_export_call_0(closure: *const crate::closure::ClosureHeader) -> f64 {
+    call_captured_wasm_export(closure, &[])
+}
+
+extern "C" fn js_wasm_export_call_1(closure: *const crate::closure::ClosureHeader, a: f64) -> f64 {
+    call_captured_wasm_export(closure, &[a])
+}
+
+extern "C" fn js_wasm_export_call_2(
+    closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+) -> f64 {
+    call_captured_wasm_export(closure, &[a, b])
+}
+
+extern "C" fn js_wasm_export_call_3(
+    closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+    c: f64,
+) -> f64 {
+    call_captured_wasm_export(closure, &[a, b, c])
+}
+
+extern "C" fn js_wasm_export_call_4(
+    closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+) -> f64 {
+    call_captured_wasm_export(closure, &[a, b, c, d])
+}
+
+fn make_export_function(
+    inst: *mut c_void,
+    name: &[u8],
+    arity: usize,
+    memory_buffer: f64,
+    instance: f64,
+    imports: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let memory_buffer = scope.root_nanbox_f64(memory_buffer);
     let instance = scope.root_nanbox_f64(instance);
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        js_wasm_export_call_0 as *const u8,
-        4,
-    ));
+    let imports = scope.root_nanbox_f64(imports);
+    let (func_ptr, declared_arity) = match arity {
+        0 => (js_wasm_export_call_0 as *const u8, 0),
+        1 => (js_wasm_export_call_1 as *const u8, 1),
+        2 => (js_wasm_export_call_2 as *const u8, 2),
+        3 => (js_wasm_export_call_3 as *const u8, 3),
+        _ => (js_wasm_export_call_4 as *const u8, 4),
+    };
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 5));
     if closure
         .get_raw_mut_ptr::<crate::closure::ClosureHeader>()
         .is_null()
     {
         return nanbox_undefined();
     }
-    crate::closure::js_register_closure_arity(js_wasm_export_call_0 as *const u8, 0);
+    crate::closure::js_register_closure_arity(func_ptr, declared_arity);
     let name_value = scope.root_nanbox_f64(string_value(name));
     let closure_ptr = closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
     crate::closure::js_closure_set_capture_f64(closure_ptr, 0, inst as usize as f64);
     crate::closure::js_closure_set_capture_f64(closure_ptr, 1, name_value.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure_ptr, 2, memory_buffer.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure_ptr, 3, instance.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure_ptr, 4, imports.get_nanbox_f64());
     crate::object::set_bound_native_closure_name(
         closure_ptr,
         std::str::from_utf8(name).unwrap_or("wasm"),
@@ -652,8 +817,9 @@ fn make_export_function(inst: *mut c_void, name: &[u8], memory_buffer: f64, inst
     crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
 
-fn make_instance_result(module: *mut c_void, inst: *mut c_void) -> f64 {
+fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
+    let imports = scope.root_nanbox_f64(imports);
     let memory_len = unsafe { perry_wasm_host_instance_memory_len(inst) };
     let memory_buffer = scope.root_nanbox_f64(if memory_len == 0 {
         nanbox_undefined()
@@ -682,8 +848,10 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void) -> f64 {
             WASM_EXTERN_KIND_FUNCTION => make_export_function(
                 inst,
                 name,
+                unsafe { perry_wasm_host_module_export_func_arity(module, index) },
                 memory_buffer.get_nanbox_f64(),
                 object_value(instance.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
+                imports.get_nanbox_f64(),
             ),
             WASM_EXTERN_KIND_MEMORY => {
                 let memory = object_set(
@@ -711,11 +879,9 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void) -> f64 {
 
     let result = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let module_value = scope.root_nanbox_f64(make_module_object(module));
-    let result_ptr = object_set(
-        result.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        b"module",
-        module_value.get_nanbox_f64(),
-    );
+    let result_ptr = result.with_mut_ptr(|r: *mut crate::object::ObjectHeader| {
+        object_set(r, b"module", module_value.get_nanbox_f64())
+    });
     result.set_raw_mut_ptr(result_ptr);
     let result_ptr = object_set(
         result.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
@@ -723,14 +889,16 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void) -> f64 {
         object_value(instance.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
     );
     result.set_raw_mut_ptr(result_ptr);
-    object_value(result.get_raw_mut_ptr::<crate::object::ObjectHeader>())
+    result.with_mut_ptr(|r: *mut crate::object::ObjectHeader| object_value(r))
 }
 
 /// `WebAssembly.instantiate(bytes, imports?)` returns the standard instance
-/// result shape. The host links imported functions by module/name; the
-/// imports object is already evaluated by codegen and kept for API parity.
+/// result shape. Imported numeric functions are resolved from the JS imports
+/// object by module/name and called synchronously by the wasmi host.
 #[no_mangle]
-pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, _imports_jsval: f64) -> f64 {
+pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let imports = scope.root_nanbox_f64(imports_jsval);
     let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
         return rejected_promise_value(wasm_type_error_value(
             "WebAssembly.instantiate: argument must be a Uint8Array or ArrayBuffer",
@@ -746,7 +914,14 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, _imports_jsval: f
         ));
     }
     let mut err2: *mut c_char = std::ptr::null_mut();
-    let inst = unsafe { perry_wasm_host_instance_new(module, &mut err2) };
+    let inst = unsafe {
+        perry_wasm_host_instance_new(
+            module,
+            Some(call_wasm_import),
+            imports.get_nanbox_f64().to_bits(),
+            &mut err2,
+        )
+    };
     if inst.is_null() {
         unsafe { perry_wasm_host_module_drop(module) };
         return rejected_promise_value(wasm_error_value_from_host(
@@ -755,7 +930,7 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, _imports_jsval: f
             "WebAssembly.instantiate(): instantiation failed",
         ));
     }
-    make_instance_result(module, inst)
+    make_instance_result(module, inst, imports.get_nanbox_f64())
 }
 
 /// `WebAssembly.callExport(handle, name, ...args)` — invoke an exported

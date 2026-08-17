@@ -647,16 +647,23 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         }
     }
 
-    // Create a Perry string for the key
-    let key_ptr =
-        crate::string::js_string_from_bytes(property_name.as_ptr(), property_name.len() as u32);
+    // #8220: root the receiver across the key-string allocation. `ptr` was
+    // extracted at the top of this function from the NaN-boxed `obj_value` and
+    // is a raw `*const` to a nursery-eligible heap object. `js_string_from_bytes`
+    // allocates a fresh StringHeader on every call and can trigger a copying
+    // minor that evacuates the receiver. Without rooting, `ptr` becomes a stale
+    // from-space pointer and the `js_object_get_field_by_name_f64` call below
+    // dereferences retired memory — the #8220 class (raw pointer in a Rust
+    // frame local, invisible to the precise root map).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_const_ptr(ptr as *const crate::object::ObjectHeader);
+    let (key_ptr, obj_ptr) = receiver.across_const(|| {
+        crate::string::js_string_from_bytes(property_name.as_ptr(), property_name.len() as u32)
+    });
 
-    // Call native object property access
+    // Call native object property access with the post-collection pointer.
 
-    crate::object::js_object_get_field_by_name_f64(
-        ptr as *const crate::object::ObjectHeader,
-        key_ptr,
-    )
+    crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr)
 }
 
 /// Dynamic method dispatch for Map/Set collection types.

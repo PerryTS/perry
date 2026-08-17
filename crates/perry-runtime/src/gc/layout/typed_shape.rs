@@ -83,14 +83,43 @@ unsafe fn init_typed_shape_layout(
         return;
     }
     let obj_header = user_ptr as *const crate::object::ObjectHeader;
-    let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
-    // #8113: 0, not a second (eager) descriptor probe.
-    let object_slot_count = shape_descriptor
-        .map(|descriptor| descriptor.live_inline_slot_count as usize)
-        .unwrap_or(0);
-    if object_slot_count != slot_count {
-        layout_set_typed_unknown(header, user_ptr);
-        return;
+    let mut shape_id = crate::object::shapes::object_shape_stamp(obj_header);
+
+    // #8289: ShapeIds are immutable, process-unique names for the exact live
+    // slot bound as well as the ordered keys. Once this tuple has passed the
+    // authoritative descriptor check, its memo entry can replay that proof
+    // for every sibling without hashing the ShapeTable again. A miss still
+    // resolves the descriptor and performs the same downgrade as before.
+    let memo = if shape_id == 0 {
+        None
+    } else {
+        shape_install::hit(
+            shape_id,
+            slot_count,
+            raw_f64_words,
+            raw_f64_word_count,
+            pointer_words,
+            pointer_word_count,
+        )
+    };
+    if memo.is_none() {
+        #[cfg(test)]
+        shape_install::note_descriptor_probe();
+        let shape_descriptor = crate::object::shapes::object_shape_descriptor(obj_header);
+        let object_slot_count = shape_descriptor
+            .map(|descriptor| descriptor.live_inline_slot_count as usize)
+            .unwrap_or(0);
+        if object_slot_count != slot_count {
+            layout_set_typed_unknown(header, user_ptr);
+            return;
+        }
+        // Keyless `js_object_alloc` objects deliberately use per-object
+        // descriptors: without property names there is no shared semantic
+        // shape to own one. Preserve that contract even though these objects
+        // are now birth-stamped for their authoritative live-slot bound.
+        if shape_descriptor.is_none_or(|descriptor| descriptor.keys == 0) {
+            shape_id = 0;
+        }
     }
 
     if slot_count != 0 && proof == TypedShapeProof::ValidateSlots {
@@ -134,25 +163,8 @@ unsafe fn init_typed_shape_layout(
     // program constants. See `gc::shape_install` for the full staleness
     // argument.
     //
-    // The receiver-kind guards are already discharged above (the low
-    // addresses were rejected, `GcLayoutSlotKind::ObjectFields` was checked),
-    // so read the field directly rather than re-walking the header.
-    let keys = shape_descriptor
-        .map(|descriptor| descriptor.keys as usize)
-        .unwrap_or((*obj_header).keys_array as usize);
-    let memo = if keys == 0 {
-        None
-    } else {
-        shape_install::hit(
-            keys,
-            slot_count,
-            raw_f64_words,
-            raw_f64_word_count,
-            pointer_words,
-            pointer_word_count,
-        )
-    };
     if let Some(pointer_mask_empty) = memo {
+        shape_install::note_hit();
         header_set_typed_layout_intact(header);
         if pointer_mask_empty {
             set_layout_state(header, GC_LAYOUT_POINTER_FREE);
@@ -166,7 +178,7 @@ unsafe fn init_typed_shape_layout(
     install_typed_shape_layout_slow(
         user_ptr,
         header,
-        keys,
+        shape_id,
         slot_count,
         raw_f64_words,
         raw_f64_word_count,
@@ -194,7 +206,7 @@ unsafe fn init_typed_shape_layout(
 unsafe fn install_typed_shape_layout_slow(
     user_ptr: usize,
     header: *mut GcHeader,
-    keys: usize,
+    shape_id: u32,
     slot_count: usize,
     raw_f64_words: *const u64,
     raw_f64_word_count: u32,
@@ -224,17 +236,17 @@ unsafe fn install_typed_shape_layout_slow(
         raw_f64_mask: LayoutSlotMask::from_words(raw_f64_slice),
         pointer_mask: pointer_mask.clone(),
     };
-    // #6893: try the O(shapes) shared shape descriptor (keyed by the canonical
-    // keys_array) before per-object storage. `shape_layout_keyed_enabled()`
+    // #6893: try the O(shapes) shared shape descriptor (keyed by immutable
+    // runtime ShapeId) before per-object storage. `shape_layout_keyed_enabled()`
     // gates this and therefore also gates the memo above: the memo is only
     // ever populated from a successful install here, so with the knob off the
     // table stays empty and every lookup misses.
-    let keys = if shape_layout_keyed_enabled() {
-        keys
+    let shape_id = if shape_layout_keyed_enabled() {
+        shape_id
     } else {
         0
     };
-    if keys != 0 && shape_install_shared(keys, header, &descriptor) {
+    if shape_id != 0 && shape_install_shared(shape_id, header, &descriptor) {
         // The common path for every object literal: the shape already owns a
         // canonical descriptor, so this object needs no per-object record at
         // all. `layout_forget_object` skips the hash entirely when the maps
@@ -244,7 +256,7 @@ unsafe fn install_typed_shape_layout_slow(
         // the memo; `words_are_empty` is pinned equal to it by
         // `shape_install::tests::mask_word_helpers_agree_with_layout_slot_mask`.
         shape_install::record(
-            keys,
+            shape_id,
             slot_count,
             raw_f64_words,
             raw_f64_word_count,

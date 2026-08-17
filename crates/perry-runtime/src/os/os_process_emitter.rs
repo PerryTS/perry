@@ -48,6 +48,32 @@ thread_local! {
     static PROCESS_EMITTER: RefCell<ProcessEmitter> = RefCell::new(ProcessEmitter::new());
 }
 
+/// #8220: GC root scanner for `PROCESS_EMITTER`. Each `ProcessListener` holds
+/// raw `*const ClosureHeader` pointers (`callback`, `raw_wrapper`) that the
+/// precise root map cannot see — they live in a TLS `HashMap`, not in a
+/// codegen root slot or a registered global. Without this scanner, a copying
+/// minor that evacuates a listener closure leaves the raw pointer pointing at
+/// retired from-space, and the next `emit` dereferences stale memory.
+pub(crate) fn process_emitter_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROCESS_EMITTER.with(|emitter| {
+        let mut emitter = emitter.borrow_mut();
+        for listeners in emitter.events.values_mut() {
+            for listener in listeners.iter_mut() {
+                visitor.visit_raw_const_ptr_slot(&mut listener.callback);
+                visitor.visit_raw_const_ptr_slot(&mut listener.raw_wrapper);
+            }
+        }
+    });
+}
+
+/// Register the process-emitter root scanner (called once during runtime init).
+pub(crate) fn register_process_emitter_root_scanner() {
+    crate::gc::gc_register_mutable_root_scanner_named(
+        "process_emitter",
+        process_emitter_root_scanner,
+    );
+}
+
 pub(crate) fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
     if event_ptr.is_null() {
         return None;

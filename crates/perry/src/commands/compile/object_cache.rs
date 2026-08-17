@@ -1058,6 +1058,14 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // #8175 — `preserve_nonecc` on recursion-participating specialized
+    // clones: `=0`/`off`/`false` keeps the default C convention, which
+    // changes the emitted IR / .o bytes; the knob exists precisely for
+    // single-binary A/B arms, so it must never let those arms share objects.
+    h.field(
+        "env_spec_preserve_none",
+        env_var("PERRY_SPEC_PRESERVE_NONE").as_deref().unwrap_or(""),
+    );
     // Representation-selection Phase 3b — shape-proven Ptr<Shape> locals:
     // `=0`/`off`/`false` reverts proven object locals from bare fixed-offset
     // access (no guard diamond, unguarded direct method calls) back to the

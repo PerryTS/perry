@@ -301,11 +301,38 @@ run_warm_soak() {
   done
   [[ "$ready" == "1" ]] || fail "warm soak did not become ready"
 
-  local failed_iterations=()
-  local pass
+  # #8286: CLASSIFY each failing pass from the evidence in the host log, never
+  # from the verifier's exit code alone. Two very different things make
+  # `verify.mjs` exit non-zero, and the first version of this arm called both
+  # of them "#8163 residual":
+  #
+  #   * the residual — the server returns an EMPTY BODY. The verifier reports
+  #     `Unexpected end of JSON input`, and the host log carries
+  #     `TypeError: value is not a function` and Next's `E180`.
+  #   * a client timeout — `UND_ERR_HEADERS_TIMEOUT`. The server was merely
+  #     slow; its log is clean and its answer, when it arrives, is correct.
+  #
+  # The second happens on its own in the saturated regime this arm exists to
+  # reach (#8213: one pass ran 644 copying minors against a steady 84 and 8 of
+  # its 21 concurrent requests timed out), so counting exits manufactures false
+  # residual reports exactly where the arm is most likely to be used. The arm
+  # was written so a GREEN run could not imply more than it proved; its first
+  # real failure was the mirror image, a RED verdict that was not true.
+  local residual_passes=() timeout_passes=() other_passes=()
+  local pass before_lines slice
   for pass in $(seq 1 "$passes"); do
+    before_lines="$(wc -l < "$log")"
     if ! BASE_URL="http://127.0.0.1:$port" node verify.mjs >>"$log" 2>&1; then
-      failed_iterations+=("$pass")
+      # Only the lines this pass appended — the host writes to the same log,
+      # so the slice carries both sides of the exchange.
+      slice="$(tail -n +$((before_lines + 1)) "$log")"
+      if grep -qE 'Unexpected end of JSON input|TypeError: value is not a function|failed to pipe response' <<<"$slice"; then
+        residual_passes+=("$pass")
+      elif grep -qE 'UND_ERR_[A-Z_]+|HeadersTimeoutError|BodyTimeoutError' <<<"$slice"; then
+        timeout_passes+=("$pass(+$(grep -c '\[gc-copy-minor\] ran' <<<"$slice") minors)")
+      else
+        other_passes+=("$pass")
+      fi
     fi
     kill -0 "$SERVER_PID" 2>/dev/null || fail "warm soak process died at pass $pass"
   done
@@ -315,14 +342,28 @@ run_warm_soak() {
   minors="$(grep -c '\[gc-copy-minor\] ran' "$log" || true)"
   local type_errors
   type_errors="$(grep -c 'TypeError: value is not a function' "$log" || true)"
-  echo "  [warm soak] passes=$passes failures=${#failed_iterations[@]} copying_minors=$minors host_type_errors=$type_errors"
+  echo "  [warm soak] passes=$passes copying_minors=$minors host_type_errors=$type_errors"
+  echo "  [warm soak] residual=${#residual_passes[@]} timeout=${#timeout_passes[@]} other=${#other_passes[@]}"
+
+  # A client timeout is NOT this arm's subject and must not fail it — that is
+  # #8286, and failing on latency would make the arm unusable in the very
+  # regime it exists to reach. It is still reported loudly, with the offending
+  # pass's collection count, because a warm server slow enough to blow a
+  # default HTTP client timeout is a user-visible failure and belongs to #8213.
+  if (( ${#timeout_passes[@]} > 0 )); then
+    echo "  [warm soak] NOTE: ${#timeout_passes[@]} pass(es) lost requests to a CLIENT timeout with a clean"
+    echo "               host log — a stall, not the residual. See #8213: ${timeout_passes[*]}"
+  fi
 
   # Order matters: an OBSERVED failure is reported even when the liveness
   # counter looks wrong, because a real broken request outranks a complaint
   # about the instrument. Reversing these two once masked a genuine failure
   # behind "exercised nothing" while this arm was being tested.
-  if (( ${#failed_iterations[@]} > 0 || type_errors > 0 )); then
-    fail "warm soak: ${#failed_iterations[@]} failing pass(es) [${failed_iterations[*]}], $type_errors host TypeError(s) — #8163 residual"
+  if (( ${#residual_passes[@]} > 0 || type_errors > 0 )); then
+    fail "warm soak: ${#residual_passes[@]} pass(es) with an empty body [${residual_passes[*]}], $type_errors host TypeError(s) — #8163 residual"
+  fi
+  if (( ${#other_passes[@]} > 0 )); then
+    fail "warm soak: ${#other_passes[@]} pass(es) failed for an UNCLASSIFIED reason [${other_passes[*]}] — read $log; do not assume a cause"
   fi
 
   # A soak that ran no collections proves nothing about a GC holder, so a clean

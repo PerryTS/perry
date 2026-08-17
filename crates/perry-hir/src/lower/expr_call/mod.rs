@@ -19,8 +19,38 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
+use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
+
+fn is_typed_array_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name)
+            if matches!(
+                name.as_str(),
+                "Int8Array"
+                    | "Int16Array"
+                    | "Int32Array"
+                    | "Uint8Array"
+                    | "Uint8ClampedArray"
+                    | "Uint16Array"
+                    | "Uint32Array"
+                    | "Float16Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            )
+    )
+}
+
+fn typed_array_lacks_array_method(name: &str) -> bool {
+    matches!(
+        name,
+        "flat" | "flatMap" | "push" | "pop" | "shift" | "unshift" | "splice" | "toSpliced"
+    )
+}
 
 mod array_only_methods;
 mod crypto;
@@ -59,7 +89,7 @@ use intrinsics::{
     try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal,
-    try_strict_eval_arguments_assignment,
+    try_strict_eval_arguments_assignment, validate_native_scalar_conversion_call,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -223,6 +253,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = try_native_arena_intrinsics(ctx, call, has_spread)? {
         return Ok(expr);
     }
+    validate_native_scalar_conversion_call(ctx, call, has_spread)?;
     if let Some(expr) = try_iife_call_rewrite(ctx, call, has_spread)? {
         return Ok(expr);
     }

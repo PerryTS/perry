@@ -8,6 +8,8 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
+use super::typed_array_lacks_array_method;
+
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
 /// [`chain_roots_at_stream`].
@@ -338,6 +340,17 @@ pub(super) fn try_array_only_methods(
         if let ast::Expr::Member(member) = expr.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
+                // #8138: these Array-only names may only use dense Array HIR
+                // folds when the receiver is positively known to be an Array.
+                // Unknown and typed-array receivers need real property lookup.
+                if typed_array_lacks_array_method(method_name) {
+                    let recv_ty = crate::lower_types::infer_type_from_expr(&member.obj, ctx);
+                    let provably_array = matches!(recv_ty, Type::Array(_) | Type::Tuple(_))
+                        || matches!(&recv_ty, Type::Generic { base, .. } if base == "Array");
+                    if !provably_array {
+                        return Ok(Err(args));
+                    }
+                }
                 // #6718: the `args` vector holds the EVALUATED spread expression
                 // with the spread token dropped, so any arm reading a positional
                 // slot (callback, comparator, index, search value, …) would bind

@@ -110,6 +110,23 @@ const CLEAN: TempFilePolicy = TempFilePolicy {
     debug_symbols: false,
 };
 
+fn compile_ll_to_object_in(
+    tmp_dir: &Path,
+    ll_text: &str,
+    target_triple: Option<&str>,
+    policy: TempFilePolicy,
+    native_roots: bool,
+) -> Result<Vec<u8>> {
+    compile_ll_to_object_in_with_retention(
+        tmp_dir,
+        ll_text,
+        target_triple,
+        policy,
+        native_roots,
+        &FailureRetention::new(),
+    )
+}
+
 #[test]
 fn successful_compile_leaves_nothing_behind() {
     // THE #7144 regression test. Before the fix each compile left one
@@ -217,6 +234,119 @@ fn failed_compile_keeps_the_ll_for_diagnosis() {
         message.contains(&surviving[0].display().to_string()),
         "the failure must name the file it left: {message}"
     );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn only_the_first_failed_compile_keeps_ir() {
+    use std::thread;
+
+    let Some(root) = temp_root_if_clang_available("failure-cap") else {
+        return;
+    };
+    let retention = FailureRetention::new();
+    let errors = thread::scope(|scope| {
+        ["not LLVM IR: first\n", "not LLVM IR: second\n"]
+            .into_iter()
+            .map(|ir| {
+                let root = root.clone();
+                let retention = &retention;
+                scope.spawn(move || {
+                    compile_ll_to_object_in_with_retention(&root, ir, None, CLEAN, false, retention)
+                        .expect_err("invalid module must fail")
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| format!("{:#}", handle.join().unwrap()))
+            .collect::<Vec<_>>()
+    });
+
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.contains("LLVM IR left at:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.contains("LLVM IR not retained:"))
+            .count(),
+        1
+    );
+    let surviving = ll_files_under(&root);
+    assert_eq!(
+        surviving.len(),
+        1,
+        "one process-wide diagnostic sample is enough: {surviving:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn keep_ir_bypasses_the_failure_cap() {
+    let Some(root) = temp_root_if_clang_available("failure-keep") else {
+        return;
+    };
+    let retention = FailureRetention::new();
+    let policy = TempFilePolicy {
+        keep: true,
+        debug_symbols: false,
+    };
+    for ir in ["not LLVM IR: first\n", "not LLVM IR: second\n"] {
+        let error =
+            compile_ll_to_object_in_with_retention(&root, ir, None, policy, false, &retention)
+                .expect_err("invalid module must fail");
+        assert!(format!("{error:#}").contains("LLVM IR left at:"));
+    }
+    assert_eq!(ll_files_under(&root).len(), 2);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_reaper_removes_only_dead_unkept_scratch() {
+    let root = env::temp_dir().join(format!(
+        "perry_linker_test_reap_{}_{:x}",
+        std::process::id(),
+        TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let live = root.join(format!("perry_llvm_scratch_{:x}_0", std::process::id()));
+    let dead = root.join("perry_llvm_scratch_ffffffff_0");
+    let kept = root.join("perry_llvm_scratch_ffffffff_1");
+    let legacy_kept = root.join("perry_llvm_scratch_ffffffff_2");
+    let unrelated = root.join("perry_llvm_scratch_not-a-pid_2");
+    for dir in [&live, &dead, &kept, &legacy_kept, &unrelated] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(kept.join(".perry-keep"), b"").unwrap();
+    fs::write(legacy_kept.join("old.compile-plan.json"), b"{}").unwrap();
+
+    assert_eq!(
+        linker_temp::reap_stale_llvm_scratch(&root, std::time::Duration::from_secs(60 * 60)),
+        0,
+        "dead but recent scratch is not stale yet"
+    );
+    assert_eq!(
+        linker_temp::reap_stale_llvm_scratch(&root, std::time::Duration::ZERO),
+        1
+    );
+    assert!(live.is_dir(), "a live owner's scratch must survive");
+    assert!(
+        !dead.exists(),
+        "a dead owner's stale scratch must be reaped"
+    );
+    assert!(kept.is_dir(), "explicit KEEP_IR output must survive");
+    assert!(
+        legacy_kept.is_dir(),
+        "pre-marker KEEP_IR output must survive"
+    );
+    assert!(unrelated.is_dir(), "unrecognized names must survive");
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -497,8 +627,10 @@ fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
         return;
     };
     for nth in 0..3 {
-        let bytes = compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN, true)
-            .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
+        let retention = FailureRetention::new();
+        let bytes =
+            compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN, true, &retention)
+                .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
         assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
         assert_eq!(
             entries(&root),

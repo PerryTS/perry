@@ -16,7 +16,9 @@ use crate::lower_string_method::{
     is_known_string_method_name, lower_string_method, lower_string_method_from_proven_box,
 };
 use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
-use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
+use crate::type_analysis::{
+    is_array_expr, is_string_expr, is_typed_array_expr, receiver_class_name,
+};
 use crate::types::{DOUBLE, I1, I64};
 
 mod dynamic_dispatch;
@@ -33,6 +35,7 @@ mod static_dispatch;
 pub(crate) use helpers::{
     class_chain_has_field_named, is_array_only_method_name, is_date_receiver,
     is_inherited_object_prototype_method, resolve_static_dispatch_cls, string_only_method_arity_ok,
+    typed_array_lacks_array_method,
 };
 
 /// Preserve the old String-method fast path for an unproven receiver without
@@ -161,7 +164,10 @@ pub fn try_lower_property_get_method_call(
     // `trim`/`split`/`charAt` method (Zod schemas are the reported case).
     // Keep the static fast path positive-proof-only; the runtime dispatcher
     // below handles both genuine Any-typed strings and user methods.
-    if is_array_expr(ctx, object) && !is_inherited_object_prototype_method(property) {
+    if is_array_expr(ctx, object)
+        && !is_inherited_object_prototype_method(property)
+        && !(is_typed_array_expr(ctx, object) && typed_array_lacks_array_method(property))
+    {
         return Ok(Some(lower_array_method(ctx, object, property, args)?));
     }
 

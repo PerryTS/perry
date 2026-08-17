@@ -126,16 +126,19 @@ impl CopyingPointerSet {
         ) {
             return None;
         }
-        // Header fields alone cannot distinguish a genuine allocation from
-        // payload bytes that happen to encode the same type, flags and size.
-        // The per-block bitmap is allocation-authored evidence that this exact
-        // address is an object boundary; test it before dereferencing bytes as
-        // a `GcHeader`.
-        if !crate::arena::arena_header_is_object_start(header_addr, range_base, object_starts) {
-            return None;
-        }
         let header = header_addr as *mut GcHeader;
         if unsafe { !plausible_gc_header(header, true) } {
+            return None;
+        }
+        // An aligned interior pointer can only fabricate an arena type whose
+        // numeric tag is itself 8-aligned. Map (8) is the sole such arena
+        // type, and its rewrite descriptor follows an external entries
+        // pointer. Require allocation-authored boundary evidence for that
+        // dangerous arm. Other arena objects need no bitmap stamp, keeping
+        // their allocation path to the bump and header stores alone.
+        if unsafe { (*header).obj_type == crate::gc::GC_TYPE_MAP }
+            && !crate::arena::arena_header_is_object_start(header_addr, range_base, object_starts)
+        {
             return None;
         }
         // The two survivor-space readings are TLS loads, and Darwin has no
@@ -250,6 +253,13 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
         Some(info) => info,
         None => return false,
     };
+    // A multiple-of-eight malloc-only type tag (currently NativePodView = 16)
+    // can appear in aligned payload bytes too. It can never be a legitimate
+    // arena header, so reject it before descriptor dispatch rather than
+    // expanding the exact-start set beyond the one arena-resident risky type.
+    if arena && matches!(info.allocation_policy, GcAllocationPolicy::Malloc) {
+        return false;
+    }
     let size = (*header).size as usize;
     if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
         return false;

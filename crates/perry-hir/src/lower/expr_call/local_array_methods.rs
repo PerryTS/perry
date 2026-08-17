@@ -7,6 +7,7 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use super::url_search_params::build_url_search_params_method_call;
+use super::{is_typed_array_type, typed_array_lacks_array_method};
 use crate::ir::*;
 
 use super::super::{lower_expr, LoweringContext};
@@ -18,25 +19,8 @@ use super::super::{lower_expr, LoweringContext};
 /// rewritten into the corresponding `Expr::Array*` fast path. TypedArray
 /// `Named` types are deliberately treated as arrays (not class instances).
 fn receiver_is_class_instance(recv_ty: Option<&Type>) -> bool {
-    let is_typed_array = |n: &str| {
-        matches!(
-            n,
-            "Int8Array"
-                | "Int16Array"
-                | "Int32Array"
-                | "Uint8Array"
-                | "Uint8ClampedArray"
-                | "Uint16Array"
-                | "Uint32Array"
-                | "Float16Array"
-                | "Float32Array"
-                | "Float64Array"
-                | "BigInt64Array"
-                | "BigUint64Array"
-        )
-    };
     match recv_ty {
-        Some(Type::Named(n)) => !is_typed_array(n),
+        Some(ty @ Type::Named(_)) => !is_typed_array_type(ty),
         Some(Type::Generic { base, .. }) => base != "Array",
         _ => false,
     }
@@ -120,6 +104,14 @@ pub(super) fn try_local_array_methods(
                 // includes, split) — those are handled by the general dispatch which
                 // checks is_string at codegen time.
                 let type_info = ctx.lookup_local_type(&arr_name);
+                // #8138: these methods exist on Array.prototype but not on
+                // %TypedArray%.prototype. Preserve ordinary property lookup so
+                // a user-installed method wins and an absent one throws.
+                if type_info.is_some_and(is_typed_array_type)
+                    && typed_array_lacks_array_method(method_name)
+                {
+                    return Ok(Err(args));
+                }
                 // `Union<String, Void>` (e.g. `JSON.stringify` return type) is
                 // a possible-string — must NOT be treated as definitely not-a-
                 // string, otherwise `.indexOf`/`.includes` get routed through

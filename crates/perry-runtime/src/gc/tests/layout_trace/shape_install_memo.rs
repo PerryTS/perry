@@ -8,7 +8,7 @@
 //! 1. **It fires.** #7525's first commit was worth nothing because its fast
 //!    path hit once in 40 million calls, and that was found by counting, not by
 //!    reasoning. [`memo_fires_on_every_repeat_construction_of_one_shape`]
-//!    counts.
+//!    counts both memo hits and authoritative descriptor probes.
 //! 2. **It decides nothing.** The header declaration is re-derived from the
 //!    mask words and the object's own field bits on every construction, hit or
 //!    miss — [`a_memo_hit_produces_the_same_header_state_as_the_install`] and
@@ -139,6 +139,12 @@ fn memo_fires_on_every_repeat_construction_of_one_shape() {
         hits,
         (INSTANCES - 1) as u64,
         "every construction after the first must take the memo fast path"
+    );
+    assert_eq!(
+        shape_install::counters::descriptor_probes(),
+        1,
+        "only the first construction may hash the authoritative shape table; \
+         repeat ShapeIds must reuse its validated slot-count proof"
     );
 }
 

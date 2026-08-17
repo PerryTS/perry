@@ -803,7 +803,7 @@ pub(super) fn compile_closure(
             .return_shape_class(func_id)
             .is_some(),
     );
-    let native_facts = crate::collectors::collect_native_region_fact_graph(
+    let mut native_facts = crate::collectors::collect_native_region_fact_graph(
         body,
         &[],
         &flat_const_ids,
@@ -817,6 +817,12 @@ pub(super) fn compile_closure(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
     );
+    if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
+        native_facts
+            .shape_stability
+            .shape_proven_ptr_locals
+            .extend(callback_shapes.clone());
+    }
 
     // Representation-selection context gates (see codegen/function.rs).
     // Async-step closures (CPS-rewritten `async` closures — the rewrite clears

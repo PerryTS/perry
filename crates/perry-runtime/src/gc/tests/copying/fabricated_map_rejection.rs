@@ -8,8 +8,8 @@
 //!
 //! For an 8-aligned arena pointer near `0x400_0000_0000`, the fabricated
 //! `GcHeader` supplies:
-//!   * `obj_type` = low byte = 0x08 = `GC_TYPE_MAP` (the only valid type
-//!     that is a multiple of 8)
+//!   * `obj_type` = low byte = 0x08 = `GC_TYPE_MAP` (the only arena-eligible
+//!     type that is a multiple of 8)
 //!   * `size` = top 32 bits ≈ 1024 (always passes the `[8, 2^34]` range
 //!     check in the old `plausible_gc_header`)
 //!   * `gc_flags` = second byte, needs `GC_FLAG_ARENA` (0x02) — ~coin flip
@@ -17,8 +17,8 @@
 //! The size check rejects the observed `size ≈ 1024` corruption, but payload
 //! bytes can also encode the genuine Map total of 24. The complete fix is the
 //! arena's allocation-authored object-start bitmap: `classify_arena` requires
-//! the candidate header address to be recorded there before it reads header
-//! fields.
+//! a candidate Map header address to be recorded there before dispatching its
+//! rewrite descriptor. Other arena types do not need to stamp the bitmap.
 
 use super::*;
 
@@ -127,6 +127,20 @@ fn test_plausible_gc_header_still_accepts_variable_size_types() {
     assert!(
         unsafe { plausible_gc_header(&mut string_header as *mut GcHeader, true) },
         "variable-size type (string) with arbitrary size must be plausible"
+    );
+}
+
+#[test]
+fn test_plausible_gc_header_rejects_malloc_only_type_in_arena() {
+    let mut fabricated = GcHeader {
+        obj_type: GC_TYPE_NATIVE_POD_VIEW,
+        gc_flags: GC_FLAG_ARENA,
+        _reserved: 0,
+        size: 32,
+    };
+    assert!(
+        !unsafe { plausible_gc_header(&mut fabricated as *mut GcHeader, true) },
+        "a malloc-only descriptor must never dispatch from arena payload bytes"
     );
 }
 
