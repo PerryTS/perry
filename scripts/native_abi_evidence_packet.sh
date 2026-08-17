@@ -306,9 +306,13 @@ echo "python: $PYTHON_BIN"
 
 PERRY_BIN_RESOLVED="$(resolve_perry)"
 if [[ -z "$PERRY_ARG" ]]; then
-  packet_build=(cargo build -p perry -p perry-runtime)
+  # #8225: `perry-runtime` is rlib-only since #5422 — the .a this packet
+  # audits comes from the `perry-runtime-static` wrapper crate. Building the
+  # bare crate produced no archive, so check_runtime_symbols failed on every
+  # run this script ever had (it was continue-on-error + tag-gated).
+  packet_build=(cargo build -p perry -p perry-runtime-static)
   case "$PERRY_BIN_RESOLVED" in
-    "$ROOT/target/release/"*) packet_build=(cargo build --release -p perry -p perry-runtime) ;;
+    "$ROOT/target/release/"*) packet_build=(cargo build --release -p perry -p perry-runtime-static) ;;
   esac
   run_logged "packet" "build" "$OUT_ABS/logs/build.log" "${packet_build[@]}"
   PERRY_BIN_RESOLVED="$(resolve_perry)"
@@ -328,9 +332,10 @@ RUNTIME_ARCHIVE_RESOLVED="$(resolve_runtime_archive "$PERRY_BIN_RESOLVED")"
 if [[ -z "$PERRY_ARG" && -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
   record_command "packet" "build_runtime_archive" "skipped" 0 "" "built by packet build"
 elif [[ ! -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
-  runtime_build=(cargo build -p perry-runtime)
+  # #8225: the wrapper crate, not the rlib-only perry-runtime (see above).
+  runtime_build=(cargo build -p perry-runtime-static)
   case "$PERRY_BIN_RESOLVED" in
-    "$ROOT/target/release/"*) runtime_build=(cargo build --release -p perry-runtime) ;;
+    "$ROOT/target/release/"*) runtime_build=(cargo build --release -p perry-runtime-static) ;;
   esac
   run_logged "packet" "build_runtime_archive" "$OUT_ABS/logs/build-runtime-archive.log" \
     "${runtime_build[@]}"

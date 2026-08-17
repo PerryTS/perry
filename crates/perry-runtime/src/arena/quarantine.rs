@@ -557,6 +557,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 data: block.data,
                 size: block.size,
                 offset: 0,
+                object_starts: new_object_start_bitmap(block.size),
                 dead_cycles: 0,
             });
         }
@@ -570,6 +571,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
+                inline.object_starts = block.object_starts_ptr();
             }
         });
     });
@@ -610,6 +612,7 @@ unsafe fn detach_used_blocks(arena: &mut Arena) -> Vec<(*mut u8, usize, usize)> 
         detached.push((block.data, size, used));
         block.data = std::ptr::null_mut();
         block.size = 0;
+        block.object_starts = Box::new([]);
         block.offset = 0;
         block.dead_cycles = 0;
     }
@@ -1102,6 +1105,7 @@ mod tombstone_tests {
             data: std::ptr::null_mut(),
             size: 0,
             offset: 0,
+            object_starts: Box::new([]),
             dead_cycles: 0,
         }
     }
@@ -1136,6 +1140,7 @@ mod tombstone_tests {
                 data: backing,
                 size: SIZE,
                 offset: 0,
+                object_starts: new_object_start_bitmap(SIZE),
                 dead_cycles: 0,
             }],
             current: 0,

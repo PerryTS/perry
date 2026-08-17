@@ -277,6 +277,7 @@ extern "C" fn native_promise_adoption_job(closure: *const crate::closure::Closur
                     outer,
                     is_error,
                     capture_context(),
+                    std::ptr::null_mut(),
                 ));
             });
             crate::event_pump::js_notify_main_thread();

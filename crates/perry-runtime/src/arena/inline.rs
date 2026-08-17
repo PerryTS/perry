@@ -2,17 +2,19 @@ use super::*;
 
 /// Inline bump-allocator state. The codegen emits inline LLVM IR that
 /// reads `data` and `offset`, computes `aligned + size`, checks against
-/// `size`, stores the new offset, and returns `data + aligned`. The
+/// `size`, stores the new offset, records the allocation boundary through
+/// `object_starts`, and returns `data + aligned`. The
 /// underlying thread-local Arena is the source of truth between
 /// inline-alloc bursts; this state is the source of truth during them.
 ///
 /// Field offsets are load-bearing — the codegen GEPs into this struct
-/// at hard-coded byte offsets (0/8/16). Do not reorder.
+/// at hard-coded byte offsets (0/8/16/24). Do not reorder.
 #[repr(C)]
 pub struct InlineArenaState {
-    pub data: *mut u8, // offset  0  — current block's data pointer
-    pub offset: usize, // offset  8  — bump pointer (mutated inline)
-    pub size: usize,   // offset 16  — current block's size
+    pub data: *mut u8,           // offset  0  — current block's data pointer
+    pub offset: usize,           // offset  8  — bump pointer (mutated inline)
+    pub size: usize,             // offset 16  — current block's size
+    pub object_starts: *mut u64, // offset 24 — one bit per 8-byte slot
 }
 
 /// Get the per-thread inline arena state pointer. Called once per JS
@@ -44,6 +46,7 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
             state.data = block.data;
             state.offset = block.offset;
             state.size = block.size;
+            state.object_starts = block.object_starts_ptr();
         }
         state as *mut InlineArenaState
     }
@@ -87,15 +90,21 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         // Allocate via existing path (may push a new block + run GC).
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
         // Resync inline state to the (possibly new) current block.
-        let (data, block_offset, block_size) = {
+        let (data, block_offset, block_size, object_starts) = {
             let arena = &*arena_ptr;
             let block = &arena.blocks[arena.current];
-            (block.data, block.offset, block.size)
+            (
+                block.data,
+                block.offset,
+                block.size,
+                block.object_starts_ptr(),
+            )
         };
         let state_ref = &mut *state;
         state_ref.data = data;
         state_ref.offset = block_offset;
         state_ref.size = block_size;
+        state_ref.object_starts = object_starts;
         ptr
     })
 }
@@ -146,6 +155,7 @@ pub fn arena_start_fresh_general_block() {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
+                inline.object_starts = block.object_starts_ptr();
             }
         });
     });

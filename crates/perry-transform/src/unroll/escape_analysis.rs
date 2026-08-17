@@ -244,7 +244,8 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 

@@ -266,6 +266,35 @@ fn test_native_module_binding_value_namespace() {
 }
 
 #[test]
+fn native_perf_hooks_namespace_default_reaches_runtime_lookup() {
+    let source = r#"
+import * as hooks from "node:perf_hooks";
+export function perfHooksDefault() {
+  return hooks.default;
+}
+"#;
+    let module =
+        perry_parser::parse_typescript(source, "perf-hooks-default.ts").expect("source parses");
+    let hir = super::lower_module(&module, "perf-hooks-default", "perf-hooks-default.ts")
+        .expect("source lowers");
+    let function = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "perfHooksDefault")
+        .expect("exported function is lowered");
+
+    assert!(matches!(
+        function.body.as_slice(),
+        [Stmt::Return(Some(crate::ir::Expr::PropertyGet {
+            object,
+            property,
+            ..
+        }))] if property == "default"
+            && matches!(object.as_ref(), crate::ir::Expr::NativeModuleRef(module) if module == "perf_hooks")
+    ));
+}
+
+#[test]
 fn test_lower_type_param_scoping() {
     let mut ctx = make_ctx();
     assert!(!ctx.is_type_param("T"));

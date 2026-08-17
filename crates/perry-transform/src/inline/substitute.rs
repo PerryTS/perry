@@ -357,12 +357,32 @@ fn substitute_locals_in_stmts_inner(
                 }
                 substitute_locals_in_stmts_inner(body, param_map, next_local_id);
             }
-            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+            Stmt::PreallocateBoxes(ids)
+            | Stmt::PreallocateTdzBoxes(ids)
+            | Stmt::ReleaseBoxes(ids) => {
                 // Issue #569: remap each id in the prealloc list. Inlining
                 // can rename body locals so the slot+box allocation must
                 // refer to the new ids. If a callee with a PreallocateBoxes
                 // gets inlined into a caller, its body's hoisted FnDecls
                 // still need their boxes set up.
+                //
+                // #8208: `ReleaseBoxes` MUST be remapped by the same rule, and
+                // the failure mode is worse than the prealloc one. An
+                // unremapped prealloc over-allocates a cell nobody reads; an
+                // unremapped release frees a still-live local's cell and hands
+                // it to the next allocation, which is a use-after-release
+                // aliasing bug. `Stmt::ReleaseBoxes`' own doc comment names
+                // remap-or-drop as the obligation for every id-substituting
+                // pass; this is the remap.
+                //
+                // Today no `ReleaseBoxes` can reach here — the release is
+                // created by the async-to-generator transform, which the
+                // driver runs strictly AFTER intra-module inlining, and the
+                // cross-module harvest refuses any body containing one
+                // (`is_cross_module_safe`). That ordering is not enforced by
+                // anything, so this arm is the belt: if inlining ever moves
+                // after the async transform, it stays correct instead of
+                // silently miscompiling.
                 for id in ids.iter_mut() {
                     if let Some(Expr::LocalGet(new_id)) = param_map.get(id) {
                         *id = *new_id;

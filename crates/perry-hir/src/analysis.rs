@@ -217,6 +217,12 @@ pub fn collect_local_refs_stmt(
         Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {
             // Pre-allocates slot+box; no expression sub-tree to visit.
         }
+        Stmt::ReleaseBoxes(ids) => {
+            // A release is a use of each id's box slot (it clears the cell),
+            // exactly like the `LocalSet(id, undefined)` shape it replaced —
+            // capture analysis must keep treating the ids as referenced.
+            refs.extend(ids.iter().copied());
+        }
     }
 }
 
@@ -322,6 +328,11 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
         }
         Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {
             // Slot+box allocation; no assignment to an outer variable.
+        }
+        Stmt::ReleaseBoxes(ids) => {
+            // Clearing the cell writes it, matching the LocalSet-based
+            // release this statement replaced.
+            assigned.extend(ids.iter().copied());
         }
     }
 }
@@ -540,7 +551,8 @@ fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -680,6 +692,26 @@ fn remap_local_ids_in_stmt_propagating(
         }
         Stmt::Throw(e) => remap_with_propagation(e, map, fp),
         Stmt::Labeled { body, .. } => remap_local_ids_in_stmt_propagating(body, map, fp),
+        // #8208: `ReleaseBoxes` carries a BARE LocalId list with no
+        // sub-expression, so this walk used to pass straight over it via the
+        // `_ => {}` tail — invisibly, since rustc cannot flag a catch-all. A
+        // stale id here would release a STILL-LIVE local's cell and hand it to
+        // the next allocation; `Stmt::ReleaseBoxes`' doc makes remap-or-drop an
+        // obligation for every id-substituting pass, and this is the remap.
+        //
+        // Scoped to `ReleaseBoxes` ON PURPOSE. `PreallocateBoxes` and
+        // `PreallocateTdzBoxes` carry the same shape and are ALSO unhandled
+        // here, which is a pre-existing gap — but a benign one (an unremapped
+        // prealloc allocates a cell nobody reads) and closing it would change
+        // codegen for existing programs. That is a separate change with its own
+        // evidence bar, not a rider on this one.
+        Stmt::ReleaseBoxes(ids) => {
+            for id in ids.iter_mut() {
+                if let Some(new_id) = map.get(id) {
+                    *id = *new_id;
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -793,6 +825,26 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
         }
         Stmt::Throw(e) => remap_local_ids_in_expr(e, map),
         Stmt::Labeled { body, .. } => remap_local_ids_in_stmt(body, map),
+        // #8208: `ReleaseBoxes` carries a BARE LocalId list with no
+        // sub-expression, so this walk used to pass straight over it via the
+        // `_ => {}` tail — invisibly, since rustc cannot flag a catch-all. A
+        // stale id here would release a STILL-LIVE local's cell and hand it to
+        // the next allocation; `Stmt::ReleaseBoxes`' doc makes remap-or-drop an
+        // obligation for every id-substituting pass, and this is the remap.
+        //
+        // Scoped to `ReleaseBoxes` ON PURPOSE. `PreallocateBoxes` and
+        // `PreallocateTdzBoxes` carry the same shape and are ALSO unhandled
+        // here, which is a pre-existing gap — but a benign one (an unremapped
+        // prealloc allocates a cell nobody reads) and closing it would change
+        // codegen for existing programs. That is a separate change with its own
+        // evidence bar, not a rider on this one.
+        Stmt::ReleaseBoxes(ids) => {
+            for id in ids.iter_mut() {
+                if let Some(new_id) = map.get(id) {
+                    *id = *new_id;
+                }
+            }
+        }
         _ => {}
     }
 }

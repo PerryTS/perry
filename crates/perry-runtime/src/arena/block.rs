@@ -318,6 +318,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             data,
             size,
             offset: 0,
+            object_starts: new_object_start_bitmap(size),
             dead_cycles: 0,
         });
     }
@@ -329,8 +330,18 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
         data,
         size,
         offset: 0,
+        object_starts: new_object_start_bitmap(size),
         dead_cycles: 0,
     })
+}
+
+/// Arena allocations are at least 8-byte aligned. One bit per possible header
+/// address therefore records exact object boundaries at 1/64 the block size.
+pub(crate) const OBJECT_START_SHIFT: usize = 3;
+const OBJECT_START_BYTES_PER_WORD: usize = 64 << OBJECT_START_SHIFT;
+
+pub(crate) fn new_object_start_bitmap(size: usize) -> Box<[u64]> {
+    vec![0; size.div_ceil(OBJECT_START_BYTES_PER_WORD)].into_boxed_slice()
 }
 
 /// Reserve a block, running one emergency full collection if the OS refuses
@@ -380,6 +391,10 @@ pub(crate) struct ArenaBlock {
     pub(crate) data: *mut u8,
     pub(crate) size: usize,
     pub(crate) offset: usize,
+    /// Exact GC-object header starts in this block, one bit per 8-byte slot.
+    /// The boxed allocation stays stable when this struct moves in a `Vec`;
+    /// page metadata caches its raw pointer.
+    pub(crate) object_starts: Box<[u64]>,
     /// Issue #73: number of consecutive GC cycles this block has been
     /// observed with zero live objects. Reset requires TWO consecutive
     /// dead observations so a block can't be reclaimed on the same
@@ -396,6 +411,16 @@ impl ArenaBlock {
     /// while the arena does not exist yet, so nothing may collect here.
     fn new() -> Self {
         alloc_block_no_gc(BLOCK_SIZE)
+    }
+
+    #[inline]
+    pub(crate) fn object_starts_ptr(&self) -> *mut u64 {
+        self.object_starts.as_ptr() as *mut u64
+    }
+
+    #[inline]
+    pub(crate) fn clear_object_starts(&mut self) {
+        self.object_starts.fill(0);
     }
 
     /// Try to allocate within this block, respecting alignment
@@ -501,7 +526,13 @@ impl Drop for Arena {
 impl Arena {
     fn new(generation: HeapGeneration, space: HeapSpace) -> Self {
         let initial = ArenaBlock::new();
-        register_block_space(initial.data as usize, initial.size, generation, space);
+        register_block_space_with_object_starts(
+            initial.data as usize,
+            initial.size,
+            generation,
+            space,
+            initial.object_starts_ptr(),
+        );
         ARENA_TOTAL_BYTES.with(|t| t.set(t.get() + initial.size));
         Arena {
             blocks: vec![initial],
@@ -528,6 +559,7 @@ impl Arena {
                 data: std::ptr::null_mut(),
                 size: 0,
                 offset: 0,
+                object_starts: Box::new([]),
                 dead_cycles: 0,
             }],
             current: 0,
@@ -592,6 +624,7 @@ impl Arena {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
+                inline.object_starts = block.object_starts_ptr();
             }
         });
     }
@@ -606,7 +639,13 @@ impl Arena {
     pub(crate) fn install_reserved_block(&mut self, fresh: ArenaBlock) {
         let fresh_size = fresh.size;
         let fresh_base = fresh.data as usize;
-        register_block_space(fresh_base, fresh_size, self.generation, self.space);
+        register_block_space_with_object_starts(
+            fresh_base,
+            fresh_size,
+            self.generation,
+            self.space,
+            fresh.object_starts_ptr(),
+        );
         let mut tomb_idx: Option<usize> = None;
         for i in 0..self.blocks.len() {
             if self.blocks[i].data.is_null() {
@@ -1019,18 +1058,19 @@ thread_local! {
         UnsafeCell::new(Arena::new_lazy(HeapGeneration::Old, HeapSpace::Old));
 
     /// Inline allocator state — a cache of the current arena block's
-    /// `(data, offset, size)` triple, exposed via a stable pointer so
+    /// `(data, offset, size, object_starts)` tuple, exposed via a stable pointer so
     /// codegen can emit inline bump-allocate IR without going through
     /// any function call or `LocalKey::with` wrapper.
     ///
     /// `#[repr(C)]` on `InlineArenaState` keeps the field offsets stable
-    /// (data=0, offset=8, size=16). The codegen reads/writes these fields
+    /// (data=0, offset=8, size=16, object_starts=24). The codegen reads/writes these fields
     /// directly via fixed GEPs, so changing the struct layout would
     /// silently break every emitted `new ClassName()`.
     pub(crate) static INLINE_STATE: UnsafeCell<InlineArenaState> = const { UnsafeCell::new(InlineArenaState {
         data: std::ptr::null_mut(),
         offset: 0,
         size: 0,
+        object_starts: std::ptr::null_mut(),
     }) };
 }
 

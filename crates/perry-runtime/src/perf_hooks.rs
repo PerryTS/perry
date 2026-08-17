@@ -23,6 +23,9 @@ pub use resource_timing::{
     js_perf_set_resource_timing_buffer_size,
 };
 
+mod timerify;
+pub use timerify::js_perf_timerify;
+
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field, js_object_get_field_by_name,
     js_object_set_field, js_object_set_field_by_name,
@@ -30,7 +33,7 @@ use crate::object::{
 use crate::string::StringHeader;
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod prototypes;
@@ -115,8 +118,6 @@ pub(crate) struct PerfEntry {
     object_bits: u64,
     initiator_type: Option<String>,
 }
-
-static TIMERIFY_WRAPPER_REGISTERED: Once = Once::new();
 
 thread_local! {
     static PERF_ENTRIES: RefCell<Vec<PerfEntry>> = const { RefCell::new(Vec::new()) };
@@ -532,12 +533,22 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
     if e.object_bits != 0 {
         return f64::from_bits(e.object_bits);
     }
+    // `detail` can be an arbitrary heap value. Every allocation below may
+    // trigger a moving collection, so keep it rooted until the field and any
+    // timerify argument aliases have been installed on the entry.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let detail_handle = scope.root_nanbox_f64(f64::from_bits(e.detail_bits));
     let obj = js_object_alloc_with_shape(
         PERF_ENTRY_SHAPE,
         5,
         PERF_ENTRY_KEYS.as_ptr(),
         PERF_ENTRY_KEYS.len() as u32,
     );
+    let obj_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    let current_obj = || {
+        crate::value::js_nanbox_get_pointer(obj_handle.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader
+    };
     // Record the shared keys_array so `is_perf_entry_object` can recognize
     // entries by pointer identity (see PERF_ENTRY_KEYS_ARRAY). All entries on
     // this thread share it, so a single store on the first call suffices.
@@ -547,13 +558,38 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
             c.set(keys_ptr);
         }
     });
-    js_object_set_field(obj, 0, str_value(&e.name));
-    js_object_set_field(obj, 1, str_value(entry_type_name(e.entry_type)));
-    js_object_set_field(obj, 2, JSValue::number(e.start_time));
-    js_object_set_field(obj, 3, JSValue::number(e.duration));
-    js_object_set_field(obj, 4, JSValue::from_bits(e.detail_bits));
+    let name = str_value(&e.name);
+    js_object_set_field(current_obj(), 0, name);
+    let entry_type = str_value(entry_type_name(e.entry_type));
+    js_object_set_field(current_obj(), 1, entry_type);
+    js_object_set_field(current_obj(), 2, JSValue::number(e.start_time));
+    js_object_set_field(current_obj(), 3, JSValue::number(e.duration));
+    js_object_set_field(
+        current_obj(),
+        4,
+        JSValue::from_bits(detail_handle.get_nanbox_f64().to_bits()),
+    );
+    // Node exposes timerify's call arguments twice: as `entry.detail` and as
+    // enumerable indexed properties on the PerformanceEntry itself.
+    if e.entry_type == ENTRY_TYPE_FUNCTION {
+        let detail = crate::value::js_nanbox_get_pointer(detail_handle.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        if !detail.is_null() {
+            let len = crate::array::js_array_length(detail);
+            for i in 0..len {
+                let key_text = i.to_string();
+                let key =
+                    crate::string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
+                let detail = crate::value::js_nanbox_get_pointer(detail_handle.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader;
+                let value = crate::array::js_array_get_f64(detail, i);
+                js_object_set_field_by_name(current_obj(), key, value);
+            }
+        }
+    }
     if let Some(initiator_type) = &e.initiator_type {
-        set_named_field(obj, "initiatorType", str_value(initiator_type));
+        let value = str_value(initiator_type);
+        set_named_field(current_obj(), "initiatorType", value);
     }
     let class_name = match e.entry_type {
         ENTRY_TYPE_MARK => "PerformanceMark",
@@ -561,7 +597,7 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
         ENTRY_TYPE_RESOURCE => "PerformanceResourceTiming",
         _ => "PerformanceEntry",
     };
-    link_perf_prototype(crate::value::js_nanbox_pointer(obj as i64), class_name)
+    link_perf_prototype(obj_handle.get_nanbox_f64(), class_name)
 }
 
 /// `performance.now()` reading used for default mark startTimes / measure
@@ -1271,109 +1307,6 @@ unsafe fn closure_ptr_from_value(value: f64) -> Option<*const crate::closure::Cl
         return None;
     }
     Some(ptr)
-}
-
-unsafe fn function_value_name(value: f64) -> String {
-    let Some(closure) = closure_ptr_from_value(value) else {
-        return String::new();
-    };
-    crate::builtins::function_name_for_ptr((*closure).func_ptr as usize)
-        .or_else(|| {
-            let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
-            string_of(JSValue::from_bits(name_value.to_bits()))
-        })
-        .unwrap_or_default()
-}
-
-extern "C" fn perf_timerify_wrapper(
-    closure: *const crate::closure::ClosureHeader,
-    rest: f64,
-) -> f64 {
-    unsafe {
-        let target = crate::closure::js_closure_get_capture_f64(closure, 0);
-        let name_value = crate::closure::js_closure_get_capture_f64(closure, 1);
-        let histogram = crate::closure::js_closure_get_capture_f64(closure, 2);
-        let name = string_of(JSValue::from_bits(name_value.to_bits())).unwrap_or_default();
-        let args = collect_rest_args(rest);
-        let start_time = perf_now();
-        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
-        let duration = (perf_now() - start_time).max(0.0);
-        // Node records timerify durations in nanoseconds. A sub-nanosecond
-        // call still has to land in a bucket — the histogram's lowest
-        // trackable value is 1 — or `histogram.count` would not move.
-        crate::perf_histogram::record_timerify_duration(
-            histogram,
-            ((duration * 1.0e6).round() as i64).max(1),
-        );
-        let entry = PerfEntry {
-            name,
-            entry_type: ENTRY_TYPE_FUNCTION,
-            start_time,
-            duration,
-            detail_bits: JSValue::null().bits(),
-            object_bits: 0,
-            initiator_type: None,
-        };
-        let mut entry = entry;
-        let obj = entry_to_object(&entry);
-        entry.object_bits = obj.to_bits();
-        notify_observers(&entry);
-        result
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
-    unsafe {
-        if !is_function_value(fn_value) {
-            throw_type_error_with_code(
-                "The \"fn\" argument must be of type function",
-                "ERR_INVALID_ARG_TYPE",
-            );
-        }
-        let mut histogram = f64::from_bits(JSValue::undefined().bits());
-        if let Some(opts) = as_object_ptr(options) {
-            let candidate = f64::from_bits(option_value(opts, "histogram").bits());
-            if !JSValue::from_bits(candidate.to_bits()).is_undefined() {
-                if crate::perf_histogram::histogram_id_from_value(candidate).is_none() {
-                    throw_type_error_with_code(
-                        "The \"options.histogram\" argument must be an instance of RecordableHistogram",
-                        "ERR_INVALID_ARG_TYPE",
-                    );
-                }
-                histogram = candidate;
-            }
-        }
-        TIMERIFY_WRAPPER_REGISTERED.call_once(|| {
-            crate::closure::js_register_closure_rest(perf_timerify_wrapper as *const u8, 0);
-        });
-        let name = function_value_name(fn_value);
-        let closure = crate::closure::js_closure_alloc(perf_timerify_wrapper as *const u8, 3);
-        crate::closure::js_closure_set_capture_f64(closure, 0, fn_value);
-        let name_value = str_value(&name);
-        crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(name_value.bits()));
-        crate::closure::js_closure_set_capture_f64(closure, 2, histogram);
-
-        if let Some(target) = closure_ptr_from_value(fn_value) {
-            if let Some(length) = crate::closure::closure_length(target) {
-                crate::object::set_builtin_closure_length(closure as usize, length);
-            }
-        }
-
-        let wrapper_name = if name.is_empty() {
-            "timerified".to_string()
-        } else {
-            format!("timerified {name}")
-        };
-        let wrapper_name_value = str_value(&wrapper_name);
-        crate::closure::closure_set_dynamic_prop(
-            closure as usize,
-            "name",
-            f64::from_bits(wrapper_name_value.bits()),
-        );
-        crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
-        f64::from_bits(JSValue::pointer(closure as *mut u8).bits())
-    }
 }
 
 // ── PerformanceObserver ──────────────────────────────────────────────────────

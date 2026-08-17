@@ -270,7 +270,8 @@ pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> b
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
         }
     }
 

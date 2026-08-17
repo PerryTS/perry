@@ -342,9 +342,13 @@ commandPaletteShow();
 ### MapView (issue #517)
 
 Wraps `MKMapView` on macOS / iOS / visionOS / tvOS, `libshumate` on GTK4,
-Google Maps SDK on Android (requires API key in
-`AndroidManifest.xml`), and the SwiftUI `Map` view on watchOS. Windows
-remains a stub (WinUI MapControl needs XAML Islands integration).
+Google Maps SDK on Android (requires API key in `AndroidManifest.xml`), the
+SwiftUI `Map` view on watchOS, and the native Windows `MapControl` in a XAML
+Island. On Windows, obtain a Bing Maps key as described in Microsoft's
+[maps authentication guide](https://learn.microsoft.com/windows/uwp/maps-and-location/authentication-key),
+then set `PERRY_MAP_SERVICE_TOKEN` (or the legacy `PERRY_BING_MAPS_KEY` alias)
+before launching the app. The token is read when each MapView is created and
+assigned to `MapControl.MapServiceToken`.
 
 ```typescript,no-test
 import {

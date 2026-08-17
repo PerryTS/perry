@@ -520,7 +520,8 @@ fn additive_flow_stmt(
         | Stmt::LabeledContinue(_)
         | Stmt::Return(None)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -808,7 +809,8 @@ fn collect_facts<'a>(
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
         }
     }
 }

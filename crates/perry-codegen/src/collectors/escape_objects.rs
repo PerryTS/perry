@@ -164,7 +164,8 @@ fn collect_used_object_fields_in_stmts(
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
         }
     }
 }

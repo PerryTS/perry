@@ -150,7 +150,8 @@ pub(super) fn forwarding_walk_header(user_addr: usize) -> Option<*mut GcHeader> 
     // #7742: one page-map probe answers both classifications. The range base
     // is the guard that keeps a garbage candidate at the very start of a
     // registered range from becoming a read of the unmapped page below it.
-    let (_space, range_base) = crate::arena::classify_heap_space_in_range(user_addr)?;
+    let (_space, range_base, _object_starts) =
+        crate::arena::classify_heap_space_in_range(user_addr)?;
     let header_addr = user_addr - GC_HEADER_SIZE;
     if header_addr < range_base {
         return None;
@@ -190,7 +191,9 @@ pub(super) fn forwarding_target_is_object_start(user_addr: usize) -> bool {
     if user_addr < GC_HEADER_SIZE {
         return false;
     }
-    if let Some((_space, range_base)) = crate::arena::classify_heap_space_in_range(user_addr) {
+    if let Some((_space, range_base, _object_starts)) =
+        crate::arena::classify_heap_space_in_range(user_addr)
+    {
         let header_addr = user_addr - GC_HEADER_SIZE;
         return header_addr >= range_base
             && unsafe { plausible_gc_header(header_addr as *mut GcHeader, true) };

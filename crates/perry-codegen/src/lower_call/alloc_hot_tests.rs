@@ -342,6 +342,10 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         ir.contains(HEADER_IMAGE_STORE),
         "the inline allocation site must store the `<2 x i64>` header image:\n{ir}"
     );
+    assert!(
+        ir.contains("shl i64 1,") && ir.contains("lshr i64") && ir.contains(", 6"),
+        "the inline allocation site must set its exact boundary in the arena object-start bitmap:\n{ir}"
+    );
     // The compose lives beside the ShapeId mint in module init, i.e. after the
     // mint call and outside the allocating function's own body.
     let compose_at = ir.find(HEADER_IMAGE_COMPOSE).unwrap();

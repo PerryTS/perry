@@ -4,21 +4,34 @@
 //! The async-to-generator transform boxes every body local of an `async`
 //! function (`Stmt::PreallocateBoxes`, one `js_box_alloc_bits` cell per local
 //! per invocation) so the synthesized state-machine closures can share them
-//! across suspends. Box cells are registered in the runtime's `BOX_REGISTRY`
-//! and are **never freed** — that monotonicity is what makes perry#4898's
-//! pointer rejection and #7906's positive pointer cache sound — and
-//! `scan_box_roots_mut` marks the JSValue inside every registered cell on every
-//! collection. So every local of every activation the program has *ever* run
-//! stays a live GC root for the life of the process.
+//! across suspends. Box cells are registered in the runtime's `BOX_REGISTRY`,
+//! and `scan_box_roots_mut` marks the JSValue inside every registered cell on
+//! every collection. So every local of every activation the program has *ever*
+//! run used to stay a live GC root for the life of the process.
 //!
-//! The fix is to **clear** (not free) an activation's cells when its state
-//! machine reaches a terminal state: a `js_box_set(cell, undefined)` keeps the
-//! address registered and readable — a stale reader sees `undefined`, which is
-//! already the defined value of an uninitialised boxed local (perry#4926) — and
-//! drops the retention, which is the entire cost.
+//! #7933 (PR #7939) fixed the *retention* half by clearing the releasable cells
+//! at a terminal state. It deliberately did not free them: registry
+//! monotonicity was what made perry#4898's pointer rejection and #7906's
+//! positive pointer cache sound. The cost of that choice was the other half of
+//! the bug — cell + registry bytes per completed activation, growing linearly,
+//! invisible to every GC counter because none of it is in the GC heap.
 //!
-//! Clearing a cell whose value is still *reachable* would be a silent
-//! use-after-clear (a wrong answer, not a crash), so a cell is only cleared
+//! #8208 makes the release real. `Stmt::ReleaseBoxes` lowers to
+//! `js_box_release` / `js_i32_box_release` / `js_bool_box_release`, which clear
+//! the cell, de-register it, evict its positive-cache slot, and park it in a
+//! per-activation release range. Queued and running `Task::AsyncStep`s retain
+//! the activation; its zero-reference transition publishes that range to a
+//! free pool, and `js_*box_alloc*` pops the pool before calling `std::alloc`.
+//! Untracked runtime releases retain the old whole-pump quarantine as a
+//! conservative fallback. Registry membership is therefore no longer
+//! monotonic — but the property perry#4898 and #7906 actually depend on
+//! survives untouched, because cell memory is never handed back to the
+//! allocator: an address minted by `js_box_alloc*` stays 8 readable bytes of
+//! box cell for the life of the thread, so "was a box" can never become "is
+//! another object".
+//!
+//! Releasing a cell whose value is still *reachable* would be a silent
+//! use-after-release (a wrong answer, not a crash), so a cell is only released
 //! when no closure in the function can hold its address. This module computes
 //! that set.
 //!
@@ -162,7 +175,8 @@ fn scan_stmt(stmt: &Stmt, scan: &mut Scan) {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -196,14 +210,22 @@ fn scan_expr(expr: &Expr, scan: &mut Scan) {
     perry_hir::walker::walk_expr_children(expr, &mut |child| scan_expr(child, scan));
 }
 
-/// `LocalSet(id, undefined)` per id — inside the state-machine step closure
-/// each id is a boxed capture, so this lowers to one
-/// `js_box_set(cell, TAG_UNDEFINED)`: no allocation, no collection point, and
-/// the cell stays registered.
+/// One `Stmt::ReleaseBoxes` naming every id in the terminal release set.
+///
+/// Inside the state-machine step closure each id is a boxed capture, so this
+/// lowers to one `js_*box_release` per cell: clear, de-register, evict the
+/// positive-cache slot, park for reuse. No allocation and no collection point,
+/// so it needs no rooting — but unlike #7933's `js_box_set(cell, undefined)`
+/// the cell does NOT stay registered.
 pub(crate) fn build_box_release_stmts(ids: &[LocalId]) -> Vec<Stmt> {
-    ids.iter()
-        .map(|id| Stmt::Expr(Expr::LocalSet(*id, Box::new(Expr::Undefined))))
-        .collect()
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    // One `Stmt::ReleaseBoxes` instead of per-id `LocalSet(id, undefined)`
+    // stores: codegen lowers it to `js_box_release*` calls that clear the
+    // cell AND de-register + park it for reuse, so a completed activation
+    // stops costing malloc-side memory, not just GC retention.
+    vec![Stmt::ReleaseBoxes(ids.to_vec())]
 }
 
 #[cfg(test)]
@@ -352,16 +374,15 @@ mod tests {
         crate::generator::transform_generators(m);
     }
 
-    /// Count `LocalSet(id, undefined)` statements anywhere in a body, including
-    /// inside closures (the release stores live in the step closure).
+    /// Count how many `Stmt::ReleaseBoxes` lists name `id`, anywhere in a
+    /// body, including inside closures (the releases live in the step
+    /// closure's terminal arms).
     fn count_release_stores(stmts: &[Stmt], id: LocalId) -> usize {
         let mut n = 0;
         fn walk_stmts(stmts: &[Stmt], id: LocalId, n: &mut usize) {
             for s in stmts {
                 match s {
-                    Stmt::Expr(Expr::LocalSet(sid, value))
-                        if *sid == id && matches!(**value, Expr::Undefined) =>
-                    {
+                    Stmt::ReleaseBoxes(ids) if ids.contains(&id) => {
                         *n += 1;
                     }
                     _ => {}
@@ -486,18 +507,18 @@ mod tests {
         );
     }
 
-    /// `__gen_sent` (the value the last `await` delivered) is released too, and
-    /// the control locals are not: an `undefined` `__gen_done` would drop a late
-    /// resume into the dispatch loop with no matching state.
+    /// The whole activation frame releases at the terminal states — the user
+    /// locals, `__gen_sent`, AND the state-machine control cells
+    /// (`__gen_state`/`__gen_done`/`__gen_executing`). The control cells are
+    /// safe to release because a stray duplicate resume observes the PARKED
+    /// values (`js_bool_box_release` parks `true` = the terminal
+    /// short-circuit, `js_i32_box_release` parks `-1` = no dispatch case),
+    /// which reproduces the pre-release terminal path exactly.
     #[test]
-    fn the_state_machine_control_locals_are_not_released() {
+    fn the_whole_activation_frame_is_released() {
         let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
         run_async_pipeline(&mut m);
         let body = &m.functions[0].body;
-        // `PreallocateBoxes` lists the activation's cells; ids 0..=3 of the
-        // transform's own allocation are state/done/sent/executing. Find the
-        // prealloc list and assert at most one of its transform-internal ids is
-        // released (that one is `__gen_sent`).
         let prealloc: Vec<LocalId> = body
             .iter()
             .find_map(|s| match s {
@@ -505,30 +526,164 @@ mod tests {
                 _ => None,
             })
             .expect("the activation preallocates its boxes");
-        let released: Vec<LocalId> = prealloc
+        let incompletely_released: Vec<(LocalId, usize)> = prealloc
             .iter()
             .copied()
-            .filter(|id| count_release_stores(body, *id) > 0)
+            .map(|id| (id, count_release_stores(body, id)))
+            .filter(|(_, count)| *count != 2)
             .collect();
-        // Exactly the user local (50) and `__gen_sent`.
-        assert_eq!(
-            released.len(),
-            2,
-            "released set should be {{user local, __gen_sent}}, got {released:?} of {prealloc:?}"
+        assert!(
+            incompletely_released.is_empty(),
+            "every preallocated cell must release on both terminal arms; \
+             observed {incompletely_released:?} in {prealloc:?}:\n{body:#?}"
         );
-        assert!(released.contains(&50), "{released:?}");
+        assert!(
+            count_release_stores(body, 50) == 2,
+            "the user local releases on both terminal arms"
+        );
+    }
+
+    /// The FORWARD direction of `the_whole_activation_frame_is_released`, and
+    /// the invariant codegen's boxing analysis now leans on explicitly.
+    ///
+    /// `perry-codegen`'s `collect_prealloc_box_ids_in_stmts` deliberately does
+    /// NOT let a `ReleaseBoxes` vote on which locals get boxed (a reclamation
+    /// hint must not change a local's representation), and
+    /// `emit_release_boxes` silently skips any id that is not in
+    /// `boxed_vars`. Both are only harmless because the transform never
+    /// releases an id it did not also preallocate. If that ever stops being
+    /// true the release goes SILENTLY INERT — the leak comes back with every
+    /// test still green — so it is asserted here rather than assumed.
+    #[test]
+    fn every_released_id_is_also_preallocated() {
+        let mut m = async_module(vec![
+            awaited_let(50),
+            Stmt::Let {
+                id: 51,
+                name: "w".into(),
+                ty: perry_hir::types::Type::Any,
+                mutable: true,
+                init: Some(Expr::Await(Box::new(Expr::LocalGet(50)))),
+            },
+            Stmt::Return(Some(local_get(51))),
+        ]);
+        run_async_pipeline(&mut m);
+        let body = &m.functions[0].body;
+
+        let prealloc: std::collections::HashSet<LocalId> = body
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => Some(ids.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            !prealloc.is_empty(),
+            "the fixture must actually box something, or this test is vacuous"
+        );
+
+        let mut released: Vec<LocalId> = Vec::new();
+        collect_released_ids(body, &mut released);
+        assert!(
+            !released.is_empty(),
+            "the fixture must actually release something, or this test is vacuous"
+        );
+
+        let orphans: Vec<LocalId> = released
+            .iter()
+            .copied()
+            .filter(|id| !prealloc.contains(id))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "released ids {orphans:?} are never preallocated, so codegen will \
+             skip them and the release becomes a silent no-op; \
+             preallocated={prealloc:?}"
+        );
+    }
+
+    /// Every id named by a `ReleaseBoxes` anywhere in `stmts`, including
+    /// inside closures (releases live in the step closure's terminal arms).
+    fn collect_released_ids(stmts: &[Stmt], out: &mut Vec<LocalId>) {
+        for s in stmts {
+            if let Stmt::ReleaseBoxes(ids) = s {
+                out.extend(ids.iter().copied());
+            }
+            let mut exprs: Vec<&Expr> = Vec::new();
+            match s {
+                Stmt::Let { init: Some(e), .. }
+                | Stmt::Expr(e)
+                | Stmt::Throw(e)
+                | Stmt::Return(Some(e)) => exprs.push(e),
+                Stmt::If { condition, .. } => exprs.push(condition),
+                Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
+                    exprs.push(condition)
+                }
+                Stmt::Switch { discriminant, .. } => exprs.push(discriminant),
+                _ => {}
+            }
+            for e in exprs {
+                collect_released_in_expr(e, out);
+            }
+            match s {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    collect_released_ids(then_branch, out);
+                    if let Some(eb) = else_branch {
+                        collect_released_ids(eb, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    collect_released_ids(body, out)
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    collect_released_ids(body, out);
+                    if let Some(c) = catch {
+                        collect_released_ids(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        collect_released_ids(f, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        collect_released_ids(&c.body, out);
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    collect_released_ids(std::slice::from_ref(body.as_ref()), out)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_released_in_expr(e: &Expr, out: &mut Vec<LocalId>) {
+        if let Expr::Closure { body, .. } = e {
+            collect_released_ids(body, out);
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| collect_released_in_expr(c, out));
     }
 
     #[test]
-    fn release_stmts_are_undefined_stores() {
+    fn release_stmts_are_one_release_boxes_stmt() {
         let stmts = build_box_release_stmts(&[3, 5]);
-        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::LocalSet(id, value)) => {
-                assert_eq!(*id, 3);
-                assert!(matches!(**value, Expr::Undefined));
-            }
+            Stmt::ReleaseBoxes(ids) => assert_eq!(ids.as_slice(), &[3, 5]),
             other => panic!("unexpected release stmt: {other:?}"),
         }
+        assert!(
+            build_box_release_stmts(&[]).is_empty(),
+            "an empty release set emits nothing"
+        );
     }
 }

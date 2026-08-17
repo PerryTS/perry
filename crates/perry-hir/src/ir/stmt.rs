@@ -73,6 +73,19 @@ pub enum Stmt {
     /// ReferenceError; the `Stmt::Let` (or `let x;` with no init) overwrites
     /// the sentinel with the real value / `undefined`, ending the dead zone.
     PreallocateTdzBoxes(Vec<LocalId>),
+    /// Release the heap box cells behind a set of boxed LocalIds: clear each
+    /// cell to `undefined`, de-register it, and park it for reuse by a later
+    /// `js_box_alloc*` (#7933 / async-state RSS accumulation). Emitted by the
+    /// async-to-generator transform at a plain-async activation's terminal
+    /// states, ONLY for ids proven unobservable (`generator/box_release.rs`).
+    ///
+    /// Semantics are a *reclamation hint*: dropping this statement is always
+    /// correct (the cells just stay live, as before #7933). Carrying it
+    /// through a pass that renumbers LocalIds WITHOUT remapping these ids is
+    /// NOT correct — the release would then free a live local's cell — so any
+    /// id-substitution pass must either remap the list like a `LocalSet`
+    /// target or drop the statement.
+    ReleaseBoxes(Vec<LocalId>),
 }
 
 /// A case in a switch statement

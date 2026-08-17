@@ -147,7 +147,8 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => {}
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
         Stmt::If {
             condition,
             then_branch,

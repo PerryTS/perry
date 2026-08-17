@@ -160,7 +160,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_i32_box_set"
         | "js_bool_box_set"
         | "js_i32_box_get"
-        | "js_bool_box_get" => GcCallEffect::CannotCollect,
+        | "js_bool_box_get"
+        // The #7933 release entry points: registry remove + raw cell clear +
+        // TLS free-pool push. No GC-heap allocation, no user code, no
+        // collection trigger — the same audit as the accessors above.
+        | "js_box_release"
+        | "js_i32_box_release"
+        | "js_bool_box_release" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
         // and accessor dispatch — none present, and none takes a receiver
@@ -211,6 +217,166 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The box/closure family's stated containment in the checker's
+    /// `NONCOLLECTING` is now CHECKED rather than merely asserted in prose.
+    ///
+    /// Three comments above claim membership in `NONCOLLECTING`
+    /// (`scripts/gc_root_dominance_check.py`) for the closure capture-slot
+    /// accessors, the box accessors/allocators, and — since #8208 — the box
+    /// release entry points, naming it "the audit authority this table must
+    /// stay a subset of". Nothing enforced it. #7510 is what one-sided drift
+    /// costs: the two lists disagreed and the checker printed 358 spurious
+    /// violations once the corpus widened. #8208 drifted them again by adding
+    /// the three `js_*box_release` names here and not there; a human reading
+    /// the diff caught it, which is not a gate.
+    ///
+    /// SCOPE, deliberately narrow. A whole-table subset is NOT asserted,
+    /// because it is not true: 28 entries here (the `js_typed_*` guards, the
+    /// feedback counters, `js_param_type_guard`, `js_nanbox_pointer`,
+    /// `js_string_addref`, …) are absent from `NONCOLLECTING` today. That
+    /// divergence is safe in the direction it runs — the checker's
+    /// `is_collecting` treats an unknown callee as collecting, so a missing
+    /// entry costs a false POSITIVE, which the script's own header calls its
+    /// one-sided design. Adding those 28 names would make the checker LESS
+    /// conservative and could hide real violations, so each needs its own
+    /// audit evidence; that is a separate decision, not a tidy-up to be
+    /// smuggled in here. What this test pins is the family whose containment
+    /// the comments actually claim, which is also exactly where this PR
+    /// drifted.
+    #[test]
+    fn box_and_closure_helpers_stay_contained_in_the_checker_authority() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let rust_src = std::fs::read_to_string(format!("{manifest}/src/gc_call_effects.rs"))
+            .expect("read gc_call_effects.rs");
+        let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
+        let py_src = std::fs::read_to_string(&py_path).expect("read gc_root_dominance_check.py");
+
+        let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
+        assert!(
+            noncollecting.len() > 50,
+            "parsed only {} NONCOLLECTING names — the extraction broke, and a \
+             vacuous containment check is worse than none",
+            noncollecting.len()
+        );
+
+        let cannot_collect = extract_cannot_collect_arms(&rust_src);
+        // The subject must be live: if the extraction silently stopped seeing
+        // the family, the containment loop below would pass by checking
+        // nothing at all.
+        let family: Vec<&str> = cannot_collect
+            .iter()
+            .filter(|n| n.contains("_box_") || n.contains("_closure_"))
+            .copied()
+            .collect();
+        assert!(
+            family.len() >= 12,
+            "parsed only {} box/closure helpers from the CannotCollect arms \
+             ({family:?}) — extraction broke",
+            family.len()
+        );
+        for probe in [
+            "js_box_release",
+            "js_i32_box_release",
+            "js_bool_box_release",
+            "js_box_alloc_bits",
+            "js_closure_get_capture_bits",
+        ] {
+            assert!(
+                family.contains(&probe),
+                "{probe} missing from the parsed box/closure family"
+            );
+        }
+
+        let missing: Vec<&str> = family
+            .iter()
+            .filter(|n| !noncollecting.contains(**n))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these box/closure callees are CannotCollect here but absent from \
+             NONCOLLECTING in scripts/gc_root_dominance_check.py, which the \
+             comments above name as the audit authority this family must stay \
+             contained in: {missing:?}"
+        );
+    }
+
+    /// Collect the string literals of a top-level `NAME = {...}` python set.
+    fn extract_python_set<'a>(src: &'a str, name: &str) -> std::collections::HashSet<&'a str> {
+        let mut out = std::collections::HashSet::new();
+        let mut inside = false;
+        for line in src.lines() {
+            if !inside {
+                if line.starts_with(&format!("{name} = {{")) {
+                    inside = true;
+                }
+                continue;
+            }
+            if line == "}" {
+                break;
+            }
+            let code = line.split('#').next().unwrap_or("");
+            out.extend(quoted_literals(code));
+        }
+        out
+    }
+
+    /// Collect the callee names of every match arm resolving to
+    /// `GcCallEffect::CannotCollect`. Arms are `| "name"` chains, freely
+    /// interleaved with `//` comments, terminated by the `=>`.
+    fn extract_cannot_collect_arms(src: &str) -> std::collections::HashSet<&str> {
+        let mut out = std::collections::HashSet::new();
+        let mut pending: Vec<&str> = Vec::new();
+        for line in src.lines() {
+            let t = line.trim();
+            if t.starts_with("//") || t.is_empty() {
+                continue;
+            }
+            // Only accumulate from pure pattern lines: `| "a"` / `"a" | "b"`.
+            let is_pattern = (t.starts_with('|') || t.starts_with('"'))
+                && !t.contains("=>")
+                && !t.contains("assert");
+            if is_pattern {
+                pending.extend(quoted_literals(t));
+                continue;
+            }
+            if let Some(head) = t.split("=>").next() {
+                if t.contains("=>") {
+                    let mut names = pending.clone();
+                    names.extend(quoted_literals(head));
+                    if t.contains("GcCallEffect::CannotCollect") {
+                        out.extend(names);
+                    }
+                    pending.clear();
+                    continue;
+                }
+            }
+            pending.clear();
+        }
+        out
+    }
+
+    fn quoted_literals(s: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'"' {
+                if let Some(end) = s[i + 1..].find('"') {
+                    let lit = &s[i + 1..i + 1 + end];
+                    if lit.starts_with("js_") || lit.starts_with("llvm.") {
+                        out.push(lit);
+                    }
+                    i = i + 1 + end + 1;
+                    continue;
+                }
+                break;
+            }
+            i += 1;
+        }
+        out
+    }
 
     /// `js_gc_register_global_root` is `js_write_barrier_root_heap_word` plus
     /// a TLS `Vec::push`, so the two must never be classified differently —
@@ -279,6 +445,9 @@ mod tests {
             "js_bool_box_set",
             "js_i32_box_get",
             "js_bool_box_get",
+            "js_box_release",
+            "js_i32_box_release",
+            "js_bool_box_release",
         ] {
             assert_eq!(
                 classify_direct_callee(name),

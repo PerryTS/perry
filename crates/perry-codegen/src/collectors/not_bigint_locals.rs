@@ -317,7 +317,8 @@ pub(super) fn collect_writes<'a>(
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
         }
     }
 }

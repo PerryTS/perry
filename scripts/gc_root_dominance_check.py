@@ -493,6 +493,13 @@ NONCOLLECTING = {
     # one-way containment `gc_call_effects.rs` documents (its CannotCollect
     # set must stay a subset of this one).
     "js_box_alloc_bits", "js_i32_box_alloc", "js_bool_box_alloc",
+    # Box release (#8208): registry remove + positive-cache evict + raw cell
+    # clear + a push onto a TLS quarantine Vec. No GC-heap allocation, no user
+    # code, no collection trigger — the same audit as the accessors above, and
+    # required here for the one-way containment gc_call_effects.rs documents
+    # (#7510: letting these two lists drift one-sided printed 358 spurious
+    # violations once the corpus widened).
+    "js_box_release", "js_i32_box_release", "js_bool_box_release",
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
@@ -2615,7 +2622,27 @@ def rust_fn_body(path, fn_name):
 
 
 def _probe_boxes_outside_the_gc_heap():
-    """Boxes are `std::alloc::alloc`, never freed, never arena-allocated."""
+    """Boxes are `std::alloc::alloc`, never handed back, never arena-allocated.
+
+    #8208 changed what "never reclaimed" means, so this probe changed with it.
+    A released cell is now recycled through an activation-owned quarantine
+    into a per-kind free pool and re-registered by a later `js_box_alloc*`.
+    Cell MEMORY is still never returned to the allocator, which is the leg the
+    exemption actually rests on: an address minted by `js_box_alloc*` stays
+    readable box-cell memory for the life of the thread, so it can never
+    become "some other kind of object" and the address never moves. What is no
+    longer monotonic is which LOCAL a given cell belongs to.
+
+    So the old `dealloc` grep is kept (it is still the thing that would break
+    the address-validity leg) and a second check is added for the property that
+    now carries the reuse argument: release must PARK into the current
+    activation's quarantine, and only that activation's zero-reference
+    transition may feed the reuse pool. A release that pushed straight onto
+    the free pool could hand a cell to a second activation while the first can
+    still resume, which is a use-after-release aliasing hazard that this
+    exemption would otherwise silently suppress. The old global quarantine is
+    retained only as a conservative fallback for untracked callers.
+    """
     try:
         with open("crates/perry-runtime/src/box.rs",
                   encoding="utf-8", errors="replace") as fh:
@@ -2633,9 +2660,60 @@ def _probe_boxes_outside_the_gc_heap():
         return (False, "box.rs now calls an arena allocator — boxes may be GC "
                        "heap objects, which makes them movable AND sweepable")
     if re.search(r"\bdealloc\s*\(", src):
-        return (False, "box.rs now frees boxes; the never-reclaimed premise of "
-                       "the exemption no longer holds")
-    return (True, "std::alloc::alloc, no arena allocation, no dealloc")
+        return (False, "box.rs now returns cell memory to the allocator; a "
+                       "recycled address could become a non-box object, which "
+                       "voids both perry#4898's pointer rejection and #7906's "
+                       "positive cache")
+    # The reuse path must stay activation-reachability-gated. Each tracked
+    # release parks through park_async_activation_cell; the per-kind global
+    # quarantine is only the null-activation fallback. No release entry point
+    # may touch the intrusive free lists directly.
+    for fn, quarantine in (("js_box_release", "BOX_RELEASE_QUARANTINE"),
+                           ("js_i32_box_release", "I32_BOX_RELEASE_QUARANTINE"),
+                           ("js_bool_box_release", "BOOL_BOX_RELEASE_QUARANTINE")):
+        rel = rust_fn_body("crates/perry-runtime/src/box.rs", fn)
+        if rel is None:
+            return (False, f"{fn} not found in box.rs; the #8208 release path "
+                           "changed shape and this premise must be re-argued")
+        if "park_async_activation_cell" not in rel:
+            return (False, f"{fn} no longer parks tracked cells in their "
+                           "activation quarantine")
+        if quarantine not in rel:
+            return (False, f"{fn} lost its conservative {quarantine} fallback")
+        if "FREE_HEAD" in rel:
+            return (False, f"{fn} touches the free list directly — release must "
+                           "park until its activation reaches zero references. "
+                           "Publishing overwrites the terminal value a stray "
+                           "resume still writes through.")
+    release_ref = rust_fn_body("crates/perry-runtime/src/box.rs",
+                               "release_async_box_activation")
+    if release_ref is None or "if new == 0" not in release_ref \
+            or "publish_async_activation_cells(ptr)" not in release_ref:
+        return (False, "activation cells are no longer published only by the "
+                       "zero-reference transition")
+    publish = rust_fn_body("crates/perry-runtime/src/box.rs",
+                           "publish_async_activation_cells")
+    if publish is None or "push_free_cell" not in publish:
+        return (False, "the activation zero-reference publisher no longer "
+                       "feeds the intrusive free pools")
+    try:
+        with open("crates/perry-runtime/src/promise/async_step.rs",
+                  encoding="utf-8", errors="replace") as fh:
+            async_step = fh.read()
+        with open("crates/perry-runtime/src/promise/microtasks.rs",
+                  encoding="utf-8", errors="replace") as fh:
+            microtasks = fh.read()
+    except OSError:
+        return (False, "async-step pump sources not readable")
+    if "retain_async_box_activation(trap.box_activation)" not in async_step:
+        return (False, "Task::AsyncStep enqueue no longer retains its "
+                       "activation")
+    if "release_async_box_activation(box_activation)" not in microtasks:
+        return (False, "Task::AsyncStep dispatch no longer releases its "
+                       "activation")
+    return (True, "std::alloc::alloc, no arena allocation, cell memory never "
+                  "returned to the allocator; reuse is gated by each async "
+                  "activation's queued/running-step refcount")
 
 
 IMMOVABLE_SOURCES = (
@@ -2652,13 +2730,27 @@ IMMOVABLE_SOURCES = (
             "scan_box_roots_mut rewrites in place — the box's own address "
             "never changes."),
         not_reclaimable_because=(
-            "boxes are never freed: box.rs has no dealloc, and BOX_REGISTRY is "
-            "monotonic per thread (box.rs:429 states this as an invariant that "
-            "js_box_is_box's membership test depends on)."),
+            "box CELL MEMORY is never returned to the allocator: box.rs has no "
+            "dealloc. #8208 made a completed async activation's cells "
+            "RECYCLABLE — released cells are parked in an activation-owned "
+            "quarantine, published to a per-kind free pool when that "
+            "activation has no queued or running async step, and re-registered "
+            "by a later js_box_alloc* — "
+            "so BOX_REGISTRY membership is no longer monotonic. The exemption "
+            "does not rest on that membership. It rests on the weaker property "
+            "#8208 preserves deliberately: every address js_box_alloc* ever "
+            "returns stays 8 readable bytes of box-cell memory for the life of "
+            "the thread. It never moves, and it can never be recycled into a "
+            "different KIND of object, which is what perry#4898's pointer "
+            "rejection and #7906's positive cache actually depend on."),
         becomes_real_when=(
-            "boxes become GC-heap allocations (arena_alloc_gc) or box.rs grows "
-            "a free path. Re-check with --assume-boxes-in-gc-heap."),
-        probes=(("boxes are outside the GC heap and never freed",
+            "boxes become GC-heap allocations (arena_alloc_gc), or box.rs "
+            "starts handing cell memory back to the allocator (dealloc), or "
+            "the release path stops being activation-refcount-gated so a cell "
+            "could be reused while that activation can still resume. Re-check with "
+            "--assume-boxes-in-gc-heap."),
+        probes=(("box cells never move and are never returned to the "
+                 "allocator; reuse stays activation-refcount-gated",
                  _probe_boxes_outside_the_gc_heap),),
     ),
 )

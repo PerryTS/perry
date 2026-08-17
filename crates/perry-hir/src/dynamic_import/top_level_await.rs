@@ -74,7 +74,8 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => false,
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => false,
     }
 }
 

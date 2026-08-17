@@ -594,6 +594,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // choke point.
         Stmt::PreallocateTdzBoxes(ids) => emit_preallocate_boxes(ctx, ids, true),
 
+        // #7933 follow-up (async-state RSS accumulation): a plain-async
+        // activation's terminal states release the box cells the escape
+        // analysis proved unobservable — clear + de-register + park for
+        // reuse, so completed activations stop accumulating malloc-side
+        // memory (cell + registry entry) for the life of the process.
+        Stmt::ReleaseBoxes(ids) => emit_release_boxes(ctx, ids),
+
         // #853: every current `perry_hir::Stmt` variant is matched above.
         // Keep this catch-all so HIR additions land as a clear compile-time
         // diagnostic instead of a silent codegen drop.
@@ -725,6 +732,36 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
     Ok(())
 }
 
+/// Lower `Stmt::ReleaseBoxes`: for each id, load the box-cell pointer (local
+/// prealloc slot or closure capture slot — the async step body's case) and
+/// call the matching `js_*box_release`. Kind selection mirrors
+/// `emit_preallocate_boxes` exactly: the compiler-private i32/i1 control
+/// cells release through their own registries.
+///
+/// The statement is a reclamation HINT: an id with no visible cell here
+/// (module global, not boxed, no slot/capture) is skipped, which is always
+/// sound — the cell just stays live, as before #7933.
+fn emit_release_boxes(ctx: &mut FnCtx<'_>, ids: &[u32]) -> Result<()> {
+    for id in ids {
+        if ctx.module_globals.contains_key(id) || !ctx.boxed_vars.contains(id) {
+            continue;
+        }
+        let Some(box_ptr) = crate::expr::load_boxed_local_pointer(ctx, *id)? else {
+            continue;
+        };
+        let release_fn = if crate::expr::is_compiler_private_async_i32_control_local(ctx, *id) {
+            "js_i32_box_release"
+        } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, *id) {
+            "js_bool_box_release"
+        } else {
+            "js_box_release"
+        };
+        ctx.block()
+            .call_void(release_fn, &[(crate::types::I64, &box_ptr)]);
+    }
+    Ok(())
+}
+
 fn stmt_variant_name(s: &Stmt) -> &'static str {
     match s {
         Stmt::Expr(_) => "Expr",
@@ -744,6 +781,7 @@ fn stmt_variant_name(s: &Stmt) -> &'static str {
         Stmt::Switch { .. } => "Switch",
         Stmt::PreallocateBoxes(_) => "PreallocateBoxes",
         Stmt::PreallocateTdzBoxes(_) => "PreallocateTdzBoxes",
+        Stmt::ReleaseBoxes(_) => "ReleaseBoxes",
     }
 }
 

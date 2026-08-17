@@ -31,4 +31,14 @@
       </requestedPrivileges>
     </security>
   </trustInfo>
+  <!--
+    Unpackaged desktop applications must declare Windows 10 version 1903 or
+    later before the OS permits them to initialize a UWP XAML Island. This is
+    used by the Windows MapView backend's DesktopWindowXamlSource host.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <maxversiontested Id="10.0.18362.0"/>
+    </application>
+  </compatibility>
 </assembly>

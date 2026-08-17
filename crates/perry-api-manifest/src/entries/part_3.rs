@@ -1389,6 +1389,11 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     method("perf_hooks", "createHistogram", false, None),
     internal_property("perf_hooks", "timeOrigin"),
     internal_property("perf_hooks", "nodeTiming"),
+    // The ESM namespace exposes the underlying CJS `module.exports` object as
+    // `default`. Keep this in the manifest so the native-module member gate
+    // lets the runtime resolve that object instead of folding the read to
+    // `undefined` before codegen (#8236).
+    property("perf_hooks", "default"),
     property("perf_hooks", "performance"),
     property("perf_hooks", "constants"),
     class("perf_hooks", "Performance"),

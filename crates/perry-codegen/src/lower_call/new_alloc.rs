@@ -644,6 +644,26 @@ fn emit_instance_alloc_inner(
                 header_image, raw
             ));
 
+            // Publish the exact header boundary in the current arena block's
+            // object-start bitmap (InlineArenaState field at byte 24). The
+            // slow arm may install a new block, so derive the slot from the
+            // merged raw pointer and the state data pointer after the merge.
+            let current_data = blk.load(PTR, &state_ptr);
+            let raw_addr = blk.ptrtoint(&raw, I64);
+            let data_addr = blk.ptrtoint(&current_data, I64);
+            let relative = blk.sub(I64, &raw_addr, &data_addr);
+            let start_slot = blk.lshr(I64, &relative, "3");
+            let start_word = blk.lshr(I64, &start_slot, "6");
+            let start_bit = blk.and(I64, &start_slot, "63");
+            let bitmap_field = blk.gep(I8, &state_ptr, &[(I64, "24")]);
+            let bitmap = blk.load(PTR, &bitmap_field);
+            let bitmap_word = blk.gep(I64, &bitmap, &[(I64, &start_word)]);
+            let prior_starts = blk.load(I64, &bitmap_word);
+            let start_mask = blk.shl(I64, "1", &start_bit);
+            let updated_starts = blk.or(I64, &prior_starts, &start_mask);
+            // GC_STORE_AUDIT(INIT): side metadata for a freshly initialized GC header.
+            blk.store(I64, &updated_starts, &bitmap_word);
+
             // Second 8 bytes: keys_array pointer. The keys_ptr we loaded
             // above is an i64 (carries the ArrayHeader address); store as
             // i64 since the underlying memory is 8 bytes either way.

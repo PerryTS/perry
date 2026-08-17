@@ -63,10 +63,7 @@ pub extern "C" fn perry_ui_pdf_view_set_scale(h: i64, s: f64) {
     widgets::pdf_view::set_scale(h, s)
 }
 
-// MapView (#517 / #559) — Win32 stub-with-state. STATIC label shows
-// the current region + pin count. Real WinUI MapControl in XAML
-// Islands needs Windows App SDK + WinUI 3 stack + Bing Maps API key
-// — tracked under #559 as multi-day follow-up.
+// MapView (#517 / #559) — native MapControl hosted in a XAML Island.
 #[no_mangle]
 pub extern "C" fn perry_ui_map_view_create(w: f64, h: f64) -> i64 {
     widgets::map_view::create(w, h)

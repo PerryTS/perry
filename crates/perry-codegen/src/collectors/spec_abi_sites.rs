@@ -377,7 +377,7 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
         }
         Stmt::Expr(e) | Stmt::Throw(e) => record_expr_use(e, depth, scan),
         Stmt::Return(Some(e)) => record_expr_use(e, depth, scan),
-        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
             scan.boxed_prealloc.extend(ids.iter().copied());
         }
         Stmt::Return(None)

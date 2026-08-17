@@ -5,3 +5,4 @@ console.log(
     [key, value],
   ) => `${key}=${value}`).join(","),
 );
+console.log(Object.values(constants).sort((a, b) => a - b).join(","));

@@ -636,7 +636,10 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                     return f64::from_bits(TAG_FALSE);
                 }
                 if matches!(key_name, "name" | "length" | "prototype") {
-                    return f64::from_bits(TAG_FALSE);
+                    let enumerable = super::super::get_property_attrs(ptr, key_name)
+                        .map(|attrs| attrs.enumerable())
+                        .unwrap_or(false);
+                    return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
                 }
                 let enumerable = super::super::get_property_attrs(ptr, key_name)
                     .map(|attrs| attrs.enumerable())

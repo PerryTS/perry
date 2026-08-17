@@ -202,6 +202,20 @@ fn app_manifest_runs_as_invoker() {
     );
 }
 
+// Issue #559: an unpackaged Win32 process must opt into the Windows 10 1903
+// compatibility context before DesktopWindowXamlSource will initialize.
+#[test]
+fn app_manifest_enables_xaml_islands() {
+    assert!(
+        WINDOWS_APP_MANIFEST.contains("urn:schemas-microsoft-com:compatibility.v1"),
+        "manifest must declare the Windows compatibility namespace"
+    );
+    assert!(
+        WINDOWS_APP_MANIFEST.contains("<maxversiontested Id=\"10.0.18362.0\"/>"),
+        "manifest must opt into the Windows 10 1903 XAML Islands context"
+    );
+}
+
 // Issue #6023: only MSVC link.exe needs the mt.exe reachability treatment —
 // lld-link embeds manifests in-process. The classifier keys on the program's
 // file stem so bare names and vswhere-resolved absolute paths both match.

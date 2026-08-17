@@ -82,6 +82,9 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref()),
             Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
+            // Conservative: a body carrying a box-release hint is an async
+            // step machine; never harvest it for cross-module inlining.
+            Stmt::ReleaseBoxes(_) => false,
         }
     }
     body.iter().all(check_stmt)
@@ -332,6 +335,9 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), extern_names),
             Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
+            // Conservative: a body carrying a box-release hint is an async
+            // step machine; never harvest it for cross-module inlining.
+            Stmt::ReleaseBoxes(_) => false,
         }
     }
     body.iter().all(|s| check_stmt(s, extern_names))
@@ -468,7 +474,9 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
                         .is_some_and(|f| f.iter().any(|s| check_stmt(s, set)))
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), set),
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => false,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {
+                false
+            }
         }
     }
     stmts.iter().any(|s| check_stmt(s, set))

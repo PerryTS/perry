@@ -109,6 +109,10 @@ impl SH for Stmt {
                 tag(h, 16);
                 ids.hash(h);
             }
+            Stmt::ReleaseBoxes(ids) => {
+                tag(h, 17);
+                ids.hash(h);
+            }
         }
     }
 }

@@ -639,7 +639,7 @@ pub fn has_simple_control_flow(stmts: &[Stmt]) -> bool {
             | Stmt::LabeledContinue(_) => {
                 return false;
             }
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
         }
     }
     true
@@ -811,7 +811,9 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
                 }
             }
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+            Stmt::PreallocateBoxes(ids)
+            | Stmt::PreallocateTdzBoxes(ids)
+            | Stmt::ReleaseBoxes(ids) => {
                 for id in ids {
                     *max_id = (*max_id).max(*id);
                 }
@@ -943,6 +945,9 @@ pub fn collect_declared_local_ids(stmts: &[Stmt], out: &mut std::collections::Ha
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 out.extend(ids.iter().copied());
             }
+            // A release *references* its ids (they are captures of the step
+            // closure body it sits in); it declares nothing.
+            Stmt::ReleaseBoxes(_) => {}
             Stmt::If {
                 then_branch,
                 else_branch,

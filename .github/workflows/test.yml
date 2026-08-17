@@ -1125,22 +1125,11 @@ jobs:
     # PR-only: tags / nightly / workflow_dispatch already run every suite in the
     # full `cargo-test` path.
     runs-on: ubuntu-latest
-    # MUST cover the worst case the per-suite bound allows, or the job wall
-    # clock kills legitimately-running suites and we get an uninformative
-    # "cancelled" instead of the per-suite `::error::` — reintroducing, one
-    # level up, exactly what `timeout 1500` below exists to prevent.
-    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 diff-named suites
-    #   NAMED_SUITE_TIMEOUT_S         = 1500s = 25 min  -> 12 x 25 = 300
-    #   #7708 mapped perry-codegen    = 22 suites, uncapped, but in-process:
-    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 22 x 5  = 110
-    #   + 2 known-failure checks at 5 min                          = 10
-    #   + 30 min for toolchain/cache/staticlib build
-    #                                                     total    = 450
-    # Keep these in sync with ci_e2e_scope.py. This is a backstop, not a budget:
-    # every mapped suite measured 2.2-10.4 s wall clock, each suite is
-    # independently bounded, and the common case selects zero suites and exits
-    # in ~20-30s.
-    timeout-minutes: 450
+    # GitHub-hosted runners enforce a six-hour job limit. The per-suite bounds
+    # below isolate a hung compile and provide a useful named failure; they are
+    # not an additive job budget. The mapped in-process suites measure 2.2-10.4
+    # seconds each, and the common case selects no suite and exits in ~20-30s.
+    timeout-minutes: 360
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
@@ -2406,7 +2395,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build compiler
-        run: cargo build --release
+        # #8224: `--release` with no `-p` builds default-members only and
+        # NEVER emits libperry_{runtime,stdlib}.a (rlib-only since #5422), so
+        # the precompile fixtures that link the archives directly could not
+        # pass — masked for weeks by continue-on-error. Name the wrapper
+        # crates explicitly (same set the parity harness builds).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
 
       - name: Issue #945 scalar method IR guard
         run: |
@@ -2489,6 +2483,8 @@ jobs:
             test_ui_phase4 \
             test_ui_adbanner_smoke \
             test_ui_on_keydown_smoke \
+            test_ui_drag_drop \
+            test_ui_text_alignment \
             test_issue_1495_image_systemname \
             test_issue_1867_audio_playback \
             test_issue_2022_canvas_draw_image \
@@ -2509,6 +2505,7 @@ jobs:
             test_take_screenshot \
             test_issue_842_side_effect_dynamic_import \
             test_jose_signverify_roundtrip \
+            test_jwt_sign_dynamic_alg \
             test_parity_assert \
             test_parity_async_hooks \
             test_parity_buffer \

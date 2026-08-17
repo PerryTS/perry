@@ -993,6 +993,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_i32_box_alloc", I64, &[I32]);
     module.declare_function("js_i32_box_get", I32, &[I64]);
     module.declare_function("js_i32_box_set", VOID, &[I64, I32]);
+    module.declare_function("js_box_release", VOID, &[I64]);
+    module.declare_function("js_i32_box_release", VOID, &[I64]);
+    module.declare_function("js_bool_box_release", VOID, &[I64]);
     module.declare_function("js_bool_box_alloc", I64, &[I32]);
     module.declare_function("js_bool_box_get", I32, &[I64]);
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
