@@ -95,7 +95,7 @@ DEFAULT_CAP = 12
 # omission is no longer silent.
 #
 # Measured on arm64 macOS, debug, `--test-threads=1`, one `cargo test -p
-# perry-codegen --test <suite>` per row: every one of the 24 mapped suites
+# perry-codegen --test <suite>` per row: every one of the 22 mapped suites
 # completes in 2.2-10.4 s wall clock, and nearly all of that is cargo's
 # freshness check — the test time itself is sub-second (e.g. shadow_slot_hygiene
 # 12 tests / 0.10 s, native_proof_buffer_views 36 / 0.2 s). The cost is the
@@ -121,9 +121,9 @@ _CODEGEN_SUITES = [
     "constructor_recursion",
     "destructure_call_location",
     "i64_spec_ternary_recursion",
+    "large_object_barriers",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
-    "native_proof_buffer_views",
     # #7506/#7245: held out until its one failing test was triaged. The
     # composition it guards had drifted from three named callees to three
     # PROPERTIES (the guard-failure edge now reaches `$pshape`, which coerces
@@ -136,11 +136,9 @@ _CODEGEN_SUITES = [
     "private_guard_declaring_class",
     "release_boxes_lowering",
     "scalar_replaced_slot_roots",
-    "shadow_slot_hygiene",
     "spec_abi_typed_array_local_length",
     "static_symbol_hygiene",
     "temp_root_operand_temporaries",
-    "typed_feedback",
     "typed_shape_declared_at_allocation",
     "typed_shape_descriptor",
     "typed_shape_descriptors",
@@ -172,15 +170,57 @@ SOURCE_SUITE_MAP = {
 SUITE_EXCLUSIONS = [
     (
         "perry-codegen",
-        "large_object_barriers",
-        "large_local_array_push_inbounds_store_emits_precise_slot_barrier",
-        "#7708 — red on main; the other 2 tests in this suite pass.",
-    ),
-    (
-        "perry-codegen",
         "loop_safepoint_purity",
         "proven_numeric_counted_loop_emits_no_back_edge_poll",
         "#8263 — red on main; current codegen emits guarded polls in this fixture.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "artifact_records_buffer_read_double_as_f64",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "artifact_records_buffer_read_float_as_f32_and_float_extend_materialization",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "artifact_records_buffer_read_u32_and_unsigned_materialization",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "artifact_records_width_aware_buffer_numeric_read_facts",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "explicit_width_guard_proves_wide_buffer_read",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "native_proof_buffer_views",
+        "proven_buffer_and_typed_array_reads_are_numeric_operands",
+        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
+    ),
+    (
+        "perry-codegen",
+        "shadow_slot_hygiene",
+        "canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops",
+        "#8264 — red on main; current IR no longer satisfies this shadow-slot assertion.",
+    ),
+    (
+        "perry-codegen",
+        "typed_feedback",
+        "typed_feedback_guards_direct_class_field_specialization",
+        "#8264 — red on main; current IR lacks the asserted class-field fast block.",
     ),
 ]
 
