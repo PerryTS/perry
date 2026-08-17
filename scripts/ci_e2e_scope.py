@@ -162,7 +162,8 @@ SOURCE_SUITE_MAP = {
 #   * the suite must exist on disk (`_assert_exclusions_are_live`), and
 #   * the named test must still FAIL. `e2e-scoped` runs exactly these tests and
 #     fails the job if one PASSES, with instructions to delete the entry. A fix
-#     therefore cannot land while leaving its exclusion behind.
+#     codegen-scoped fix therefore cannot land while leaving its exclusion
+#     behind. Scope-independent validation is tracked in #8266.
 #
 # Excluding a TEST rather than a SUITE matters: `native_proof_regressions` is
 # 262 tests, and holding all 262 out for one of them is how 261 tests' worth of
@@ -399,9 +400,10 @@ def _assert_map_covers_codegen_suites(root: str) -> None:
 def _assert_exclusions_are_live(root: str) -> None:
     """An exclusion must name a suite that exists, and must not also be mapped.
 
-    The stale half of the bookkeeping. The other half — "the named test must
-    still fail" — cannot be answered without running cargo, so `e2e-scoped`
-    answers it: it runs exactly these tests and fails if one passes.
+    The stale structural half of the bookkeeping. The behavioral half — "the
+    named test must still fail" — cannot be answered without running cargo, so
+    `e2e-scoped` answers it whenever perry-codegen is selected. Independent
+    validation for fixes outside that scope is tracked in #8266.
     """
     mapped = {(pkg, suite) for pkg, suite in SOURCE_SUITE_MAP.get(_CODEGEN_SRC, [])}
     for pkg, suite, test, why in SUITE_EXCLUSIONS:
@@ -604,8 +606,9 @@ def main() -> int:
 
     root = _repo_root()
 
-    # `<package> <suite> <failing test>` for every held-out test, so the runner
-    # can assert each one still fails and tell the fixer to delete the entry.
+    # `<package> <suite> <failing test>` for every held-out test, so a runner
+    # that selected perry-codegen can assert each still fails and tell the
+    # fixer to delete the entry. Scope-independent execution is #8266.
     if "--exclusions" in sys.argv:
         for pkg, suite, test, _why in SUITE_EXCLUSIONS:
             print(f"{pkg} {suite} {test}")

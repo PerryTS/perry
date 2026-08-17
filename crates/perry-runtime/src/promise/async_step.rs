@@ -1564,9 +1564,11 @@ mod tests {
             let rejected = js_promise_rejected(73.0);
 
             let step = crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
-            let thunk = crate::closure::js_closure_alloc(async_step_fulfill_thunk as *const u8, 2);
+            let thunk = crate::closure::js_closure_alloc(async_step_fulfill_thunk as *const u8, 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
+            crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);
+            crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 
             let original = INLINE_TRAP.with(|slot| {
                 let original = slot.get();

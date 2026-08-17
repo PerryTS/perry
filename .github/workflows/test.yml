@@ -1110,22 +1110,11 @@ jobs:
     # PR-only: tags / nightly / workflow_dispatch already run every suite in the
     # full `cargo-test` path.
     runs-on: ubuntu-latest
-    # MUST cover the worst case the per-suite bound allows, or the job wall
-    # clock kills legitimately-running suites and we get an uninformative
-    # "cancelled" instead of the per-suite `::error::` — reintroducing, one
-    # level up, exactly what `timeout 1500` below exists to prevent.
-    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 diff-named suites
-    #   NAMED_SUITE_TIMEOUT_S         = 1500s = 25 min  -> 12 x 25 = 300
-    #   #7708 mapped perry-codegen    = 22 suites, uncapped, but in-process:
-    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 22 x 5  = 110
-    #   + 9 known-failure checks at 5 min                          = 45
-    #   + 30 min for toolchain/cache/staticlib build
-    #                                                     total    = 485
-    # Keep these in sync with ci_e2e_scope.py. This is a backstop, not a budget:
-    # every mapped suite measured 2.2-10.4 s wall clock, each suite is
-    # independently bounded, and the common case selects zero suites and exits
-    # in ~20-30s.
-    timeout-minutes: 485
+    # GitHub-hosted runners enforce a six-hour job limit. The per-suite bounds
+    # below isolate a hung compile and provide a useful named failure; they are
+    # not an additive job budget. The mapped in-process suites measure 2.2-10.4
+    # seconds each, and the common case selects no suite and exits in ~20-30s.
+    timeout-minutes: 360
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
