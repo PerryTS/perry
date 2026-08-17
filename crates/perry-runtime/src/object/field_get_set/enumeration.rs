@@ -52,6 +52,69 @@ fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut 
     out
 }
 
+/// Build `Object.values` / `Object.entries` from the virtual export surface of
+/// a native-module namespace.  Such namespaces physically contain only the
+/// internal `__module__` sentinel; their observable keys and values are
+/// supplied lazily by the native-module vtable.
+///
+/// Keep this in the generic enumeration module and call through the armed
+/// vtable so binaries that never create a namespace do not retain the native
+/// module export tables.  The receiver, key list, output, and per-key values
+/// are rooted because resolving a callable export can allocate and trigger a
+/// moving collection.
+unsafe fn native_module_enum(
+    obj: *const ObjectHeader,
+    what: MapSetEnum,
+) -> Option<*mut ArrayHeader> {
+    let vt = super::super::native_module::native_module_vtable()?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let keys = obj_h.with_const_ptr(|obj| (vt.own_keys_array)(obj))?;
+    let keys_h = scope.root_raw_const_ptr(keys);
+    let count = crate::array::js_array_length(keys_h.get_raw_const_ptr::<ArrayHeader>());
+    let result = crate::array::js_array_alloc(count);
+    let result_h = scope.root_raw_mut_ptr(result);
+
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key = crate::array::js_array_get(keys_h.get_raw_const_ptr::<ArrayHeader>(), i);
+        let key_ptr = (key.bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+        let key_h = iter_scope.root_string_ptr(key_ptr);
+        let value = obj_h.with_const_ptr(|obj| {
+            key_h.with_const_ptr(|key| js_object_get_field_by_name(obj, key))
+        });
+        let value_h = iter_scope.root_nanbox_u64(value.bits());
+
+        match what {
+            MapSetEnum::Values => {
+                crate::array::js_array_push_f64(
+                    result_h.get_raw_mut_ptr::<ArrayHeader>(),
+                    value_h.get_nanbox_f64(),
+                );
+            }
+            MapSetEnum::Entries => {
+                let pair = crate::array::js_array_alloc(2);
+                let pair_h = iter_scope.root_raw_mut_ptr(pair);
+                crate::array::js_array_push(
+                    pair_h.get_raw_mut_ptr::<ArrayHeader>(),
+                    JSValue::string_ptr(key_h.get_raw_mut_ptr::<crate::StringHeader>()),
+                );
+                crate::array::js_array_push_f64(
+                    pair_h.get_raw_mut_ptr::<ArrayHeader>(),
+                    value_h.get_nanbox_f64(),
+                );
+                crate::array::js_array_push(
+                    result_h.get_raw_mut_ptr::<ArrayHeader>(),
+                    JSValue::array_ptr(pair_h.get_raw_mut_ptr::<ArrayHeader>()),
+                );
+            }
+            MapSetEnum::Keys => unreachable!("native_module_enum is only used for values/entries"),
+        }
+    }
+
+    Some(result_h.get_raw_mut_ptr::<ArrayHeader>())
+}
+
 /// `Object.keys(value)` entry point that inspects the NaN-boxed *value* (not a
 /// raw pointer) so it handles primitives safely. A string yields its index
 /// keys `"0".."length-1"` (`Object.keys("abc") === ["0","1","2"]`); objects and
@@ -1381,6 +1444,11 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
         return crate::array::js_array_alloc(0);
     }
     unsafe {
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(result) = native_module_enum(obj, MapSetEnum::Values) {
+                return result;
+            }
+        }
         // Iterate up to keys_len (logical property count), not
         // field_count — same fix as Object.entries above. Without
         // this, objects with overflow fields silently returned only
@@ -1566,6 +1634,11 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         return crate::array::js_array_alloc(0);
     }
     unsafe {
+        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(result) = native_module_enum(obj, MapSetEnum::Entries) {
+                return result;
+            }
+        }
         let keys = (*obj).keys_array;
         // Iterate up to keys_len (the logical property count), not
         // field_count. Parser-built and dict-built objects with ≥9
