@@ -373,8 +373,8 @@ Total: 2946 entries across 125 modules.
 - `linkSymbols` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 - `ptr` — module
 - `read` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
-- `toArrayBuffer` — module ⚠ **stub** — stage 2 — not yet implemented, throws at runtime (#6562)
-- `toBuffer` — module ⚠ **stub** — stage 2 — not yet implemented, throws at runtime (#6562)
+- `toArrayBuffer` — module
+- `toBuffer` — module
 - `viewSource` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 
 ### Properties

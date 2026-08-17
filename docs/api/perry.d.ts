@@ -323,9 +323,9 @@ declare module "bun:ffi" {
   export function ptr(...args: any[]): any;
   /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function read(...args: any[]): any;
-  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
+  /** stdlib */
   export function toArrayBuffer(...args: any[]): any;
-  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
+  /** stdlib */
   export function toBuffer(...args: any[]): any;
   /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function viewSource(...args: any[]): any;

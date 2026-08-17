@@ -1,4 +1,4 @@
-//! bun:ffi stage 1 (#6562) — e2e: compile TS that dlopens real C-ABI
+//! bun:ffi stages 1-2 (#6562) — e2e: compile TS that dlopens real C-ABI
 //! dylibs and drive them through the typed call stubs.
 //!
 //! Two tiers:
@@ -8,8 +8,9 @@
 //!    bool, mixed int/float register assignment (the classic ABI trap),
 //!    8-int / 8-double register limits, ptr round-trips through pinned
 //!    Buffers (JS→native reads AND native→JS writes), cstring in both
-//!    directions, NULL pointers, and the error surfaces (missing symbol,
-//!    bad library, stage-1 rejections).
+//!    directions, zero-copy native-memory ArrayBuffer/Buffer views, NULL
+//!    pointers, and the error surfaces (missing symbol, bad library,
+//!    stage-1 rejections).
 //! 2. A bun-pty smoke test against the real third-party
 //!    `librust_pty` dylib (17-symbol pty FFI table): spawn a shell,
 //!    write/read round-trip, resize, kill. Runs when the dylib is
@@ -152,10 +153,17 @@ EXPORT const char *ffi_concat(const char *a, const char *b) {
     return g_concat_buf;
 }
 EXPORT const char *ffi_utf8(void) { return "caf\xC3\xA9 \xE2\x9C\x93"; }
+
+static uint8_t g_external_bytes[] = { 65, 66, 0, 67, 68 };
+EXPORT uint8_t *ffi_external_ptr(void) { return g_external_bytes; }
+EXPORT uint8_t ffi_external_get(int32_t index) { return g_external_bytes[index]; }
+EXPORT void ffi_external_set(int32_t index, uint8_t value) {
+    g_external_bytes[index] = value;
+}
 "#;
 
 const TIER1_TS: &str = r#"
-import { dlopen, FFIType, ptr, CString, suffix } from "bun:ffi";
+import { dlopen, FFIType, ptr, CString, suffix, toArrayBuffer, toBuffer } from "bun:ffi";
 
 console.log("suffix-ok:", suffix === "dylib" || suffix === "so");
 console.log("ffitype:", FFIType.i32, FFIType.cstring, FFIType.ptr, FFIType.void, FFIType.u64);
@@ -203,6 +211,9 @@ const lib = dlopen(process.env.FFI_TEST_LIB!, {
   ffi_strlen: { args: [FFIType.cstring], returns: FFIType.i32 },
   ffi_concat: { args: [FFIType.cstring, FFIType.cstring], returns: FFIType.cstring },
   ffi_utf8: { args: [], returns: FFIType.ptr },
+  ffi_external_ptr: { args: [], returns: FFIType.ptr },
+  ffi_external_get: { args: [FFIType.i32], returns: FFIType.u8 },
+  ffi_external_set: { args: [FFIType.i32, FFIType.u8], returns: FFIType.void },
 });
 const s = lib.symbols;
 
@@ -267,6 +278,29 @@ console.log("concat:", s.ffi_concat(Buffer.from("foo\0"), Buffer.from("bar\0")))
 // CString: read a NUL-terminated string from a raw pointer
 const utf8Ptr = s.ffi_utf8();
 console.log("cstring-read:", CString(utf8Ptr));
+
+// Stage 2: zero-copy native-memory wrappers. Both directions must alias the
+// C static allocation; a copy would fail one of these checks.
+const externalPtr = s.ffi_external_ptr();
+const externalAB = toArrayBuffer(externalPtr, 1, 3);
+const externalView = new Uint8Array(externalAB);
+console.log("external-ab:", externalAB instanceof ArrayBuffer, externalAB.byteLength);
+console.log("external-initial:", externalView[0], externalView[1], externalView[2]);
+s.ffi_external_set(2, 88);
+console.log("external-native-write:", externalView[1]);
+externalView[2] = 90;
+console.log("external-js-write:", s.ffi_external_get(3));
+console.log("external-ptr-offset:", ptr(externalAB) === externalPtr + 1);
+
+const externalBuffer = toBuffer(externalPtr, 0, 2);
+console.log("external-buffer:", Buffer.isBuffer(externalBuffer), externalBuffer.length, externalBuffer[0]);
+externalBuffer[0] = 81;
+console.log("external-buffer-write:", s.ffi_external_get(0));
+
+// Omitted byteLength uses the first NUL terminator.
+s.ffi_external_set(2, 0);
+const terminated = toArrayBuffer(externalPtr);
+console.log("external-terminated:", terminated.byteLength);
 
 lib.close();
 
@@ -334,6 +368,14 @@ fn tier1_every_ffi_type_against_test_dylib() {
         "strlen: 11",
         "concat: foobar",
         "cstring-read: caf\u{e9} \u{2713}",
+        "external-ab: true 3",
+        "external-initial: 66 0 67",
+        "external-native-write: 88",
+        "external-js-write: 90",
+        "external-ptr-offset: true",
+        "external-buffer: true 2 65",
+        "external-buffer-write: 81",
+        "external-terminated: 2",
         "closed-throws: true",
         "TIER1-DONE",
     ] {

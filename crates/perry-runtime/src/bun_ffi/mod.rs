@@ -1,4 +1,4 @@
-//! `bun:ffi` — C-ABI foreign-function interface, stage 1 (#6562).
+//! `bun:ffi` — C-ABI foreign-function interface, stages 1-2 (#6562).
 //!
 //! Implements the Bun FFI API shape for perry-compiled programs:
 //!
@@ -10,10 +10,12 @@
 //!   TypedArray / ArrayBuffer / DataView's bytes.
 //! - `CString(ptr[, byteOffset[, byteLength]])` — read a NUL-terminated
 //!   (or length-bounded) UTF-8 string from a native pointer.
+//! - `toArrayBuffer` / `toBuffer` — zero-copy JS views over native-owned
+//!   memory. The native allocation remains caller-owned.
 //! - `suffix` — platform dylib suffix ("dylib" / "so" / "dll").
 //!
-//! Stage-1 scope: `toArrayBuffer` (external backing stores), `JSCallback` /
-//! `FFIType.function` (native→JS trampolines), `linkSymbols`, `CFunction`,
+//! Remaining scope: `JSCallback` / `FFIType.function` (native→JS
+//! trampolines), `linkSymbols`, `CFunction`,
 //! `viewSource` and `read` are declared but throw a clear "not yet
 //! supported" error. The dispatch/type plumbing here is shaped so those can
 //! be added without reworking stage 1 (see `types::` for the reserved
@@ -72,6 +74,7 @@
 
 pub mod call;
 pub mod dlopen;
+pub mod memory;
 pub mod types;
 
 use crate::value::JSValue;
@@ -117,14 +120,14 @@ pub fn scan_bun_ffi_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     types::scan_ffi_type_cache_mut(visitor);
 }
 
-/// Stage-1 boundary: named exports that exist in `bun:ffi` but are not yet
+/// Later-stage boundary: named exports that exist in `bun:ffi` but are not yet
 /// implemented in perry. Kept callable so real-world feature probes fail
 /// with an actionable message instead of `undefined is not a function`.
-fn throw_stage1_unsupported(what: &str) -> ! {
+fn throw_unsupported(what: &str) -> ! {
     crate::fs::validate::throw_error_with_code(
         &format!(
-            "bun:ffi: {what} is not supported yet in perry (stage 1, #6562). \
-             Available: dlopen, FFIType, ptr, CString, suffix."
+            "bun:ffi: {what} is not supported yet in perry (#6562). \
+             Available: dlopen, FFIType, ptr, CString, toArrayBuffer, toBuffer, suffix."
         ),
         "ERR_NOT_IMPLEMENTED",
     )
@@ -157,13 +160,13 @@ pub(crate) unsafe fn dispatch(
         // but destructured/dynamic reads can land here too.
         "FFIType" => Some(types::ffi_type_object_value()),
         "suffix" => Some(string_value(suffix_str())),
-        "toArrayBuffer" => throw_stage1_unsupported("toArrayBuffer (external backing stores)"),
-        "JSCallback" => throw_stage1_unsupported("JSCallback (native-to-JS callbacks)"),
-        "CFunction" => throw_stage1_unsupported("CFunction"),
-        "linkSymbols" => throw_stage1_unsupported("linkSymbols"),
-        "viewSource" => throw_stage1_unsupported("viewSource"),
-        "read" => throw_stage1_unsupported("the read namespace"),
-        "toBuffer" => throw_stage1_unsupported("toBuffer"),
+        "toArrayBuffer" => Some(memory::view_value(arg(0), arg(1), arg(2), true)),
+        "JSCallback" => throw_unsupported("JSCallback (native-to-JS callbacks)"),
+        "CFunction" => throw_unsupported("CFunction"),
+        "linkSymbols" => throw_unsupported("linkSymbols"),
+        "viewSource" => throw_unsupported("viewSource"),
+        "read" => throw_unsupported("the read namespace"),
+        "toBuffer" => Some(memory::view_value(arg(0), arg(1), arg(2), false)),
         _ => None,
     }
 }

@@ -78,6 +78,12 @@ pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 
 crate::perry_thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// `BufferHeader` wrappers whose bytes live in memory owned by native
+    /// code. The wrapper itself is an ordinary, non-moving GC object; only
+    /// its data pointer is external. `bun:ffi.toArrayBuffer`/`toBuffer` use
+    /// this to expose native memory without copying it or taking ownership.
+    static FOREIGN_BACKING_REGISTRY: RefCell<PtrHashMap<usize, usize>> =
+        RefCell::new(new_ptr_hash_map());
     /// Buffers that were specifically created via `new Uint8Array(...)` —
     /// formatted as `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`.
     static UINT8ARRAY_FROM_CTOR: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -156,6 +162,10 @@ use crate::registry_latch::RegistryLatch;
 /// load rather than one per registry — hence [`note_buffer_like_registered`],
 /// which `shared_sab::alloc_shared_sab` calls before publishing a backing.
 static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
+/// Avoid a thread-local map probe in `buffer_data{,_mut}` until the first
+/// foreign-backed buffer is created. The latch is deliberately monotone;
+/// these accessors are among the hottest paths in the runtime.
+static FOREIGN_BACKING_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 
 /// Arm the `is_registered_buffer` latch from outside this module.
 ///
@@ -605,6 +615,43 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
     ptr
 }
 
+/// Allocate a Buffer-shaped GC wrapper over native-owned memory.
+///
+/// Only the `BufferHeader` is allocated in Perry's old arena. The byte span
+/// remains owned by the native caller and is never freed by the GC. Callers
+/// must keep that span alive for at least as long as the returned JS value.
+/// The external mapping is removed when the wrapper is collected, preventing
+/// recycled GC addresses from inheriting stale backing pointers.
+pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
+    let ptr = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<BufferHeader>(),
+        8,
+        crate::gc::GC_TYPE_BUFFER,
+    ) as *mut BufferHeader;
+    unsafe {
+        let header = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+        (*ptr).length = length;
+        (*ptr).capacity = length;
+    }
+    register_buffer(ptr);
+    // Arm before publishing the map entry; see `RegistryLatch`'s ordering
+    // contract and the analogous buffer-registration path above.
+    FOREIGN_BACKING_EVER_REGISTERED.arm();
+    FOREIGN_BACKING_REGISTRY.with(|r| {
+        r.borrow_mut().insert(ptr as usize, data as usize);
+    });
+    ptr
+}
+
+#[inline]
+fn foreign_backing(addr: usize) -> Option<usize> {
+    if FOREIGN_BACKING_EVER_REGISTERED.is_idle() {
+        return None;
+    }
+    FOREIGN_BACKING_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+}
+
 /// Post-trace registry pruning (mirrors the #6010 Map/Set pattern): collect
 /// registered buffers whose header is genuinely dead so the sweep subphase
 /// can drop their side-table state. All buffers are TENURED old-arena
@@ -674,6 +721,9 @@ unsafe fn registered_buffer_is_dead_post_trace(
 /// the #6080 ABA class) and the entries leak forever.
 pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     BUFFER_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    FOREIGN_BACKING_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
     ARRAY_BUFFER_REGISTRY.with(|r| {
@@ -776,10 +826,14 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
 
 /// Get the data pointer for a buffer
 pub fn buffer_data(buf: *const BufferHeader) -> *const u8 {
-    unsafe { (buf as *const u8).add(std::mem::size_of::<BufferHeader>()) }
+    foreign_backing(buf as usize)
+        .map(|addr| addr as *const u8)
+        .unwrap_or_else(|| unsafe { (buf as *const u8).add(std::mem::size_of::<BufferHeader>()) })
 }
 
 /// Get the mutable data pointer for a buffer
 pub fn buffer_data_mut(buf: *mut BufferHeader) -> *mut u8 {
-    unsafe { (buf as *mut u8).add(std::mem::size_of::<BufferHeader>()) }
+    foreign_backing(buf as usize)
+        .map(|addr| addr as *mut u8)
+        .unwrap_or_else(|| unsafe { (buf as *mut u8).add(std::mem::size_of::<BufferHeader>()) })
 }

@@ -56,7 +56,8 @@ pub use header::{
     resolve_buffer_ab_alias, set_buffer_ab_alias, CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
-    collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
+    buffer_alloc_foreign, collect_dead_registered_buffers_post_trace,
+    finalize_collected_dead_buffer,
 };
 #[cfg(test)]
 pub(crate) use header::{test_data_view_registry_len, test_shared_array_buffer_registry_len};

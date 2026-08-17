@@ -19,6 +19,9 @@ pub(super) struct BufferViewInit {
     native_owner_local_id: Option<u32>,
     native_byte_offset: Option<i64>,
     native_byte_length: Option<i64>,
+    /// Resolve element zero through the runtime's buffer-view registry instead
+    /// of assuming bytes start inline at `header + data_offset_bytes`.
+    resolve_buffer_backing: bool,
     /// See `BufferViewSlot::storage_inline_proven` — true only when the
     /// construction form proves fresh inline (non-view) storage.
     storage_inline_proven: bool,
@@ -45,6 +48,17 @@ pub(super) fn register_noalias_buffer_view(
             &[(I32, &init.data_offset_bytes.to_string())],
         );
         blk.load(PTR, &data_field)
+    } else if init.resolve_buffer_backing {
+        // `new Uint8Array(arrayBuffer)` has a local snapshot after its header,
+        // but reads and writes belong to the ArrayBuffer's real backing. This
+        // also covers bun:ffi external ArrayBuffers, whose bytes are not inline
+        // in the wrapper at all (#6562). Resolve once at construction and cache
+        // the stable backing pointer in the normal view slot.
+        blk.call(
+            PTR,
+            "js_native_buffer_data_ptr",
+            &[(crate::types::DOUBLE, value)],
+        )
     } else {
         blk.gep(
             I8,
@@ -129,6 +143,7 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
+            resolve_buffer_backing: false,
             // copyBytesFrom always allocates a fresh inline buffer.
             storage_inline_proven: true,
         }),
@@ -143,6 +158,7 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
+                resolve_buffer_backing: false,
                 // Buffer.alloc/allocUnsafe always allocate fresh inline bytes.
                 storage_inline_proven: true,
             })
@@ -157,6 +173,7 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
+            resolve_buffer_backing: true,
             // `new Uint8Array(buffer)` is the VIEW form — only a literal
             // length (or no argument) proves inline storage.
             storage_inline_proven: ctor_arg_is_literal_length(arg.as_deref()),
@@ -173,6 +190,7 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
+                resolve_buffer_backing: false,
                 // Same view-form hazard as Uint8ArrayNew: only a literal
                 // length proves the non-view construction here (the pre-pass
                 // proves the plain-array-source form separately for params).
@@ -204,6 +222,7 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_owner_local_id: Some(owner_local_id),
                 native_byte_offset: byte_offset_const,
                 native_byte_length,
+                resolve_buffer_backing: false,
                 // Arena views have their own owner/dispose lifecycle — never
                 // eligible for the proven checked tier.
                 storage_inline_proven: false,
