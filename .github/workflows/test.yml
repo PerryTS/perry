@@ -2347,7 +2347,12 @@ jobs:
   # ---------------------------------------------------------------------------
   parity-aggregate:
     needs: [plan, parity]
-    if: fromJSON(needs.plan.outputs.plan).jobs.parity
+    # `!cancelled()`: run even when a shard FAILED its verdict (dark debt in
+    # the known-failures gate) — the merged report is exactly what a triage
+    # needs, and the threshold/trend verdicts are meaningful regardless. A
+    # missing shard ARTIFACT still fails the merge (--expect). Skipped only
+    # when the plan turned parity off.
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.plan).jobs.parity }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
