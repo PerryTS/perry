@@ -172,6 +172,9 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
+/// #8220 diagnostic: native-stack scan for stale from-space pointers after a
+/// copying minor. Debug-only (`PERRY_GC_SCAN_NATIVE_STACK=1`).
+mod native_stack_scan;
 /// #7742: the measured policy behind whole-block in-place promotion. The
 /// mechanism is `arena/promote.rs`; this decides when to use it.
 mod promote_in_place;
@@ -1015,6 +1018,11 @@ pub fn gc_init() {
     reg_scanner!(crate::process::scan_process_env_cache_roots_mut);
     reg_scanner!(crate::process::scan_permission_cache_roots_mut);
     reg_scanner!(crate::process::scan_report_cache_roots_mut);
+    // #8220: process EventEmitter listener closures are held as raw
+    // `*const ClosureHeader` in a TLS `HashMap` — invisible to the precise
+    // root map. Without this scanner a copying minor that evacuates a
+    // listener closure leaves the raw pointer stale.
+    reg_scanner!(crate::os::process_emitter_root_scanner);
     // #7231: the raw `Error` constructor address behind
     // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
     // so it is not swept, but this duplicate lives outside the object graph
