@@ -209,7 +209,7 @@ unsafe fn object_field_name(
 ) -> Option<String> {
     let keys_bits = crate::object::shapes::object_shape_descriptor(obj)
         .map(|descriptor| descriptor.keys)
-        .unwrap_or((*obj).keys_array as u64);
+        .unwrap_or(crate::object::object_keys_array(obj) as u64);
     let keys_addr = decode_slot_target(keys_bits);
     if keys_addr < GC_HEADER_SIZE + 0x1000 {
         return None;

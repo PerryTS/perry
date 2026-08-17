@@ -146,7 +146,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     if class_id != 0
                         && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
                     {
-                        let keys = (*o).keys_array;
+                        let keys = crate::object::object_keys_array(o);
                         if !keys.is_null()
                             && ((keys as u64) >> 48) == 0
                             && crate::value::addr_class::is_above_handle_band(keys as usize)

@@ -47,8 +47,8 @@ pub(crate) struct ObjectShapeHint {
     /// Pre-interned key pointers in declared field order. Pointers
     /// are held alive by PARSE_KEY_CACHE + scan_parse_roots.
     pub(crate) expected_keys: Vec<*const StringHeader>,
-    /// Pre-built keys_array that each parsed record's ObjectHeader
-    /// points to. Built via `js_build_class_keys_array`, so the
+    /// Pre-built keys array that each parsed record's shape descriptor
+    /// references. Built via `js_build_class_keys_array`, so the
     /// shape cache + scan_shape_cache_roots keeps it alive.
     pub(crate) keys_array: *mut crate::array::ArrayHeader,
     /// Number of fields in the declared shape — used as the object's

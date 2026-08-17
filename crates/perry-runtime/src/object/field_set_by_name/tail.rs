@@ -170,7 +170,7 @@ pub(super) fn set_field_by_name_object_tail(
 
         // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
         // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
-        // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.
+        // Without this check, crate::object::object_keys_array(obj) reads capture[0] → corruption/crash.
         let type_tag_at_12 =
             *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
@@ -381,7 +381,7 @@ pub(super) fn set_field_by_name_object_tail(
         let is_sealed_or_no_extend =
             obj_flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
 
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
 
         // Validate keys_array is a real heap pointer or null.
         if !keys.is_null() {
@@ -670,7 +670,7 @@ pub(super) fn set_field_by_name_object_tail(
             let owned_keys = if keys_shared {
                 let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
                 refresh_roots_after_alloc!();
-                let keys = (*obj).keys_array;
+                let keys = crate::object::object_keys_array(obj);
                 prev_keys_usize = keys as usize;
                 let src_data = (keys as *const u8).add(8) as *const f64;
                 let dst_data = (cloned as *mut u8).add(8) as *mut f64;
@@ -718,7 +718,7 @@ pub(super) fn set_field_by_name_object_tail(
                     new_index as u32,
                 );
                 keys_index_insert(
-                    (*obj).keys_array,
+                    crate::object::object_keys_array(obj),
                     (new_index + 1) as u32,
                     key_hash,
                     new_index as u32,
@@ -764,7 +764,7 @@ pub(super) fn set_field_by_name_object_tail(
             // C3a migration above, an owned grow lands the append on the
             // migrated record rather than forcing a rebuild.
             keys_index_insert(
-                (*obj).keys_array,
+                crate::object::object_keys_array(obj),
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,
@@ -865,7 +865,7 @@ pub(super) fn set_field_by_name_object_tail(
         let owned_keys = if keys_shared {
             let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
             refresh_roots_after_alloc!();
-            let keys = (*obj).keys_array;
+            let keys = crate::object::object_keys_array(obj);
             prev_keys_usize = keys as usize;
             let src_data = (keys as *const u8).add(8) as *const f64;
             let dst_data = (cloned as *mut u8).add(8) as *mut f64;

@@ -632,7 +632,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     let can_cache = !crate::state::state().descriptors.accessors_in_use.get();
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
-        // (*obj).keys_array — otherwise an Array/String/Buffer/etc. receiver
+        // crate::object::object_keys_array(obj) — otherwise an Array/String/Buffer/etc. receiver
         // (whose word at offset 0 collides with a real `class_id` — since
         // #8113 that is an array's `length`, so ANY length-N array impersonates
         // class N) would be treated as cacheable and seed the per-site PIC with
@@ -1300,7 +1300,7 @@ mod c3c_pic_tests {
             let obj = crate::object::js_object_alloc(0x6080, 8);
             let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
             crate::object::js_object_set_field_by_name(obj, key, 7.0);
-            let keys = (*obj).keys_array;
+            let keys = crate::object::object_keys_array(obj);
             assert!(!keys.is_null(), "test premise: field append built keys");
             assert_eq!((*obj).class_id, 0x6080, "test premise: a class instance");
 

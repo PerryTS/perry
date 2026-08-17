@@ -117,7 +117,7 @@ unsafe fn compute_object_proto_tojson_state() -> u8 {
     {
         return PROTO_TOJSON_PRESENT;
     }
-    let keys = (*proto).keys_array;
+    let keys = crate::object::object_keys_array(proto);
     if keys.is_null() {
         return PROTO_TOJSON_ABSENT;
     }
@@ -206,7 +206,7 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
 /// `JSON.stringify` time on small objects and a ~250x gap vs V8 (#6009).
 pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if !keys.is_null() && keys_array_may_carry_to_json(keys) {
         return false;
     }

@@ -643,8 +643,8 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     }
 
     // Serialize keys array if present (plain objects have keys, class instances don't)
-    let keys = if !(*obj).keys_array.is_null() {
-        let keys_arr = (*obj).keys_array;
+    let keys = if !crate::object::object_keys_array(obj).is_null() {
+        let keys_arr = crate::object::object_keys_array(obj);
         let keys_len = (*keys_arr).length as usize;
         let keys_elements = (keys_arr as *const u8)
             .add(std::mem::size_of::<crate::array::ArrayHeader>())

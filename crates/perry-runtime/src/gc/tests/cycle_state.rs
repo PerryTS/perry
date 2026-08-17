@@ -105,7 +105,6 @@ fn alloc_tracked_test_object() -> *mut crate::object::ObjectHeader {
     unsafe {
         (*child).class_id = 0;
         (*child).parent_class_id = 0;
-        (*child).keys_array = std::ptr::null_mut();
         (*child).meta = std::ptr::null_mut();
         let fields_ptr = (child as *mut u8).add(header_size) as *mut crate::JSValue;
         for i in 0..8 {

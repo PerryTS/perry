@@ -458,13 +458,14 @@ fn test_transient_runtime_handle_object_set_gc() {
     drain_scheduled_minor_gc(before, "keys-array allocation");
     let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     unsafe {
-        assert!(!(*obj_after).keys_array.is_null());
+        assert!(!crate::object::object_keys_array(obj_after).is_null());
         let stored_value = crate::object::js_object_get_field(obj_after, 0).bits();
         assert_eq!(stored_value & TAG_MASK, STRING_TAG);
         let stored_value_ptr = (stored_value & POINTER_MASK) as *const crate::StringHeader;
         assert_string_bytes(stored_value_ptr, b"object-payload");
 
-        let key_value = crate::array::js_array_get((*obj_after).keys_array, 0).bits();
+        let key_value =
+            crate::array::js_array_get(crate::object::object_keys_array(obj_after), 0).bits();
         assert_eq!(key_value & TAG_MASK, STRING_TAG);
         let stored_key_ptr = (key_value & POINTER_MASK) as *const crate::StringHeader;
         assert_string_bytes(stored_key_ptr, b"name");

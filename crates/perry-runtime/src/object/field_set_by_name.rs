@@ -138,7 +138,7 @@ pub extern "C" fn js_object_set_field_by_name(
                         && !super::prototype_chain::object_has_prototype_override(raw)
                         && super::prop_plan::store_plan_check(class_id, key as usize)
                     {
-                        let keys = (*o).keys_array;
+                        let keys = crate::object::object_keys_array(o);
                         let keys_ok = keys.is_null()
                             || (((keys as u64) >> 48) == 0
                                 && crate::value::addr_class::is_above_handle_band(keys as usize));

@@ -64,7 +64,7 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 
     let obj = extract_obj_ptr(obj_value);
     if !obj.is_null() {
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if !keys.is_null() {
             let len = crate::array::js_array_length(keys) as usize;
             let order = ecma_own_key_order(keys);
@@ -1393,7 +1393,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
             }
         }
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             let empty = crate::array::js_array_alloc(0);
             return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);

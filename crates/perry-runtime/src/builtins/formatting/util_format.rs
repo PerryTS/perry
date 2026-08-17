@@ -88,7 +88,7 @@ unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usiz
     stack.push(addr);
 
     let obj = ptr as *const crate::ObjectHeader;
-    let keys_arr = (*obj).keys_array;
+    let keys_arr = crate::object::object_keys_array(obj);
     let found = if keys_arr.is_null() {
         false
     } else {

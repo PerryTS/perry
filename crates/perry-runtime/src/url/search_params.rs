@@ -535,7 +535,7 @@ pub(crate) fn try_read_as_search_params(
         // URLSearchParams stores entries in field index 0 (URL_SEARCH_PARAMS_ENTRIES).
         // If this isn't a URLSearchParams, that slot likely holds a string or
         // is missing — we detect by checking the keys array shape.
-        let keys_arr = (*params).keys_array;
+        let keys_arr = crate::object::object_keys_array(params);
         if keys_arr.is_null() {
             return None;
         }
@@ -563,7 +563,7 @@ pub(crate) fn read_record_entries(obj: *mut ObjectHeader) -> Vec<(String, String
         return Vec::new();
     }
     unsafe {
-        let keys_arr = (*obj).keys_array;
+        let keys_arr = crate::object::object_keys_array(obj);
         if keys_arr.is_null() {
             return Vec::new();
         }
@@ -974,7 +974,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         if (*obj).class_id != 0 {
             return false;
         }
-        let keys_arr = (*obj).keys_array;
+        let keys_arr = crate::object::object_keys_array(obj);
         if keys_arr.is_null() {
             return false;
         }

@@ -25,8 +25,8 @@ pub(crate) fn gc_shape_keys_edge_slot(
 ) -> Option<*mut u64> {
     #[cfg(test)]
     if shapes::test_keys_edge_suppressed() {
-        // Sabotage arm: with BOTH this edge and the header mirror gone, a keys
-        // array has no root and no rewritable location at all. The fixtures use
+        // Sabotage arm: without this edge a keys array has no root and no
+        // rewritable location at all. The fixtures use
         // it to prove their detector fires — a green protected run then means
         // the detector works, not that nothing was tried.
         return None;
@@ -38,47 +38,8 @@ pub(crate) fn gc_shape_keys_edge_slot(
     descriptor.keys_slot()
 }
 
-/// The object's keys-array MIRROR slot.
-///
-/// #8112 demoted this word. It is no longer the strong edge and no longer the
-/// scratch buffer the descriptor is repaired from — `gc_shape_keys_edge_slot`
-/// above is both. What remains is an ABI mirror the mutator still loads
-/// directly (codegen emits the load), so the collector refreshes it from the
-/// authoritative record and keeps rewriting it across a move. #8047 deletes
-/// the word, this function, and its call site together; nothing else has to
-/// change, which is exactly what this issue had to establish.
-pub(crate) unsafe fn gc_keys_array_slot(
-    obj: *mut ObjectHeader,
-    descriptor: Option<shapes::ShapeDescriptor>,
-) -> Option<*mut u64> {
-    if obj.is_null() {
-        return None;
-    }
-    #[cfg(test)]
-    if shapes::test_keys_mirror_suppressed() {
-        // #8047 rehearsal: with the mirror gone, the descriptor edge is the
-        // only thing that can keep this receiver's keys array alive and
-        // correctly forwarded. `gc/tests/shape_keys_descriptor_edge.rs` runs
-        // real collections in this mode.
-        return None;
-    }
-    if let Some(descriptor) = descriptor {
-        // Mirror refresh, not an edge: a sibling traced earlier in this cycle
-        // may already have rewritten the shared record, in which case this
-        // receiver's word is stale and the slot visitor below would otherwise
-        // hand the collector a from-space address it has no forwarding record
-        // for.
-        // GC_STORE_AUDIT(ROOT): collector refreshes the derived keys mirror from the authoritative descriptor record.
-        (*obj).keys_array = descriptor.keys as usize as *mut ArrayHeader;
-    }
-    if (*obj).keys_array.is_null() {
-        return None;
-    }
-    Some(&mut (*obj).keys_array as *mut _ as *mut u64)
-}
-
 /// The object's inline field-slot range, given the receiver's `ShapeDescriptor`
-/// (see [`gc_keys_array_slot`]).
+/// resolved once by the collector.
 pub(crate) unsafe fn gc_field_slot_range(
     obj: *mut ObjectHeader,
     descriptor: Option<shapes::ShapeDescriptor>,

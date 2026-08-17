@@ -26,7 +26,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         }};
     }
     // If no keys array exists, create one with this key.
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         let new_keys = crate::array::js_array_alloc(4);
         refresh_define_property_roots!();
@@ -98,7 +98,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     let owned_keys = if keys_shared {
         let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
         refresh_define_property_roots!();
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         let src_data = (keys as *const u8).add(8) as *const f64;
         let dst_data = (cloned as *mut u8).add(8) as *mut f64;
         for i in 0..key_count {
@@ -125,7 +125,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_hash = super::super::key_bytes_hash(name_ptr, (*key).byte_len as usize);
         super::super::keys_index_insert(
-            (*obj).keys_array,
+            crate::object::object_keys_array(obj),
             key_count as u32 + 1,
             key_hash,
             key_count as u32,
@@ -168,7 +168,10 @@ mod tests {
                 crate::object::js_object_alloc_with_shape(0x6B45_5901, 0, packed.as_ptr(), 0);
             let sibling =
                 crate::object::js_object_alloc_with_shape(0x6B45_5901, 0, packed.as_ptr(), 0);
-            assert_eq!((*first).keys_array, (*sibling).keys_array);
+            assert_eq!(
+                crate::object::object_keys_array(first),
+                crate::object::object_keys_array(sibling)
+            );
 
             // A logical-field/key-count mismatch is not evidence that the
             // keys array is privately owned. This was the false assumption in
@@ -180,16 +183,25 @@ mod tests {
 
             assert!(own_key_present(first, key));
             assert!(!own_key_present(sibling, key));
-            assert_ne!((*first).keys_array, (*sibling).keys_array);
+            assert_ne!(
+                crate::object::object_keys_array(first),
+                crate::object::object_keys_array(sibling)
+            );
             assert_ne!((*first).parent_class_id, sibling_shape);
             let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
                 .expect("sibling descriptor must remain installed");
-            assert_eq!(sibling_descriptor.keys, (*sibling).keys_array as u64);
+            assert_eq!(
+                sibling_descriptor.keys,
+                crate::object::object_keys_array(sibling) as u64
+            );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
                 crate::object::shapes::shape_descriptor_by_id((*first).parent_class_id)
                     .expect("defineProperty growth must install an exact descriptor");
-            assert_eq!(first_descriptor.keys, (*first).keys_array as u64);
+            assert_eq!(
+                first_descriptor.keys,
+                crate::object::object_keys_array(first) as u64
+            );
             assert_eq!(first_descriptor.logical_key_count, 1);
             assert_eq!(first_descriptor.live_inline_slot_count, 1);
         }
@@ -262,7 +274,7 @@ pub(crate) unsafe fn own_key_present_via_index(
     if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
         return None;
     }
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         _ => return None,
@@ -294,11 +306,11 @@ pub(crate) unsafe fn own_key_present(
     if let Some(present) = crate::process::process_env_has_field(obj, key) {
         return present;
     }
-    // Only a genuine `GC_TYPE_OBJECT` carries a `keys_array` at ObjectHeader
-    // offset 16. A non-object receiver that still cleared the alignment/range
+    // Only a genuine `GC_TYPE_OBJECT` carries a ShapeId that can derive a keys
+    // array. A non-object receiver that still cleared the alignment/range
     // guard above — most importantly a real `Map`/`Set`, whose 16-byte header
     // is only `size`/`capacity`/`entries` — has no such field, so reading
-    // `(*obj).keys_array` loads 8 bytes past the header into the adjacent
+    // `crate::object::object_keys_array(obj)` loads 8 bytes past the header into the adjacent
     // allocation. A `Map` reaching `js_object_get_field_by_name`'s `.size`
     // fast path (an `any`-typed `map.size` dispatched by name) did exactly
     // that: the out-of-bounds word was a live neighbour's GC-header value,
@@ -311,13 +323,13 @@ pub(crate) unsafe fn own_key_present(
         Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
         _ => return false,
     }
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         return false;
     }
     let keys_ptr = keys as usize;
-    // Same alignment invariant for the keys_array pointer: when `obj` is not a
-    // genuine object its `keys_array` field holds garbage that may land in the
+    // Same alignment invariant for the derived keys-array pointer: when `obj` is not a
+    // genuine object its would-be shape token is garbage that may land in the
     // address range yet be misaligned. Without this guard the `[keys-8]`
     // GcHeader read below SIGBUSes on that garbage. (#3527)
     if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || keys_ptr & 0x7 != 0 {

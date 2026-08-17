@@ -51,7 +51,7 @@ pub(crate) struct ShapeTemplate {
 #[inline]
 pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const ShapeTemplate> {
     let obj = obj_ptr as *const crate::ObjectHeader;
-    let keys_arr = (*obj).keys_array;
+    let keys_arr = crate::object::object_keys_array(obj);
     if keys_arr.is_null() {
         return None;
     }
@@ -151,7 +151,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
         return None;
     }
-    let keys_arr = (*obj).keys_array;
+    let keys_arr = crate::object::object_keys_array(obj);
     if keys_arr.is_null() {
         return None;
     }
@@ -317,7 +317,7 @@ pub(crate) unsafe fn try_emit_shape_element(
         return false;
     }
     let obj = elem_ptr as *const crate::ObjectHeader;
-    if (*obj).keys_array != template.keys_arr.get() {
+    if crate::object::object_keys_array(obj) != template.keys_arr.get() {
         return false;
     }
 

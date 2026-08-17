@@ -61,7 +61,7 @@ mod c3c_tests {
             "a fresh compiled class instance waited for a by-name lookup to stamp"
         );
         assert_eq!(
-            unsafe { (*obj).keys_array },
+            unsafe { crate::object::object_keys_array(obj) },
             keys,
             "the stamp and canonical keys global must describe the same shape"
         );
@@ -96,10 +96,13 @@ mod c3c_tests {
                 assert!(is_shape_id(stamp2));
                 let descriptor = shape_descriptor_by_id(stamp2)
                     .expect("a surviving stamp must resolve in this agent");
-                assert_eq!(descriptor.keys, (*obj).keys_array as u64);
+                assert_eq!(
+                    descriptor.keys,
+                    crate::object::object_keys_array(obj) as u64
+                );
                 assert_eq!(
                     descriptor.logical_key_count,
-                    crate::array::js_array_length((*obj).keys_array)
+                    crate::array::js_array_length(crate::object::object_keys_array(obj))
                 );
                 assert_eq!(
                     descriptor.live_inline_slot_count,
@@ -149,8 +152,8 @@ mod c6804_tests {
                 "siblings of one literal shape must share one id"
             );
             assert_eq!(
-                (*a).keys_array,
-                (*b).keys_array,
+                crate::object::object_keys_array(a),
+                crate::object::object_keys_array(b),
                 "test premise: shared keys"
             );
         }
@@ -585,7 +588,7 @@ mod descriptor_tests_8067 {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let keys = (*obj).keys_array as usize;
+            let keys = crate::object::object_keys_array(obj) as usize;
             let before = (*obj).parent_class_id;
             let before_descriptor = shape_descriptor_by_id(before).expect("birth descriptor");
             assert_eq!(before_descriptor.live_inline_slot_count, 1);
@@ -618,15 +621,15 @@ mod descriptor_tests_8067 {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let shared_keys = (*a).keys_array;
+            let shared_keys = crate::object::object_keys_array(a);
             let shared_id = (*a).parent_class_id;
-            assert_eq!(shared_keys, (*b).keys_array);
+            assert_eq!(shared_keys, crate::object::object_keys_array(b));
             assert_eq!(shared_id, (*b).parent_class_id);
 
             crate::object::js_object_set_field_by_name(a, key("sib8067_b"), 2.0);
 
-            assert_ne!((*a).keys_array, shared_keys);
-            assert_eq!((*b).keys_array, shared_keys);
+            assert_ne!(crate::object::object_keys_array(a), shared_keys);
+            assert_eq!(crate::object::object_keys_array(b), shared_keys);
             assert_eq!((*b).parent_class_id, shared_id);
             assert_ne!((*a).parent_class_id, shared_id);
             assert_eq!(
@@ -637,7 +640,10 @@ mod descriptor_tests_8067 {
             );
             let transitioned =
                 shape_descriptor_by_id((*a).parent_class_id).expect("transitioned descriptor");
-            assert_eq!(transitioned.keys, (*a).keys_array as u64);
+            assert_eq!(
+                transitioned.keys,
+                crate::object::object_keys_array(a) as u64
+            );
             assert_eq!(transitioned.logical_key_count, 2);
             assert_eq!(transitioned.live_inline_slot_count, 2);
         }

@@ -1,11 +1,10 @@
-//! #8113: the live inline-slot bound, and the `ObjectHeader` ABI revision.
+//! The live inline-slot bound and the `ObjectHeader` ABI revision.
 //!
 //! `ObjectHeader` used to carry a `field_count: u32` word. It was derivable
 //! from the object's immutable ShapeId descriptor, and removing it together
 //! with the equally derivable `object_type` word took the header from 32 bytes
-//! to 24 (a two-slot object from 56 to 48). These four items are what took its
-//! place; they live in their own module because `object/mod.rs` is at the
-//! repository's 2000-line cap.
+//! to 24 (a two-slot object from 56 to 48). #8047 removed the remaining
+//! derived keys mirror, taking the header to 16 and the object to 40 bytes.
 
 use super::shapes;
 use super::ObjectHeader;
@@ -22,9 +21,10 @@ use super::ObjectHeader;
 ///
 /// * 1 — `{object_type, class_id, parent_class_id, field_count, keys_array, meta}`.
 /// * 2 — `{class_id, parent_class_id, keys_array, meta}` (#8113).
+/// * 3 — `{class_id, parent_class_id, meta}` (#8047).
 #[no_mangle]
 pub extern "C" fn perry_object_header_abi_revision() -> u32 {
-    2
+    3
 }
 
 /// The authoritative live inline-slot bound (#8113: the replacement for the

@@ -58,8 +58,9 @@ pub extern "C" fn js_module_source_map_new(payload: f64, options: f64) -> f64 {
     // shape; it does not initialize ObjectHeader::class_id.
     obj.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| unsafe {
         (*obj).class_id = SOURCE_MAP_CLASS_ID;
-        // GC_STORE_AUDIT(INIT): the fresh object is still rooted and unpublished.
-        (*obj).keys_array = std::ptr::null_mut();
+        // This wrapper intentionally hides its internal slots from ordinary
+        // property enumeration while retaining their live-slot bound.
+        crate::object::js_object_set_keys(obj, std::ptr::null_mut());
     });
     obj.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
         crate::object::js_object_set_field(

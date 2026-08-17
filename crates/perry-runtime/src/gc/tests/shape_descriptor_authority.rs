@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[test]
-fn gc_recovers_keys_and_live_slots_from_shape_id_after_header_sabotage() {
+fn gc_recovers_keys_and_live_slots_from_shape_id() {
     let _lock = global_side_table_test_lock();
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -35,15 +35,11 @@ fn gc_recovers_keys_and_live_slots_from_shape_id_after_header_sabotage() {
             assert_eq!(descriptor.logical_key_count, 2);
             assert_eq!(descriptor.live_inline_slot_count, 2);
 
-            // `keys_array` is the last ABI mirror (#8047 removes it; #8113
-            // already removed `field_count`). Corrupt it to prove the GC walk
-            // derives its strong keys edge — and, since the payload range now
-            // has NO header mirror at all, its exact slot count — from ShapeId.
-            // GC_STORE_AUDIT(POINTER_FREE): test sabotage removes the compatibility edge by storing null.
-            (*obj).keys_array = std::ptr::null_mut();
-
             let slots = super::support::test_heap_child_slots_for_user(obj as *mut u8);
-            assert_eq!((*obj).keys_array as u64, descriptor.keys);
+            assert_eq!(
+                crate::object::object_keys_array(obj) as u64,
+                descriptor.keys
+            );
 
             let fields =
                 (obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut u64;

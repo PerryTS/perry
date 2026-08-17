@@ -207,7 +207,7 @@ fn render_table(headers: &[String], rows: &[Vec<String>]) {
 
 /// Read all keys from an object's keys_array as Strings.
 unsafe fn object_key_names(obj_ptr: *const crate::object::ObjectHeader) -> Vec<String> {
-    let keys_array = (*obj_ptr).keys_array;
+    let keys_array = crate::object::object_keys_array(obj_ptr);
     if keys_array.is_null() {
         return Vec::new();
     }

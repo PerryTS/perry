@@ -5,8 +5,8 @@
 //!
 //! > A keys array is marked, and its pointer rewritten after a move, through
 //! > the boxed `ShapeDescriptor` record named by a live receiver's ShapeId.
-//! > The header word is a derived mirror: deleting it (#8047) must unroot
-//! > nothing and leave nothing stale.
+//! > #8047 deleted the header mirror; the descriptor edge alone must keep the
+//! > keys array live and current.
 //!
 //! Why this needs a fixture rather than an argument. An unrooted-but-reachable
 //! keys array is the quietest failure the collector has: nothing is missing at
@@ -27,8 +27,7 @@ use super::super::*;
 use super::support::{collect_minor_trace, ptr_bits, CopyingNurseryTestGuard};
 use crate::object::shapes;
 
-/// Facts the assertions compare, read exclusively through the descriptor —
-/// never through `ObjectHeader::keys_array`, which these tests suppress.
+/// Facts the assertions compare, read exclusively through the descriptor.
 #[derive(Clone, Copy, Debug)]
 struct KeysEdge {
     keys: u64,
@@ -111,7 +110,7 @@ fn the_descriptor_record_is_enumerated_as_a_child_slot() {
         keys_slot < obj as usize
             || keys_slot >= obj as usize + std::mem::size_of::<crate::ObjectHeader>(),
         "#8112: the enumerated edge must be the descriptor record, not the \
-         header mirror inside the receiver"
+         removed header word inside the receiver"
     );
 
     // Siblings of one shape hand the collector the SAME edge. That is the
@@ -158,11 +157,7 @@ fn collect_and_report(suppress_edge: bool) -> Option<(KeysEdge, KeysEdge)> {
     // under test.
     js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
 
-    let _suppression = if suppress_edge {
-        shapes::TestKeysEdgeSuppression::without_any_keys_edge()
-    } else {
-        shapes::TestKeysEdgeSuppression::without_header_mirror()
-    };
+    let _suppression = suppress_edge.then(shapes::TestKeysEdgeSuppression::without_descriptor_edge);
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(
         trace.copying_nursery.copied_objects > 0,
@@ -223,7 +218,7 @@ fn keys_edge_sabotage_is_detected() {
     let (before, after) = collect_and_report(true)
         .expect("#8112: the receiver must move for this cycle to be discriminating");
 
-    // With BOTH edges gone, nothing marked the keys array and nothing rewrote
+    // With the descriptor edge gone, nothing marked the keys array and nothing rewrote
     // the record. The detector above must be able to SEE that: either the
     // descriptor still names the from-space address, or the dead-owner prune
     // removed the descriptor outright. What it must NOT be is a live, moved,
@@ -236,8 +231,8 @@ fn keys_edge_sabotage_is_detected() {
         && after.logical_key_count == before.logical_key_count;
     assert!(
         !correctly_rewritten,
-        "#8112 SABOTAGE ARM: with the descriptor edge and the header mirror \
-         both suppressed, the keys array was still rooted and rewritten \
+        "#8112 SABOTAGE ARM: with the descriptor edge suppressed, the keys array \
+         was still rooted and rewritten \
          ({:#x} -> {:#x}). Something other than the edge under test is keeping \
          it alive, so a green run of \
          `a_keys_array_reachable_only_through_the_descriptor_survives_and_is_rewritten` \

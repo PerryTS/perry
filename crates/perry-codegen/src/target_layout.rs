@@ -27,14 +27,11 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
 
 /// `std::mem::size_of::<perry_runtime::object::ObjectHeader>()` for the target.
 ///
-/// #8113: `ObjectHeader` is two `u32`s (`class_id` @0, `parent_class_id` @4 —
-/// the latter carrying the runtime ShapeId after stamping) followed by two
-/// pointers (`keys_array`, and the #6759 Phase B `meta` record pointer):
-/// 8 bytes of words → **24 on 64-bit**; → **16 on ILP32**. It was 32/24 while
-/// the header also carried `object_type` @0 and `field_count` @12; both were
-/// derivable (`GcHeader.obj_type` + the ShapeId descriptor's `object_kind`, and
-/// the descriptor's `live_inline_slot_count`) and removing either ALONE saved
-/// nothing because the struct re-padded.
+/// #8047: `ObjectHeader` is two `u32`s (`class_id` @0, `parent_class_id` @4 —
+/// the latter carrying the runtime ShapeId after stamping) followed by the
+/// #6759 Phase B `meta` pointer. The keys pointer is derived from that ShapeId.
+/// LP64 is naturally 16 bytes; ILP32 carries explicit padding before `meta` so
+/// the following 8-byte JSValue slots remain aligned. Both are therefore **16**.
 ///
 /// Inline object allocation, header init, and the property inline-cache fast
 /// path all use this as the field-region base
@@ -45,16 +42,9 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
 /// runtime-side via `perry_runtime::closure::CLOSURE_TYPE_TAG_OFFSET` /
 /// `offset_of!`.)
 ///
-/// Both values stay 8-BYTE MULTIPLES, which the f64 field region after the
-/// header depends on: the ILP32 struct is `{u32, u32, *4, *4}` = 16 with align
-/// 4, and allocations are 8-aligned, so slot 0 lands 8-aligned and the arm64_32
-/// `i64:64` ABI hazard `lower_call/new_alloc.rs` warns about does not arise.
-pub fn object_header_size_bytes(target_triple: &str) -> u64 {
-    if target_is_ilp32(target_triple) {
-        16
-    } else {
-        24
-    }
+/// The value stays an 8-BYTE MULTIPLE, which the f64 field region depends on.
+pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
+    16
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY
@@ -97,9 +87,8 @@ pub(crate) const FIELD_SLOT_SIZE_BYTES: u64 = 8;
 /// `field_count` declared fields: GcHeader + ObjectHeader +
 /// `max(field_count, INLINE_SLOT_FLOOR)` slots, rounded up to a slot multiple.
 ///
-/// The round-up matters only on ILP32, where the header is not a multiple of
-/// 8 and an unpadded total would misalign the next bump; it is a no-op on
-/// 64-bit (8 + 24 + 8·n is already 8-aligned).
+/// The round-up is retained as a defensive invariant; #8047 makes the header
+/// 16 bytes on both pointer widths, so the total is already 8-aligned.
 pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u32) -> u64 {
     let alloc_field_count = std::cmp::max(field_count as u64, INLINE_SLOT_FLOOR);
     let payload_size =
@@ -186,22 +175,18 @@ mod tests {
 
     #[test]
     fn object_header_size_matches_pointer_width() {
-        // #8113 — 64-bit targets: 2×u32 + two 8-byte-aligned pointers
-        // (keys_array + #6759 meta) = 24.
-        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 24);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 24);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 24);
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 24);
-        // arm64_32 watchOS (Series 4–8 / SE): 2×u32 + two 4-byte pointers = 16.
+        // #8047 — 64-bit targets: 2×u32 + one pointer = 16.
+        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 16);
+        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 16);
+        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 16);
+        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
+        // ILP32 stays 16 through explicit tail padding.
         assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 16);
         assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 16);
     }
 
-    /// #8113: two emitters divide the header size by 8 to get a WORD index
-    /// (`expr/proxy_reflect.rs`, `stmt/loops.rs`). That is only sound while the
-    /// size is a multiple of 8 on every target — 24/8 and 16/8 are exact, but
-    /// #8047's 16/12 pair would make the ILP32 division silently truncate.
-    /// Pin the divisibility rather than the quotient.
+    /// Two emitters divide the header size by 8 to get a WORD index. #8047
+    /// keeps ILP32 at 16 with explicit padding so that remains exact.
     #[test]
     fn object_header_size_is_a_whole_number_of_heap_words() {
         for triple in [

@@ -363,7 +363,7 @@ impl GuardState<'_> {
     /// This ran per descriptor FIELD, so a two-field object paid for the whole
     /// header validation twice.
     unsafe fn object_keys(&self, object: *const ObjectHeader) -> ObjectKeys {
-        let keys = (*object).keys_array;
+        let keys = crate::object::object_keys_array(object);
         if keys.is_null() {
             return ObjectKeys::Absent;
         }

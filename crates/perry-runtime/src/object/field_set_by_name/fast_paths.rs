@@ -59,7 +59,7 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         return false;
     }
 
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     let keys_addr = keys as usize;
     if keys.is_null() || (keys_addr as u64) >> 48 != 0 {
         return false;
@@ -240,7 +240,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let value = value_handle.get_nanbox_f64();
 
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         let prev_keys = keys as usize;
         if !keys.is_null() {
             let keys_ptr = keys as usize;

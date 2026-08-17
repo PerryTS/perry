@@ -257,7 +257,7 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
         return ScopeProbe::Bail;
     }
     unsafe {
-        let keys = (*o).keys_array;
+        let keys = crate::object::object_keys_array(o);
         if keys.is_null() {
             return ScopeProbe::Bail;
         }

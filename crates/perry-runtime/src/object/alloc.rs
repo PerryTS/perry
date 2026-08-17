@@ -171,8 +171,6 @@ pub extern "C" fn js_object_alloc_with_parent(
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
-        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
-        (*ptr).keys_array = ptr::null_mut();
 
         // Initialize ALL allocated field slots to undefined (not just field_count)
         // We allocate max(field_count, 8) slots but must zero all of them to prevent
@@ -208,8 +206,6 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
-        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
-        (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
@@ -242,8 +238,6 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
-        // GC_STORE_AUDIT(INIT): freshly allocated object starts with no keys-array edge.
-        (*ptr).keys_array = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
@@ -843,16 +837,6 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*new_ptr).meta = ptr::null_mut();
-        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
-        // edge (#7683). This MUST precede the `js_array_alloc` below: that call
-        // allocates, so it can collect, and the collector reads this slot
-        // through `object::gc_keys_array_slot` as a child edge. Every sibling
-        // allocator in this file already nulls it here; this function was the
-        // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
-        // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
-        // leftover heap bytes rather than zeros.
-        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
-        (*new_ptr).keys_array = ptr::null_mut();
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
@@ -881,16 +865,6 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     (*new_ptr).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
     (*new_ptr).meta = ptr::null_mut();
-    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
-    // edge (#7683). This MUST precede the `js_array_alloc` below: that call
-    // allocates, so it can collect, and the collector reads this slot
-    // through `object::gc_keys_array_slot` as a child edge. Every sibling
-    // allocator in this file already nulls it here; this function was the
-    // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
-    // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
-    // leftover heap bytes rather than zeros.
-    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
-    (*new_ptr).keys_array = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;
@@ -927,7 +901,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Build keys array: copy ONLY src keys. Static keys are NOT added here — codegen uses
     // js_object_set_field_by_name for each static prop, which appends new keys via
     // js_array_push. Pre-size the keys capacity to avoid immediate reallocation on append.
-    let src_keys_arr = (*src_ptr).keys_array;
+    let src_keys_arr = crate::object::object_keys_array(src_ptr);
     let new_keys_arr = crate::array::js_array_alloc(src_field_count + extra_count);
     let new_keys_elements = (new_keys_arr as *mut u8).add(8) as *mut f64;
 
@@ -1015,7 +989,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
 
     // Iterate src's keys and copy each value via set_field_by_name.
-    let src_keys = (*src).keys_array;
+    let src_keys = crate::object::object_keys_array(src);
     if src_keys.is_null() || (src_keys as usize) < 0x10000 {
         return;
     }
@@ -1486,11 +1460,11 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     }
     let src_raw = source.as_pointer::<u8>() as usize;
     // Same alignment guard as the target above — `src` is dereferenced at
-    // `(*src).keys_array` just below; an unaligned non-object source must
+    // `crate::object::object_keys_array(src)` just below; an unaligned non-object source must
     // be skipped, not dereferenced. Reject the WHOLE handle band, not just a
     // `< 0x10000` floor: a common-band registry id (crypto `Hash`, `Blob`, …)
     // can sit above 0x10000 and be 8-aligned, so the old floor let it through
-    // and `(*src).keys_array` read unmapped memory (SIGSEGV). A native handle
+    // and `crate::object::object_keys_array(src)` read unmapped memory (SIGSEGV). A native handle
     // has no own enumerable properties to spread, so skipping it yields `{}`,
     // matching Node (`{...new Blob([])}` === `{}`). test_gap_handle_band_object_ops
     // `{...blob}`/`{...hash}`.
@@ -1731,7 +1705,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             );
         }
     } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
-        let src_keys = (*src).keys_array;
+        let src_keys = crate::object::object_keys_array(src);
         let keys_h = scope.root_raw_mut_ptr(src_keys);
         if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
             // Cap the key count at the keys array's capacity: a malformed keys

@@ -251,7 +251,7 @@ pub extern "C" fn js_object_delete_field(
                 }
             }
         }
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously
             return 1;
@@ -320,10 +320,8 @@ pub extern "C" fn js_object_delete_field(
         }
         (*keys_cloned).length = new_count as u32;
         super::rebuild_array_layout_from_slots(keys_cloned);
-        // Preserve semantic generation and object kind before installing the
-        // cloned keys array: `set_object_keys_array` clears the old stamp when
-        // it observes the pointer change.
-        let predecessor = crate::object::shapes::object_shape_descriptor(obj);
+        // `set_object_keys_array` publishes the cloned edge while preserving
+        // the predecessor's semantic generation and object kind.
         set_object_keys_array(obj, keys_cloned);
 
         // 1) Shift values down: for slot j in i..new_count, copy slot j+1
@@ -388,47 +386,7 @@ pub extern "C" fn js_object_delete_field(
         //    not eagerly deleted because a sibling may still name one; exact
         //    new facts are published below and weak post-trace pruning retires
         //    dead historical descriptors.
-        crate::object::shapes::shape_drop((*obj).keys_array);
-        // #6759 C3c: the compaction changed the layout under the SAME keys
-        //    address, so the stamped shape id no longer describes this
-        //    object. Ids are never reused, so clearing here makes every stale
-        //    id-keyed cache entry a permanent miss for this receiver; the
-        //    synchronization below stamps exact post-delete facts.
-        //
-        //    #6759 C3 rung 1: this now fires for CLASS INSTANCES too — the
-        //    whole point of the rung. A delete on a class instance is exactly
-        //    the case the shape word had no way to express: `class_id` is
-        //    preserved by design (vtable/instanceof identity) and the keys
-        //    pointer was the only compaction evidence in the header.
-        //
-        //    ★ REDUNDANT ON EVERY CURRENT PATH, deliberately kept. The clone
-        //    above is a FRESH `js_array_alloc`, so `set_object_keys_array`
-        //    already saw a pointer CHANGE and cleared the stamp there. Per-site
-        //    sabotage confirms it: gating either clear alone breaks no test;
-        //    gating BOTH breaks
-        //    `delete_mints_a_fresh_shape_id_for_a_class_instance`. This one is
-        //    the only clear that would still fire if a future path compacts
-        //    IN PLACE (which is what the comment above describes and what
-        //    `shape_slot_lookup`'s shrink check already anticipates), so
-        //    deleting it would silently make that path wrong.
-        // #8113: no `clear_object_shape_stamp` here any more. The stamp is now
-        // the ONLY record of the live inline-slot bound, so clearing it — even
-        // for the two statements it used to be cleared across — makes the
-        // object's payload untraceable if a collection lands in between (the
-        // publication below inserts into the shape table and can allocate). The
-        // republication is mint-then-stamp, which subsumes what the clear was
-        // for: the successor descriptor is minted while the predecessor is
-        // still installed, and the receiver's shape changes at the single
-        // `parent_class_id` store.
-        // The bound is the POST-compaction one published in step 3 above;
-        // `predecessor` contributes only semantic lineage (class kind /
-        // generation), never structural facts.
-        crate::object::shapes::synchronize_object_shape_descriptor_from(
-            obj,
-            predecessor,
-            crate::object::object_live_slot_count(obj),
-        );
-
+        crate::object::shapes::shape_drop(crate::object::object_keys_array(obj));
         1
     }
 }
@@ -569,7 +527,7 @@ pub extern "C" fn js_object_rest(
         return js_object_alloc(0, 0);
     }
     unsafe {
-        let keys = (*src).keys_array;
+        let keys = crate::object::object_keys_array(src);
         if keys.is_null() {
             return js_object_alloc(0, 0);
         }
@@ -705,7 +663,10 @@ mod shape_transition_tests_6759 {
             );
             let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
                 .expect("delete must publish a by-id descriptor");
-            assert_eq!(descriptor.keys, (*obj).keys_array as u64);
+            assert_eq!(
+                descriptor.keys,
+                crate::object::object_keys_array(obj) as u64
+            );
             assert_eq!(descriptor.logical_key_count, 2);
             assert_eq!(
                 descriptor.live_inline_slot_count,
@@ -743,7 +704,7 @@ mod shape_transition_tests_6759 {
             for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
                 js_object_set_field(obj, i as u32, JSValue::from_bits(v.to_bits()));
             }
-            let keys_before = (*obj).keys_array;
+            let keys_before = crate::object::object_keys_array(obj);
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
             let before = (*obj).parent_class_id;
             assert!(
@@ -785,7 +746,10 @@ mod shape_transition_tests_6759 {
             );
             let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
                 .expect("class delete must publish a by-id descriptor");
-            assert_eq!(descriptor.keys, (*obj).keys_array as u64);
+            assert_eq!(
+                descriptor.keys,
+                crate::object::object_keys_array(obj) as u64
+            );
             assert_eq!(descriptor.logical_key_count, 2);
             assert_eq!(
                 descriptor.live_inline_slot_count,
@@ -794,7 +758,7 @@ mod shape_transition_tests_6759 {
 
             // Still true, and still what the guard compares until rung 3.
             assert_ne!(
-                (*obj).keys_array,
+                crate::object::object_keys_array(obj),
                 keys_before,
                 "the keys pointer is the guard's compaction evidence and it did not change"
             );

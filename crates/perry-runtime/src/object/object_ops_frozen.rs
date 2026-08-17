@@ -455,7 +455,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
         // Empty array + non-extensible ⇒ integrity holds.
         return true;
     }
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         return true; // no own keys + non-extensible ⇒ frozen/sealed
     }

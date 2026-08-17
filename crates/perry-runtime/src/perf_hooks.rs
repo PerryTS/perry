@@ -180,7 +180,7 @@ pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeade
     if obj.is_null() {
         return false;
     }
-    let keys = (*obj).keys_array as usize;
+    let keys = crate::object::object_keys_array(obj) as usize;
     let recorded = PERF_ENTRY_KEYS_ARRAY.with(|c| c.get());
     if recorded != 0 && keys == recorded {
         return true;
@@ -196,7 +196,7 @@ pub(crate) unsafe fn is_resource_entry_object(obj: *const crate::object::ObjectH
         return false;
     }
     let recorded = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
-    recorded != 0 && (*obj).keys_array as usize == recorded
+    recorded != 0 && crate::object::object_keys_array(obj) as usize == recorded
 }
 
 unsafe fn perf_entry_type(obj: *const crate::object::ObjectHeader) -> Option<u8> {
@@ -552,7 +552,7 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
     // Record the shared keys_array so `is_perf_entry_object` can recognize
     // entries by pointer identity (see PERF_ENTRY_KEYS_ARRAY). All entries on
     // this thread share it, so a single store on the first call suffices.
-    let keys_ptr = (*obj).keys_array as usize;
+    let keys_ptr = crate::object::object_keys_array(obj) as usize;
     PERF_ENTRY_KEYS_ARRAY.with(|c| {
         if c.get() == 0 {
             c.set(keys_ptr);
@@ -1230,7 +1230,7 @@ unsafe fn make_node_timing_object() -> f64 {
             11,
             JSValue::from_bits(uv_metrics_handle.get_nanbox_u64()),
         );
-        NODE_TIMING_KEYS_ARRAY.with(|c| c.set((*obj).keys_array as usize));
+        NODE_TIMING_KEYS_ARRAY.with(|c| c.set(crate::object::object_keys_array(obj) as usize));
         crate::value::js_nanbox_pointer(obj as i64)
     }
 }
@@ -1241,7 +1241,7 @@ pub(crate) unsafe fn is_node_timing_object(obj: *const crate::object::ObjectHead
         return false;
     }
     let recorded = NODE_TIMING_KEYS_ARRAY.with(|c| c.get());
-    recorded != 0 && (*obj).keys_array as usize == recorded
+    recorded != 0 && crate::object::object_keys_array(obj) as usize == recorded
 }
 
 /// `performance.nodeTiming.toJSON()` — the milestone numbers plus the entry

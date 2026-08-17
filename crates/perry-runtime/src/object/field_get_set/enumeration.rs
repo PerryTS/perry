@@ -1201,7 +1201,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 }
             }
         }
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             return crate::array::js_array_alloc(0);
         }
@@ -1454,7 +1454,7 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
         // field_count — same fix as Object.entries above. Without
         // this, objects with overflow fields silently returned only
         // their first 8 values.
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         let count = if !keys.is_null() {
             crate::array::js_array_length(keys) as usize
         } else {
@@ -1623,7 +1623,7 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         // Issue #893 lineage: chalk's `Object.entries(ansiStyles)` passed a
         // value whose unboxed low-48 bits weren't a real heap pointer
         // (cross-module import where the default-export wrapper hasn't
-        // finished initializing). Pre-fix the `(*obj).keys_array` deref
+        // finished initializing). Pre-fix the `crate::object::object_keys_array(obj)` deref
         // SIGSEGV'd at 0x14; now we return an empty array so the user's
         // `for (const [k, v] of Object.entries(undefined)) {}` no-ops the
         // way the spec's "abstract conversion to object" path would for
@@ -1640,7 +1640,7 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
                 return result;
             }
         }
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         // Iterate up to keys_len (the logical property count), not
         // field_count. Parser-built and dict-built objects with ≥9
         // fields cap field_count at the inline alloc_limit (8) and

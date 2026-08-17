@@ -33,8 +33,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     // #8112: the authoritative ordered-keys edge, taken from the descriptor
     // `gc_child_slots` already resolved for this receiver. It is the boxed
     // record's OWN `keys` word, so the collector marks through it and rewrites
-    // it in place — the descriptor is the root and the rewritable location,
-    // and the header word below is a derived mirror.
+    // it in place — the descriptor is the root and the rewritable location.
     //
     // Never enumerate the HashMap BUCKET as a GC slot: dirty-page work may
     // retain enumerated slot addresses across budgeted resumptions, during

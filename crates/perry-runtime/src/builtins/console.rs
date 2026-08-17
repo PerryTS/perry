@@ -1473,7 +1473,7 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-    let keys_array = (*obj_ptr).keys_array;
+    let keys_array = crate::object::object_keys_array(obj_ptr);
     if keys_array.is_null() {
         return None;
     }
@@ -1549,7 +1549,7 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-    let keys_array = (*obj_ptr).keys_array;
+    let keys_array = crate::object::object_keys_array(obj_ptr);
     if keys_array.is_null() {
         return None;
     }

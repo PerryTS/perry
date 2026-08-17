@@ -167,7 +167,7 @@ fn stringify_shape_cache_keys_array_is_marked_and_rewritten() {
         let obj = crate::object::js_object_alloc(0, 1);
         let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
         crate::object::js_object_set_field_by_name(obj, key, 1.0);
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         assert!(!keys.is_null(), "probe object must have a keys array");
         assert!(
             crate::arena::pointer_in_nursery(keys as usize),

@@ -635,15 +635,14 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
-/// #7916 / #8113: the per-object footprint accounting this issue is about,
+/// #7916 / #8047: the per-object footprint accounting this issue is about,
 /// pinned as an executable fact rather than a comment.
 ///
-/// A two-field object literal is `GcHeader (8) + ObjectHeader (24) + 8 *
+/// A two-field object literal is `GcHeader (8) + ObjectHeader (16) + 8 *
 /// max(live_inline_slot_count, INLINE_SLOT_FLOOR)`. It was 72 bytes at floor 4
 /// (#7916 took it to 56 by lowering the floor to 2) and #8113 took it to **48**
-/// by deleting the header's two derivable words. 48 bytes to store 16 bytes of
-/// payload; `gc-handoff/bench/retain.ts` writes 3x its data volume, down from
-/// 4.5x.
+/// by deleting two derivable words; #8047 removes the final derived keys mirror
+/// for **40** bytes total.
 ///
 /// This reads the size the ALLOCATOR recorded (`GcHeader::size`), not a
 /// recomputation of the same formula, so it fails if any allocation path
@@ -652,10 +651,8 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
 fn two_field_literal_footprint_is_exactly_accounted() {
     assert_eq!(
         std::mem::size_of::<ObjectHeader>(),
-        24,
-        "the ObjectHeader half of the accounting: 2 u32 + 2 pointers (#8113 \
-         removed `object_type` and `field_count`; either alone saved nothing \
-         because the struct re-padded, both together saved 8 bytes)"
+        16,
+        "#8047: ObjectHeader is two u32 words plus the meta pointer"
     );
     assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
 
@@ -680,14 +677,11 @@ fn two_field_literal_footprint_is_exactly_accounted() {
         "a 2-field literal must occupy exactly {expected} bytes"
     );
     assert_eq!(
-        recorded, 48,
-        "#8113: the 2-field literal footprint is 48 bytes (56 before the header \
-         shrink, 72 at floor 4). Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 \
-         bytes of unusable slots to every small object; re-adding a header word \
-         re-adds 8 to every object regardless of width"
+        recorded, 40,
+        "#8047: the 2-field literal footprint is 40 bytes"
     );
 
-    // #8113 acceptance: the WIDE case too. The floor does not apply at 8
+    // #8047 acceptance: the WIDE case too. The floor does not apply at 8
     // fields, so this isolates the header term from the padding term — it is
     // the number that says the saving is per-OBJECT, not per-small-object.
     let wide_keys = b"a\0b\0c\0d\0e\0f\0g\0h\0";
@@ -699,26 +693,25 @@ fn two_field_literal_footprint_is_exactly_accounted() {
             .expect("a freshly allocated object must carry a readable GcHeader")
             .size as usize
     };
-    assert_eq!(
-        wide_recorded, 96,
-        "#8113: the 8-slot footprint is 96 bytes (104 before the header shrink)"
-    );
+    assert_eq!(wide_recorded, 88, "#8047: the 8-slot footprint is 88 bytes");
 }
 
-/// #8113 acceptance, spelled as offsets rather than a total so a failure names
+/// #8047 acceptance, spelled as offsets rather than a total so a failure names
 /// the field that moved. `GcHeader` staying 8 bytes is part of the contract:
 /// the whole 8-byte saving is the header's, not a GcHeader change.
 #[test]
-fn object_header_is_two_words_plus_two_pointers() {
+fn object_header_is_two_words_plus_meta_pointer() {
     use std::mem::{align_of, offset_of, size_of};
     assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
     assert_eq!(size_of::<crate::gc::GcHeader>(), 8);
     assert_eq!(align_of::<ObjectHeader>(), size_of::<*const u8>());
     assert_eq!(offset_of!(ObjectHeader, class_id), 0);
     assert_eq!(offset_of!(ObjectHeader, parent_class_id), 4);
-    assert_eq!(offset_of!(ObjectHeader, keys_array), size_of::<*const u8>());
-    assert_eq!(offset_of!(ObjectHeader, meta), 2 * size_of::<*const u8>());
-    assert_eq!(size_of::<ObjectHeader>(), 3 * size_of::<*const u8>());
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(offset_of!(ObjectHeader, meta), 8);
+    #[cfg(target_pointer_width = "32")]
+    assert_eq!(offset_of!(ObjectHeader, meta), 12);
+    assert_eq!(size_of::<ObjectHeader>(), 2 * size_of::<*const u8>());
     // The emitted-IR offsets in perry-codegen are literals; these two are the
     // ones `class_field_inline_guard` / `proxy_reflect` / `generic_dispatch`
     // splice in, and `stmt/loops.rs` + `expr/proxy_reflect.rs` used to divide
@@ -1342,7 +1335,7 @@ fn class_capture_value_or_rejects_tag_stripped_fallback() {
 /// through `js_object_get_field_by_name`) — reaches the `.size` fast path,
 /// which calls `own_key_present(map, "size")`. A `MapHeader` is 16 bytes
 /// (`size`/`capacity`/`entries`) with no `keys_array` field at offset 16, so
-/// `(*obj).keys_array` used to read 8 bytes past the header into the adjacent
+/// `crate::object::object_keys_array(obj)` used to read 8 bytes past the header into the adjacent
 /// allocation; that stray word cleared the keys-pointer alignment/range guard
 /// and then SIGBUS'd on the `[keys-8]` GC-type-tag load. `own_key_present` now
 /// answers `false` for a non-`GC_TYPE_OBJECT` receiver, so the read falls
@@ -1656,7 +1649,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 ///
 /// A buffer is a `BufferHeader` — no `class_id`, no `keys_array`. With no arm
 /// of its own it fell through to the ordinary arm, which read
-/// `(*obj).keys_array` out of the bytes that follow a buffer header and handed
+/// `crate::object::object_keys_array(obj)` out of the bytes that follow a buffer header and handed
 /// that to `js_array_length`, whose lazy-array probe dereferences `addr - 8`.
 ///
 /// The two platforms fail differently, which is why this test asserts the

@@ -437,8 +437,8 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // Check if this is a ClosureHeader (CLOSURE_MAGIC at offset 12).
     // ClosureHeader layout: func_ptr (8B), capture_count u32 (4B), type_tag u32 (4B), captures at 16+
-    // ObjectHeader layout (#8113): class_id u32 (4B), parent_class_id u32 (4B), keys_array (8B), meta (8B)
-    // Without this check, the closure's capture[0] at offset 16 would be read as keys_array → crash.
+    // ObjectHeader layout (#8047): class_id u32 (4B), parent_class_id u32 (4B), meta (8B).
+    // Without this check, the closure header would be interpreted as an object descriptor token.
     if crate::closure::is_closure_ptr(ptr as usize) {
         return crate::closure::closure_get_dynamic_prop(ptr as usize, property_name);
     }

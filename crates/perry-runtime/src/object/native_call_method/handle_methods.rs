@@ -898,7 +898,7 @@ pub(super) unsafe fn dispatch_handle(
             }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
-            let keys = (*obj).keys_array;
+            let keys = crate::object::object_keys_array(obj);
             if !keys.is_null() {
                 let keys_ptr = keys as usize;
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {

@@ -2,8 +2,8 @@
 //!
 //! Objects are heap-allocated with a header containing:
 //! - Class ID (for type checking and vtable lookup)
-//! - Field count
-//! - Keys array pointer (for Object.keys() support)
+//! - Parent/shape ID (for inheritance and descriptor lookup)
+//! - Metadata pointer (for overflow storage and descriptor overrides)
 //! - Fields array (inline)
 
 use crate::arena::arena_alloc_gc;
@@ -28,14 +28,14 @@ use std::sync::RwLock;
 /// # Why this number is a footprint dial, not a safety one (#7916)
 ///
 /// It is *the* padding term in a small object's size:
-/// `8 (GcHeader) + 32 (ObjectHeader) + 8 * max(field_count, INLINE_SLOT_FLOOR)`.
-/// At 4, a two-field literal `{a, b}` costs **72 bytes to store 16 bytes of
+/// `8 (GcHeader) + 16 (ObjectHeader) + 8 * max(field_count, INLINE_SLOT_FLOOR)`.
+/// At 4, a two-field literal `{a, b}` costs **56 bytes to store 16 bytes of
 /// payload**, of which 16 bytes are slots 2–3 that the shape can never use —
 /// `gc-handoff/bench/retain.ts` writes 216 MB to store 48 MB of doubles.
 ///
 /// Lowering it is sound at any value because `field_count` is *capped* by the
 /// same expression it feeds: the by-name append path
-/// (`field_set_by_name/tail.rs`) only bumps `field_count` for a slot it placed
+/// (`field_set_by_name/tail.rs`) only advances the descriptor's live count for a slot it placed
 /// INLINE, and anything at or past `alloc_limit` spills to overflow storage
 /// instead. So `alloc_limit` is a fixed point of the allocation — it can never
 /// grow past the physical slot count — and the floor is purely a
@@ -77,8 +77,8 @@ pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;
 pub(crate) use gc_slots::{
-    gc_field_slot_range, gc_keys_array_slot, gc_shape_keys_edge_slot,
-    rebuild_array_layout_from_slots, rebuild_object_field_layout,
+    gc_field_slot_range, gc_shape_keys_edge_slot, rebuild_array_layout_from_slots,
+    rebuild_object_field_layout,
 };
 mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
@@ -525,7 +525,7 @@ unsafe fn keys_index_lookup(
 }
 
 /// Record a new (key_hash → slot) entry on the POST-append keys array's
-/// shape after a key was appended. Caller passes `(*obj).keys_array`
+/// shape after a key was appended. Caller passes `crate::object::object_keys_array(obj)`
 /// (the definitive post-append array — a clone or grow-realloc lands
 /// under its new identity, or nowhere if no shape entry exists yet) and
 /// ensures `new_count` equals the new keys_array length.
@@ -1638,13 +1638,15 @@ pub(crate) use crate::value::addr_class::is_valid_obj_ptr;
 
 /// Object header - precedes the fields in memory
 ///
-/// # #8113: two derivable words are gone
+/// # #8047: all derivable words are gone
 ///
 /// The header used to open with `object_type: u32` (an ABI mirror of
 /// `error::ErrorHeader`'s first word) and carry `field_count: u32` (the live
 /// inline-slot bound). Both were derivable and neither alone saved a byte — the
 /// struct re-padded — so they went together: 32 bytes to 24, and a two-slot
-/// object from 56 to 48. The kind now comes from `GcHeader.obj_type` plus
+/// object from 56 to 48. #8047 then removed the derived `keys_array` mirror,
+/// taking the header to 16 bytes and a two-slot object to 40. The kind comes
+/// from `GcHeader.obj_type` plus
 /// [`shapes::ShapeObjectKind`] ([`object_is_regular`],
 /// [`crate::error::ptr_is_native_error`]); the bound from
 /// [`object_live_slot_count`]. See `object/live_slots.rs` for the consequence
@@ -1658,30 +1660,35 @@ pub struct ObjectHeader {
     /// runtime `ShapeId` after shape stamping. Parent lookup must use the class
     /// registry; direct reads of this word are not authoritative parent data.
     pub parent_class_id: u32,
-    /// Pointer to array of key strings (for Object.keys() support).
-    ///
-    /// A class instance HAS one: `object_alloc_class_inline_keys_impl` installs
-    /// the per-class array that codegen builds once at module init
-    /// (`js_build_class_keys_array`). The note that used to sit here claiming
-    /// the opposite outlived the compact-instance layout it described, and cost
-    /// #8099 a wrong premise — the guard descriptor refused every class-typed
-    /// parameter on the strength of it. Null means genuinely keyless, not
-    /// "class instance".
-    pub keys_array: *mut ArrayHeader,
+    /// Keep the 8-byte JSValue slot region aligned on ILP32 targets. The pad
+    /// sits before `meta` so the pointer remains the last semantic field and
+    /// codegen can derive its offset as `header_size - pointer_size`.
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) _slot_alignment_padding: u32,
     /// #6759 Phase B: per-object metadata record — null for ordinary
     /// objects (the common case). MUST stay the LAST field: codegen reads
-    /// the earlier header fields at fixed offsets (0/4/8), and the
+    /// the earlier header fields at fixed offsets (0/4), and the
     /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
     /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
     /// See [`ObjectMeta`].
     pub meta: *mut ObjectMeta,
 }
 
+/// Return the ordered keys array derived from the receiver's authoritative
+/// ShapeId descriptor. #8047 removed the per-object header mirror; this is the
+/// sole runtime spelling for consumers that need the pointer rather than the
+/// complete descriptor.
+#[inline]
+pub(crate) unsafe fn object_keys_array(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    shapes::object_shape_descriptor(obj)
+        .map(|descriptor| descriptor.keys as usize as *mut ArrayHeader)
+        .unwrap_or(std::ptr::null_mut())
+}
+
 /// #6759 Phase B: per-object metadata record, reached from
 /// [`ObjectHeader::meta`] in two dependent loads (no side-table probe).
 ///
-/// GC-arena allocated (`GC_TYPE_OBJECT_META`), exactly like the
-/// `keys_array` the header already carries: the header slot is a traced +
+/// GC-arena allocated (`GC_TYPE_OBJECT_META`). Its header slot is a traced +
 /// rewritten child edge (the record is reachable ONLY through its owner),
 /// so liveness, evacuation, and death all ride the ordinary GC — no manual
 /// free paths, no owner registry, and no stale-address hazard: the record
@@ -1820,7 +1827,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
 }
 
 /// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-pointer
-/// child slot exactly like `gc_keys_array_slot`. The GC type table calls this
+/// child slot. The GC type table calls this
 /// only for `GC_TYPE_OBJECT`; RegExp uses its dedicated slot descriptor.
 pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
     if user_ptr == 0 {
@@ -1870,7 +1877,9 @@ unsafe fn set_object_keys_array_with_live(
     // carrying its allocation-time `parent_class_id` (never in the ShapeId
     // range) is left alone.
     let predecessor = shapes::object_shape_descriptor(obj);
-    let keys_changed = (*obj).keys_array != keys_array;
+    let keys_changed = predecessor
+        .map(|descriptor| descriptor.keys != keys_array as u64)
+        .unwrap_or(!keys_array.is_null());
     if keys_changed {
         // #6893: the object's typed-shape layout descriptor is keyed by its
         // keys_array (shared per shape via SHAPE_LAYOUTS). A pointer change
@@ -1890,13 +1899,6 @@ unsafe fn set_object_keys_array_with_live(
     // inside the helper.
     let successor_shape_id =
         shapes::publish_object_shape_from(obj, predecessor, keys_array, live_inline_slot_count);
-    // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
-    (*obj).keys_array = keys_array;
-    crate::gc::runtime_write_barrier_slot(
-        obj as usize,
-        &(*obj).keys_array as *const _ as usize,
-        keys_array as u64,
-    );
     // An old receiver is invisible to an ordinary minor root walk. Arm the
     // shared descriptor edge at publication time so its keys array is copied
     // during the same first minor, rather than relying on a later pass over a

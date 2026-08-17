@@ -1322,7 +1322,7 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
 
         if keys.is_null() {
             // #809: an object with no own keys (e.g. an `Object.create(proto)`

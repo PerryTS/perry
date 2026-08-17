@@ -673,18 +673,9 @@ fn message_value_is_uncloneable(value: f64, visited: &mut HashSet<usize>) -> boo
     let Some(object) = object_ptr_from_value(value) else {
         return false;
     };
-    // #8113: the header no longer carries `field_count`; the authoritative live
-    // inline-slot bound is the ShapeId descriptor's, exposed as
-    // `object_live_slot_count`. The `keys_array.is_null()` arm is deliberate —
-    // class instances have no keys array, and `js_object_keys` filters private
-    // `#x` fields, so it is NOT the same set.
-    let field_count = unsafe {
-        if (*object).keys_array.is_null() {
-            perry_runtime::object_live_slot_count(object)
-        } else {
-            perry_runtime::array::js_array_length((*object).keys_array)
-        }
-    };
+    // The exact live-slot bound includes private class fields too; enumeration
+    // helpers intentionally filter those and are therefore not a substitute.
+    let field_count = unsafe { perry_runtime::object_live_slot_count(object) };
     (0..field_count).any(|index| {
         let field = perry_runtime::object::js_object_get_field(object, index);
         message_value_is_uncloneable(f64::from_bits(field.bits()), visited)

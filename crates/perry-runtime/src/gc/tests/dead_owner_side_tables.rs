@@ -84,7 +84,6 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     // #8113: zero live slots, so no descriptor is needed — the derived bound
     // for an unstamped receiver is 0, which is the right answer here.
     (*obj).parent_class_id = 0;
-    (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     obj
 }
@@ -1014,10 +1013,8 @@ fn test_dead_shape_descriptor_churn_returns_to_baseline_after_full_gc() {
 }
 
 /// #8112: the DESCRIPTOR record is the strong edge and the rewritten location;
-/// the header word is a derived mirror the collector also keeps valid until
-/// #8047 deletes it. Two siblings share one descriptor — and therefore one
-/// edge — so after copied-minor evacuation both mirrors and that record must
-/// agree.
+/// Two siblings share one descriptor — and therefore one edge — so after
+/// copied-minor evacuation that one record must be rewritten exactly once.
 #[test]
 fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let _guard = CopyingNurseryTestGuard::new(2);
@@ -1031,24 +1028,19 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let (a, _) = unsafe { alloc_nursery_test_object(0) };
     let (b, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
-        (*a).keys_array = keys;
         (*a).parent_class_id = id;
-        (*b).keys_array = keys;
         (*b).parent_class_id = id;
     }
     assert_eq!(
         crate::gc::test_gc_rewrite_slot_addresses(a as usize),
-        Some(vec![
-            unsafe { std::ptr::addr_of_mut!((*a).keys_array) } as usize,
-            crate::object::shapes::shape_descriptor_keys_slot(id)
-                .expect("a table-resident descriptor exposes its keys word") as usize,
-        ]),
-        "#8112: a stamped object enumerates its derived header mirror AND the \
-         authoritative descriptor record"
+        Some(vec![crate::object::shapes::shape_descriptor_keys_slot(id)
+            .expect("a table-resident descriptor exposes its keys word")
+            as usize,]),
+        "#8047: a stamped object enumerates only the authoritative descriptor edge"
     );
     assert_eq!(
-        crate::gc::test_gc_rewrite_slot_addresses(b as usize).map(|slots| slots[1]),
-        crate::gc::test_gc_rewrite_slot_addresses(a as usize).map(|slots| slots[1]),
+        crate::gc::test_gc_rewrite_slot_addresses(b as usize).map(|slots| slots[0]),
+        crate::gc::test_gc_rewrite_slot_addresses(a as usize).map(|slots| slots[0]),
         "#8112: siblings of one shape must share ONE keys edge"
     );
     js_shadow_slot_set(0, ptr_bits(a as usize));
@@ -1063,9 +1055,15 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     unsafe {
         assert_eq!((*a_after).parent_class_id, id);
         assert_eq!((*b_after).parent_class_id, id);
-        assert_eq!((*a_after).keys_array, (*b_after).keys_array);
-        assert_ne!((*a_after).keys_array as usize, old_keys);
-        assert_eq!(descriptor.keys, (*a_after).keys_array as u64);
+        assert_eq!(
+            crate::object::object_keys_array(a_after),
+            crate::object::object_keys_array(b_after)
+        );
+        assert_ne!(crate::object::object_keys_array(a_after) as usize, old_keys);
+        assert_eq!(
+            descriptor.keys,
+            crate::object::object_keys_array(a_after) as u64
+        );
     }
     assert_eq!(
         crate::object::shapes::test_shape_descriptor_count(),
@@ -1114,7 +1112,6 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
         .expect("shape range unexpectedly exhausted");
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
-        (*owner).keys_array = old_keys;
         (*owner).parent_class_id = id;
     }
 
@@ -1165,49 +1162,6 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
     crate::object::shapes::test_clear_shape_table();
 }
 
-/// #8067 release fail-closed guard, restated for #8112. A live GC_TYPE_OBJECT
-/// can carry a corrupt header word and a real ShapeId at the same time. Under
-/// the old model the collector captured descriptor FACTS from that word, so it
-/// had to classify it before dereferencing. The descriptor is now the source,
-/// so the corrupt word is never read for facts at all — it is only a mirror
-/// slot the collector still rewrites, and the unrelated descriptor must come
-/// through untouched.
-#[test]
-fn test_shape_descriptor_skips_a_plausible_misaligned_corrupt_keys_word() {
-    let _guard = GcTestIsolationGuard::new();
-    crate::object::shapes::test_clear_shape_table();
-
-    let valid_keys = unsafe { alloc_nursery_test_array() };
-    let id = crate::object::shapes::shape_descriptor_ensure(valid_keys, 0, 0)
-        .expect("shape range unexpectedly exhausted");
-    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let corrupt_keys = 0x2800_0203usize;
-    assert!(
-        unsafe { crate::value::addr_class::try_read_tracked_gc_header(corrupt_keys) }.is_none(),
-        "test premise: the plausible misaligned word is not an exact tracked allocation"
-    );
-    unsafe {
-        (*owner).keys_array = corrupt_keys as *mut crate::array::ArrayHeader;
-        (*owner).parent_class_id = id;
-    }
-    js_shadow_slot_set(0, ptr_bits(owner as usize));
-
-    assert_eq!(
-        crate::gc::test_gc_rewrite_slot_count(owner as usize),
-        Some(2),
-        "#8112: the corrupt mirror stays enumerated (the collector still has to \
-         rewrite it) alongside the authoritative descriptor record"
-    );
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
-        .expect("invalid header facts must not retire the unrelated descriptor");
-    assert_eq!(descriptor.keys, valid_keys as u64);
-    assert_eq!(descriptor.logical_key_count, 0);
-    assert_eq!(descriptor.live_inline_slot_count, 0);
-
-    js_shadow_slot_set(0, 0);
-    crate::object::shapes::test_drop_shape_descriptors(valid_keys as usize);
-}
-
 /// DirtyHeaderSlotScan retains enumerated raw slot pointers between budgeted
 /// work units, and descriptor-table growth in that mutator window must not
 /// invalidate any saved pointer. #8067 answered that by refusing to enumerate
@@ -1226,23 +1180,19 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
     let id = crate::object::shapes::shape_descriptor_ensure(keys_before, 0, 0)
         .expect("shape range unexpectedly exhausted");
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let keys = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
     unsafe {
-        (*owner).keys_array = keys;
         (*owner).parent_class_id = id;
     }
     js_shadow_slot_set(0, ptr_bits(owner as usize));
     let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)
         .expect("tracked object must have a rewrite descriptor");
-    let header_keys_slot = unsafe { std::ptr::addr_of_mut!((*owner).keys_array) as *mut u64 };
     let descriptor_keys_slot = crate::object::shapes::shape_descriptor_keys_slot(id)
         .expect("a table-resident descriptor exposes its keys word")
         as usize;
     assert_eq!(
         saved_slots,
-        vec![header_keys_slot as usize, descriptor_keys_slot],
-        "#8112: the enumeration is the derived mirror plus the authoritative \
-         descriptor record"
+        vec![descriptor_keys_slot],
+        "#8047: the enumeration contains only the stable descriptor record"
     );
 
     for i in 0..1024usize {
@@ -1255,7 +1205,7 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
         .expect("rooted object must remain enumerable after table growth");
     assert_eq!(
         slots_after,
-        vec![header_keys_slot as usize, descriptor_keys_slot],
+        vec![descriptor_keys_slot],
         "descriptor-table growth moved a keys word that deferred dirty-page \
          work may still be holding — the box did not keep the record put"
     );

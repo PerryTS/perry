@@ -344,7 +344,7 @@ pub(crate) fn class_object_own_field_bytes(
         return None;
     }
     unsafe {
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             return None;
         }

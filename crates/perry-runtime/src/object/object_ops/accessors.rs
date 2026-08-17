@@ -140,7 +140,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
             return f64::from_bits(TAG_UNDEF);
         }
-        let keys = (*obj).keys_array;
+        let keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             return f64::from_bits(TAG_UNDEF);
         }

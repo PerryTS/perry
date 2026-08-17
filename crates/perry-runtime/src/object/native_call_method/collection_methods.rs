@@ -417,7 +417,7 @@ pub(super) unsafe fn dispatch_raw_pointer(
             }
 
             // Field name scan on this object
-            let keys = (*obj).keys_array;
+            let keys = crate::object::object_keys_array(obj);
             if !keys.is_null() {
                 let keys_ptr = keys as usize;
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {

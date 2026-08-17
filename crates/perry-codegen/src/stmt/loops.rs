@@ -3276,9 +3276,8 @@ fn lower_object_array_write_versioned_for(
         plans
     };
     let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-    // #8113: address inline slots in BYTES rather than dividing the header size
-    // by 8 to get a word index. The quotient is exact today (24/8 and 16/8), but
-    // #8047's ILP32 header is 12 bytes and `12 / 8 == 1` truncates silently.
+    // Address inline slots in bytes. #8047 makes both layouts 16 bytes, while
+    // retaining this target-derived form prevents future silent truncation.
     let header_bytes = object_header_size.to_string();
     // `meta` is the LAST ObjectHeader field (a documented invariant of the
     // header layout): a POINTER-WIDTH field at byte offset

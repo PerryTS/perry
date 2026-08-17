@@ -6,7 +6,6 @@ mod block_pool_pressure;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
-mod clone_keys_array_init;
 mod contract;
 mod copying;
 mod copying_side_tables;

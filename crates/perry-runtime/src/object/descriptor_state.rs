@@ -982,7 +982,7 @@ pub(crate) unsafe fn mark_all_keys(
     _drop_enumerable: bool,
     drop_configurable: bool,
 ) {
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         return;
     }

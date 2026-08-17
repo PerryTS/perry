@@ -60,7 +60,7 @@ unsafe fn array_header_mut(obj: *mut ObjectHeader) -> *mut crate::array::ArrayHe
 }
 
 /// Apply `Object.freeze` / `Object.seal` to an array's OWN index + named data
-/// properties. The generic `mark_all_keys` walks `(*obj).keys_array`, but an
+/// properties. The generic `mark_all_keys` walks `crate::object::object_keys_array(obj)`, but an
 /// array's indices live in the dense element store and its named props in the
 /// `ARRAY_NAMED_PROPS` side table — neither appears in `keys_array` — so
 /// freeze/seal historically missed them, leaving a frozen array's elements

@@ -25,8 +25,8 @@
 //! predecessor stamp is still readable, and the `parent_class_id` store is the
 //! single, allocation-free publication point. A stamp-cleared window would be a
 //! window in which the collector sees a live bound of 0 (#7154/#7164).
-//! `ObjectHeader::keys_array` remains an ABI mirror until #8047 removes it;
-//! guards and GC must not use its value as a shape fact.
+//! #8047 removed `ObjectHeader::keys_array`; consumers derive the edge from
+//! this descriptor and no compatibility mirror remains.
 
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
@@ -45,8 +45,7 @@ pub(crate) struct ShapeIndex {
 /// Immutable facts named by one ShapeId.
 ///
 /// #8112: `keys` is the AUTHORITATIVE ordered-keys edge — the collector marks
-/// it and rewrites it in place, and `ObjectHeader::keys_array` is the derived
-/// mirror. It used to be the other way round: the header word was the sole
+/// it and rewrites it in place. Before #8112 the header word was the sole
 /// strong edge and this field a weak copy that a post-visit callback repaired.
 /// The inversion is what #8047 needs, because deleting the header word must
 /// not unroot anything.
@@ -742,7 +741,10 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
     if obj.is_null() {
         return 0;
     }
-    publish_object_shape_from(obj, predecessor, (*obj).keys_array, live_inline_slot_count)
+    let keys = predecessor
+        .map(|descriptor| descriptor.keys as usize as *mut ArrayHeader)
+        .unwrap_or(std::ptr::null_mut());
+    publish_object_shape_from(obj, predecessor, keys, live_inline_slot_count)
 }
 
 /// Publish the exact descriptor for an EXPLICIT keys edge — which may not be
@@ -750,11 +752,8 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
 ///
 /// This is what makes the keys-edge mutation mint-then-stamp (#8113). The
 /// caller stamps the successor here, with the predecessor still describing the
-/// header's current edge throughout every allocation inside, and only then
-/// stores the header word. The gap between the stamp store and the header store
-/// is allocation-free, and `object::gc_keys_array_slot` materializes
-/// `descriptor.keys` into the header slot anyway, so a collection inside it
-/// still sees exactly one authoritative edge.
+/// current edge throughout every allocation inside. The final ShapeId store is
+/// the atomic publication point for the new descriptor and its rooted edge.
 pub(crate) unsafe fn publish_object_shape_from(
     obj: *mut crate::object::ObjectHeader,
     predecessor: Option<ShapeDescriptor>,
@@ -948,7 +947,7 @@ fn descriptor_matches_object(
         return false;
     };
     unsafe {
-        d.keys == (*obj).keys_array as u64
+        d.keys == crate::object::object_keys_array(obj) as u64
             && d.logical_key_count == object_header_key_count(obj)
             && d.live_inline_slot_count == live_inline_slot_count
     }
@@ -956,7 +955,7 @@ fn descriptor_matches_object(
 
 #[inline]
 unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u32 {
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         0
     } else {
@@ -970,7 +969,7 @@ unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u3
 /// itself.
 #[inline]
 pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
-    debug_assert_object_shape_parity_for_keys(obj, (*obj).keys_array);
+    debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
 }
 
 /// Parity against an EXPLICIT keys edge.
@@ -1283,26 +1282,16 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
     }
 }
 
-// #8112 / #8047 rehearsal switches. Suppressing the derived `ObjectHeader`
-// keys mirror leaves the descriptor edge as the ONLY thing the collector has;
-// suppressing the descriptor edge too is the SABOTAGE arm that proves the
-// fixture's detector distinguishes a rewritten record from a stale one.
+// #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's
+// detector distinguishes a rewritten record from a stale one.
 //
 // Deliberately `#[cfg(test)]` thread-locals and not env knobs: the GC-knob
 // kill policy requires every shipped knob's off-state to be exercised by a
 // required CI arm, and neither state may be reachable in a shipped binary —
-// with the mirror off, the mutator's direct header loads are stale by
-// construction. Only collector-level fixtures may turn them on.
+// Only collector-level fixtures may turn it on.
 #[cfg(test)]
 thread_local! {
-    static KEYS_MIRROR_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEYS_EDGE_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-#[inline]
-pub(crate) fn test_keys_mirror_suppressed() -> bool {
-    KEYS_MIRROR_SUPPRESSED.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -1315,25 +1304,14 @@ pub(crate) fn test_keys_edge_suppressed() -> bool {
 /// next test on this thread.
 #[cfg(test)]
 pub(crate) struct TestKeysEdgeSuppression {
-    mirror: bool,
     edge: bool,
 }
 
 #[cfg(test)]
 impl TestKeysEdgeSuppression {
-    /// Drop the header mirror; keep the descriptor edge. This is the state
-    /// #8047 ships.
-    pub(crate) fn without_header_mirror() -> Self {
+    /// Drop the only edge. Nothing roots or rewrites the keys array.
+    pub(crate) fn without_descriptor_edge() -> Self {
         Self {
-            mirror: KEYS_MIRROR_SUPPRESSED.with(|c| c.replace(true)),
-            edge: KEYS_EDGE_SUPPRESSED.with(std::cell::Cell::get),
-        }
-    }
-
-    /// Drop BOTH. Nothing roots or rewrites the keys array — the sabotage arm.
-    pub(crate) fn without_any_keys_edge() -> Self {
-        Self {
-            mirror: KEYS_MIRROR_SUPPRESSED.with(|c| c.replace(true)),
             edge: KEYS_EDGE_SUPPRESSED.with(|c| c.replace(true)),
         }
     }
@@ -1342,7 +1320,6 @@ impl TestKeysEdgeSuppression {
 #[cfg(test)]
 impl Drop for TestKeysEdgeSuppression {
     fn drop(&mut self) {
-        KEYS_MIRROR_SUPPRESSED.with(|c| c.set(self.mirror));
         KEYS_EDGE_SUPPRESSED.with(|c| c.set(self.edge));
     }
 }

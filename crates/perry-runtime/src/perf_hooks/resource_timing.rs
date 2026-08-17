@@ -132,7 +132,7 @@ pub extern "C" fn js_perf_mark_resource_timing(
             );
             RESOURCE_ENTRY_KEYS_ARRAY.with(|c| {
                 if c.get() == 0 {
-                    c.set((*out).keys_array as usize);
+                    c.set(crate::object::object_keys_array(out) as usize);
                 }
             });
             let fields: [JSValue; RESOURCE_ENTRY_FIELD_COUNT as usize] = [

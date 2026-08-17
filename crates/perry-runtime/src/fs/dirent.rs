@@ -215,7 +215,7 @@ pub(crate) unsafe fn options_field_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options_value);
     let obj_ptr = options_object_ptr(options_handle.get_nanbox_f64())?;
-    let keys = (*obj_ptr).keys_array;
+    let keys = crate::object::object_keys_array(obj_ptr);
     if !keys.is_null() {
         let key_count = crate::array::js_array_length(keys) as usize;
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];

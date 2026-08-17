@@ -17,7 +17,7 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
     if obj.is_null() {
         return None;
     }
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     let keys_ptr = keys as usize;
     if keys.is_null() || keys_ptr < 0x10000 {
         return None;

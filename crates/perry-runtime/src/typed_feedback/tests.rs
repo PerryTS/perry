@@ -70,7 +70,7 @@ fn class_instance(
         packed.len() as u32,
     );
     let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
-    let keys = unsafe { (*obj).keys_array };
+    let keys = unsafe { crate::object::object_keys_array(obj) };
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     (obj, keys, key, receiver)
 }
@@ -1660,7 +1660,10 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
 
     let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
-    assert_ne!(unsafe { (*obj).keys_array }, original_keys);
+    assert_ne!(
+        unsafe { crate::object::object_keys_array(obj) },
+        original_keys
+    );
 
     let second = js_typed_feedback_class_field_get_guard(
         39,
@@ -1680,47 +1683,6 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 1);
     assert_eq!(site.fallback_calls, 1);
-}
-
-#[test]
-fn typed_feedback_class_field_guard_ignores_object_header_shape_mirrors() {
-    let _guard = typed_feedback_test_lock();
-    reset_typed_feedback_for_tests();
-    register(8067, TypedFeedbackSiteKind::PropertyGet, "obj.x");
-
-    let class_id = 0x7EED_8067;
-    let (obj, original_keys, key_x, receiver) = class_instance(class_id, b"x");
-    let expected_shape_id = shape_id(obj);
-
-    unsafe {
-        // `keys_array` is the last ABI mirror (#8113 deleted `field_count`;
-        // #8047 removes this one). An authoritative guard must not consult it.
-        // GC_STORE_AUDIT(POINTER_FREE): test sabotage removes the compatibility edge by storing null.
-        (*obj).keys_array = std::ptr::null_mut();
-    }
-    let passed = js_typed_feedback_class_field_get_guard(
-        8067,
-        receiver,
-        class_id,
-        expected_shape_id,
-        key_x,
-        0,
-        0,
-    );
-    unsafe {
-        // GC_STORE_AUDIT(BARRIERED): restoring the saved compatibility edge is followed by the ordinary object-slot barrier.
-        (*obj).keys_array = original_keys;
-        crate::gc::runtime_write_barrier_slot(
-            obj as usize,
-            &(*obj).keys_array as *const _ as usize,
-            original_keys as u64,
-        );
-    }
-
-    assert_eq!(passed, 1, "guard must consume ShapeDescriptor facts");
-    let site = &typed_feedback_snapshot().sites[0];
-    assert_eq!(site.guard_passes, 1);
-    assert_eq!(site.guard_failures, 0);
 }
 
 #[test]

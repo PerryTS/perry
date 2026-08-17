@@ -630,7 +630,7 @@ unsafe fn read_ordinary_own_value(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     let key_count = crate::array::js_array_length(keys) as usize;
     let alloc_limit = std::cmp::max(
         crate::object::object_live_slot_count(obj),
@@ -655,7 +655,7 @@ unsafe fn write_ordinary_own_value(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     let key_count = crate::array::js_array_length(keys) as usize;
     let alloc_limit = std::cmp::max(
         crate::object::object_live_slot_count(obj),

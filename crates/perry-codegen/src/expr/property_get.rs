@@ -1448,14 +1448,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `js_object_get_field_by_name_f64` runtime helper which
                 // hashes the property name + walks the keys array. The
                 // ObjectHeader layout (`#[repr(C)]` in
-                // `crates/perry-runtime/src/object/mod.rs`) is 24 bytes on
-                // LP64 / 16 on ILP32 (#8113) followed by the inline field
+                // `crates/perry-runtime/src/object/mod.rs`) is 16 bytes on
+                // LP64 and ILP32 (#8047) followed by the inline field
                 // array of f64-sized slots:
                 //
-                //   offset  0..24:  ObjectHeader (class_id, parent_class_id
-                //                   [= ShapeId], keys_array, meta)
-                //   offset 24..32:  field 0
-                //   offset 32..40:  field 1
+                //   offset  0..16:  ObjectHeader (class_id, parent_class_id
+                //                   [= ShapeId], meta)
+                //   offset 16..24:  field 0
+                //   offset 24..32:  field 1
                 //   ...
                 //
                 // Parent class fields come first in the slot order
@@ -1734,10 +1734,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                         ctx.current_block = fast_idx;
                         // arm64_32 watchOS: the object fields region begins at
-                        // `size_of::<ObjectHeader>()` past the user pointer — 24 on
-                        // 64-bit, 16 on ILP32 since #8113 (both trailing pointers are
-                        // 4 bytes there). A hardcoded 24 reads every class field 8 bytes
-                        // off on a 32-bit watch, so this inline class-field load
+                        // `size_of::<ObjectHeader>()` past the user pointer — 16 on
+                        // both LP64 and ILP32 since #8047. A hardcoded offset reads
+                        // class fields from the wrong word when the header changes, so
+                        // this inline class-field load
                         // disagreed with the generic-PIC load / runtime setter (both
                         // target-aware) and typed-object string fields came back as
                         // word-swapped NaN-boxes. Derive it from the target triple

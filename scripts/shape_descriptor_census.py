@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""#8067/#8113 exact shape-header census plus authority-order sabotage tests.
+"""#8067/#8113/#8047 exact shape-header census and sabotage tests.
 
-#8113 deleted `ObjectHeader::object_type` and `::field_count`, so `keys_array`
-is the last compatibility mirror and the only field this census tracks. The
-deleted pair is now guarded structurally instead: `assert_header_fields` pins
-the exact declared field list, so re-adding a word is red rather than merely
-un-baselined.
+#8047 deleted the final `ObjectHeader::keys_array` compatibility mirror. The
+name remains census-tracked so any stale/reintroduced raw member read is red;
+`assert_header_fields` also pins the exact declared field list.
 """
 
 from __future__ import annotations
@@ -21,10 +19,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "scripts" / "shape_descriptor_census_baseline.json"
 FIELDS = ("keys_array",)
-# The exact `ObjectHeader` field list, in order. #8113 took it from six fields
-# (32 bytes LP64) to four (24). Changing it is an ABI change with a published
+# The exact public `ObjectHeader` field list, in order. #8047 took it from four
+# fields (24 bytes LP64) to three (16). Changing it is an ABI change with a published
 # crates.io mirror (`perry-ffi`), so it must be a deliberate edit here too.
-OBJECT_HEADER_FIELDS = ("class_id", "parent_class_id", "keys_array", "meta")
+OBJECT_HEADER_FIELDS = ("class_id", "parent_class_id", "meta")
 RAW_STRING_START = re.compile(r'(?:br|r)(?P<hashes>#{0,255})"')
 RUST_SPECIAL = re.compile(
     r"//|/\*|(?:b)?'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|.)|[^'\\\n])'|(?:br|r)#{0,255}\"|(?:b|c)?\""
@@ -368,20 +366,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"gc_shape_keys_edge_slot\s*\(",
         "descriptor keys edge enumerated as a child slot",
     )
-    # #8112: the authoritative edge is resolved from the descriptor BEFORE the
-    # derived header mirror is handed to the visitor. Reversing that would let
-    # a mirror rewrite feed back into the edge, which is the inversion this
-    # issue exists to remove.
-    assert_before(
-        layout_body,
-        "gc_shape_keys_edge_slot(",
-        "child_slots.take_prefix_child_slot()",
-        "authoritative descriptor edge before derived mirror visit",
-    )
-    # And nothing in the visit reads the mirror for a FACT. The old model
-    # captured `logical_key_count` from the header's array and validated the
-    # header word before dereferencing it; both are gone, which is why #8047
-    # can delete the word without touching this function's logic.
+    # Nothing in the visit reads the deleted mirror. The descriptor record is
+    # both the strong edge and the stable rewritable location.
     if re.search(r"keys_array", layout_body):
         raise CensusError(
             "the GC slot visitor reads ObjectHeader::keys_array again; the "
@@ -554,9 +540,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError(f"{label} reintroduced a keys-pointer token")
 
     # Emitted guards may read exactly two header offsets: `class_id` @0 and the
-    # ShapeId @4. Everything at or past 8 is a mirror (`keys_array` @8, `meta`
-    # @16) that #8047 removes, and reading one as a shape fact is the bug this
-    # census exists to catch.
+    # ShapeId @4. Guards have no reason to address anything at or past 8.
     #
     # #8113 also fixed this arm's VACUITY. It used to match only
     # `add(..., "N")`, while all four functions below emit
@@ -648,10 +632,9 @@ def forbidden_header_offsets(body: str) -> list[str]:
     the GcHeader bytes at -8/-7/-6 are reached — and neither is a negative
     literal.
     """
-    forbidden = {"8", "16"}
     gep = re.findall(r'\(\s*I64\s*,\s*"(-?\d+)"\s*\)', body)
     add = re.findall(r'\.add\s*\(\s*I64\s*,\s*&\w[\w.]*\s*,\s*"(-?\d+)"\s*\)', body)
-    return sorted({off for off in gep + add if off in forbidden})
+    return sorted({off for off in gep + add if int(off) >= 8})
 
 
 def assert_header_fields(object_mod: str) -> None:
@@ -742,18 +725,6 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         lambda: assert_authority_surfaces(alternate_strong_root),
     )
 
-    inverted_gc = dict(sources)
-    path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
-    inverted_gc[path] = swap_once(
-        inverted_gc[path],
-        "gc_shape_keys_edge_slot(",
-        "child_slots.take_prefix_child_slot()",
-    )
-    expect_rejected(
-        "derived mirror visited before the authoritative descriptor edge",
-        lambda: assert_authority_surfaces(inverted_gc),
-    )
-
     shapes_path = "crates/perry-runtime/src/object/shapes.rs"
     unboxed_table = dict(sources)
     unboxed_table[shapes_path] = unboxed_table[shapes_path].replace(
@@ -778,6 +749,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     header_fact_read = dict(sources)
+    path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
     header_fact_read[path] = header_fact_read[path].replace(
         "let shape_keys_edge = if",
         "let _mirror = (*obj).keys_array;\n    let shape_keys_edge = if",
@@ -867,8 +839,8 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     readded_field = dict(sources)
     path = "crates/perry-runtime/src/object/mod.rs"
     readded_field[path] = readded_field[path].replace(
-        "    pub keys_array: *mut ArrayHeader,",
-        "    pub field_count: u32,\n    pub keys_array: *mut ArrayHeader,",
+        "    pub meta: *mut ObjectMeta,",
+        "    pub keys_array: *mut ArrayHeader,\n    pub meta: *mut ObjectMeta,",
         1,
     )
     expect_rejected(

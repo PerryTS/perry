@@ -208,7 +208,7 @@ unsafe fn object_prototype_has_desc_field() -> bool {
     // on Object.prototype, so the per-object flag is no signal here. Every own
     // install — data write, defineProperty accessor, builtin getter — mirrors
     // its key into keys_array, so scanning it for the 6 names is sufficient.
-    let keys = (*(ptr as *const ObjectHeader)).keys_array;
+    let keys = crate::object::object_keys_array(ptr as *const ObjectHeader);
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         Some(_) => return true, // unexpected shape — be conservative
@@ -294,7 +294,7 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         present: [false; 6],
         handles: [None; 6],
     };
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if !keys.is_null() {
         match crate::value::addr_class::try_read_gc_header(keys as usize) {
             Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}

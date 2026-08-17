@@ -1604,14 +1604,13 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             let Some(range) = crate::object::gc_field_slot_range(obj, descriptor) else {
                 return HeapChildSlotIterator::empty();
             };
-            let keys_slot = crate::object::gc_keys_array_slot(obj, descriptor);
             // #6812: the meta record is a raw-pointer child edge; before the
             // spill buffer it was enumerated only on the rewrite path, which
             // left it invisible to MARKING (latent for custom prototypes,
             // which are usually rooted elsewhere; fatal for the spill
             // buffer, reachable through meta alone). A second prefix slot
             // keeps payload slot indices aligned with the layout masks.
-            HeapChildSlotIterator::new_object(header, keys_slot, range, descriptor)
+            HeapChildSlotIterator::new_object(header, None, range, descriptor)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
         }
         GcLayoutSlotKind::RegExpFields => {

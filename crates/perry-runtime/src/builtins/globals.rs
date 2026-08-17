@@ -878,7 +878,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     // js_object_get_field (which resolves inline vs overflow
                     // per index) + js_object_set_field_by_name.
                     let src_obj = ptr as *const crate::object::ObjectHeader;
-                    let src_keys = (*src_obj).keys_array;
+                    let src_keys = crate::object::object_keys_array(src_obj);
                     let key_count = if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
                         crate::array::js_array_length(src_keys) as usize
                     } else {
@@ -898,7 +898,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                         for i in 0..key_count {
                             let src_now =
                                 src_handle.get_raw_const_ptr::<crate::object::ObjectHeader>();
-                            let keys_now = (*src_now).keys_array;
+                            let keys_now = crate::object::object_keys_array(src_now);
                             if keys_now.is_null()
                                 || i >= crate::array::js_array_length(keys_now) as usize
                             {

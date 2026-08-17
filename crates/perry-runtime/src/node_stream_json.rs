@@ -33,7 +33,7 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
     // keys array for BOTH flag keys, instead of two exported-getter scans
     // (`own_field_by_key_bytes` × 2) whose per-element `js_array_get` +
     // SSO-materializing compare dominated small-object stringify profiles.
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     let keys_ptr = keys as usize;
     if keys.is_null() || keys_ptr < 0x10000 {
         return false;

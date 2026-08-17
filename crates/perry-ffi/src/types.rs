@@ -26,7 +26,8 @@ pub const BIGINT_LIMBS: usize = 16;
 /// * 1 — `{object_type, class_id, parent_class_id, field_count, keys_array, meta}`,
 ///   32 bytes on LP64.
 /// * 2 — `{class_id, parent_class_id, keys_array, meta}`, 24 bytes on LP64 (#8113).
-pub const OBJECT_HEADER_ABI_REVISION: u32 = 2;
+/// * 3 — `{class_id, parent_class_id, meta}`, 16 bytes on LP64/ILP32 (#8047).
+pub const OBJECT_HEADER_ABI_REVISION: u32 = 3;
 
 /// Header for a runtime-allocated JS string.
 #[repr(C)]
@@ -54,19 +55,20 @@ pub struct ArrayHeader {
 
 /// Header for a runtime-allocated JS object.
 ///
-/// # ABI revision 2 (#8113) — BREAKING for out-of-tree mirrors
+/// # ABI revision 3 (#8047) — BREAKING for out-of-tree mirrors
 ///
 /// Revision 1 opened with `object_type: u32` and carried `field_count: u32`.
 /// Both were derivable and both are gone; `class_id` moved from offset 4 to 0,
 /// the shape word from 8 to 4, and the struct shrank from 32 to 24 bytes on
-/// LP64 (16 on ILP32).
+/// LP64 (16 on ILP32). Revision 3 removes the derived keys mirror and is 16
+/// bytes on both pointer widths.
 ///
-/// A wrapper compiled against the revision-1 mirror and linked against a
-/// revision-2 runtime reads `class_id` out of the deleted `object_type` slot
-/// with **no compile error**. That cannot be detected retroactively — nothing in
-/// revision 1 references a version symbol — so revision 1 consumers must
-/// recompile. From this revision on, [`OBJECT_HEADER_ABI_REVISION`] gives the
-/// tripwire: assert it against the runtime's
+/// A wrapper compiled against an older mirror and linked against a revision-3
+/// runtime reads shifted fields and/or starts the field region at the wrong
+/// offset with **no compile error**. Revision 1 cannot detect this
+/// retroactively — it references no version symbol — so those consumers must
+/// recompile. From revision 2 on, [`OBJECT_HEADER_ABI_REVISION`] gives the tripwire:
+/// assert it against the runtime's
 /// `perry_object_header_abi_revision()` at startup, and a future layout change
 /// is caught instead of silently misread.
 #[repr(C)]
@@ -76,8 +78,8 @@ pub struct ObjectHeader {
     /// Runtime parent class identifier during allocation, then the runtime
     /// ShapeId after shape stamping. Never authoritative parent data.
     pub parent_class_id: u32,
-    /// Runtime array of object keys, or null for class instances.
-    pub keys_array: *mut ArrayHeader,
+    #[cfg(target_pointer_width = "32")]
+    _slot_alignment_padding: u32,
     /// Per-object metadata record (#6759 Phase B), or null when the object
     /// has none. Opaque to FFI consumers — never dereferenced across the
     /// boundary, mirrored only so the header size and field-region offset
@@ -199,10 +201,6 @@ mod layout_tests {
             offset_of!(perry_runtime::ObjectHeader, parent_class_id)
         );
         assert_eq!(
-            offset_of!(ObjectHeader, keys_array),
-            offset_of!(perry_runtime::ObjectHeader, keys_array)
-        );
-        assert_eq!(
             offset_of!(ObjectHeader, meta),
             offset_of!(perry_runtime::ObjectHeader, meta)
         );
@@ -216,7 +214,7 @@ mod layout_tests {
     /// see.
     #[test]
     fn object_header_abi_revision_matches_the_pinned_layout() {
-        assert_eq!(OBJECT_HEADER_ABI_REVISION, 2);
+        assert_eq!(OBJECT_HEADER_ABI_REVISION, 3);
         assert_eq!(
             OBJECT_HEADER_ABI_REVISION,
             perry_runtime::perry_object_header_abi_revision(),
@@ -225,11 +223,15 @@ mod layout_tests {
              changelog: perry-ffi is published to crates.io"
         );
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(size_of::<ObjectHeader>(), 24);
+        assert_eq!(size_of::<ObjectHeader>(), 16);
         #[cfg(target_pointer_width = "32")]
         assert_eq!(size_of::<ObjectHeader>(), 16);
         assert_eq!(offset_of!(ObjectHeader, class_id), 0);
         assert_eq!(offset_of!(ObjectHeader, parent_class_id), 4);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(offset_of!(ObjectHeader, meta), 8);
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(offset_of!(ObjectHeader, meta), 12);
     }
 
     #[test]

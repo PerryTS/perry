@@ -76,7 +76,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // Buffer / ArrayBuffer / DataView NEXT, and for the same reason
         // (#8117). These receivers are `BufferHeader`s, not `ObjectHeader`s:
         // they have no `class_id` and no `keys_array`. Nothing below rejected
-        // them, so the ordinary arm read `(*obj).keys_array` out of the bytes
+        // them, so the ordinary arm read `crate::object::object_keys_array(obj)` out of the bytes
         // that follow a buffer header, and handed that to `js_array_length` —
         // which dereferences `addr - 8` for its lazy-array probe. The only
         // thing between the two was a `< 0x10000` magnitude floor, which
@@ -184,7 +184,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // them, and the very next iteration compared a from-space string
         // against a from-space slot. Root both and re-read each iteration; the
         // pre-call addresses are never bound past the call.
-        let keys_handle = scope.root_raw_mut_ptr((*obj).keys_array);
+        let keys_handle = scope.root_raw_mut_ptr(crate::object::object_keys_array(obj));
         let key_handle = scope.root_string_ptr(key_str);
         let ((), mut keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
         // Defence in depth for the class the buffer arm above closes by

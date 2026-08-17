@@ -892,7 +892,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             }
             // #1758: a CLOSURE receiver (functions ARE objects in JS, so
             // `key in fn` is valid). Pre-fix this fell through to the
-            // keys_array scan below, which read `(*obj_ptr).keys_array` at
+            // keys_array scan below, which read `crate::object::object_keys_array(obj_ptr)` at
             // the closure's capture-slot offset — a NaN-boxed value, not a
             // real *ArrayHeader — and SIGSEGV'd in `js_array_length`. effect's
             // `dual`-wrapped helpers reach here (`<key> in someClosure` deep in
@@ -1078,7 +1078,7 @@ unsafe fn ordinary_has_property(
         // test262 reduce/reduceRight `subclassed array` cases): its layout is
         // `ArrayHeader { length, capacity }` + inline elements, NOT the
         // `ObjectHeader.keys_array` shape `own_key_present` expects, so reading
-        // `(*cur).keys_array` off an array node finds garbage (or nothing) and
+        // `crate::object::object_keys_array(cur)` off an array node finds garbage (or nothing) and
         // every indexed/`"length"` lookup wrongly reports absent. Detect the
         // GC type and route to the array-aware own-key check instead.
         let cur_is_array = crate::value::addr_class::try_read_gc_header(cur as usize)
@@ -1301,7 +1301,7 @@ pub(crate) unsafe fn native_module_own_field_by_key(
     if target == b"__module__" {
         return None;
     }
-    let keys = (*obj).keys_array;
+    let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
         return None;
     }

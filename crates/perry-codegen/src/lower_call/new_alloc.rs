@@ -246,14 +246,14 @@ fn emit_instance_alloc_inner(
     //    store offset      (1)
     //    load data + gep   (2)
     //    write GcHeader    (1)  — packed i64 store
-    //    write ObjectHeader (1)  — one packed i64 store (#8113)
-    //    write keys_ptr    (1)
-    //  total: ~12 cycles vs ~140 cycles for the function-call path.
+    //    write ObjectHeader (1)  — class id + ShapeId
+    //    write null meta    (1)
+    //  total: ~11 cycles vs ~140 cycles for the function-call path.
     //
     // Layout assumption: GcHeader is 8 bytes
     //    {obj_type:u8, gc_flags:u8, _reserved:u16, size:u32}
-    // and ObjectHeader is 24 bytes on LP64 / 16 on ILP32 (#8113)
-    //    {class_id:u32, parent_class_id:u32, keys_array:*ptr, meta:*ptr}
+    // and ObjectHeader is 16 bytes on LP64 and ILP32 (#8047)
+    //    {class_id:u32, parent_class_id:u32, meta:*ptr [, ILP32 pad:u32]}
     // followed by `max(field_count, INLINE_SLOT_FLOOR)` 8-byte field
     // slots. The user pointer the rest of the codegen sees is `raw + 8`
     // (i.e. the ObjectHeader address) — same as what
@@ -386,8 +386,8 @@ fn emit_instance_alloc_inner(
         } else {
             // Compile-time layout constants.
             const GC_HEADER_SIZE: u64 = 8;
-            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit
-            // but 16 on ILP32 (two 4-byte pointers). Derive from the target
+            // `size_of::<ObjectHeader>()` is 16 on LP64 and padded ILP32.
+            // Derive from the target
             // triple so the inline alloc size and field-region base match the
             // target-compiled runtime (no-op on 64-bit; see `target_layout`).
             let object_header_size: u64 =
@@ -452,10 +452,8 @@ fn emit_instance_alloc_inner(
             let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
             // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
             // bump allocator's offset invariant (below) requires every
-            // allocation to be a multiple of 8; on ILP32 `object_header_size`
-            // is 20, so an unpadded total is 4-skewed (e.g. 92) and would
-            // misalign the next bump. No-op on 64-bit (8 + 24 + 8·n is already
-            // 8-aligned → 96 for ≤8 fields).
+            // allocation to be a multiple of 8. #8047 makes the object header
+            // 16 bytes on both pointer widths, so this is currently a no-op.
             let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
             let total_size_str = total_size.to_string();
 
@@ -471,22 +469,6 @@ fn emit_instance_alloc_inner(
                 slot
             };
 
-            // Hoist the per-class `keys_array` global load to the function
-            // entry block (cached in a stack slot per class). Without this
-            // hoisting, LLVM would reload `@perry_class_keys_<class>` on
-            // every loop iteration, because the loop body's `call
-            // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
-            // the call doesn't modify the global.
-            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-                s
-            } else {
-                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), s.clone());
-                s
-            };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
-
             // Inline bump-allocator IR.
             let blk = ctx.block();
             let state_ptr = blk.load(PTR, &arena_state_slot);
@@ -494,7 +476,7 @@ fn emit_instance_alloc_inner(
             // offset = state.offset (at byte offset 8 in InlineArenaState).
             // The offset is invariant 8-aligned: arena blocks start at offset 0
             // (8-aligned), every allocation is a multiple of 8 (`total_size`
-            // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=4` slots ×
+            // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=2` slots ×
             // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
             // state to `block.offset` which is also always 8-aligned. So we
             // skip the `(offset + 7) & -8` align-up step entirely — saves
@@ -644,13 +626,6 @@ fn emit_instance_alloc_inner(
                 header_image, raw
             ));
 
-            // Second 8 bytes: keys_array pointer. The keys_ptr we loaded
-            // above is an i64 (carries the ArrayHeader address); store as
-            // i64 since the underlying memory is 8 bytes either way.
-            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "16")]);
-            // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
-            blk.store(I64, &keys_ptr, &oh_addr_3);
-
             // #6759 Phase B: null the `meta` record pointer — the LAST header
             // field, at header offset (object_header_size - pointer_size).
             // Pointer-width store: on ILP32 the field is 4 bytes at a
@@ -671,9 +646,7 @@ fn emit_instance_alloc_inner(
             // observed stale arena bytes. When those bytes were a previously-freed
             // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
             // crashed with "Cannot read properties of undefined". Slots start
-            // at raw + GcHeader(8) + ObjectHeader(24) = raw + 32 on LP64
-            // (#8113; it was raw + 40 while the header carried the two deleted
-            // words).
+            // at raw + GcHeader(8) + ObjectHeader(16) = raw + 24 (#8047).
             for i in 0..alloc_field_count {
                 let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
