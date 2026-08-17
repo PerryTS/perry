@@ -7,7 +7,6 @@ host_os=$(uname -s)
 arguments=()
 skip_export_list_value=false
 original_export_list=""
-original_version_script=""
 saw_runtime_rlib=false
 stdlib_provider_exports=(
   issue_8075_stdlib_runtime_probe
@@ -52,18 +51,13 @@ for argument in "$@"; do
     -Wl,-exported_symbols_list,*)
       original_export_list=${argument#-Wl,-exported_symbols_list,}
       ;;
-    -Wl,--version-script=*)
-      original_version_script=${argument#-Wl,--version-script=}
-      ;;
     *) arguments+=("$argument") ;;
   esac
 done
 
 custom_export_list=""
-custom_version_script=""
 cleanup() {
   [[ -z "$custom_export_list" ]] || rm -f "$custom_export_list"
-  [[ -z "$custom_version_script" ]] || rm -f "$custom_version_script"
 }
 trap cleanup EXIT
 
@@ -78,37 +72,6 @@ if [[ -n "$original_export_list" ]]; then
     arguments+=('-Wl,-exported_symbols_list' "-Wl,$custom_export_list")
   else
     arguments+=('-Wl,-exported_symbols_list' "-Wl,$original_export_list")
-  fi
-fi
-
-if [[ -n "$original_version_script" ]]; then
-  if [[ "$saw_runtime_rlib" == true ]]; then
-    custom_version_script=$(mktemp "${TMPDIR:-/tmp}/perry-8075-version.XXXXXX")
-    # `global:` WITHOUT a `local: *`.
-    #
-    # The provider statically links the runtime rlib as well as loading the
-    # runtime .so, so it carries its own `js_gc_init` and friends. `local: *`
-    # binds those internally, and a local symbol is not preemptible — the
-    # stdlib then resolves stateful runtime calls to its OWN copy instead of
-    # the image the host loaded first, which is exactly what this fixture
-    # exists to detect ("stdlib provider is bound to a different runtime
-    # image"). Before this shim parsed `--version-script` at all, the
-    # rustc-generated script was passed through and the gate passed; the
-    # regression came with the hiding, not with the export list.
-    #
-    # Listing the runtime's symbols explicitly is NOT the fix: rustc also
-    # passes `--no-undefined-version`, so naming a symbol the output does not
-    # define is a hard lld error. Omitting `local: *` leaves every other
-    # symbol at its default (global, preemptible) binding and names only what
-    # must be added.
-    {
-      echo '{ global:'
-      printf '  %s;\n' "${stdlib_provider_exports[@]}"
-      echo '};'
-    } > "$custom_version_script"
-    arguments+=("-Wl,--version-script=$custom_version_script")
-  else
-    arguments+=("-Wl,--version-script=$original_version_script")
   fi
 fi
 

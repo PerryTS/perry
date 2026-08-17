@@ -112,6 +112,10 @@ if [[ "$host_os" == Darwin ]]; then
   install_name_tool -id '@rpath/libperry_runtime.dylib' "$runtime_library"
   install_name_tool -id '@rpath/libperry_stdlib.dylib' "$stdlib_library"
 else
+  nm -D "$stdlib_library" | grep -q ' T js_gc_init' || {
+    echo "stdlib provider hid js_gc_init — not preemptible" >&2
+    exit 1
+  }
   readelf -d "$stdlib_library" | grep -Fq "Shared library: [$runtime_filename]" || {
     echo "stdlib provider is not bound to the separate runtime provider" >&2
     exit 1
