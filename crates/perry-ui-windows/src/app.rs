@@ -309,6 +309,9 @@ unsafe fn dispatch_ui_message(msg: &MSG) {
         });
         return;
     }
+    if crate::widgets::map_view::pre_translate_message(msg) {
+        return;
+    }
     if (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
         && try_handle_shortcut(msg.wParam.0 as u16)
     {
