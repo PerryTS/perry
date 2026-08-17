@@ -285,6 +285,14 @@ fn walk_frame_pointers() -> Vec<FrameInfo> {
 }
 
 /// Resolve a code address to a symbol name using `dladdr`.
+///
+/// `dladdr`/`Dl_info` are POSIX-only. They were reached unconditionally, so
+/// `perry-runtime` failed to COMPILE for `*-pc-windows-msvc` — which is why the
+/// `native-roots-rs4gc (windows-latest)` arm of `gc-native-roots` died in its
+/// build step rather than in a probe. This diagnostic is debug-only
+/// (`PERRY_GC_SCAN_NATIVE_STACK=1`), so the non-POSIX arm degrades to the bare
+/// address rather than pulling in a platform symbolizer.
+#[cfg(unix)]
 fn resolve_symbol(addr: usize) -> String {
     unsafe {
         let mut info: libc::Dl_info = std::mem::zeroed();
@@ -309,6 +317,12 @@ fn resolve_symbol(addr: usize) -> String {
             format!("0x{addr:x} (dladdr failed)")
         }
     }
+}
+
+/// No `dladdr` off POSIX: report the bare address.
+#[cfg(not(unix))]
+fn resolve_symbol(addr: usize) -> String {
+    format!("0x{addr:x} (symbolication unavailable on this target)")
 }
 
 #[derive(Clone, Copy)]
