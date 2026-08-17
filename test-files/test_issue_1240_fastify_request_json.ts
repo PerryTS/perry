@@ -1,3 +1,4 @@
+// parity-skip: background server; driven by test-files/run_test_issue_1240.sh
 // Issue #1240 — fastify `request.json()` returns `undefined` (silent 400).
 //
 // Before the fix, the native dispatch table routed the `json` method to

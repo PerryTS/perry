@@ -81,6 +81,14 @@ pub fn is_cluster_worker() -> bool {
     cluster_worker_id().is_some()
 }
 
+/// Stable cross-crate worker check for the separately linked HTTP/Fastify
+/// adapters. The runtime consumes `NODE_UNIQUE_ID` during cluster bootstrap,
+/// so adapters must query this cached state instead of rereading the env var.
+#[no_mangle]
+pub extern "C" fn perry_cluster_is_worker() -> i32 {
+    is_cluster_worker() as i32
+}
+
 /// Bind a TCP listener with SO_REUSEPORT (+SO_REUSEADDR) so N cluster
 /// workers can share one port (#4914). Callers gate on
 /// [`is_cluster_worker`]; non-worker binds stay on the plain

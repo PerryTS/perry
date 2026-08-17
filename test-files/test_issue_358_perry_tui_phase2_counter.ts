@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI fixture; requires piped keypresses and has no Node oracle
 // Regression test for #358 Phase 2: state + useInput + run loop.
 // Implements the issue's acceptance-criterion #1:
 //

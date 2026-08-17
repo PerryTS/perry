@@ -77,7 +77,6 @@ mod stream;
 mod textencoder;
 mod url_date_instance;
 mod url_search_params;
-mod wasm_exports;
 
 use array_only_methods::try_array_only_methods;
 use globals::try_global_builtins;
@@ -110,7 +109,6 @@ use regex_string::try_regex_string_methods;
 use static_and_instance::try_static_method_and_instance;
 use textencoder::try_textencoder_decoder;
 use url_date_instance::try_url_date_weakref_instance;
-use wasm_exports::try_wasm_instance_exports;
 
 fn unwrap_call_callee_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     let mut cur = e;
@@ -564,12 +562,6 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
                 // Static class method + native-instance method dispatch.
                 args = match try_static_method_and_instance(ctx, call, expr, args)? {
-                    Ok(e) => return Ok(e),
-                    Err(a) => a,
-                };
-
-                // `<inst>.exports.<method>(...)` for WebAssembly JS API.
-                args = match try_wasm_instance_exports(ctx, call, expr, args)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };

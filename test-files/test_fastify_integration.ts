@@ -1,3 +1,4 @@
+// parity-skip: background server; driven by scripts/run_fastify_tests.sh
 // Integration test for Fastify (issue #174). Runs a small server that
 // scripts/run_fastify_tests.sh launches in the background, curls, and
 // asserts the response bodies for each route. Port is read from argv

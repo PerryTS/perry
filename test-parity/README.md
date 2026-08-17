@@ -49,6 +49,14 @@ generated snapshot needs a full-suite baseline from a tag run and is still a
 follow-up; until then its gap-suite entries overlap `gap_snapshot.json` and are
 kept so the tag-gated job keeps passing.
 
+The full sweep executes a source file only when it is a self-contained,
+terminating program whose output can be compared with Node (or with a committed
+expected-output file). A fixture that instead needs terminal input, a client to
+drive a background server, or an external service must declare a non-empty
+`// parity-skip: <reason>` header. The runner records it as `skipped`; compile
+smoke and the fixture's lifecycle-specific harness remain responsible for its
+coverage. Keep the reason concrete and name that harness when one exists.
+
 It is **bidirectional** as of #7582. `scripts/parity_known_failures.py` fails on
 a failure that is not allowed here, and equally on an **entry whose test ran on
 this platform and passed** — naming the entry to delete. It used to compute

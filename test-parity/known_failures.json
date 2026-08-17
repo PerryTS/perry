@@ -10,24 +10,6 @@
     },
     "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite). Because that job runs after the merges it would judge, the OFFLINE half of the ratchet runs on `lint` (a required per-PR context) via `python3 scripts/parity_known_failures.py --audit`: it enforces the provenance fields above, rejects an entry naming a test file that no longer exists, and cross-checks every test_gap_* entry against test-parity/gap_snapshot.json — a generated, bidirectional baseline, so a gap entry absent from it is one the snapshot asserts passes. Migrating this whole file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
   },
-  "cluster_4962": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "demo_claude_code_tui": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_ads_compile_smoke": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -87,15 +69,6 @@
     "added": "2026-08-17",
     "category": "untriaged",
     "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_fastify_integration": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
     "platforms": [
       "linux"
     ]
@@ -201,33 +174,6 @@
     "added": "2026-08-17",
     "category": "untriaged",
     "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_1240_fastify_request_json": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_1293_fastify_request_json_as_any": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_1425_gc_unsafe_zones": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
     "platforms": [
       "linux"
     ]
@@ -367,15 +313,6 @@
       "linux"
     ]
   },
-  "test_issue_358_perry_tui_phase2_counter": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_issue_358_perry_tui_phase3_flexbox": {
     "issue": "348",
     "added": "2026-08-17",
@@ -444,15 +381,6 @@
     "added": "2026-08-17",
     "category": "bug-open",
     "reason": "perry-tui / ink-compat family; #348 is the TUI end-to-end tracker. Surfaced by the 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_414_mysql_query_params": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
     "platforms": [
       "linux"
     ]
@@ -732,15 +660,6 @@
     "added": "2026-08-17",
     "category": "untriaged",
     "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_915_jwt_sign_after_async_route": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
     "platforms": [
       "linux"
     ]
@@ -1036,60 +955,6 @@
       "linux"
     ]
   },
-  "test_perry_tui_inkcompat_counter": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_perry_tui_inkcompat_useapp": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_perry_tui_inkcompat_useeffect": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_perry_tui_inkcompat_usefocus": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_perry_tui_inkcompat_usememo": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_perry_tui_inkcompat_useref": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_perry_tui_inkcompat_usestdout": {
     "issue": "348",
     "added": "2026-08-17",
@@ -1212,15 +1077,6 @@
     "added": "2026-08-17",
     "category": "untriaged",
     "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_wasm_add": {
-    "issue": "8272",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "CRASH (signal/timeout) — hard defect, never a cosmetic gap. Family + bisect notes in #8272.",
     "platforms": [
       "linux"
     ]

@@ -1,3 +1,4 @@
+// parity-skip: interactive TUI fixture; requires piped keypresses and has no Node oracle
 // #679 Phase 4 — ink source-compat test #2: useApp imperative exit.
 //
 // Validates that `useApp()` returns a stable handle whose `.exit()`

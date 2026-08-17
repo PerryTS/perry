@@ -1,3 +1,4 @@
+// parity-skip: background server; driven by test-files/run_test_issue_1293.sh
 // Issue #1293 — fastify `(request as any).json()` / `(request as any).body`
 // returned NaN / undefined (silent 400) under the well-known-flipped
 // perry-ext-fastify backend.

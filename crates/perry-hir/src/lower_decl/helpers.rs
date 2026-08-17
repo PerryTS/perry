@@ -53,11 +53,6 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
 /// cross-module callers that pad missing args with `undefined` still observe
 /// the intended default. Rest params are skipped (they're handled by the
 /// call-site array bundling, not by scalar default substitution).
-/// Recognise `WebAssembly.instantiate(...)` call shapes used as a var-decl
-/// initializer. Used to populate `ctx.wasm_instance_locals` so the
-/// standard `inst.exports.<method>(...)` syntactic match in
-/// `lower/expr_call.rs` doesn't fire on unrelated `obj.exports.method()`
-/// calls (notably CJS aggregator output). Issue #76.
 /// Collect local IDs declared anywhere inside this statement tree (Let
 /// statements, for-init Lets, catch-clause variables, etc.) — but do NOT
 /// recurse into nested closures, since those introduce their own scope.
@@ -130,31 +125,6 @@ pub fn collect_let_decls_in_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
         // Other forms don't introduce new bindings or only have expression payloads.
         _ => {}
     }
-}
-
-pub fn init_is_webassembly_instantiate(expr: &ast::Expr) -> bool {
-    let call = match expr {
-        ast::Expr::Call(c) => c,
-        ast::Expr::Await(a) => return init_is_webassembly_instantiate(&a.arg),
-        _ => return false,
-    };
-    let callee = match &call.callee {
-        ast::Callee::Expr(e) => e.as_ref(),
-        _ => return false,
-    };
-    let member = match callee {
-        ast::Expr::Member(m) => m,
-        _ => return false,
-    };
-    let obj = match member.obj.as_ref() {
-        ast::Expr::Ident(i) => i,
-        _ => return false,
-    };
-    let prop = match &member.prop {
-        ast::MemberProp::Ident(i) => i,
-        _ => return false,
-    };
-    obj.sym.as_ref() == "WebAssembly" && prop.sym.as_ref() == "instantiate"
 }
 
 pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
