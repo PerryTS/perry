@@ -537,9 +537,22 @@ pub unsafe extern "C" fn js_new_function_construct(
                     options,
                 );
             }
-            #[cfg(feature = "global-webfetch")]
             // Global builtins reached through a VALUE (alias variable,
             // intrinsic lookup, cross-module re-export) rather than by name.
+            //
+            // #8223: NOT feature-gated. This arm carried a
+            // `#[cfg(feature = "global-webfetch")]` inherited from #7008's
+            // web-platform size gating when #7779 moved the arms out — but it
+            // dispatches Map/Set/WeakMap/WeakSet/WeakRef/EventTarget/
+            // AbortController/TextEncoder/URLSearchParams/DisposableStack,
+            // whose factories are all unconditional modules. Auto-optimize
+            // builds the runtime with a minimal feature set (a bare test gets
+            // `async-runtime` alone), so the arm compiled out and every
+            // value-held builtin constructor fell through: `new (Map-as-value)`
+            // threw "Constructor Map requires 'new'", an aliased EventTarget
+            // had no surface. The prebuilt FULL stdlib (PERRY_SKIP_BUILD fast
+            // mode) masked it, which is exactly the fast/full gap-suite mode
+            // divergence #8223 documents.
             n if builtin_alias_construct::handles(n) => {
                 return builtin_alias_construct::construct(n, args);
             }
