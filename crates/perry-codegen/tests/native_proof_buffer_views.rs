@@ -146,11 +146,15 @@ fn module_with_classes_and_params(
 }
 
 fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
-    compile_ir_with_opts(name, body, empty_opts())
+    compile_ir_for_module_with_opts(module(name, body), empty_opts())
 }
 
 fn compile_ir_with_opts(name: &str, body: Vec<Stmt>, opts: CompileOptions) -> String {
-    String::from_utf8(compile_module(&module(name, body), opts).unwrap()).unwrap()
+    compile_ir_for_module_with_opts(module(name, body), opts)
+}
+
+fn compile_ir_for_module_with_opts(module: Module, opts: CompileOptions) -> String {
+    String::from_utf8(compile_module(&module, opts).unwrap()).unwrap()
 }
 
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
@@ -1676,6 +1680,48 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
     assert!(
         !ir.contains("call double @js_uint8array_index_get_value"),
         "inline Uint8Array get should not call the JS-value runtime helper:\n{ir}"
+    );
+}
+
+#[test]
+fn bounded_buffer_read_modify_write_keeps_inline_byte_store() {
+    let read = Expr::Uint8ArrayGet {
+        array: Box::new(local(1)),
+        index: Box::new(local(2)),
+    };
+    let value = Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(add(read, int(1))),
+        right: Box::new(int(255)),
+    };
+    let ir = compile_ir_for_module_with_opts(
+        module_with_classes_and_params(
+            "bounded_buffer_read_modify_write.ts",
+            Vec::new(),
+            vec![param(1, "buf", Type::Named("Buffer".to_string()))],
+            Type::Number,
+            vec![
+                for_loop(
+                    2,
+                    length(1),
+                    vec![Stmt::Expr(Expr::Uint8ArraySet {
+                        array: Box::new(local(1)),
+                        index: Box::new(local(2)),
+                        value: Box::new(value),
+                    })],
+                ),
+                Stmt::Return(Some(int(0))),
+            ],
+        ),
+        empty_opts(),
+    );
+    assert!(
+        ir.contains("load i8") && ir.contains("store i8"),
+        "bounded read/modify/write should stay on native byte access:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_uint8array_set"),
+        "proven call-free RHS must not force the byte store to its runtime helper:\n{ir}"
     );
 }
 

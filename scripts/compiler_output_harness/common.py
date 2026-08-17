@@ -31,7 +31,11 @@ DYNAMIC_PROPERTY_HELPERS = (
     "js_native_call_method",
     "js_get_property",
     "js_set_property",
-    "js_dynamic",
+    # Dynamic index access is a property operation; dynamic arithmetic is not.
+    # The old `js_dynamic` prefix also matched helpers such as
+    # js_dynamic_string_or_number_add and made every guarded numeric `+` look
+    # like a property-access regression.
+    "js_dyn_index",
 )
 
 BUFFER_SLOW_PATH_HELPERS = (

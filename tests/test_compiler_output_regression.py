@@ -30,19 +30,19 @@ GOOD_IR = """
 define i32 @main() {
 entry:
   call void @llvm.assume(i1 true)
-  br label %for.body.20
-for.body.20:
+  br label %for.body.32
+for.body.32:
   %row = mul i32 %y, 255
-  br label %for.body.24
-for.body.24:
+  br label %for.body.36
+for.body.36:
   %p0 = getelementptr inbounds i8, ptr %base, i64 %i
   store i8 1, ptr %p0, align 1, !alias.scope !2, !noalias !3
   %p1 = getelementptr inbounds i8, ptr %base, i64 %i1
   store i8 2, ptr %p1, align 1, !alias.scope !2, !noalias !3
   %p2 = getelementptr inbounds i8, ptr %base, i64 %i2
   store i8 3, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %while.body.28
-while.body.28:
+  br label %while.body.40
+while.body.40:
   %noise0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %noise1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %noise2 = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
@@ -52,19 +52,19 @@ while.body.28:
   %n3 = xor i32 %n2, %seed3
   %nb = trunc i32 %n3 to i8
   store i8 %nb, ptr %p0, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.38
-for.body.38:
+  br label %for.body.56
+for.body.56:
   %b0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b2 = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   store i8 %b0, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.42
-for.body.42:
+  br label %for.body.64
+for.body.64:
   %hbyte = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %x = zext i8 %hbyte to i32
   %h = xor i32 %prev, %x
   %m = mul i32 %h, 16777619
-  br label %for.body.42
+  br label %for.body.64
 }
 !1 = !{}
 !2 = !{}
@@ -80,21 +80,21 @@ main:
 H1_MIN_IR = """
 define i32 @main() {
 entry:
-  br label %for.body.14
-for.body.14:
+  br label %for.body.8
+for.body.8:
   %i = load i32, ptr %slot
   store i32 %i, ptr %slot
   %ok = icmp slt i32 %i, %n
   %p0 = getelementptr i8, ptr %src, i32 %i
   %b = load i8, ptr %p0
   store i8 %b, ptr %p0
-  br label %for.body.18
-for.body.18:
+  br label %for.body.12
+for.body.12:
   %p1 = getelementptr i8, ptr %src, i32 %i
   %b1 = load i8, ptr %p1
   store i8 %b1, ptr %p1
-  br label %for.body.22
-for.body.22:
+  br label %for.body.18
+for.body.18:
   %p2 = getelementptr i8, ptr %src, i32 %i
   %b2 = load i8, ptr %p2
   store i8 %b2, ptr %p2
@@ -240,7 +240,7 @@ def image_native_records():
     proven = {"proven": {"proof": "loop_guard"}}
     input_records = [
         native_record(
-            block="for.body.24",
+            block="for.body.36",
             rep="buffer_view",
             expr_kind="Uint8ArraySet.array",
             consumer="Uint8ArraySet.BufferView",
@@ -250,7 +250,7 @@ def image_native_records():
             emitted_inbounds=True,
         ),
         native_record(
-            block="for.body.24",
+            block="for.body.36",
             rep="u8",
             expr_kind="Uint8ArraySet",
             consumer="u8_store_trunc_i32",
@@ -265,7 +265,7 @@ def image_native_records():
         *input_records,
         *input_records,
         native_record(
-            block="while.body.28",
+            block="while.body.40",
             rep="u8",
             expr_kind="Uint8ArrayGet",
             consumer="u8_load_zext_i32",
@@ -275,7 +275,7 @@ def image_native_records():
             emitted_inbounds=True,
         ),
         native_record(
-            block="while.body.28",
+            block="while.body.40",
             rep="u8",
             expr_kind="Uint8ArraySet",
             consumer="u8_store_trunc_i32",
@@ -285,7 +285,7 @@ def image_native_records():
             emitted_inbounds=True,
         ),
         native_record(
-            block="for.body.38",
+            block="for.body.56",
             rep="u8",
             expr_kind="Uint8ArrayGet",
             consumer="u8_load_zext_i32",
@@ -296,7 +296,7 @@ def image_native_records():
             emitted_noalias=True,
         ),
         native_record(
-            block="for.body.38",
+            block="for.body.56",
             rep="u8",
             expr_kind="Uint8ArrayGet",
             consumer="u8_load_zext_i32",
@@ -307,7 +307,7 @@ def image_native_records():
             emitted_noalias=True,
         ),
         native_record(
-            block="for.body.38",
+            block="for.body.56",
             rep="u8",
             expr_kind="Uint8ArrayGet",
             consumer="u8_load_zext_i32",
@@ -318,7 +318,7 @@ def image_native_records():
             emitted_noalias=True,
         ),
         native_record(
-            block="for.body.38",
+            block="for.body.56",
             rep="u8",
             expr_kind="Uint8ArraySet",
             consumer="u8_store_trunc_i32",
@@ -329,7 +329,7 @@ def image_native_records():
             emitted_noalias=True,
         ),
         native_record(
-            block="for.body.42",
+            block="for.body.64",
             rep="u8",
             expr_kind="Uint8ArrayGet",
             consumer="u8_load_zext_i32",
@@ -340,7 +340,7 @@ def image_native_records():
             emitted_noalias=True,
         ),
         native_record(
-            block="for.body.42",
+            block="for.body.64",
             rep="i32",
             expr_kind="MathImul",
             consumer="lower_expr_native_i32.structural",
@@ -474,9 +474,8 @@ def numeric_array_native_records():
 
 def numeric_arrays_inline_ir():
     # Repsel 4a.1/4a.2 shapes: canonical pushes take the inline store + length
-    # bump (no guarded helper), the numeric read fast arm loads the raw slot
-    # and canonicalizes NaN payloads (fcmp ord + select), and a canonical RHS
-    # write stores verbatim (no js_array_numeric_value_to_raw_f64 call).
+    # bump (no guarded helper), the dense numeric read arm loads the raw slot,
+    # and a runtime-checked RHS is canonicalized before its direct store.
     return """
 define i32 @main() {
 entry:
@@ -501,8 +500,6 @@ bidx.num.fast.1:
   %addr = add i64 1, 8
   %p = inttoptr i64 %addr to ptr
   %v = load double, ptr %p, align 8
-  %vo = fcmp ord double %v, %v
-  %vc = select i1 %vo, double %v, double 0x7FF8000000000000
   br label %bidx.num.merge.3
 
 bidx.num.fallback.2:
@@ -517,7 +514,8 @@ idxset.bounded_numeric_fast.4:
   %sval = fadd double 3.0, 0.0
   %saddr = add i64 1, 8
   %sp = inttoptr i64 %saddr to ptr
-  store double %sval, ptr %sp, align 8
+  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
+  store double %sraw, ptr %sp, align 8
   br label %idxset.bounded_numeric_merge.5
 
 idxset.bounded_numeric_merge.5:
@@ -583,6 +581,25 @@ def h1_equivalence_native_records():
 
 
 class CompilerOutputRegressionTests(unittest.TestCase):
+    def test_dynamic_arithmetic_is_not_counted_as_dynamic_property_access(self):
+        ir = """
+define double @main() {
+entry:
+  %sum = call double @js_dynamic_string_or_number_add(double 1.0, double 2.0)
+  ret double %sum
+}
+"""
+        report = HARNESS.verify_artifacts(
+            workload="dynamic_arithmetic",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_reason_kinds": {}},
+            workloads={"dynamic_arithmetic": {}},
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
     def test_function_scoped_ir_check_does_not_include_callers(self):
         ir = """
 define void @target_function() {
@@ -685,7 +702,7 @@ entry:
         self.assertEqual(report["status"], "pass", report["errors"])
 
     def test_image_convolution_requires_named_regions(self):
-        bad_ir = GOOD_IR.replace("for.body.42:", "for.body.77:").replace(
+        bad_ir = GOOD_IR.replace("for.body.64:", "for.body.77:").replace(
             "  %m = mul i32 %h, 16777619\n", ""
         )
         report = HARNESS.verify_artifacts(
@@ -741,11 +758,11 @@ entry:
         numeric_ir = """
 define i32 @main() {
 entry:
-  br label %for.body.11
-for.body.11:
+  br label %for.body.4
+for.body.4:
   %x = fmul double %a, %b
   %y = fadd double %x, %c
-  br label %for.body.11
+  br label %for.body.4
 }
 """
         report = HARNESS.verify_artifacts(
@@ -767,11 +784,11 @@ for.body.11:
         numeric_ir = """
 define i32 @main() {
 entry:
-  br label %for.body.11
-for.body.11:
+  br label %for.body.4
+for.body.4:
   %x = fmul double %a, %b
   %y = fadd double %x, %c
-  br label %for.body.11
+  br label %for.body.4
 }
 """
         cases = [
@@ -2018,7 +2035,7 @@ idxset.bounded_numeric_merge.5:
                 "named_regions": [
                     {
                         "name": "input_generation",
-                        "selectors": [{"label_prefix_any": ["for.body.20"]}],
+                        "selectors": [{"label_prefix_any": ["for.body.32"]}],
                     }
                 ],
             }
@@ -2055,7 +2072,7 @@ idxset.bounded_numeric_merge.5:
                 "named_regions": [
                     {
                         "name": "input_generation",
-                        "selectors": [{"label_prefix_any": ["for.body.20"]}],
+                        "selectors": [{"label_prefix_any": ["for.body.32"]}],
                     }
                 ],
             }
@@ -2072,7 +2089,7 @@ idxset.bounded_numeric_merge.5:
                 {
                     "records": [
                         native_record(
-                            block="for.body.20",
+                            block="for.body.32",
                             rep="js_value",
                             materialization_reason="runtime_api",
                         )
@@ -2802,8 +2819,8 @@ entry:
   br label %for.body.2
 for.body.2:
   %setup = sitofp i32 %seed to double
-  br label %for.body.11
-for.body.11:
+  br label %for.body.4
+for.body.4:
   %mul = fmul double %sum, %x
   %add = fadd double %mul, %y
   br label %exit
