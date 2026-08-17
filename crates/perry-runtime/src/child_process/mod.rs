@@ -6,6 +6,10 @@ pub mod reactor;
 // #1933: `fork()` + IPC channel (parent `send`/`'message'`/`disconnect`, child
 // `process.send`/`process.on('message')`).
 pub mod fork;
+#[cfg(windows)]
+pub(crate) mod ipc_transport;
+#[cfg(windows)]
+mod windows_fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
 mod v8_serde;
 // #2555: sync buffered `input`, `timeout`, and `maxBuffer` execution options.

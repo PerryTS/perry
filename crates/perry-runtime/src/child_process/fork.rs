@@ -4,17 +4,17 @@
 //! has no embedded interpreter to "fork into", so — like Node, whose `fork`
 //! launches `process.execPath` (the `node` binary) on the module — we launch a
 //! configurable interpreter (`options.execPath`, else `$PERRY_FORK_EXECPATH`,
-//! else `node`) on `modulePath`. The IPC channel is a `socketpair(2)`: the
-//! parent keeps one end; the child inherits the other as fd 3 with
-//! `NODE_CHANNEL_FD=3` (Node's convention), so a Node child's
+//! else `node`) on `modulePath`. The IPC channel is a Unix `socketpair(2)` or
+//! Windows named pipe: the parent keeps one end; the child inherits the other
+//! as fd 3 with `NODE_CHANNEL_FD=3` (Node's convention), so a Node child's
 //! `process.send` / `process.on('message')` interoperate out of the box.
 //!
 //! The returned ChildProcess reuses the #1934 reactor for its lifecycle
 //! (`spawn`/`data`/`end`/`exit`/`close`, live `kill`) and adds
 //! `send` / `disconnect` / `connected` / `channel` plus `'message'` delivery.
 //! Messages are newline-delimited JSON (Node's default `'json'` IPC
-//! serialization). The IPC wiring is Unix-only; on other platforms `fork`
-//! launches the child but reports `connected: false`.
+//! serialization). Windows additionally wraps payloads in libuv's IPC pipe
+//! frame so Node and compiled Perry children share the same byte stream.
 
 use super::*;
 use std::process::Command;
@@ -190,6 +190,11 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     };
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
+    command.env("NODE_CHANNEL_FD", ipc_fd.to_string());
+    command.env(
+        "NODE_CHANNEL_SERIALIZATION_MODE",
+        if advanced { "advanced" } else { "json" },
+    );
     if let Some(exec_argv) = native_exec_argv {
         command.env("PERRY_PROCESS_EXEC_ARGV", exec_argv);
     }
@@ -216,6 +221,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
             abort_signal,
             opts_val,
             ipc_fd,
+            &stdio_kinds,
         ),
         Err(error) => Err(error),
     };
@@ -241,9 +247,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp
 }
 
-/// Wire up the IPC socketpair, launch the child, and register it with the
-/// reactor. Returns whether the child spawned. Unix-only IPC; elsewhere the
-/// child is launched without a channel.
+/// Wire up the platform IPC transport, launch the child, and register it with
+/// the reactor.
 #[cfg(unix)]
 fn fork_launch(
     cp: f64,
@@ -258,6 +263,7 @@ fn fork_launch(
     abort_signal: Option<f64>,
     opts_val: f64,
     ipc_fd: usize,
+    _stdio_kinds: &[CpStdio],
 ) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -273,12 +279,6 @@ fn fork_launch(
     // NODE_CHANNEL_FD — the convention a Node child reads to enable
     // `process.send` / `process.on('message')`.
     let child_fd = child_sock.as_raw_fd();
-    command.env("NODE_CHANNEL_FD", ipc_fd.to_string());
-    // #2130: tell a node child to use V8 structured-clone framing on the channel.
-    command.env(
-        "NODE_CHANNEL_SERIALIZATION_MODE",
-        if advanced { "advanced" } else { "json" },
-    );
     unsafe {
         command.pre_exec(move || {
             if libc::dup2(child_fd, ipc_fd as i32) < 0 {
@@ -320,7 +320,56 @@ fn fork_launch(
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn fork_launch(
+    cp: f64,
+    stdout_obj: f64,
+    stderr_obj: f64,
+    stdin_obj: f64,
+    extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    command: Command,
+    advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
+    abort_signal: Option<f64>,
+    opts_val: f64,
+    ipc_fd: usize,
+    stdio_kinds: &[CpStdio],
+) -> std::io::Result<()> {
+    let clear_environment = cp_object_ptr(cp_get_field(opts_val, b"env")).is_some();
+    let detached = cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits();
+    match super::windows_fork::spawn(&command, stdio_kinds, ipc_fd, clear_environment, detached) {
+        Ok((child, parent_pipe)) => {
+            cp_set_field(cp, b"connected", TAG_TRUE_F64);
+            let channel = cp_build_object(
+                &[
+                    ("ref", cp_cast0(cp_method_this0)),
+                    ("unref", cp_cast0(cp_method_this0)),
+                ],
+                CP_SHAPE_ID + 0x40,
+            );
+            cp_set_field(cp, b"channel", cp_box_ptr(channel as *const u8));
+            let handle = reactor::cp_register_windows_live_child(
+                cp,
+                stdout_obj,
+                stderr_obj,
+                stdin_obj,
+                extra_pipes,
+                child,
+                parent_pipe,
+                advanced,
+                timeout,
+                kill_signal,
+            );
+            reactor::cp_install_abort_signal(handle, abort_signal, opts_val);
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn fork_launch(
     cp: f64,
     stdout_obj: f64,
@@ -328,14 +377,14 @@ fn fork_launch(
     stdin_obj: f64,
     extra_pipes: Vec<(usize, f64, std::fs::File)>,
     mut command: Command,
-    advanced: bool,
+    _advanced: bool,
     timeout: Option<Duration>,
     kill_signal: i32,
     abort_signal: Option<f64>,
     opts_val: f64,
     _ipc_fd: usize,
+    _stdio_kinds: &[CpStdio],
 ) -> std::io::Result<()> {
-    let _ = advanced;
     match command.spawn() {
         Ok(child) => {
             let handle = reactor::cp_register_live_child(
