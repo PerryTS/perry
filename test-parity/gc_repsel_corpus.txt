@@ -805,3 +805,14 @@ test_gap_gc_fetch_method_value_cache_rooting
 test_gap_gc_request_signal_rooting
 test_gap_gc_net_once_flags_rekey
 test_gap_gc_http2_pending_event_callback_rooting
+
+# Interpreter global-`this` rooting on the `Function("return this")()` /
+# dyn_eval path (#6559). `dyn_function_from_strings` obtained the global from
+# `js_get_global_this()` but did NOT root it before `env_new_root()`
+# allocated a scope object. A copying minor at that allocation evacuates the
+# global singleton — `THREAD_GLOBAL_THIS` is rewritten, the raw local is not.
+# The stale pointer flows into the closure's capture slots 3 (global) and 4
+# (intrinsics); the sloppy-mode `this = global` then returns undefined, and
+# `Object.getPrototypeOf(undefined)` throws. Pre-fix `bad > 0` under seeded
+# GC; post-fix `bad 0`. Clean under `PERRY_GEN_GC=0`.
+test_gap_gc_interp_global_this_rooting

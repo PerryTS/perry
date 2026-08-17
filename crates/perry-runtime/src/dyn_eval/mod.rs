@@ -350,12 +350,32 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     let fn_id = prepare_function_args(args);
     // Preserve Function-constructor semantics: each instance owns a private
     // sloppy-assignment root, while universal globals resolve in this realm.
+    let base = roots_len();
+    // Root the global BEFORE env_new_root() allocates. A copying minor
+    // triggered by that allocation evacuates the global singleton —
+    // THREAD_GLOBAL_THIS (a registered root) is rewritten, but a raw local
+    // is not. The stale pointer then flows into the closure's capture
+    // slots 3 (global) and 4 (intrinsics), so every call reads a stale
+    // global. On the `Function("return this")()` path the sloppy-mode
+    // `this = global` returns undefined (the evacuated from-space object's
+    // fields read back as undefined), and downstream
+    // `Object.getPrototypeOf(undefined)` throws TypeError. The other
+    // dyn_eval entry points already root global_this before any
+    // allocation; this one missed it.
     let global = crate::object::js_get_global_this();
+    let global_idx = root_push(global);
     let root_env = env::env_new_root();
     let root_idx = root_push(root_env);
-    let closure =
-        interp::alloc_interp_closure(fn_id, root_get(root_idx), None, global, global, true, true);
-    roots_truncate(root_idx);
+    let closure = interp::alloc_interp_closure(
+        fn_id,
+        root_get(root_idx),
+        None,
+        root_get(global_idx),
+        root_get(global_idx),
+        true,
+        true,
+    );
+    roots_truncate(base);
     closure
 }
 
