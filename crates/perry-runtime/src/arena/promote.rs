@@ -595,7 +595,6 @@ fn reset_young_after_promotion() {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
-                inline.object_starts = block.object_starts_ptr();
             }
         });
     });

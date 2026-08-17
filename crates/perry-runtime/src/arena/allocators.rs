@@ -33,21 +33,15 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
         // Resync block → inline (may have advanced to a new block).
         if !(*inline_ptr).data.is_null() {
-            let (data, offset, block_size, object_starts) = {
+            let (data, offset, block_size) = {
                 let arena = &*arena_ptr;
                 let block = &arena.blocks[arena.current];
-                (
-                    block.data,
-                    block.offset,
-                    block.size,
-                    block.object_starts_ptr(),
-                )
+                (block.data, block.offset, block.size)
             };
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
             inline.size = block_size;
-            inline.object_starts = object_starts;
         }
         ptr
     }
@@ -108,7 +102,7 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
@@ -135,21 +129,15 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
             return std::ptr::null_mut();
         };
         if !(*inline_ptr).data.is_null() {
-            let (data, offset, block_size, object_starts) = {
+            let (data, offset, block_size) = {
                 let arena = &*arena_ptr;
                 let block = &arena.blocks[arena.current];
-                (
-                    block.data,
-                    block.offset,
-                    block.size,
-                    block.object_starts_ptr(),
-                )
+                (block.data, block.offset, block.size)
             };
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
             inline.size = block_size;
-            inline.object_starts = object_starts;
         }
         ptr
     }
@@ -192,7 +180,7 @@ pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
@@ -255,7 +243,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             (*header)._reserved = 0;
             (*header).size = total as u32;
         }
-        record_arena_object_start(raw as usize);
+        record_arena_object_start(raw as usize, obj_type);
         defer_old_object_page_registration(raw as usize, total);
         return user_ptr as *mut u8;
     }
@@ -269,7 +257,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
     defer_old_object_page_registration(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
@@ -327,7 +315,7 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
             (*header)._reserved = 0;
             (*header).size = total as u32;
         }
-        record_arena_object_start(raw as usize);
+        record_arena_object_start(raw as usize, obj_type);
         register_old_object_pages(raw as usize, total);
         return user_ptr as *mut u8;
     }
@@ -341,7 +329,7 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
     register_old_object_pages(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
@@ -402,7 +390,7 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
@@ -494,7 +482,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             (*header)._reserved = 0;
             (*header).size = total as u32;
         }
-        record_arena_object_start(user_ptr as usize - GC_HEADER_SIZE);
+        record_arena_object_start(user_ptr as usize - GC_HEADER_SIZE, obj_type);
         return user_ptr;
     }
 
@@ -527,7 +515,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    record_arena_object_start(raw as usize);
+    record_arena_object_start(raw as usize, obj_type);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }

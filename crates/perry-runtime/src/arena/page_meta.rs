@@ -990,12 +990,16 @@ fn classify_heap_space_in_range_uncached(
     Some((range.space, range.base, range.object_starts))
 }
 
-/// Record a newly initialized GC header in its owning block's exact-start
-/// bitmap. Runtime allocation paths call this after publishing the header;
-/// compiler-generated inline bump allocators perform the equivalent bit store
-/// directly through `InlineArenaState::object_starts`.
-#[inline]
-pub(crate) fn record_arena_object_start(header_addr: usize) {
+/// Record a newly initialized Map header in its owning block's exact-start
+/// bitmap. Map is the only arena type whose tag can be fabricated by an
+/// 8-aligned interior pointer and whose rewrite descriptor follows an external
+/// payload pointer. Keeping all other allocations off this path avoids a
+/// metadata read-modify-write on every bump allocation.
+#[inline(always)]
+pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
+    if obj_type != crate::gc::GC_TYPE_MAP {
+        return;
+    }
     let Some((_space, range_base, bitmap)) = classify_heap_space_in_range(header_addr) else {
         debug_assert!(false, "arena allocation was not in a registered block");
         return;
