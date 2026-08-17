@@ -3,8 +3,6 @@
 
 use super::*;
 
-use super::*;
-
 fn install_test_activation(activation: *mut AsyncBoxActivation) -> crate::promise::InlineTrap {
     crate::promise::INLINE_TRAP.with(|trap| {
         trap.replace(crate::promise::InlineTrap {
