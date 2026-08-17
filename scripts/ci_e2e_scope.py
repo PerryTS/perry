@@ -125,6 +125,7 @@ _CODEGEN_SUITES = [
     "loop_safepoint_purity",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
+    "native_proof_buffer_views",
     # #7506/#7245: held out until its one failing test was triaged. The
     # composition it guards had drifted from three named callees to three
     # PROPERTIES (the guard-failure edge now reaches `$pshape`, which coerces
@@ -170,42 +171,6 @@ SOURCE_SUITE_MAP = {
 # 262 tests, and holding all 262 out for one of them is how 261 tests' worth of
 # coverage went dark.
 SUITE_EXCLUSIONS = [
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "artifact_records_buffer_read_double_as_f64",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "artifact_records_buffer_read_float_as_f32_and_float_extend_materialization",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "artifact_records_buffer_read_u32_and_unsigned_materialization",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "artifact_records_width_aware_buffer_numeric_read_facts",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "explicit_width_guard_proves_wide_buffer_read",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_buffer_views",
-        "proven_buffer_and_typed_array_reads_are_numeric_operands",
-        "#8264 — red on main; current artifacts no longer satisfy this proof assertion.",
-    ),
     (
         "perry-codegen",
         "shadow_slot_hygiene",
