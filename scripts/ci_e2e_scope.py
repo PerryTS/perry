@@ -126,6 +126,8 @@ _CODEGEN_SUITES = [
     "macos_bundle_chdir_gate",
     "manifest_consistency",
     "native_proof_buffer_views",
+    "shadow_slot_hygiene",
+    "typed_feedback",
     # #7506/#7245: held out until its one failing test was triaged. The
     # composition it guards had drifted from three named callees to three
     # PROPERTIES (the guard-failure edge now reaches `$pshape`, which coerces
@@ -171,18 +173,6 @@ SOURCE_SUITE_MAP = {
 # 262 tests, and holding all 262 out for one of them is how 261 tests' worth of
 # coverage went dark.
 SUITE_EXCLUSIONS = [
-    (
-        "perry-codegen",
-        "shadow_slot_hygiene",
-        "canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops",
-        "#8264 — red on main; current IR no longer satisfies this shadow-slot assertion.",
-    ),
-    (
-        "perry-codegen",
-        "typed_feedback",
-        "typed_feedback_guards_direct_class_field_specialization",
-        "#8264 — red on main; current IR lacks the asserted class-field fast block.",
-    ),
 ]
 
 # Suites reached through `SOURCE_SUITE_MAP` are exempt from `--cap` and carry a
