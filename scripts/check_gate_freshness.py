@@ -263,64 +263,79 @@ def issue_body(verdicts: Sequence[Verdict], branch: str) -> str:
 # --------------------------------------------------------------------------- sticky issue
 
 
-def _gh(args: list[str]) -> str:
-    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
+def _gh_api(method: str, path: str, fields: dict[str, str] | None = None) -> dict:
+    """Call GitHub's REST API without depending on the GraphQL-backed `gh issue`."""
+    args = [
+        "gh",
+        "api",
+        "--method",
+        method,
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
+    for key, value in (fields or {}).items():
+        args.extend(["-f", f"{key}={value}"])
+    args.append(path)
+    proc = subprocess.run(args, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args)} failed: {proc.stderr.strip()}")
-    return proc.stdout
+        raise RuntimeError(f"gh api {method} {path} failed: {proc.stderr.strip()}")
+    return json.loads(proc.stdout) if proc.stdout.strip() else {}
 
 
-def sync_issue(repo: str, verdicts: Sequence[Verdict], branch: str) -> None:
+def sync_issue(
+    repo: str,
+    verdicts: Sequence[Verdict],
+    branch: str,
+    request=_gh_api,
+) -> None:
     """Open, update, or close the single sticky alert issue. Never duplicates."""
-    found = json.loads(
-        _gh(
-            [
-                "issue",
-                "list",
-                "--repo",
-                repo,
-                "--state",
-                "open",
-                "--search",
-                f'"{ISSUE_MARKER}" in:title',
-                "--json",
-                "number,title",
-                "--limit",
-                "10",
-            ]
-        )
+    found = request(
+        "GET",
+        "search/issues",
+        {
+            "q": f'repo:{repo} is:issue in:title "{ISSUE_MARKER}"',
+            "per_page": "100",
+        },
     )
-    existing = next((i["number"] for i in found if ISSUE_MARKER in i["title"]), None)
+    matches = [i for i in found.get("items", []) if ISSUE_MARKER in i.get("title", "")]
+    # Historical episodes may predate the current sticky issue (#7966 preceded
+    # #8085). Reuse the newest match so a later recurrence returns to the issue that
+    # the previous sweep most recently maintained.
+    existing = max(matches, key=lambda i: i["number"], default=None)
     stale = [v for v in verdicts if v.stale]
 
     if not stale:
-        if existing is not None:
-            _gh(
-                [
-                    "issue",
-                    "close",
-                    str(existing),
-                    "--repo",
-                    repo,
-                    "--comment",
-                    "All post-merge gates are fresh again; closing automatically.",
-                ]
+        if existing is not None and existing.get("state") == "open":
+            number = existing["number"]
+            request(
+                "PATCH",
+                f"repos/{repo}/issues/{number}",
+                {"state": "closed", "state_reason": "completed"},
             )
-            print(f"closed sticky issue #{existing} (all gates fresh)")
+            request(
+                "POST",
+                f"repos/{repo}/issues/{number}/comments",
+                {"body": "All post-merge gates are fresh again; closing automatically."},
+            )
+            print(f"closed sticky issue #{number} (all gates fresh)")
         return
 
     title = f"{ISSUE_MARKER}: {len(stale)} gate(s) have no recent completed `{branch}` result"
     body = issue_body(verdicts, branch)
     if existing is None:
-        url = _gh(
-            ["issue", "create", "--repo", repo, "--title", title, "--body", body]
-        ).strip()
-        print(f"opened sticky issue {url}")
-    else:
-        _gh(
-            ["issue", "edit", str(existing), "--repo", repo, "--title", title, "--body", body]
+        created = request(
+            "POST", f"repos/{repo}/issues", {"title": title, "body": body}
         )
-        print(f"updated sticky issue #{existing}")
+        print(f"opened sticky issue {created.get('html_url', '')}".rstrip())
+    else:
+        number = existing["number"]
+        request(
+            "PATCH",
+            f"repos/{repo}/issues/{number}",
+            {"state": "open", "title": title, "body": body},
+        )
+        action = "reopened" if existing.get("state") != "open" else "updated"
+        print(f"{action} sticky issue #{number}")
 
 
 # --------------------------------------------------------------------------- self-test
@@ -481,6 +496,82 @@ def self_test() -> int:
     only_fresh = [verdicts["fresh.yml"], verdicts["boundary.yml"]]
     if _exit_code(only_fresh) != 0:
         failures.append("exit code was non-zero for an all-fresh set")
+
+    # A later stale episode must reopen the original sticky issue. Searching only
+    # open issues makes the first successful close orphan the discussion and creates
+    # a new issue on every recurrence while claiming to maintain one forever.
+    issue_calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+    def closed_issue_request(
+        method: str, path: str, fields: dict[str, str] | None = None
+    ) -> dict:
+        issue_calls.append((method, path, fields))
+        if method == "GET" and path == "search/issues":
+            return {
+                "items": [
+                    {
+                        "number": 7966,
+                        "title": f"{ISSUE_MARKER}: older episode",
+                        "state": "closed",
+                    },
+                    {
+                        "number": 8085,
+                        "title": f"{ISSUE_MARKER}: prior episode",
+                        "state": "closed",
+                    },
+                ]
+            }
+        return {}
+
+    sync_issue(
+        "PerryTS/perry",
+        [verdicts["stale.yml"]],
+        "main",
+        request=closed_issue_request,
+    )
+    if len(issue_calls) != 2 or issue_calls[1][:2] != (
+        "PATCH",
+        "repos/PerryTS/perry/issues/8085",
+    ):
+        failures.append(
+            "closed sticky issue was not reused via REST; expected search/PATCH of "
+            f"#8085, got {[(method, path) for method, path, _ in issue_calls]}"
+        )
+    elif issue_calls[1][2] is None or issue_calls[1][2].get("state") != "open":
+        failures.append("closed sticky issue PATCH did not reopen the issue")
+
+    # The healthy path must close first and then comment, entirely through REST.
+    issue_calls.clear()
+
+    def open_issue_request(
+        method: str, path: str, fields: dict[str, str] | None = None
+    ) -> dict:
+        issue_calls.append((method, path, fields))
+        if method == "GET" and path == "search/issues":
+            return {
+                "items": [
+                    {
+                        "number": 8085,
+                        "title": f"{ISSUE_MARKER}: active episode",
+                        "state": "open",
+                    }
+                ]
+            }
+        return {}
+
+    sync_issue("PerryTS/perry", only_fresh, "main", request=open_issue_request)
+    close_shape = [(method, path) for method, path, _ in issue_calls]
+    if close_shape != [
+        ("GET", "search/issues"),
+        ("PATCH", "repos/PerryTS/perry/issues/8085"),
+        ("POST", "repos/PerryTS/perry/issues/8085/comments"),
+    ]:
+        failures.append(
+            "fresh sticky issue did not close/comment through REST in order; got "
+            f"{close_shape}"
+        )
+    elif issue_calls[1][2] != {"state": "closed", "state_reason": "completed"}:
+        failures.append("fresh sticky issue PATCH did not mark the issue completed")
 
     print(table)
     if failures:
