@@ -29,6 +29,12 @@ type PacketHeader = pod<{
   gain: f32;
 }>;
 
+const header: PacketHeader = {
+  flags: u32(inputFlags),
+  sequence: u64(inputSequence),
+  gain: f32(inputGain),
+};
+
 const byteLength = sizeof<PacketHeader>();
 const alignment = alignof<PacketHeader>();
 const sequenceOffset = offsetof<PacketHeader>("sequence");
@@ -78,7 +84,10 @@ const ratio = f32(computation);
 ```
 
 The scalar aliases establish representation inside a `pod` layout and at
-supported native ABI boundaries. They do not change the semantics of
+supported native ABI boundaries. A matching checked conversion may initialize
+a POD field from a dynamic value without forcing the whole record back to an
+ordinary object; the conversion guard runs before the value enters the native
+record. They do not change the semantics of
 standalone TypeScript arithmetic. Additional widths (`i8`, `i16`, `u8`,
 `u16`, and `isize`) and guaranteed native lanes across general-purpose
 collections are later parts of the native value profile.

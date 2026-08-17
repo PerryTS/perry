@@ -167,6 +167,10 @@ pub(crate) fn validate_exact_init(
 }
 
 fn pod_init_value_roundtrips_exact(rep: &NativeRep, value: &Expr) -> bool {
+    if checked_native_scalar_conversion_matches(rep, value) {
+        return true;
+    }
+
     match rep {
         NativeRep::I32 => {
             literal_i64(value).is_some_and(|n| i32::try_from(n).is_ok())
@@ -202,6 +206,33 @@ fn pod_init_value_roundtrips_exact(rep: &NativeRep, value: &Expr) -> bool {
         NativeRep::F32 => literal_f64(value).is_some_and(f32_roundtrips_exact),
         _ => false,
     }
+}
+
+fn checked_native_scalar_conversion_matches(rep: &NativeRep, value: &Expr) -> bool {
+    let Expr::NativeMethodCall {
+        module,
+        class_name,
+        object,
+        method,
+        args,
+    } = value
+    else {
+        return false;
+    };
+    if module != "perry/native" || class_name.is_some() || object.is_some() || args.len() != 1 {
+        return false;
+    }
+
+    matches!(
+        (rep, method.as_str()),
+        (NativeRep::I32, "i32")
+            | (NativeRep::I64, "i64")
+            | (NativeRep::U32, "u32")
+            | (NativeRep::U64, "u64")
+            | (NativeRep::USize, "usize")
+            | (NativeRep::F32, "f32")
+            | (NativeRep::F64, "f64")
+    )
 }
 
 fn literal_i64(value: &Expr) -> Option<i64> {

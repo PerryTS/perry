@@ -1,6 +1,158 @@
 use super::*;
 
 #[test]
+fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
+    let packet_ty = pod_type(&[
+        ("signed", Type::Named("PerryI32".to_string())),
+        ("flags", Type::Named("PerryU32".to_string())),
+        ("signed64", Type::Named("PerryI64".to_string())),
+        ("sequence", Type::Named("PerryU64".to_string())),
+        ("pointerSize", Type::Named("PerryUSize".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+        ("ratio", Type::Named("PerryF64".to_string())),
+    ]);
+    let module = module(
+        "checked_native_scalar_pod_init.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "input".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(number(7.0)),
+            },
+            pod_let(
+                2,
+                "packet",
+                packet_ty,
+                vec![
+                    (
+                        "signed",
+                        native_module_call("perry/native", "i32", vec![local(1)]),
+                    ),
+                    (
+                        "flags",
+                        native_module_call("perry/native", "u32", vec![local(1)]),
+                    ),
+                    (
+                        "signed64",
+                        native_module_call("perry/native", "i64", vec![local(1)]),
+                    ),
+                    (
+                        "sequence",
+                        native_module_call("perry/native", "u64", vec![local(1)]),
+                    ),
+                    (
+                        "pointerSize",
+                        native_module_call("perry/native", "usize", vec![local(1)]),
+                    ),
+                    (
+                        "gain",
+                        native_module_call("perry/native", "f32", vec![local(1)]),
+                    ),
+                    (
+                        "ratio",
+                        native_module_call("perry/native", "f64", vec![local(1)]),
+                    ),
+                ],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    for helper in [
+        "js_perry_native_i32",
+        "js_perry_native_u32",
+        "js_perry_native_i64",
+        "js_perry_native_u64",
+        "js_perry_native_usize",
+        "js_perry_native_f32",
+        "js_perry_native_f64",
+    ] {
+        assert!(
+            ir.contains(&format!("call double @{helper}")),
+            "missing checked conversion {helper}:\n{ir}"
+        );
+    }
+
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["native_rep_name"] == "pod_record"
+                    && record["consumer"] == "pod_record_stack_alloc"
+                    && record["pod_layout"]["size"] == 48
+            }),
+        "checked conversions should preserve a region-local POD record:\n{artifact:#}"
+    );
+    assert!(
+        !artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["consumer"] == "pod_record_fallback_to_js_object"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note.contains("inexact_or_dynamic_initializer"))
+                        })
+                    })
+            }),
+        "checked conversions must not be rejected as inexact dynamic initializers:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn mismatched_checked_native_scalar_conversion_does_not_prove_pod_field() {
+    let packet_ty = pod_type(&[("signed", Type::Named("PerryI32".to_string()))]);
+    let module = module(
+        "mismatched_checked_native_scalar_pod_init.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "input".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(number(7.0)),
+            },
+            pod_let(
+                2,
+                "packet",
+                packet_ty,
+                vec![(
+                    "signed",
+                    native_module_call("perry/native", "u32", vec![local(1)]),
+                )],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["consumer"] == "pod_record_fallback_to_js_object"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes.iter().any(|note| {
+                            note.as_str()
+                                .is_some_and(|note| note.contains("inexact_or_dynamic_initializer"))
+                        })
+                    })
+            }),
+        "a u32 conversion must not prove an i32 POD field:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn native_library_manifest_pod_param_lowers_region_local_record_to_ptr() {
     let packet_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

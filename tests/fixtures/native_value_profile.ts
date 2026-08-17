@@ -13,6 +13,11 @@ const aliasedHeaders = headers;
 const convertedFlags = Word(4_294_967_295);
 const convertedSequence = LongWord(9_007_199_254_740_991);
 const convertedGain = FloatWord(0.1);
+const convertedHeader: Header = {
+  flags: Word(7),
+  sequence: LongWord(42),
+  gain: FloatWord(0.1),
+};
 let rejectedFraction = false;
 let rejectedType = false;
 try {
@@ -47,6 +52,7 @@ console.log(
     ",flags=" + convertedFlags +
     ",sequenceValue=" + convertedSequence +
     ",gainRounded=" + (convertedGain > 0.1) +
+    ",header=" + convertedHeader.flags + ":" + convertedHeader.sequence + ":" + (convertedHeader.gain > 0.1) +
     ",rejectedFraction=" + rejectedFraction +
     ",rejectedType=" + rejectedType,
 );
