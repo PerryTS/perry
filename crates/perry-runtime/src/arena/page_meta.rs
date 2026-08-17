@@ -54,6 +54,7 @@ struct PageGenerationRange {
     end: usize,
     generation: HeapGeneration,
     space: HeapSpace,
+    object_starts: *mut u64,
 }
 
 impl PageGenerationRange {
@@ -113,6 +114,7 @@ impl PageGenerationCache {
                 end: 0,
                 generation: HeapGeneration::Unknown,
                 space: HeapSpace::Unknown,
+                object_starts: std::ptr::null_mut(),
             },
             valid: false,
         }
@@ -478,11 +480,22 @@ pub(crate) fn address_span_overlaps_pages(
     (first_page..=last_page).any(|page| pages.contains(&page))
 }
 
+#[cfg(test)]
 pub(crate) fn register_block_space(
     base: usize,
     size: usize,
     generation: HeapGeneration,
     space: HeapSpace,
+) {
+    register_block_space_with_object_starts(base, size, generation, space, std::ptr::null_mut());
+}
+
+pub(crate) fn register_block_space_with_object_starts(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+    object_starts: *mut u64,
 ) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
@@ -493,6 +506,7 @@ pub(crate) fn register_block_space(
         end,
         generation,
         space,
+        object_starts,
     };
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
@@ -927,7 +941,7 @@ fn classify_heap_generation_uncached(addr: usize, key: usize) -> HeapGeneration 
 
 #[inline]
 pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
-    classify_heap_space_in_range(addr).map_or(HeapSpace::Unknown, |(space, _)| space)
+    classify_heap_space_in_range(addr).map_or(HeapSpace::Unknown, |(space, _, _)| space)
 }
 
 /// [`classify_heap_space`] plus the base of the registered range `addr` fell
@@ -948,21 +962,24 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
 /// `CopyingPointerSet::classify_arena` calls it once per visited slot — so on a
 /// promotion-heavy cycle it runs millions of times per collection.
 #[inline(always)]
-pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize)> {
+pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
     if addr == 0 {
         return None;
     }
     let key = generation_class_key_for_addr(addr);
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
     if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
-        return Some((range.space, range.base));
+        return Some((range.space, range.base, range.object_starts));
     }
     classify_heap_space_in_range_uncached(addr, key)
 }
 
 /// Cache-miss arm of [`classify_heap_space_in_range`].
 #[inline(never)]
-fn classify_heap_space_in_range_uncached(addr: usize, key: usize) -> Option<(HeapSpace, usize)> {
+fn classify_heap_space_in_range_uncached(
+    addr: usize,
+    key: usize,
+) -> Option<(HeapSpace, usize, *mut u64)> {
     let found = {
         let pages = hot_page_generations().borrow();
         pages.get(&key).and_then(|slot| slot.find(addr))
@@ -970,7 +987,53 @@ fn classify_heap_space_in_range_uncached(addr: usize, key: usize) -> Option<(Hea
     let range = found?;
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
     unsafe { (*hot_page_generation_cache()).insert(key, range) };
-    Some((range.space, range.base))
+    Some((range.space, range.base, range.object_starts))
+}
+
+/// Record a newly initialized GC header in its owning block's exact-start
+/// bitmap. Runtime allocation paths call this after publishing the header;
+/// compiler-generated inline bump allocators perform the equivalent bit store
+/// directly through `InlineArenaState::object_starts`.
+#[inline]
+pub(crate) fn record_arena_object_start(header_addr: usize) {
+    let Some((_space, range_base, bitmap)) = classify_heap_space_in_range(header_addr) else {
+        debug_assert!(false, "arena allocation was not in a registered block");
+        return;
+    };
+    debug_assert!(
+        !bitmap.is_null(),
+        "registered arena block has no object-start bitmap"
+    );
+    if bitmap.is_null() || header_addr < range_base {
+        return;
+    }
+    let slot = (header_addr - range_base) >> super::OBJECT_START_SHIFT;
+    let word = slot / u64::BITS as usize;
+    let bit = slot % u64::BITS as usize;
+    unsafe {
+        *bitmap.add(word) |= 1u64 << bit;
+    }
+}
+
+/// True only when `header_addr` is a recorded allocation boundary in the
+/// registered block beginning at `range_base`.
+#[inline(always)]
+pub(crate) fn arena_header_is_object_start(
+    header_addr: usize,
+    range_base: usize,
+    bitmap: *mut u64,
+) -> bool {
+    if bitmap.is_null() || header_addr < range_base {
+        return false;
+    }
+    let relative = header_addr - range_base;
+    if relative & ((1 << super::OBJECT_START_SHIFT) - 1) != 0 {
+        return false;
+    }
+    let slot = relative >> super::OBJECT_START_SHIFT;
+    let word = slot / u64::BITS as usize;
+    let bit = slot % u64::BITS as usize;
+    unsafe { *bitmap.add(word) & (1u64 << bit) != 0 }
 }
 
 pub(crate) fn old_object_page_overlaps(
@@ -1763,6 +1826,7 @@ mod page_generation_hasher_tests {
                     end: addr + (1 << GENERATION_CLASS_SHIFT),
                     generation: HeapGeneration::Old,
                     space: HeapSpace::Old,
+                    object_starts: std::ptr::null_mut(),
                 }),
             );
         }

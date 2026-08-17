@@ -1888,7 +1888,8 @@ unsafe fn set_object_keys_array_with_live(
     // #8067/#8113: every visible ShapeId resolves to the exact rooted
     // ordered-keys/live-slot descriptor. Same-pointer appends are versioned
     // inside the helper.
-    shapes::publish_object_shape_from(obj, predecessor, keys_array, live_inline_slot_count);
+    let successor_shape_id =
+        shapes::publish_object_shape_from(obj, predecessor, keys_array, live_inline_slot_count);
     // GC_STORE_AUDIT(BARRIERED): keys_array pointer field is followed by an object-slot barrier.
     (*obj).keys_array = keys_array;
     crate::gc::runtime_write_barrier_slot(
@@ -1896,6 +1897,14 @@ unsafe fn set_object_keys_array_with_live(
         &(*obj).keys_array as *const _ as usize,
         keys_array as u64,
     );
+    // An old receiver is invisible to an ordinary minor root walk. Arm the
+    // shared descriptor edge at publication time so its keys array is copied
+    // during the same first minor, rather than relying on a later pass over a
+    // stale from-space address. Exact object-start validation deliberately
+    // rejects that stale address once the nursery block is reset (#8256).
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        shapes::note_old_generation_carrier(shapes::shape_descriptor_by_id(successor_shape_id));
+    }
 }
 
 #[inline]

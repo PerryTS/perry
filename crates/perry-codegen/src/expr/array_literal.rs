@@ -201,6 +201,26 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             // GC_STORE_AUDIT(INIT): freshly allocated array header starts pointer-free until slot notes below.
             blk.store(I64, &gc_packed.to_string(), &raw);
 
+            // Publish the exact header boundary in the current arena block's
+            // object-start bitmap (InlineArenaState field at byte 24). The
+            // slow arm may have replaced the current block, so compute the
+            // slot from the merged raw pointer rather than `aligned_off`.
+            let current_data = blk.load(PTR, &state_ptr);
+            let raw_addr = blk.ptrtoint(&raw, I64);
+            let data_addr = blk.ptrtoint(&current_data, I64);
+            let relative = blk.sub(I64, &raw_addr, &data_addr);
+            let start_slot = blk.lshr(I64, &relative, "3");
+            let start_word = blk.lshr(I64, &start_slot, "6");
+            let start_bit = blk.and(I64, &start_slot, "63");
+            let bitmap_field = blk.gep(I8, &state_ptr, &[(I64, "24")]);
+            let bitmap = blk.load(PTR, &bitmap_field);
+            let bitmap_word = blk.gep(I64, &bitmap, &[(I64, &start_word)]);
+            let prior_starts = blk.load(I64, &bitmap_word);
+            let start_mask = blk.shl(I64, "1", &start_bit);
+            let updated_starts = blk.or(I64, &prior_starts, &start_mask);
+            // GC_STORE_AUDIT(INIT): side metadata for a freshly initialized GC header.
+            blk.store(I64, &updated_starts, &bitmap_word);
+
             // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
             let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
             let arr_header_packed = (n as u64) | ((n as u64) << 32);

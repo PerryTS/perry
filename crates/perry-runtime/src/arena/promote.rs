@@ -388,6 +388,7 @@ fn take_block(block: PromotedBlock) -> Option<ArenaBlock> {
                 data: std::ptr::null_mut(),
                 size: 0,
                 offset: 0,
+                object_starts: Box::new([]),
                 dead_cycles: 0,
             },
         ))
@@ -572,6 +573,7 @@ fn reset_young_after_promotion() {
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for block in arena.blocks.iter_mut() {
+            block.clear_object_starts();
             block.offset = 0;
             block.dead_cycles = 0;
         }
@@ -593,6 +595,7 @@ fn reset_young_after_promotion() {
                 inline.data = block.data;
                 inline.offset = block.offset;
                 inline.size = block.size;
+                inline.object_starts = block.object_starts_ptr();
             }
         });
     });
@@ -600,6 +603,7 @@ fn reset_young_after_promotion() {
     for idx in [0usize, 1usize] {
         with_survivor_arena_mut(idx, |arena| {
             for block in arena.blocks.iter_mut() {
+                block.clear_object_starts();
                 block.offset = 0;
                 block.dead_cycles = 0;
             }

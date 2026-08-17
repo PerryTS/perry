@@ -161,6 +161,9 @@ fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borro
     let _overflow_guard = OverflowFieldsRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::object::test_clear_overflow_fields_root();
+    // This focused fixture bypasses the normal runtime initialization that
+    // registers the shape table's authoritative shared keys edge.
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let (owner, _) = unsafe { alloc_old_test_object(8) };
     let owner_addr = owner as usize;

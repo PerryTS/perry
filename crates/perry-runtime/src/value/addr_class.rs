@@ -287,7 +287,7 @@ pub(crate) unsafe fn try_read_tracked_gc_header(
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     let (header_addr, storage) = classify_tracked_gc_header_with(
         addr,
-        |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base)| base),
+        |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
         crate::gc::gc_malloc_header_is_tracked,
     )?;
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {

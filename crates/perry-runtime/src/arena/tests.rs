@@ -106,6 +106,30 @@ fn reset_single_reclaimable_nursery_block(
 }
 
 #[test]
+fn object_start_bitmap_tracks_boundaries_and_clears_on_reset() {
+    run_with_fresh_arenas(|| {
+        let user = arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+        let header = user - GC_HEADER_SIZE;
+        let (_, range_base, bitmap) =
+            classify_heap_space_in_range(user).expect("allocation must be in an arena range");
+
+        assert!(arena_header_is_object_start(header, range_base, bitmap));
+        assert!(
+            !arena_header_is_object_start(header + 8, range_base, bitmap),
+            "an aligned payload word must not be recorded as an object start"
+        );
+
+        arena_reset_all_blocks_to_zero();
+        let (_, reset_base, reset_bitmap) =
+            classify_heap_space_in_range(user).expect("reset retains the arena block registration");
+        assert!(
+            !arena_header_is_object_start(header, reset_base, reset_bitmap),
+            "reset must clear stale object boundaries before block reuse"
+        );
+    });
+}
+
+#[test]
 fn survivor_reclaim_resets_dead_blocks() {
     run_with_fresh_arenas(|| {
         let baseline = arena_telemetry_snapshot();

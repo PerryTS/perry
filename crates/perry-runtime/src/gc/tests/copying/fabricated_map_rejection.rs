@@ -14,10 +14,11 @@
 //!     check in the old `plausible_gc_header`)
 //!   * `gc_flags` = second byte, needs `GC_FLAG_ARENA` (0x02) — ~coin flip
 //!
-//! The fix: `plausible_gc_header` now requires `size == 24` (the known
-//! fixed total for Map: 8-byte header + 16-byte `MapHeader` payload) for
-//! fixed-layout types. A fabricated header has `size ≈ 1024`, which is
-//! rejected.
+//! The size check rejects the observed `size ≈ 1024` corruption, but payload
+//! bytes can also encode the genuine Map total of 24. The complete fix is the
+//! arena's allocation-authored object-start bitmap: `classify_arena` requires
+//! the candidate header address to be recorded there before it reads header
+//! fields.
 
 use super::*;
 
@@ -190,11 +191,8 @@ fn test_classify_arena_rejects_interior_pointer_as_map() {
         "interior pointer with fabricated Map header (size=1024) must NOT classify"
     );
 
-    // Also verify a genuine-size fabricated header (size=24) at the same
-    // location WOULD have been accepted without the fix — but with the
-    // fix, the fixed-layout check passes, so classify_arena returns Some.
-    // This confirms the check is specific to the size, not a blanket
-    // rejection of the address.
+    // The core #8256 case: header fields are now entirely indistinguishable
+    // from a genuine Map, but the address is not an allocation boundary.
     let genuine_size_header = GcHeader {
         obj_type: GC_TYPE_MAP,
         gc_flags: GC_FLAG_ARENA,
@@ -205,20 +203,8 @@ fn test_classify_arena_rejects_interior_pointer_as_map() {
         std::ptr::write(array_ptr as *mut GcHeader, genuine_size_header);
     }
     let result_genuine = ptrs.classify_arena(fabricated_user_addr);
-    // This SHOULD classify — the header now has the correct fixed size.
-    // (If it doesn't, the array payload may not be in a recognized heap
-    // space, which would also block the fabricated bug — so None is
-    // acceptable here. The key assertion is the previous one: size=1024
-    // is rejected.)
-    if result_genuine.is_some() {
-        // It classified — verify it claims to be a Map.
-        let ptr = result_genuine.unwrap();
-        unsafe {
-            assert_eq!(
-                (*ptr.header).obj_type,
-                GC_TYPE_MAP,
-                "classified fabricated-as-genuine should be Map"
-            );
-        }
-    }
+    assert!(
+        result_genuine.is_none(),
+        "correct-size fabricated Map must be rejected because its header is not an object start"
+    );
 }

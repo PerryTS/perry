@@ -101,7 +101,9 @@ impl CopyingPointerSet {
         // becoming a read of the unmapped page below it. Before #7742 this was
         // two `classify_heap_space` calls for addresses 8 bytes apart, on
         // EVERY visited slot.
-        let Some((space, range_base)) = crate::arena::classify_heap_space_in_range(addr) else {
+        let Some((space, range_base, object_starts)) =
+            crate::arena::classify_heap_space_in_range(addr)
+        else {
             return None;
         };
         let header_addr = addr - GC_HEADER_SIZE;
@@ -122,6 +124,14 @@ impl CopyingPointerSet {
                 | crate::arena::HeapSpace::Old
                 | crate::arena::HeapSpace::PromotedYoung
         ) {
+            return None;
+        }
+        // Header fields alone cannot distinguish a genuine allocation from
+        // payload bytes that happen to encode the same type, flags and size.
+        // The per-block bitmap is allocation-authored evidence that this exact
+        // address is an object boundary; test it before dereferencing bytes as
+        // a `GcHeader`.
+        if !crate::arena::arena_header_is_object_start(header_addr, range_base, object_starts) {
             return None;
         }
         let header = header_addr as *mut GcHeader;
