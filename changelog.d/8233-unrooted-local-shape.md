@@ -14,10 +14,10 @@ Neither existing instrument can see this — `gc_root_dominance_check.py` reads 
 LLVM IR and is structurally blind to Rust locals, and `gc_runtime_root_holders.py`
 enumerates `static`/`thread_local!` declarations, not stack slots.
 
-Current surface: **218 findings across 51 files**, led by `mysql2/result.rs` (27),
-`crypto/sign.rs` (16), `sqlite/better.rs` (12), `events/events_on.rs` (11). This is an
-*exposure surface*, not a bug count — most sites allocate and return without holding
-anything across a second collection point.
+Current surface: **605 findings across 84 files**, led by `mysql2/result.rs` (43),
+`webcrypto/keys.rs` (40), `streams.rs` (25), and the events extension (23). This is
+an *exposure surface*, not a bug count — the line-order heuristic deliberately
+over-approximates control flow and allocator behavior.
 
 It ships as a ratchet against a recorded baseline rather than a zero target, because
 per CLAUDE.md a new gate has never been green. It runs in the `lint` job with no
@@ -27,12 +27,12 @@ one — but the `gate` fan-in lists `lint` among its `needs` and fails on any
 tiers (`pr`, `sweep`, `full`), including the docs-only PR case it self-tests. So the
 path from a red step here to a blocked merge is unbroken.
 
-The detector is validated against independent ground truth rather than only its own
-fixtures: it reproduces both sites named in #8233, including
-`events/events_on.rs:40`, where `state` is bound at :37 and can move at :38, and the
-push also stores a stale `buffer` **into the heap** — damage that outlives the frame.
-`--self-test` plants a stale-local site and asserts it is flagged while an
-allocation-free function is not, so a detector that silently stops working fails
-loudly.
+The detector reproduces the still-present `events/events_on.rs:40` ground-truth
+site from #8233, where `state` is bound at :37 and can move at :38, and the push
+also stores a stale `buffer` **into the heap** — damage that outlives the frame.
+`--self-test` separately plants collecting-call, ordinary-return, and later-`let`
+RHS uses, including a pointer extracted from a NaN-box. It also asserts that a
+function with one allocation and no intervening collection point stays clean, and
+that total, per-file, and schema baseline violations can turn the gate red.
 
 Refs #8233.

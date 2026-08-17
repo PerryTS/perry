@@ -12,7 +12,7 @@ This instrument detects the SHAPE instead of the API misuse:
 
     let state   = js_array_alloc(6);                    // binds a raw pointer
     let buffer  = js_array_alloc(0);                    // may move `state`
-    let _ = js_array_push_f64(state, ...);              // `state` is stale
+    consume(state);                                     // `state` is stale
 
 A local bound from an allocator return, used again after an intervening call
 that can allocate or run JS. That is the #8217 / #8163 shape, and neither the
@@ -34,6 +34,7 @@ Usage:
     scripts/unrooted_local_shape.py                 # report
     scripts/unrooted_local_shape.py --check         # fail if above baseline
     scripts/unrooted_local_shape.py --update-baseline
+    scripts/unrooted_local_shape.py --no-raise-vs <ref>
     scripts/unrooted_local_shape.py --self-test     # prove it can still fail
 """
 
@@ -42,11 +43,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "unrooted_local_shape_baseline.json"
+BASELINE_SCHEMA = 2
 
 # Crate families outside `raw_handle_debt.py`'s scope -- the whole point.
 SCAN_GLOBS = (
@@ -69,6 +72,18 @@ ALLOCATORS = (
     "js_buffer_alloc",
     "js_typed_array_alloc",
 )
+
+# Pure pointer extractions do not collect, but they put the same invisible raw
+# address in a local as an allocator return does. #8233 explicitly names this
+# half of the shape; omitting it would leave the original denominator gap open
+# for every pointer that entered the function as a NaN-boxed value.
+POINTER_EXTRACTORS = (
+    "js_nanbox_get_pointer",
+    "js_nanbox_get_string_pointer",
+    "js_nanbox_get_bigint",
+    "js_get_string_pointer_unified",
+)
+POINTER_SOURCES = ALLOCATORS + POINTER_EXTRACTORS
 
 # Calls that can allocate or run user JS, i.e. can move the heap. Deliberately
 # conservative: every entry either allocates outright or can re-enter the
@@ -154,28 +169,42 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
         return []
 
     bound: dict[str, int] = {}
+    crossed: dict[str, int] = {}
     findings = []
     for offset, line in enumerate(body):
         m = LET_BIND.match(line)
-        if m and calls_any(m.group(2), ALLOCATORS):
-            bound[m.group(1)] = offset
-            continue
-        if not bound:
-            continue
-        # A line that can collect invalidates every local bound before it.
-        if calls_any(line, COLLECTION_POINTS):
-            used_here = {t for t in IDENT.findall(line) if t in bound}
-            for local in sorted(used_here):
-                # Used ON the collecting line itself, after an earlier one.
-                for other, other_off in bound.items():
-                    if other_off < bound[local] or other == local:
-                        continue
-                for prev_off in range(bound[local] + 1, offset):
-                    if calls_any(body[prev_off], COLLECTION_POINTS):
-                        findings.append(
-                            (start + offset + 1, local, start + bound[local] + 1, start + prev_off + 1)
-                        )
-                        break
+        expression = m.group(2) if m else line
+
+        # Inspect every expression, not only calls that are themselves
+        # collection points. In `let copied = (*raw).field`, `raw` occurs only
+        # in the RHS; excluding it was the blind spot called out in review of
+        # #8253. Check before recording a collection on THIS line: the call has
+        # not run yet when its arguments are evaluated, so it is only a hazard
+        # to later expressions.
+        used_here = set(IDENT.findall(expression))
+        for local in sorted(used_here & crossed.keys()):
+            findings.append(
+                (
+                    start + offset + 1,
+                    local,
+                    start + bound[local] + 1,
+                    start + crossed[local] + 1,
+                )
+            )
+
+        if calls_any(expression, COLLECTION_POINTS):
+            for local in bound:
+                crossed.setdefault(local, offset)
+
+        if m:
+            # A `let` shadows the old binding only after its RHS is evaluated.
+            # Remove the old identity after scanning that RHS, then track the
+            # new one only when it binds a raw heap address.
+            local, rhs = m.groups()
+            bound.pop(local, None)
+            crossed.pop(local, None)
+            if calls_any(rhs, POINTER_SOURCES):
+                bound[local] = offset
     return findings
 
 
@@ -199,23 +228,119 @@ def collect(root: Path = ROOT):
 
 
 SELF_TEST_SRC = '''
-unsafe fn planted() -> *mut ArrayHeader {
+unsafe fn planted_collecting_use() -> *mut ArrayHeader {
     let state = js_array_alloc(6);
     let buffer = js_array_alloc(0);
     let _ = js_array_push_f64(state, js_nanbox_pointer(buffer as i64));
     state
 }
 
+unsafe fn planted_plain_return() -> *mut ArrayHeader {
+    let state = js_array_alloc(6);
+    let _other = js_array_alloc(0);
+    state
+}
+
+unsafe fn planted_later_rhs(value: f64) -> usize {
+    let raw = js_nanbox_get_pointer(value) as *mut ObjectHeader;
+    let _other = js_object_alloc(0);
+    let copied = (*raw).shape_id;
+    copied
+}
+
 unsafe fn clean_single_alloc() -> *mut ArrayHeader {
     let only = js_array_alloc(1);
     only
 }
+
+unsafe fn clean_use_on_first_collection() {
+    let only = js_array_alloc(1);
+    js_array_push_f64(only, 0.0);
+}
 '''
 
 
+def compare_baselines(base: dict, head: dict) -> list[str]:
+    """Return recorded-debt increases from BASE to HEAD.
+
+    Schema 1 is the detector merged by #8253. Schema 2 fixes that detector's
+    ordinary-use blind spot and adds NaN-box pointer sources, so its initial
+    re-pin necessarily increases the measured surface. That one migration is
+    explicit; after it lands, both total and per-file ceilings only go down.
+    """
+    base_schema = int(base.get("schema_version", 1))
+    head_schema = int(head.get("schema_version", 1))
+    if (base_schema, head_schema) == (1, BASELINE_SCHEMA):
+        return []
+    if base_schema != head_schema:
+        return [f"baseline schema changed {base_schema} -> {head_schema} without an audited migration"]
+
+    bad = []
+    if int(head["total"]) > int(base["total"]):
+        bad.append(f"baseline total raised {base['total']} -> {head['total']}")
+    base_files = base.get("per_file", {})
+    for path, ceiling in sorted(head.get("per_file", {}).items()):
+        previous = int(base_files.get(path, 0))
+        if int(ceiling) > previous:
+            where = "was not listed" if path not in base_files else f"was {previous}"
+            bad.append(f"{path}: ceiling raised to {ceiling} ({where})")
+    return bad
+
+
+def git_show_baseline(ref: str) -> dict | None:
+    """Read the baseline at REF, failing closed when REF was not fetched."""
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot resolve {ref}. The merge base was not fetched, so "
+            "the unrooted-local ratchet cannot compare against it -- failing "
+            "rather than passing on a comparison that did not happen."
+        )
+    proc = subprocess.run(
+        ["git", "show", f"{ref}:scripts/unrooted_local_shape_baseline.json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    return json.loads(proc.stdout)
+
+
+def no_raise_vs(ref: str) -> int:
+    base = git_show_baseline(ref)
+    if base is None:
+        print(f"{ref} has no unrooted-local baseline; no recorded debt to compare")
+        return 0
+    head = json.loads(BASELINE.read_text(encoding="utf-8"))
+    base_schema = int(base.get("schema_version", 1))
+    head_schema = int(head.get("schema_version", 1))
+    bad = compare_baselines(base, head)
+    if bad:
+        print(f"::error::recorded unrooted-local debt rose vs. {ref}: {len(bad)} violation(s)")
+        for violation in bad:
+            print(f"  {violation}")
+        return 1
+    if (base_schema, head_schema) == (1, BASELINE_SCHEMA):
+        print(
+            f"recorded unrooted-local debt vs. {ref}: audited schema migration "
+            f"{base_schema} -> {head_schema}, baseline {base['total']} -> {head['total']}"
+        )
+    else:
+        print(
+            f"recorded unrooted-local debt vs. {ref}: {base['total']} -> {head['total']}, "
+            "no ceiling raised"
+        )
+    return 0
+
+
 def self_test() -> int:
-    """Prove the detector can still fail: a planted site must be found, and a
-    single-allocation function must NOT be."""
+    """Prove the detector and each baseline failure mode can still fail."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -224,15 +349,41 @@ def self_test() -> int:
         hits = scan_file(p)
     names = {h[0] for h in hits}
     ok = True
-    if "planted" not in names:
-        print("SELF-TEST FAIL: did not flag the planted stale-local site", file=sys.stderr)
+    required = {"planted_collecting_use", "planted_plain_return", "planted_later_rhs"}
+    missing = required - names
+    if missing:
+        print(f"SELF-TEST FAIL: did not flag planted shape(s): {sorted(missing)}", file=sys.stderr)
         ok = False
-    if "clean_single_alloc" in names:
-        print("SELF-TEST FAIL: flagged a function with no intervening collection point", file=sys.stderr)
+    forbidden = {"clean_single_alloc", "clean_use_on_first_collection"} & names
+    if forbidden:
+        print(f"SELF-TEST FAIL: flagged clean control(s): {sorted(forbidden)}", file=sys.stderr)
         ok = False
-    stale = [h for h in hits if h[0] == "planted"]
+
+    base = {"schema_version": 2, "total": 2, "per_file": {"a.rs": 2}}
+    comparisons = (
+        ({"schema_version": 2, "total": 3, "per_file": {"a.rs": 3}}, "total raised"),
+        (
+            {"schema_version": 2, "total": 2, "per_file": {"a.rs": 1, "new.rs": 1}},
+            "was not listed",
+        ),
+        ({"schema_version": 3, "total": 2, "per_file": {"a.rs": 2}}, "schema changed"),
+    )
+    for head, needle in comparisons:
+        if not any(needle in violation for violation in compare_baselines(base, head)):
+            print(f"SELF-TEST FAIL: baseline rule did not fire for {needle}", file=sys.stderr)
+            ok = False
+    if compare_baselines(base, base):
+        print("SELF-TEST FAIL: unchanged baseline reported an increase", file=sys.stderr)
+        ok = False
+    if compare_baselines({"total": 218, "per_file": {}}, {"schema_version": 2, "total": 999, "per_file": {}}):
+        print("SELF-TEST FAIL: audited schema-1 migration was rejected", file=sys.stderr)
+        ok = False
+
     if ok:
-        print(f"self-test OK: planted site flagged ({len(stale)} finding(s)), clean function not flagged")
+        print(
+            "self-test OK: collecting/plain-return/later-RHS sites flagged, "
+            "clean controls ignored, baseline increases rejected"
+        )
         return 0
     return 1
 
@@ -241,12 +392,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true", help="fail if the count exceeds the baseline")
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--no-raise-vs", metavar="REF")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="list every finding")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
+    if args.no_raise_vs:
+        return no_raise_vs(args.no_raise_vs)
 
     results = collect()
     total = sum(len(v) for v in results.values())
@@ -265,7 +419,18 @@ def main() -> int:
                 print(f"  {path}:{use_line}: `{local}` bound at :{bind_line}, may have moved at :{collect_line} (fn {fn})")
 
     if args.update_baseline:
-        BASELINE.write_text(json.dumps({"total": total, "per_file": {k: len(v) for k, v in results.items()}}, indent=2, sort_keys=True) + "\n")
+        BASELINE.write_text(
+            json.dumps(
+                {
+                    "schema_version": BASELINE_SCHEMA,
+                    "total": total,
+                    "per_file": {k: len(v) for k, v in results.items()},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         print(f"wrote {BASELINE.relative_to(ROOT)}")
         return 0
 
@@ -274,8 +439,31 @@ def main() -> int:
             print("no baseline recorded; run --update-baseline first", file=sys.stderr)
             return 1
         base = json.loads(BASELINE.read_text())
+        if int(base.get("schema_version", 1)) != BASELINE_SCHEMA:
+            print(
+                f"baseline schema is {base.get('schema_version', 1)}, expected {BASELINE_SCHEMA}; "
+                "run --update-baseline",
+                file=sys.stderr,
+            )
+            return 1
         if total > base["total"]:
             print(f"REGRESSION: {total} findings exceeds baseline {base['total']}", file=sys.stderr)
+            return 1
+        actual_per_file = {path: len(hits) for path, hits in results.items()}
+        for path, count in sorted(actual_per_file.items()):
+            ceiling = int(base["per_file"].get(path, 0))
+            if count > ceiling:
+                print(
+                    f"REGRESSION: {path}: {count} findings exceeds per-file ceiling {ceiling}",
+                    file=sys.stderr,
+                )
+                return 1
+        stale = sorted(set(base["per_file"]) - set(actual_per_file))
+        if stale:
+            print(
+                f"STALE BASELINE: {stale[0]} has no findings; run --update-baseline",
+                file=sys.stderr,
+            )
             return 1
         if total < base["total"]:
             print(f"improved: {total} < baseline {base['total']} -- run --update-baseline to ratchet")
