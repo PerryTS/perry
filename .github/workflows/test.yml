@@ -2370,14 +2370,17 @@ jobs:
           python3 scripts/parity_report_merge.py --self-test
           mkdir -p test-parity/reports test-parity/output/node test-parity/output/perry
           # Reconstruct the per-test output captures the matrix trend reads.
+          # NOTE: upload-artifact strips the common parent, so each artifact
+          # extracts as parity-shard-N/{reports,output}/... (no test-parity/
+          # prefix) — verified against run 31964093732's artifacts.
           for d in parity-shards/parity-shard-*/; do
-            if [ -d "$d/test-parity/output/node" ]; then cp "$d"/test-parity/output/node/*.txt test-parity/output/node/ 2>/dev/null || true; fi
-            if [ -d "$d/test-parity/output/perry" ]; then cp "$d"/test-parity/output/perry/*.txt test-parity/output/perry/ 2>/dev/null || true; fi
+            if [ -d "$d/output/node" ]; then cp "$d"/output/node/*.txt test-parity/output/node/ 2>/dev/null || true; fi
+            if [ -d "$d/output/perry" ]; then cp "$d"/output/perry/*.txt test-parity/output/perry/ 2>/dev/null || true; fi
           done
           python3 scripts/parity_report_merge.py \
             --expect "$EXPECT" \
             --output test-parity/reports/latest.json \
-            parity-shards/parity-shard-*/test-parity/reports/latest.json
+            parity-shards/parity-shard-*/reports/latest.json
       - name: Check parity threshold
         run: |
           set +e
