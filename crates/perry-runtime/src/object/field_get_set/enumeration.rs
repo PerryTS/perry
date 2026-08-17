@@ -71,13 +71,18 @@ unsafe fn native_module_enum(
     let obj_h = scope.root_raw_const_ptr(obj);
     let keys = obj_h.with_const_ptr(|obj| (vt.own_keys_array)(obj))?;
     let keys_h = scope.root_raw_const_ptr(keys);
-    let count = crate::array::js_array_length(keys_h.get_raw_const_ptr::<ArrayHeader>());
+    // #8269 follow-up: every handle read below goes through `with_*` closures
+    // (the #7341 blessed forms) instead of bare `get_raw_*_ptr`, keeping this
+    // module at its raw-handle-debt ceiling. `js_array_push*` self-root their
+    // array argument (they are JS-facing entry points), so a `with_mut_ptr`
+    // scope is the right custody for each push.
+    let count = keys_h.with_const_ptr(|keys| crate::array::js_array_length(keys));
     let result = crate::array::js_array_alloc(count);
     let result_h = scope.root_raw_mut_ptr(result);
 
     for i in 0..count {
         let iter_scope = crate::gc::RuntimeHandleScope::new();
-        let key = crate::array::js_array_get(keys_h.get_raw_const_ptr::<ArrayHeader>(), i);
+        let key = keys_h.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
         let key_ptr = (key.bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
         let key_h = iter_scope.root_string_ptr(key_ptr);
         let value = obj_h.with_const_ptr(|obj| {
@@ -87,32 +92,28 @@ unsafe fn native_module_enum(
 
         match what {
             MapSetEnum::Values => {
-                crate::array::js_array_push_f64(
-                    result_h.get_raw_mut_ptr::<ArrayHeader>(),
-                    value_h.get_nanbox_f64(),
-                );
+                result_h.with_mut_ptr(|result| {
+                    crate::array::js_array_push_f64(result, value_h.get_nanbox_f64())
+                });
             }
             MapSetEnum::Entries => {
                 let pair = crate::array::js_array_alloc(2);
                 let pair_h = iter_scope.root_raw_mut_ptr(pair);
-                crate::array::js_array_push(
-                    pair_h.get_raw_mut_ptr::<ArrayHeader>(),
-                    JSValue::string_ptr(key_h.get_raw_mut_ptr::<crate::StringHeader>()),
-                );
-                crate::array::js_array_push_f64(
-                    pair_h.get_raw_mut_ptr::<ArrayHeader>(),
-                    value_h.get_nanbox_f64(),
-                );
-                crate::array::js_array_push(
-                    result_h.get_raw_mut_ptr::<ArrayHeader>(),
-                    JSValue::array_ptr(pair_h.get_raw_mut_ptr::<ArrayHeader>()),
-                );
+                let key_value =
+                    key_h.with_mut_ptr(|key: *mut crate::StringHeader| JSValue::string_ptr(key));
+                pair_h.with_mut_ptr(|pair| crate::array::js_array_push(pair, key_value));
+                pair_h.with_mut_ptr(|pair| {
+                    crate::array::js_array_push_f64(pair, value_h.get_nanbox_f64())
+                });
+                let pair_value =
+                    pair_h.with_mut_ptr(|pair: *mut ArrayHeader| JSValue::array_ptr(pair));
+                result_h.with_mut_ptr(|result| crate::array::js_array_push(result, pair_value));
             }
             MapSetEnum::Keys => unreachable!("native_module_enum is only used for values/entries"),
         }
     }
 
-    Some(result_h.get_raw_mut_ptr::<ArrayHeader>())
+    Some(result_h.with_mut_ptr(|result: *mut ArrayHeader| result))
 }
 
 /// `Object.keys(value)` entry point that inspects the NaN-boxed *value* (not a
