@@ -53,7 +53,7 @@ use import_helpers::{
 use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
-use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
+use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
@@ -202,12 +202,10 @@ fn collect_module_one(
     // #5223: text-asset imports (`import s from "./x.txt"`). A recognized text
     // extension is read verbatim and synthesized into a native module whose
     // default export is the file contents as a JS string (see the text branch
-    // below, mirroring the JSON-module path). `.wasm` is out of scope.
+    // below, mirroring the JSON-module path).
     let is_text_asset = is_recognized_text_asset(&canonical);
-    // #5235: `.wasm` ESM import. The file is binary (not valid UTF-8), so it
-    // must NOT be read as a string. We read the bytes, parse the export section,
-    // and synthesize a throwing-stub module (see the wasm branch below). Real
-    // `.wasm` ESM instantiation is the companion issue #5234.
+    // #5234: `.wasm` is binary, so collect it through an executable synthetic
+    // module instead of the UTF-8 source reader.
     let is_wasm = is_wasm_asset(&canonical);
     // Match a real `node_modules/` directory COMPONENT, not a substring: a
     // file whose NAME contains "node_modules" (e.g. turbopack's bundled chunks
@@ -352,39 +350,17 @@ fn collect_module_one(
         });
     }
 
-    // #5235: `.wasm` ESM import — defer. Read the BYTES (never as UTF-8; the
-    // file is binary), parse the WebAssembly export section, and synthesize a
-    // TypeScript stub module whose exports are throw-on-call functions. Strict
-    // mode makes it a hard error; the default policy defers it (records the
-    // shared end-of-compile notice and keeps building) so a build with a
-    // peripheral `.wasm` dep compiles + runs its core — the wasm feature throws
-    // only if reached. Real `.wasm` ESM instantiation is the companion #5234.
-    //
-    // The synthesized source flows through the exact same parse/lower/codegen
-    // pipeline as the #5223 text-asset and JSON synthetic modules below — we
-    // just feed `raw_source` from the stub instead of reading the file as text.
+    // #5234: synthesize a TypeScript adapter that embeds and instantiates the
+    // binary at module initialization, then feed it through the normal native
+    // module pipeline used by JSON and text assets.
     let raw_source = if is_wasm {
         let display_name = canonical
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("module.wasm");
-        let loc = canonical.to_string_lossy().to_string();
-        // Strict mode (broad `perry.strict` / `--strict-dynamic-import` /
-        // `perry.dynamicImport = "error"`) turns the deferred `.wasm` import into
-        // a hard compile error. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT
-        // escape hatch), mirroring the dynamic-import deferral (#5230).
-        if ctx.strict_dynamic_import && !perry_hir::eval_classifier::eval_override_enabled() {
-            return Err(anyhow!(
-                ".wasm import {} cannot run in an ahead-of-time compiled binary \
-                 — full .wasm ESM instantiation is tracked in #5234 (strict mode)",
-                loc
-            ));
-        }
         let bytes = fs::read(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
-        let stub = synthesize_wasm_stub_module(&bytes, display_name);
-        perry_hir::record_deferred_aot_site(".wasm import", loc);
-        stub.source
+        synthesize_wasm_module(&bytes, display_name).source
     } else {
         // It's a TypeScript (or synthetic JSON/text) file to compile natively.
         refuse_node_addon_binary(&canonical)?;

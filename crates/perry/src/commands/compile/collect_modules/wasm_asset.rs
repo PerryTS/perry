@@ -1,23 +1,10 @@
-//! #5235: defer `.wasm` ESM imports.
+//! #5234: native `.wasm` ESM imports.
 //!
-//! An `import ... from "./x.wasm"` cannot run in an ahead-of-time compiled
-//! binary today — real `.wasm` ESM instantiation is tracked as the companion
-//! issue #5234. Rather than hard-failing the whole build (the file isn't valid
-//! UTF-8, so the normal TS read aborts with `stream did not contain valid
-//! UTF-8`), we *defer* the import: we parse the WebAssembly **export section**
-//! for the export names and synthesize a tiny TypeScript module whose exports
-//! are **throw-on-call stubs**. The build proceeds past peripheral `.wasm`
-//! dependencies; the wasm feature throws a descriptive `Error` only if actually
-//! reached.
-//!
-//! This mirrors the #5206 / #5230 deferred-AOT-site policy: the site is recorded
-//! in the shared end-of-compile notice (`record_deferred_aot_site`), and strict
-//! mode (`perry.strict` / `--strict-dynamic-import`) turns it into a hard
-//! compile error instead.
-//!
-//! The export-section walk is a trivial, defensive binary parse — on *any*
-//! malformed input we fall back to synthesizing just a throwing default export
-//! (and still record the deferred site) rather than crashing.
+//! A wasm file is binary, so it cannot enter the normal TypeScript source
+//! reader. We parse its export names and synthesize a small TypeScript adapter
+//! that embeds the bytes, instantiates the module during module initialization,
+//! and re-exports the live instance exports through Perry's normal module
+//! pipeline.
 
 /// True when `path` is a `.wasm` file (case-insensitive extension).
 pub(crate) fn is_wasm_asset(path: &std::path::Path) -> bool {
@@ -28,9 +15,6 @@ pub(crate) fn is_wasm_asset(path: &std::path::Path) -> bool {
 }
 
 /// Decode one unsigned LEB128 integer from `bytes` starting at `*pos`.
-/// Advances `*pos` past the consumed bytes. Returns `None` on truncation or an
-/// over-long encoding (more than 5 bytes for the u32 range we care about — the
-/// wasm spec caps section/name/index encodings at u32).
 fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Option<u32> {
     let mut result: u64 = 0;
     let mut shift = 0u32;
@@ -42,7 +26,6 @@ fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Option<u32> {
             break;
         }
         shift += 7;
-        // u32 LEB128 is at most 5 bytes; guard against unbounded/over-long input.
         if shift >= 35 {
             return None;
         }
@@ -50,49 +33,96 @@ fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Option<u32> {
     u32::try_from(result).ok()
 }
 
-/// Parsed export-section result.
 struct WasmExports {
-    /// Export names found in section id 7. Empty when the section is absent.
     names: Vec<String>,
 }
 
-/// Walk a `.wasm` binary and collect the names in its export section (id 7).
-///
-/// Returns `None` when the header is absent/malformed (caller then synthesizes a
-/// default-only stub). Returns `Some(WasmExports { names })` — possibly with an
-/// empty `names` vec — when the header is valid; a parse error *inside* a
-/// section stops the walk but keeps whatever names were collected so far.
-fn parse_wasm_exports(bytes: &[u8]) -> Option<WasmExports> {
-    // Header: 4-byte magic `\0asm` + 4-byte version `01 00 00 00`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WasmImport {
+    module: String,
+    name: String,
+}
+
+fn read_name(bytes: &[u8], pos: &mut usize) -> Option<String> {
+    let len = read_uleb128(bytes, pos)? as usize;
+    let end = pos.checked_add(len)?;
+    let name = std::str::from_utf8(bytes.get(*pos..end)?).ok()?.to_string();
+    *pos = end;
+    Some(name)
+}
+
+/// Collect function imports from section 2. The adapter uses these to build
+/// the `WebAssembly.instantiate` imports object. A non-function descriptor is
+/// left to the host's existing LinkError path until table/memory/global import
+/// wrappers are available.
+fn parse_wasm_imports(bytes: &[u8]) -> Option<Vec<WasmImport>> {
     const MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
     if bytes.len() < 8 || bytes[0..4] != MAGIC {
         return None;
     }
-    // We don't enforce the exact version bytes — any 8-byte-or-longer module
-    // with the right magic is walked; an unknown version simply won't contain a
-    // recognizable export section and yields an empty name list.
+    let mut pos = 8usize;
+    while pos < bytes.len() {
+        let section_id = bytes[pos];
+        pos += 1;
+        let size = read_uleb128(bytes, &mut pos)? as usize;
+        let section_end = pos.checked_add(size)?;
+        if section_end > bytes.len() {
+            return None;
+        }
+        if section_id != 2 {
+            pos = section_end;
+            continue;
+        }
 
-    let mut names: Vec<String> = Vec::new();
+        let payload = &bytes[pos..section_end];
+        let mut import_pos = 0usize;
+        let count = read_uleb128(payload, &mut import_pos)?;
+        let mut imports = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let module = read_name(payload, &mut import_pos)?;
+            let name = read_name(payload, &mut import_pos)?;
+            let kind = *payload.get(import_pos)?;
+            import_pos += 1;
+            if kind != 0 {
+                return None;
+            }
+            let _type_index = read_uleb128(payload, &mut import_pos)?;
+            let import = WasmImport { module, name };
+            if !imports.contains(&import) {
+                imports.push(import);
+            }
+        }
+        return Some(imports);
+    }
+    Some(Vec::new())
+}
+
+/// Walk a wasm binary and collect the names in its export section (id 7).
+/// Malformed section data produces an empty list; the host reports the actual
+/// compile error later when the synthesized adapter instantiates the bytes.
+fn parse_wasm_exports(bytes: &[u8]) -> Option<WasmExports> {
+    const MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
+    if bytes.len() < 8 || bytes[0..4] != MAGIC {
+        return None;
+    }
+
+    let mut names = Vec::new();
     let mut pos = 8usize;
     while pos < bytes.len() {
         let section_id = bytes[pos];
         pos += 1;
         let size = match read_uleb128(bytes, &mut pos) {
-            Some(s) => s as usize,
-            None => break, // truncated section header — stop, keep what we have
+            Some(size) => size as usize,
+            None => break,
         };
-        let section_start = pos;
-        let section_end = match section_start.checked_add(size) {
+        let section_end = match pos.checked_add(size) {
             Some(end) if end <= bytes.len() => end,
-            _ => break, // section claims more bytes than the file has
+            _ => break,
         };
         if section_id == 7 {
-            // Export section: uleb count, then `count` entries of
-            // (uleb name_len, name_len bytes, 1 byte kind, uleb index).
-            if let Some(found) = parse_export_section(&bytes[section_start..section_end]) {
+            if let Some(found) = parse_export_section(&bytes[pos..section_end]) {
                 names = found;
             }
-            // Export section appears at most once; we can stop after it.
             break;
         }
         pos = section_end;
@@ -100,9 +130,6 @@ fn parse_wasm_exports(bytes: &[u8]) -> Option<WasmExports> {
     Some(WasmExports { names })
 }
 
-/// Parse the payload of an export section (everything after the section id +
-/// size header). Returns the collected export names, or `None` on a parse error
-/// (caller keeps the prior — empty — name list and falls back to default-only).
 fn parse_export_section(payload: &[u8]) -> Option<Vec<String>> {
     let mut pos = 0usize;
     let count = read_uleb128(payload, &mut pos)?;
@@ -117,13 +144,9 @@ fn parse_export_section(payload: &[u8]) -> Option<Vec<String>> {
             .ok()?
             .to_string();
         pos = name_end;
-        // 1-byte export kind (0 = func, 1 = table, 2 = mem, 3 = global), then
-        // the uleb index. We include *every* kind as a throwing function stub —
-        // simplest, and member access only throws when actually invoked.
         let _kind = *payload.get(pos)?;
         pos += 1;
         let _index = read_uleb128(payload, &mut pos)?;
-        // Skip empty / duplicate names defensively.
         if !name.is_empty() && !names.contains(&name) {
             names.push(name);
         }
@@ -131,75 +154,79 @@ fn parse_export_section(payload: &[u8]) -> Option<Vec<String>> {
     Some(names)
 }
 
-/// Result of synthesizing a deferred `.wasm` stub module.
-pub(crate) struct WasmStubModule {
-    /// Synthesized TypeScript source — flows through the normal parse/lower
-    /// pipeline exactly like the #5223 text-asset / JSON synthetic modules.
+pub(crate) struct WasmModuleSource {
     pub(crate) source: String,
 }
 
-/// Build a throwing-stub TypeScript module for a `.wasm` import (#5235).
+/// Build an executable TypeScript adapter for a `.wasm` import.
 ///
-/// `bytes` is the raw `.wasm` file content; `display_name` is the file name (or
-/// path) used in the thrown error message. Every export name parsed from the
-/// module's export section becomes a named export whose value is a function that
-/// throws a descriptive `Error` when called; a throwing **default** export is
-/// always provided too (covers `import w from "./x.wasm"`). On a malformed
-/// binary we synthesize the default-only stub.
-///
-/// Returns the synthesized source. Does not record the deferred site or consult
-/// strict mode — the caller does both, so it can decide between erroring and
-/// deferring.
-pub(crate) fn synthesize_wasm_stub_module(bytes: &[u8], display_name: &str) -> WasmStubModule {
+/// The generated module uses Perry's compile-time `embedWasm` intrinsic, so
+/// the produced executable does not need the source wasm file at runtime. The
+/// instance exports object is also the default export. Wasm names that cannot
+/// be represented as static ESM names remain available through bracket access
+/// on that default object.
+pub(crate) fn synthesize_wasm_module(bytes: &[u8], display_name: &str) -> WasmModuleSource {
     let names = parse_wasm_exports(bytes)
-        .map(|e| e.names)
+        .map(|exports| exports.names)
         .unwrap_or_default();
-    // The descriptive runtime message. JS-string-escaped via serde so the file
-    // name (which may contain quotes/odd chars) is safe to embed.
-    let msg = format!(
-        "wasm module {} cannot run in an ahead-of-time compiled binary \
-         — full .wasm ESM instantiation is tracked in #5234",
-        display_name
-    );
-    let msg_lit =
-        serde_json::to_string(&msg).unwrap_or_else(|_| "\"wasm module unavailable\"".into());
+    let imports = parse_wasm_imports(bytes).unwrap_or_default();
+    let path_lit = serde_json::to_string(display_name).unwrap_or_else(|_| "\"module.wasm\"".into());
 
-    let mut src = String::new();
-    src.push_str("// #5235: synthesized deferred stub for a .wasm import.\n");
-    src.push_str("// Each export throws only when actually called; real .wasm ESM\n");
-    src.push_str("// instantiation is tracked in #5234.\n");
-    // A single shared thrower keeps the synthesized module compact regardless of
-    // export count.
-    src.push_str(&format!(
-        "function __perry_wasm_unavailable(): never {{ throw new Error({}); }}\n",
-        msg_lit
-    ));
-    for name in &names {
-        if !is_valid_js_export_ident(name) {
-            // Names that aren't valid bare JS identifiers can't be exported as
-            // `export function <name>`. Skip them — they're reachable through
-            // the namespace object's string keys only via real instantiation
-            // (#5234); for the deferred stub, omitting them is fine. The default
-            // export still throws.
+    let mut source = String::new();
+    source.push_str("// #5234: synthesized executable adapter for a .wasm import.\n");
+    let mut import_groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (index, import) in imports.iter().enumerate() {
+        if !is_valid_js_export_ident(&import.name) {
             continue;
         }
-        src.push_str(&format!(
-            "export function {}(...args: any[]): any {{ return __perry_wasm_unavailable(); }}\n",
-            name
+        let local = format!("__perry_wasm_import_{index}");
+        let module_lit = serde_json::to_string(&import.module).unwrap_or_else(|_| "\"\"".into());
+        source.push_str(&format!(
+            "import {{ {} as {local} }} from {module_lit};\n",
+            import.name
+        ));
+        import_groups
+            .entry(import.module.clone())
+            .or_default()
+            .push((import.name.clone(), local));
+    }
+    if import_groups.is_empty() {
+        source.push_str(&format!(
+            "const __perry_wasm_result = WebAssembly.instantiate(embedWasm({path_lit}));\n"
+        ));
+    } else {
+        source.push_str("const __perry_wasm_imports = {\n");
+        for (module, entries) in &import_groups {
+            let module_lit = serde_json::to_string(module).unwrap_or_else(|_| "\"\"".into());
+            source.push_str(&format!("  {module_lit}: {{\n"));
+            for (name, local) in entries {
+                let name_lit = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".into());
+                source.push_str(&format!("    {name_lit}: {local},\n"));
+            }
+            source.push_str("  },\n");
+        }
+        source.push_str("};\n");
+        source.push_str(&format!(
+            "const __perry_wasm_result = WebAssembly.instantiate(embedWasm({path_lit}), __perry_wasm_imports);\n"
         ));
     }
-    // Throwing default export: a function so `import w from "./x.wasm"; w()`
-    // throws on call, and bare `import w from "./x.wasm"` (no call) is fine.
-    src.push_str(
-        "export default function (...args: any[]): any { return __perry_wasm_unavailable(); }\n",
-    );
+    source.push_str("const __perry_wasm_exports = __perry_wasm_result.instance.exports;\n");
+    for (index, name) in names.iter().enumerate() {
+        if !is_valid_js_export_ident(name) || name == "default" {
+            continue;
+        }
+        let name_lit = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".into());
+        let local = format!("__perry_wasm_export_{index}");
+        source.push_str(&format!(
+            "const {local} = __perry_wasm_exports[{name_lit}];\nexport {{ {local} as {name} }};\n"
+        ));
+    }
+    source.push_str("export default __perry_wasm_exports;\n");
 
-    WasmStubModule { source: src }
+    WasmModuleSource { source }
 }
 
-/// A name is exportable as `export function <name>` only if it's a valid bare
-/// ECMAScript identifier: first char is a letter / `_` / `$`, the rest are
-/// alphanumeric / `_` / `$`. (The wasm export-name grammar is far broader.)
 fn is_valid_js_export_ident(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -213,7 +240,6 @@ fn is_valid_js_export_ident(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The fixture from #5235: a 41-byte wasm module exporting `add`.
     fn add_wasm() -> Vec<u8> {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
@@ -221,39 +247,62 @@ mod tests {
             .unwrap()
     }
 
+    fn imported_wasm() -> Vec<u8> {
+        vec![
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f,
+            0x01, 0x7f, 0x02, 0x0e, 0x01, 0x06, 0x2e, 0x2f, 0x67, 0x6c, 0x75, 0x65, 0x03, 0x69,
+            0x6e, 0x63, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0x07, 0x08, 0x01, 0x04, 0x63, 0x61,
+            0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x08, 0x01, 0x06, 0x00, 0x20, 0x00, 0x10, 0x00, 0x0b,
+        ]
+    }
+
     #[test]
     fn parses_add_export() {
         let bytes = add_wasm();
-        assert_eq!(bytes.len(), 41, "fixture should be 41 bytes");
+        assert_eq!(bytes.len(), 41);
         let exports = parse_wasm_exports(&bytes).expect("valid header");
         assert_eq!(exports.names, vec!["add".to_string()]);
     }
 
     #[test]
-    fn synthesizes_named_and_default_stub() {
-        let src = synthesize_wasm_stub_module(&add_wasm(), "add.wasm").source;
-        assert!(src.contains("export function add("), "named stub present");
-        assert!(
-            src.contains("export default function"),
-            "default stub present"
-        );
-        assert!(src.contains("#5234"), "references real-integration issue");
-        assert!(src.contains("add.wasm"), "names the file in the message");
+    fn synthesizes_instantiated_named_and_default_exports() {
+        let source = synthesize_wasm_module(&add_wasm(), "add.wasm").source;
+        assert!(source.contains("WebAssembly.instantiate(embedWasm(\"add.wasm\"))"));
+        assert!(source.contains("as add"));
+        assert!(source.contains("export default __perry_wasm_exports"));
     }
 
     #[test]
-    fn malformed_header_falls_back_to_default_only() {
-        // Wrong magic → no header.
+    fn synthesizes_static_function_imports_for_glue_modules() {
+        let bytes = imported_wasm();
+        assert_eq!(
+            parse_wasm_imports(&bytes),
+            Some(vec![WasmImport {
+                module: "./glue".to_string(),
+                name: "inc".to_string(),
+            }])
+        );
+        let source = synthesize_wasm_module(&bytes, "imported.wasm").source;
+        assert!(source.contains("import { inc as __perry_wasm_import_0 } from \"./glue\""));
+        assert!(source.contains("\"./glue\": {"));
+        assert!(source.contains("\"inc\": __perry_wasm_import_0"));
+        assert!(source.contains(
+            "WebAssembly.instantiate(embedWasm(\"imported.wasm\"), __perry_wasm_imports)"
+        ));
+        assert!(source.contains("as call"));
+    }
+
+    #[test]
+    fn malformed_header_still_instantiates_for_a_host_compile_error() {
         assert!(parse_wasm_exports(b"not a wasm file at all").is_none());
-        let src = synthesize_wasm_stub_module(b"garbage", "bad.wasm").source;
-        // Default export still throws; no named exports synthesized.
-        assert!(src.contains("export default function"));
-        assert!(!src.contains("export function "));
+        let source = synthesize_wasm_module(b"garbage", "bad.wasm").source;
+        assert!(source.contains("WebAssembly.instantiate"));
+        assert!(source.contains("export default __perry_wasm_exports"));
+        assert!(!source.contains(" as "));
     }
 
     #[test]
     fn no_export_section_yields_empty_names() {
-        // Valid header + version, no sections.
         let bytes = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         let exports = parse_wasm_exports(&bytes).expect("valid header");
         assert!(exports.names.is_empty());
@@ -261,7 +310,6 @@ mod tests {
 
     #[test]
     fn uleb128_multibyte() {
-        // 624485 = 0xE5 0x8E 0x26 in uleb128 (the canonical spec example).
         let bytes = [0xE5u8, 0x8E, 0x26];
         let mut pos = 0;
         assert_eq!(read_uleb128(&bytes, &mut pos), Some(624485));
