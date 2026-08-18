@@ -7,9 +7,19 @@
     "tools:check": "node scripts/soak/external-tools.mts --check",
     "tools:fix": "node scripts/soak/external-tools.mts --fix",
     "tools:install": "node scripts/soak/external-tools.mts --install-all --shims",
-    "test:scripts": "node --test scripts/soak/*.test.mts"
+    "test:scripts": "node --test scripts/soak/*.test.mts scripts/publish/*.test.mts",
+    "publish:pipeline": "node scripts/publish/pipeline.mts",
+    "publish:stage": "node scripts/publish/pipeline.mts --stage-only",
+    "publish:scan": "node scripts/publish/pipeline.mts --scan-only",
+    "publish:approve": "node scripts/publish/pipeline.mts --approve",
+    "publish:status": "node scripts/publish/pipeline.mts --status",
+    "publish:release": "node scripts/publish/pipeline.mts --release-only",
+    "publish:brew": "node scripts/publish/brew/tap-publish.mts",
+    "publish:ffi": "node scripts/publish/cargo/ffi-publish.mts",
+    "prepublishOnly": "node scripts/publish/auth-posture.mts --guard"
   },
   "devDependencies": {
+    "@socketsecurity/sdk": "4.1.4",
     "cron": "^4.4.0",
     "dayjs": "^1.11.21",
     "exponential-backoff": "^3.1.3",

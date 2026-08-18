@@ -175,6 +175,18 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         locator=_workflow_pins,
     ),
     Exemption(
+        path=".github/workflows/npm-stage-publish.yml",
+        value="26",
+        major_tracks_oracle=True,
+        reason=(
+            "npm *publishing* toolchain (OIDC staged-upload + npm stage "
+            "publishing), never a test oracle. Major literal for the same "
+            "reason as release-packages.yml -- a gap-suite oracle bump must "
+            "not move the runtime that publishes releases."
+        ),
+        locator=_workflow_pins,
+    ),
+    Exemption(
         path="benchmarks/public-baseline-config.json",
         value="v22.23.1",
         major_tracks_oracle=False,

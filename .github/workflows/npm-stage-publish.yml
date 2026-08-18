@@ -1,0 +1,216 @@
+name: npm stage publish
+
+# Perry's OIDC staged-upload workflow, modeled on a tiered registry-infra design
+# adapted to Perry's multi-platform-binary reality.
+#
+# ORDER RULE: this workflow only STAGES — nothing is public, and NO git tag or
+# GitHub release exists yet. The tag + immutable GH release are cut LAST, by
+# the local `npm run publish:approve` (scripts/publish/pipeline.mts), only
+# after the approved version is live on npm.
+#
+# The 9 @perryts/* packages are platform binaries + static libs built on
+# platform runners, so the stage upload MUST follow the per-platform build
+# legs. Rather than duplicate the build matrix (which would drift from
+# release-packages.yml), this workflow dispatches release-packages.yml in its
+# existing `stage` mode (build-only, archives as workflow artifacts, nothing
+# publishes) and then a single `stage-upload` job downloads those artifacts,
+# runs scripts/stage-npm.sh, and `npm stage publish`es each package under
+# OIDC trusted publishing.
+#
+# Auth: OIDC trusted publishing only — id-token: write, NO long-lived NPM_TOKEN.
+# Each @perryts/* package must list this workflow + the `npm-publish` environment
+# as a trusted publisher on npmjs.com (same one-time setup npm/README.md
+# describes for release-packages.yml). The auth-posture gate in
+# scripts/publish/auth-posture.mts refuses any long-lived token present here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Stage for real (false = dry-run, the default).'
+        type: boolean
+        default: false
+      dist-tag:
+        description: 'npm dist-tag to stage under.'
+        type: string
+        default: 'latest'
+      build-run-id:
+        description: 'Reuse an existing release-packages.yml stage-mode build run instead of dispatching a new one.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolve the build run to stage from: either a caller-supplied build-run-id
+  # (re-use), or dispatch release-packages.yml in stage mode and capture its
+  # run id. The build matrix itself lives in release-packages.yml — single
+  # source of truth, no drift.
+  resolve-build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write   # dispatch release-packages.yml (stage mode) + watch it
+      contents: read
+    outputs:
+      build-run-id: ${{ steps.resolve.outputs.build-run-id }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve or dispatch the stage-mode build
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EXISTING: ${{ inputs.build-run-id }}
+        run: |
+          set -euo pipefail
+          if [ -n "$EXISTING" ]; then
+            RUN_ID="$EXISTING"
+            echo "Reusing build run $RUN_ID."
+          else
+            # Dispatch release-packages.yml in stage mode. Stage mode is the
+            # DEFAULT workflow_dispatch (no inputs = build-only smoke run; the
+            # preflight job's else-branch sets MODE=stage), so no input is needed.
+            DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            gh workflow run release-packages.yml -R "$REPO"
+            # Poll for the workflow_dispatch run we just created. Match by
+            # event + createdAt after the dispatch timestamp — NOT just the
+            # newest run, which could be a concurrent or unrelated dispatch and
+            # would stage the wrong artifacts.
+            sleep 5
+            RUN_ID=""
+            for i in $(seq 1 20); do
+              RUN_ID=$(gh run list --workflow release-packages.yml -R "$REPO" \
+                --event workflow_dispatch --limit 5 \
+                --json databaseId,createdAt \
+                --jq "[.[] | select(.createdAt >= \"$DISPATCHED_AT\")][0].databaseId" 2>/dev/null || true)
+              if [ -n "$RUN_ID" ]; then break; fi
+              sleep 3
+            done
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::could not resolve a release-packages.yml run id after dispatch." >&2
+              exit 1
+            fi
+            echo "Dispatched release-packages.yml stage build: run $RUN_ID."
+          fi
+          echo "build-run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+      - name: Await the stage-mode build
+        # The build MUST finish before stage-upload can download its artifacts
+        # — actions/download-artifact from an in-progress run gets nothing.
+        # gh run watch returns immediately for an already-completed run, so
+        # this is safe for the reuse-existing-run-id path too.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ steps.resolve.outputs.build-run-id }}"
+          echo "Watching release-packages.yml run $RUN_ID to completion…"
+          gh run watch "$RUN_ID" -R "$REPO" --exit-status
+          echo "Build run $RUN_ID succeeded — ready to download artifacts."
+
+  # The OIDC stage upload. Downloads the build artifacts from the resolved
+  # run, stages the npm packages, and `npm stage publish`es each under OIDC.
+  stage-upload:
+    needs: resolve-build
+    runs-on: ubuntu-latest
+    environment: npm-publish   # npm's trusted-publisher config pins this env name
+    permissions:
+      actions: read     # download artifacts from the resolved stage-mode build run
+      contents: read
+      id-token: write   # npm provenance / trusted publishing mints the OIDC token here
+    env:
+      DIST_TAG: ${{ inputs.dist-tag }}
+      BUILD_RUN_ID: ${{ needs.resolve-build.outputs.build-run-id }}
+      PUBLISH: ${{ inputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is
+      # a publishing toolchain (npm registry auth), not a test oracle.
+      # Registered in scripts/check_node_version_consistency.py.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm + assert the publish-flow floor
+        # The floor is npm >= 11.17: it is the newest of the features this job
+        # needs — `npm stage` (staged publishing, >= 11.15.0), OIDC trusted
+        # publishing (>= 11.5.1), and `min-release-age` in DAYS (>= 11.17).
+        # npm@latest satisfies it; the assert is a fail-fast guard if the
+        # runner image or a future pin ever drops below.
+        run: |
+          npm install -g npm@latest
+          floor=11.17.0
+          cur=$(npm --version | tr -d 'v')
+          if [ "$(printf '%s\n%s\n' "$floor" "$cur" | sort -V | head -n1)" != "$floor" ]; then
+            echo "::error::npm $cur is below the publish-flow floor of $floor (staged publishing + OIDC + min-release-age)." >&2
+            exit 1
+          fi
+          echo "npm $cur satisfies the publish-flow floor (>= $floor)."
+
+      - name: Download build artifacts from the stage-mode build run
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts/
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-build.outputs.build-run-id }}
+
+      - name: Stage npm packages
+        run: ./scripts/stage-npm.sh release-artifacts/
+
+      - name: Sanity-check staged packages
+        run: |
+          for dir in npm/perry npm/perry-*; do
+            if [ ! -f "$dir/package.json" ]; then
+              echo "::error::MISSING package.json in $dir" >&2
+              exit 1
+            fi
+            node -e "const p=require('./$dir/package.json'); console.log(p.name, p.version)"
+          done
+
+      - name: npm stage publish (OIDC, platforms first, wrapper last)
+        # Stages ONLY — nothing is public until the local `publish:approve` runs
+        # `npm stage approve` with 2FA. Skip versions already staged/published
+        # so the job is idempotent. One platform's failure must not starve the
+        # packages after it — record failures, keep going, fail at the end.
+        # NO NPM_TOKEN secret is set — OIDC trusted publishing mints the token
+        # from id-token: write (setup-node registry-url + the npm-publish env).
+        run: |
+          set -e
+          if [ "$PUBLISH" != "true" ]; then
+            echo "PUBLISH=false (dry-run) — running stage-npm only, no registry writes."
+            exit 0
+          fi
+          # Refuse any long-lived token (the auth-posture gate, in shell form).
+          for v in NPM_TOKEN NODE_AUTH_TOKEN NPM_AUTH_TOKEN; do
+            if [ -n "$(printenv $v 2>/dev/null || true)" ]; then
+              echo "::error::Refusing to stage in CI with a long-lived $v token — OIDC is the only sanctioned path." >&2
+              exit 1
+            fi
+          done
+          failed=""
+          for pkg in ./npm/perry-*; do
+            name=$(node -p "require('$pkg/package.json').name")
+            ver=$(node -p "require('$pkg/package.json').version")
+            echo "=== staging $name@$ver ==="
+            if ! npm stage publish "$pkg" --access public --tag "$DIST_TAG" --ignore-scripts --provenance; then
+              echo "::error::npm stage publish failed for $name@$ver — continuing" >&2
+              failed="$failed $name@$ver"
+            fi
+          done
+          # Wrapper LAST (optionalDependencies must be staged first).
+          name=$(node -p "require('./npm/perry/package.json').name")
+          ver=$(node -p "require('./npm/perry/package.json').version")
+          echo "=== staging $name@$ver (wrapper, last) ==="
+          if ! npm stage publish ./npm/perry --access public --tag "$DIST_TAG" --ignore-scripts --provenance; then
+            echo "::error::npm stage publish failed for $name@$ver" >&2
+            failed="$failed $name@$ver"
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::staging failures:$failed" >&2
+            exit 1
+          fi
+          echo "All 9 packages staged (not public). Next: npm run publish:approve locally."
