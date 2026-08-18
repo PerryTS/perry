@@ -93,8 +93,21 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    // Record immutable literal metadata before the module-global and boxed
+    // storage paths return. The loop/PIC matchers reason from the HIR local id,
+    // so the storage representation does not change the const proof.
     if !mutable {
         if let Some(init_expr) = init {
+            if let perry_hir::Expr::String(value) = init_expr {
+                ctx.const_string_locals.insert(id, value.clone());
+            }
+            if let Some(value) = match init_expr {
+                perry_hir::Expr::Integer(value) => Some(*value as f64),
+                perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
+                _ => None,
+            } {
+                ctx.const_number_locals.insert(id, value);
+            }
             if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
                 ctx.option_object_locals.insert(id, props);
             }
@@ -1964,18 +1977,6 @@ pub(crate) fn lower_let(
         // of TAG_UNDEFINED (a NaN that fails all numeric comparisons).
         let lit = crate::nanbox::double_literal(*cv);
         ctx.block().store(DOUBLE, &lit, &slot);
-    }
-    if !mutable {
-        if let Some(perry_hir::Expr::String(value)) = init {
-            ctx.const_string_locals.insert(id, value.clone());
-        }
-        if let Some(value) = init.and_then(|expr| match expr {
-            perry_hir::Expr::Integer(value) => Some(*value as f64),
-            perry_hir::Expr::Number(value) if value.is_finite() => Some(*value),
-            _ => None,
-        }) {
-            ctx.const_number_locals.insert(id, value);
-        }
     }
     Ok(())
 }

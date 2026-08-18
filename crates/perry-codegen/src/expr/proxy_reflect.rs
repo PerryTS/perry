@@ -1081,10 +1081,16 @@ fn lower_put_value_dyn_ic_inline(
     Ok(result)
 }
 
-fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
+pub(crate) fn static_string_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {
         Expr::String(property) => Some(property.clone()),
         Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned(),
+        _ => None,
+    }
+}
+
+pub(crate) fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
+    static_string_write_key(ctx, key).or_else(|| match key {
         // #6812 (w13): `o[7] = v` — a constant integer key is the canonical
         // numeric-string property key ("7"; i64 formatting is canonical for
         // every integer, including negatives). Real arrays never take the IC
@@ -1093,7 +1099,7 @@ fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
         // generic write, which performs the element store.
         Expr::Integer(n) => Some(n.to_string()),
         _ => None,
-    }
+    })
 }
 
 fn put_value_rhs_is_safepoint_free(ctx: &FnCtx<'_>, expr: &Expr) -> bool {

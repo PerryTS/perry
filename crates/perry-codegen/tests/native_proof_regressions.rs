@@ -14485,6 +14485,52 @@ fn immutable_string_key_reuses_static_write_pic() {
 }
 
 #[test]
+fn module_global_immutable_string_key_reuses_static_write_pic() {
+    let key = 2u32;
+    let object = 3u32;
+    let mut module = module_with_classes_and_params(
+        "module_global_immutable_string_key_write_pic",
+        Vec::new(),
+        Vec::new(),
+        Type::String,
+        vec![Stmt::Return(Some(Expr::LocalGet(key)))],
+    );
+    module.init = vec![
+        Stmt::Let {
+            id: key,
+            name: "key".to_string(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(Expr::String("x".to_string())),
+        },
+        Stmt::Let {
+            id: object,
+            name: "object".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Object(vec![("x".to_string(), Expr::Integer(0))])),
+        },
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(object)),
+            key: Box::new(Expr::LocalGet(key)),
+            value: Box::new(Expr::Integer(1)),
+            receiver: Box::new(Expr::LocalGet(object)),
+            strict: false,
+        }),
+    ];
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_put_value_set_ic_miss"),
+        "an immutable string key promoted to module-global storage should retain its static-key metadata:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_put_value_set_dyn_ic("),
+        "the module-global immutable literal key should not fall through to dynamic PutValue:\n{ir}"
+    );
+}
+
+#[test]
 fn mutable_string_key_rejects_static_write_pic() {
     let object = 1u32;
     let key = 2u32;

@@ -2740,18 +2740,7 @@ fn match_object_array_write_loop(
                 // v1: a table-driven lane must be the group's only store.
                 return None;
             }
-            let property = match key.as_ref() {
-                Expr::String(property) => property.clone(),
-                Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
-                // #6812 (w13): `o[7] = v` — a constant integer key IS the
-                // canonical numeric-string property ("7") on a plain
-                // object. Receivers that are real arrays at runtime are
-                // safe: the preflight guard type-checks every element as
-                // GC_TYPE_OBJECT and rejects the nest, and the per-write
-                // fallback handles element writes generically.
-                Expr::Integer(n) => n.to_string(),
-                _ => return None,
-            };
+            let property = crate::expr::proxy_reflect::static_write_key(ctx, key.as_ref())?;
             let value =
                 match_object_array_write_number(value, outer_counter_id, inner_counter_id, &temps)?;
             // Same size budget as the temps: a value combining several
@@ -3702,11 +3691,9 @@ fn match_class_field_versioned_loop(
             if t != r {
                 return None;
             }
-            let prop = match key.as_ref() {
-                Expr::String(prop) => prop.clone(),
-                Expr::LocalGet(id) => ctx.const_string_locals.get(id).cloned()?,
-                _ => return None,
-            };
+            // Keep this class-field clone's existing string-only contract;
+            // integer keys are handled by the general object-write matcher.
+            let prop = crate::expr::proxy_reflect::static_string_write_key(ctx, key.as_ref())?;
             recv = Some(*t);
             if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
                 return None;
