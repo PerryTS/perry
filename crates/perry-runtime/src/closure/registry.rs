@@ -135,36 +135,93 @@ pub enum RestDispatchKind {
 }
 
 crate::perry_thread_local! {
-    /// Last-resolved (func_ptr, strategy) tuple — single-slot direct cache.
-    /// Avoids the per-call HashMap::get + RefCell::borrow when the same
-    /// closure body is invoked back-to-back, which is the steady-state
-    /// shape of:
+    /// Four-entry polymorphic cache for recently resolved closure bodies.
+    /// Avoids the per-call HashMap::get + RefCell::borrow both when one body
+    /// is invoked back-to-back and when a small set of bodies alternates,
+    /// which are the steady-state shapes of:
     ///   - microtask drain (same then_v_arrow / __step body each iter)
     ///   - tight `array.sort` callbacks (same comparator every comparison)
     ///   - hot `array.map` / `array.forEach` loops
-    /// Cache key is the func_ptr (usize) and is checked with a single
-    /// load + cmp.
-    static DISPATCH_LAST: std::cell::Cell<(usize, DispatchStrategy)> =
-        const { std::cell::Cell::new((0, DispatchStrategy::Direct)) };
+    ///   - stage pipelines that rotate through a few closure bodies
+    ///
+    /// Hits do not reorder the entries: that keeps the monomorphic first
+    /// slot to one comparison and makes a warmed polymorphic cache read-only.
+    static DISPATCH_RECENT: DispatchRecent = const { DispatchRecent::new() };
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RESOLVE_STRATEGY_SLOW_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[derive(Clone, Copy)]
+struct DispatchCacheEntry {
+    key: usize,
+    strategy: DispatchStrategy,
+}
+
+impl DispatchCacheEntry {
+    const EMPTY: Self = Self {
+        key: 0,
+        strategy: DispatchStrategy::Direct,
+    };
+}
+
+struct DispatchRecent {
+    entries: [std::cell::Cell<DispatchCacheEntry>; 4],
+}
+
+impl DispatchRecent {
+    const fn new() -> Self {
+        Self {
+            entries: [const { std::cell::Cell::new(DispatchCacheEntry::EMPTY) }; 4],
+        }
+    }
+
+    #[inline(always)]
+    fn get(&self, key: usize) -> Option<DispatchStrategy> {
+        for entry in &self.entries {
+            let entry = entry.get();
+            if entry.key == key {
+                return Some(entry.strategy);
+            }
+        }
+        None
+    }
+
+    #[inline(always)]
+    fn insert(&self, key: usize, strategy: DispatchStrategy) {
+        self.entries[3].set(self.entries[2].get());
+        self.entries[2].set(self.entries[1].get());
+        self.entries[1].set(self.entries[0].get());
+        self.entries[0].set(DispatchCacheEntry { key, strategy });
+    }
+
+    fn invalidate(&self, key: usize) {
+        for entry in &self.entries {
+            if entry.get().key == key {
+                entry.set(DispatchCacheEntry::EMPTY);
+            }
+        }
+    }
 }
 
 #[inline(always)]
 pub fn resolve_strategy(func_ptr: *const u8) -> DispatchStrategy {
     let key = func_ptr as usize;
-    // Inline single-slot cache: 90%+ of microtask-drain hot paths
-    // dispatch the same func_ptr back-to-back. One Cell::get + one cmp
-    // beats the RefCell::borrow + HashMap::get of DISPATCH_CACHE.
-    let last = DISPATCH_LAST.with(|c| c.get());
-    if last.0 == key {
-        return last.1;
+    if let Some(strategy) = DISPATCH_RECENT.with(|cache| cache.get(key)) {
+        return strategy;
     }
     let strategy = resolve_strategy_slow(func_ptr);
-    DISPATCH_LAST.with(|c| c.set((key, strategy)));
+    DISPATCH_RECENT.with(|cache| cache.insert(key, strategy));
     strategy
 }
 
 #[inline(never)]
 fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
+    #[cfg(test)]
+    RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let key = func_ptr as usize;
     // Fast path: read existing cache entry.
     if let Some(s) = DISPATCH_CACHE.with(|c| c.borrow().get(&key).copied()) {
@@ -202,7 +259,7 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
 /// the rest array). Called once per closure literal at module init time.
 
 /// #6475: purge a func_ptr's cached dispatch strategy. The strategy caches
-/// (`DISPATCH_CACHE` + the single-slot `DISPATCH_LAST`) memoize the FIRST
+/// (`DISPATCH_CACHE` + `DISPATCH_RECENT`) memoize the FIRST
 /// resolution per func_ptr — but effect's module-init graph calls `.pipe`
 /// (an `arguments`-object method) during init, and inside an import cycle
 /// such a call can precede the module's own `js_register_closure_*` batch.
@@ -219,11 +276,69 @@ fn invalidate_dispatch_strategy(func_ptr: *const u8) {
     DISPATCH_CACHE.with(|c| {
         c.borrow_mut().remove(&key);
     });
-    DISPATCH_LAST.with(|c| {
-        if c.get().0 == key {
-            c.set((0, DispatchStrategy::Direct));
+    DISPATCH_RECENT.with(|cache| cache.invalidate(key));
+}
+
+#[cfg(test)]
+mod dispatch_recent_tests {
+    use super::*;
+
+    extern "C" fn body_a(_: *const ClosureHeader) -> f64 {
+        1.0
+    }
+    extern "C" fn body_b(_: *const ClosureHeader) -> f64 {
+        2.0
+    }
+    extern "C" fn body_c(_: *const ClosureHeader) -> f64 {
+        3.0
+    }
+    extern "C" fn body_d(_: *const ClosureHeader) -> f64 {
+        4.0
+    }
+
+    #[test]
+    fn four_alternating_bodies_stay_out_of_the_hash_lookup() {
+        let bodies = [
+            body_a as *const u8,
+            body_b as *const u8,
+            body_c as *const u8,
+            body_d as *const u8,
+        ];
+        let mut addresses = bodies.map(|body| body as usize);
+        addresses.sort_unstable();
+        assert!(addresses.windows(2).all(|pair| pair[0] != pair[1]));
+
+        for body in bodies {
+            invalidate_dispatch_strategy(body);
         }
-    });
+        RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
+
+        for body in bodies {
+            assert!(matches!(resolve_strategy(body), DispatchStrategy::Direct));
+        }
+        assert_eq!(RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()), 4);
+
+        RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
+        for body in bodies {
+            assert!(matches!(resolve_strategy(body), DispatchStrategy::Direct));
+        }
+        assert_eq!(
+            RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
+            0,
+            "a warm four-body rotation must not reach resolve_strategy_slow"
+        );
+
+        js_register_closure_arity(body_c as *const u8, 3);
+        assert!(matches!(
+            resolve_strategy(body_c as *const u8),
+            DispatchStrategy::Arity(3)
+        ));
+        assert_eq!(
+            RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
+            1,
+            "late registration must evict a body from every recent-cache slot"
+        );
+    }
 }
 
 #[no_mangle]

@@ -6,7 +6,7 @@
 //!   1. `get_valid_func_ptr` — two address-band checks plus a volatile
 //!      `CLOSURE_MAGIC` probe through `*(closure + 12)` and a volatile load of
 //!      `closure->func_ptr` (`dispatch/validate.rs`);
-//!   2. `resolve_strategy` — a `perry_thread_local!` single-slot cache, which
+//!   2. `resolve_strategy` — a `perry_thread_local!` polymorphic cache, which
 //!      on Darwin is a `tlv_get_addr` CALL plus a load and a compare even when
 //!      it hits (`closure/registry.rs`);
 //!   3. the `match` over `DispatchStrategy` before the indirect jump.
