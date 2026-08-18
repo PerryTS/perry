@@ -1,0 +1,1 @@
+**Fix missing relative namespace import diagnostics (#8348):** Perry now reports the absolute path it tried when a relative `import * as ...` target is absent and recommends checking the import or build/staging step. Bare package imports with no native bindings retain the existing `perry.compilePackages` guidance.

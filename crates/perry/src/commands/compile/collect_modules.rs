@@ -1532,6 +1532,20 @@ fn collect_module_one(
             // compile.rs registration loop can wire the namespace local
             // through to that runtime helper.
             if has_namespace_specifier && known_node_submodule_key(&import.source).is_none() {
+                if let Some(attempted_path) =
+                    super::resolve::attempted_relative_import_path(&import.source, entry_path)
+                {
+                    return Err(anyhow::anyhow!(
+                        "Could not resolve relative namespace import `import * as ... from \"{source}\"` in {filename} ({path}).\n\
+                         The module file was not found at the path Perry tried:\n  \
+                           {attempted_path}\n\
+                         Check the import path, or ensure the build step that generates or stages this file runs before compiling.",
+                        source = import.source,
+                        filename = filename,
+                        path = canonical.display(),
+                        attempted_path = attempted_path.display(),
+                    ));
+                }
                 return Err(anyhow::anyhow!(
                     "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename} ({path}).\n\
                      Perry has no stdlib bindings for this module path, so the namespace would compile to an empty object \

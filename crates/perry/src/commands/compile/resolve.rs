@@ -1374,6 +1374,28 @@ fn normalize_path_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Return the absolute filesystem path that a relative import is resolved
+/// from. This is intentionally available even when resolution fails so
+/// diagnostics can distinguish a missing local file from a bare package with
+/// no Perry bindings.
+pub(super) fn attempted_relative_import_path(
+    import_source: &str,
+    importer_path: &Path,
+) -> Option<PathBuf> {
+    if !is_relative_specifier(import_source) {
+        return None;
+    }
+
+    let parent = importer_path.parent().unwrap_or_else(|| Path::new(""));
+    let joined = parent.join(import_source);
+    let absolute = if joined.is_absolute() {
+        joined
+    } else {
+        std::env::current_dir().ok()?.join(joined)
+    };
+    Some(normalize_path_lexically(&absolute))
+}
+
 /// True for ECMAScript relative-import specifiers. Besides the obvious `./x`
 /// and `../x`, the bare `"."` and `".."` are also relative — they resolve to
 /// the current / parent **directory**'s `index` file. `@tanstack/table-core`'s

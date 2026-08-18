@@ -10,6 +10,83 @@ use crate::commands::progress::VerboseProgress;
 use crate::OutputFormat;
 use std::collections::HashSet;
 
+fn collect_entry(root: &std::path::Path, entry: &std::path::Path) -> anyhow::Result<()> {
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry.to_path_buf(),
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn missing_relative_namespace_import_reports_attempted_file_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("missing.ts");
+    std::fs::write(
+        &entry,
+        "import * as bundle from \"./sub/absent.js\";\nconsole.log(bundle);\n",
+    )
+    .expect("write entry");
+
+    let err = collect_entry(dir.path(), &entry)
+        .expect_err("a namespace import of a missing relative module must fail");
+    let message = err.to_string();
+    let attempted = dir.path().join("sub/absent.js");
+
+    assert!(
+        message.contains("relative namespace import"),
+        "got: {message}"
+    );
+    assert!(
+        message.contains(&attempted.display().to_string()),
+        "diagnostic must include the attempted absolute path; got: {message}"
+    );
+    assert!(
+        message.contains("module file was not found"),
+        "got: {message}"
+    );
+    assert!(message.contains("build step"), "got: {message}");
+    assert!(!message.contains("compilePackages"), "got: {message}");
+    assert!(!message.contains("stdlib bindings"), "got: {message}");
+    assert!(!message.contains("named imports"), "got: {message}");
+}
+
+#[test]
+fn missing_bare_namespace_import_keeps_binding_guidance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("missing.ts");
+    std::fs::write(
+        &entry,
+        "import * as bundle from \"package-that-does-not-exist\";\nconsole.log(bundle);\n",
+    )
+    .expect("write entry");
+
+    let err = collect_entry(dir.path(), &entry)
+        .expect_err("a namespace import of a missing bare package must fail");
+    let message = err.to_string();
+
+    assert!(message.contains("no stdlib bindings"), "got: {message}");
+    assert!(message.contains("named imports"), "got: {message}");
+    assert!(message.contains("perry.compilePackages"), "got: {message}");
+    assert!(
+        !message.contains("module file was not found"),
+        "got: {message}"
+    );
+}
+
 #[test]
 fn env_defines_for_lowering_strips_prefix_and_maps_kinds() {
     // #5009: only `process.env.*` define keys are honored, the prefix is
