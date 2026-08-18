@@ -78,10 +78,42 @@ Object.defineProperty(Boolean.prototype, "toString", {
 
 console.log("data:", (true as any).toLocaleString());
 
-// NOT covered here: a `toString` that resolves to a NON-CALLABLE. The spec
-// throws (`Invoke` -> `Call` on a non-callable), while Perry falls through to
-// the native `toString`. That divergence is independent of the receiver rule —
-// it predates this file and reproduces identically through a plain DATA
-// property (`defineProperty(String.prototype, "toString", { value: 42 })`),
-// because the resolver collapses "absent" and "present but not callable" into
-// one "native behavior still applies" answer.
+// A present NON-CALLABLE must throw (`Invoke` -> `Call`), not collapse into the
+// "native behavior still applies" fallback.
+Object.defineProperty(String.prototype, "toString", {
+  configurable: true,
+  value: 42,
+});
+try {
+  ("abc" as any).toLocaleString();
+  console.log("data noncallable: missed");
+} catch (error) {
+  console.log("data noncallable:", error instanceof TypeError);
+}
+
+// The same distinction matters when an accessor resolves the value.
+Object.defineProperty(Boolean.prototype, "toString", {
+  configurable: true,
+  get: function () {
+    return null;
+  },
+});
+try {
+  (true as any).toLocaleString();
+  console.log("accessor noncallable: missed");
+} catch (error) {
+  console.log("accessor noncallable:", error instanceof TypeError);
+}
+
+// TypedArray.prototype.toLocaleString performs the same Invoke operation for
+// each numeric element, through the shared prototype resolver.
+Object.defineProperty(Number.prototype, "toLocaleString", {
+  configurable: true,
+  value: 42,
+});
+try {
+  new Int32Array([1]).toLocaleString();
+  console.log("typed array noncallable: missed");
+} catch (error) {
+  console.log("typed array noncallable:", error instanceof TypeError);
+}

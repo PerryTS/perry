@@ -139,13 +139,19 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         };
         if !builtin_name.is_empty() {
             if let Some(patched) =
-                unsafe { super::builtin_proto_user_method(builtin_name, "toString", receiver) }
+                unsafe { super::builtin_proto_user_value(builtin_name, "toString", receiver) }
             {
                 if let Some(result) =
                     unsafe { call_primitive_closure_value(receiver, patched, std::ptr::null(), 0) }
                 {
                     return result;
                 }
+                // `Invoke(O, "toString")` must call the value returned by
+                // `GetV`. A present data property such as
+                // `String.prototype.toString = 42`, or an accessor returning
+                // a non-callable, throws rather than silently selecting the
+                // native fallback (#5901).
+                throw_object_to_string_not_function();
             }
         }
         return unsafe {

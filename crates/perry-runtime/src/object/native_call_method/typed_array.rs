@@ -268,7 +268,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             // formatted individually below, so pass `undefined`.
             let (patched, ta) =
                 ta_handle.across_mut::<crate::typedarray::TypedArrayHeader, _>(|| {
-                    builtin_proto_user_method(
+                    builtin_proto_user_value(
                         builtin,
                         "toLocaleString",
                         f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -296,8 +296,23 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                         let patched_now = JSValue::from_bits(patched_now.to_bits());
 
                         let (r, _) = patched_handle.across_nanbox(|| {
-                            call_primitive_closure_value(elem, patched_now, std::ptr::null(), 0)
-                                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+                            match call_primitive_closure_value(
+                                elem,
+                                patched_now,
+                                std::ptr::null(),
+                                0,
+                            ) {
+                                Some(result) => result,
+                                None => {
+                                    let kind = if is_bigint { "bigint" } else { "number" };
+                                    crate::error::js_throw_type_error_not_a_function(
+                                        kind.as_ptr(),
+                                        kind.len(),
+                                        b"toLocaleString".as_ptr(),
+                                        "toLocaleString".len(),
+                                    )
+                                }
+                            }
                         });
 
                         let (s_hdr, ta_after) = ta_handle

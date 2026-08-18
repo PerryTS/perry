@@ -398,11 +398,12 @@ unsafe fn builtin_proto_accessor_method(
 }
 
 /// A *user-installed* method on a builtin's prototype object (e.g.
-/// `Number.prototype.toLocaleString = function () { … }`). Returns the patched
-/// closure value, or `None` when the property is absent / not a real closure /
-/// the no-op-backed builtin placeholder — i.e. `None` means "the native
-/// builtin behavior is still in effect".
-unsafe fn builtin_proto_user_method(
+/// `Number.prototype.toLocaleString = function () { … }`). Returns the resolved
+/// value even when it is not callable: callers implementing `Invoke` must
+/// distinguish a present non-callable property (TypeError) from the
+/// no-op-backed builtin placeholder (`None`, meaning native behavior still
+/// applies).
+unsafe fn builtin_proto_user_value(
     builtin_name: &[u8],
     method_name: &str,
     receiver: f64,
@@ -431,17 +432,14 @@ unsafe fn builtin_proto_user_method(
             js_object_get_field_by_name(proto_ptr, key)
         }
     };
-    if (value.bits() & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
-        return None;
-    }
-    let ptr = (value.bits() & crate::value::POINTER_MASK) as usize;
-    if !crate::closure::is_closure_ptr(ptr) {
-        return None;
-    }
-    if (*(ptr as *const crate::closure::ClosureHeader)).func_ptr
-        == super::global_this::global_this_builtin_noop_thunk as *const u8
-    {
-        return None;
+    if (value.bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        let ptr = (value.bits() & crate::value::POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(ptr)
+            && (*(ptr as *const crate::closure::ClosureHeader)).func_ptr
+                == super::global_this::global_this_builtin_noop_thunk as *const u8
+        {
+            return None;
+        }
     }
     Some(value)
 }
