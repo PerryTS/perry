@@ -480,7 +480,7 @@ fn optimize_and_emit(
                 )
             })?;
         // Verify the rewritten module before it reaches the backend. RS4GC
-        // has produced verifier-invalid IR in the wild (#8082: it wrapped an
+        // has produced verifier-invalid IR in the wild (#8121: it wrapped an
         // inline-asm barrier into a gc.statepoint), and unlike the external
         // `opt` path — whose verifier aborts with the broken instruction —
         // the in-process pipeline would feed the broken module straight to
@@ -580,7 +580,7 @@ mod tests {
     fn unattributed_asm_barrier_is_rejected_not_miscompiled() {
         // Sabotage arm: without the attribute RS4GC wraps the asm into a
         // gc.statepoint whose callee is inline asm — invalid IR. The
-        // pipeline must fail verification loudly (#8082's SIGBUS shape),
+        // pipeline must fail verification loudly (#8121's SIGBUS shape),
         // proving the leaf test above can actually fail.
         let result = statepoint_rewritten_ir(
             &asm_barrier_fixture(""),

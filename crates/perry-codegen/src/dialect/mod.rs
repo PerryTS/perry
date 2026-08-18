@@ -906,7 +906,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .map_err(be)?;
         // Perry-emitted inline asm never calls back into the runtime, so it
         // can never reach a safepoint. Without this, RS4GC statepoint-wraps
-        // the call and produces IR the verifier rejects (#8082).
+        // the call and produces IR the verifier rejects (#8121).
         site.add_attribute(
             inkwell::attributes::AttributeLoc::Function,
             self.ctx.create_string_attribute("gc-leaf-function", ""),
@@ -1613,7 +1613,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     .map_err(be)?;
                 // The empty barrier can never reach a safepoint; the
                 // exemption keeps RS4GC from statepoint-wrapping inline asm
-                // into invalid IR (#8082).
+                // into invalid IR (#8121).
                 site.add_attribute(
                     inkwell::attributes::AttributeLoc::Function,
                     self.ctx.create_string_attribute("gc-leaf-function", ""),

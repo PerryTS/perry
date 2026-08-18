@@ -695,6 +695,44 @@ mod tests {
         }
     }
 
+    /// #8121, emission half. The sibling pair in `inprocess::tests` proves the
+    /// LLVM mechanism (RS4GC breaks an unmarked inline-asm barrier, and
+    /// `gc-leaf-function` stops it) using hand-written IR, so it would still
+    /// pass if Perry stopped emitting the attribute. This asserts the emission
+    /// itself, on both paths.
+    #[test]
+    fn perry_emits_the_loop_barrier_as_a_gc_leaf() {
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        let function = module.define_function("barrier_emission_fixture", VOID, vec![]);
+        let entry = function.create_block("entry");
+        entry.asm_sideeffect_barrier();
+        entry.ret_void();
+
+        let text_ir = module.to_ir();
+        assert!(
+            text_ir.contains("asm sideeffect"),
+            "fixture emitted no barrier, so this proves nothing:\n{text_ir}"
+        );
+        assert!(
+            text_ir.contains(r#"call void asm sideeffect "", ""() "gc-leaf-function""#),
+            "text path barrier lost its gc-leaf callsite attribute (#8121):\n{text_ir}"
+        );
+
+        let context = Context::create();
+        let native_ir = build_native_module(&context, &module)
+            .expect("barrier emission fixture constructs")
+            .print_to_string()
+            .to_string();
+        assert!(
+            native_ir.contains("asm sideeffect"),
+            "native arm emitted no barrier, so this proves nothing:\n{native_ir}"
+        );
+        assert!(
+            native_ir.contains("gc-leaf-function"),
+            "native path lost the gc-leaf attribute on the barrier (#8121):\n{native_ir}"
+        );
+    }
+
     fn compact_gc_map_section_name() -> &'static [u8] {
         if cfg!(target_os = "macos") {
             b"__perry_gcmap"
