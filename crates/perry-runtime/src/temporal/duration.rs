@@ -221,14 +221,19 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
         ))),
         "with" => with(d, raw_arg(args, 0)),
         // `toString` honors a `{ fractionalSecondDigits, smallestUnit,
-        // roundingMode }` options bag; `toJSON`/`toLocaleString` always use the
-        // default precision.
+        // roundingMode }` options bag; `toJSON` always uses the default
+        // precision, while `toLocaleString` delegates to Intl.DurationFormat.
         "toString" => string(&ok_or_throw(d.as_temporal_string(
             super::options::to_string_rounding_options(raw_arg(args, 0)),
         ))),
-        "toJSON" | "toLocaleString" => string(&super::temporal_value_iso_string(
-            &TemporalValue::Duration(*d),
-        )),
+        "toJSON" => string(&super::temporal_value_iso_string(&TemporalValue::Duration(
+            *d,
+        ))),
+        "toLocaleString" => crate::intl::temporal_duration_to_locale_string(
+            recv,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "round" => {
             let (opts, rel) = super::options::duration_round_options(raw_arg(args, 0));

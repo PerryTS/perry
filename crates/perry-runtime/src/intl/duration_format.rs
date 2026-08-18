@@ -851,6 +851,17 @@ fn format_value(obj: *const ObjectHeader, duration: f64) -> f64 {
     string_value(&parts.iter().map(|p| p.value.as_str()).collect::<String>())
 }
 
+/// `Temporal.Duration.prototype.toLocaleString`: initialize an ephemeral
+/// DurationFormat with the supplied locales/options and format the receiver.
+pub(super) fn format_temporal_duration(duration: f64, locales: f64, options: f64) -> f64 {
+    let locale = locale_or_default(locales);
+    let obj = js_object_alloc(0, 8);
+    set_internal_field(obj, KEY_KIND, string_value(KIND_DURATION_FORMAT));
+    set_internal_field(obj, KEY_LOCALE, string_value(&locale));
+    configure(obj, options);
+    format_value(obj, duration)
+}
+
 pub(super) extern "C" fn format_thunk(_closure: *const ClosureHeader, duration: f64) -> f64 {
     let obj = this_intl_object("format", super::KIND_DURATION_FORMAT);
     format_value(obj, duration)

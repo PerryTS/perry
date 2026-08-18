@@ -95,6 +95,13 @@ const KIND_LIST_FORMAT: &str = "ListFormat";
 const KIND_PLURAL_RULES: &str = "PluralRules";
 const KIND_RELATIVE_TIME: &str = "RelativeTimeFormat";
 const KIND_DURATION_FORMAT: &str = "DurationFormat";
+
+/// Format a Temporal.Duration through the same initialization and formatting
+/// path as `new Intl.DurationFormat(locales, options).format(duration)`.
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_duration_to_locale_string(duration: f64, locales: f64, options: f64) -> f64 {
+    duration_format::format_temporal_duration(duration, locales, options)
+}
 const KIND_DISPLAY_NAMES: &str = "DisplayNames";
 
 const KEY_KIND: &str = "__intlKind";
