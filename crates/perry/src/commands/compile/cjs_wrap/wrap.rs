@@ -160,9 +160,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let builtin_requires: Vec<String> = require_specs
         .iter()
         .filter(|spec| {
+            // Match the complete normalized specifier (`fs/promises`,
+            // `path/win32`, …) against the shared built-in table instead of
+            // the truncated base name, so unsupported subpaths such as
+            // `fs/unknown` fall through to compiled-module resolution rather
+            // than being routed to `createRequire`. Every valid built-in
+            // subpath is already an entry in `NODE_BUILTIN_MODULES`.
             let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-            let base = normalized.split('/').next().unwrap_or(normalized);
-            perry_hir::is_node_builtin_module(base)
+            perry_hir::is_node_builtin_module(normalized)
         })
         .cloned()
         .collect();
@@ -304,8 +309,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // in the IIFE body and `require("process")` goes through the
         // synthetic require, which resolves builtins via createRequire.
         let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-        let base = normalized.split('/').next().unwrap_or(normalized);
-        if perry_hir::is_node_builtin_module(base) {
+        if perry_hir::is_node_builtin_module(normalized) {
             continue;
         }
         if import_local_names.iter().any(|n| n == alias) {
@@ -663,10 +667,21 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         named_reexport_requires
             .iter()
             .filter_map(|(name, spec)| {
-                require_specs
-                    .iter()
-                    .position(|s| s == spec)
-                    .map(|n| format!("export {{ {} as {} }};", import_local_names[n], name))
+                let n = require_specs.iter().position(|s| s == spec)?;
+                if builtin_requires.contains(spec) {
+                    // #8343 followup: built-in specs no longer hoist a static
+                    // `import _req_N` (the codegen doesn't initialize
+                    // native-module import bindings in CJS-wrapped modules),
+                    // so `export { _req_N as name }` would reference an
+                    // undeclared ESM binding. The IIFE body's
+                    // `exports.name = require("<builtin>")` resolves through
+                    // the synthetic require's `createRequire` arm and populates
+                    // `_cjs.name`, so back the re-export with that — the same
+                    // surface `named_export_decls` uses below.
+                    Some(format!("export const {name} = _cjs.{name};"))
+                } else {
+                    Some(format!("export {{ {} as {} }};", import_local_names[n], name))
+                }
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -780,8 +795,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // the synthetic require (which uses createRequire for builtins).
             .filter(|(_, spec, _)| {
                 let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-                let base = normalized.split('/').next().unwrap_or(normalized);
-                !perry_hir::is_node_builtin_module(base)
+                !perry_hir::is_node_builtin_module(normalized)
             })
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
@@ -870,6 +884,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     } else {
         "__perry_cjs_factory"
     };
+    // Generate the `__perry_cjs_require_is_builtin` switch cases from the
+    // shared `NODE_BUILTIN_MODULES` table so the dynamic/computed `require`
+    // arm stays in sync with `perry_hir::is_node_builtin_module`. The
+    // hardcoded list previously omitted 16 entries (`tls`, `dgram`,
+    // `diagnostics_channel`, `fs/promises`, `inspector`, `repl`,
+    // `stream/web`, `v8`, `vm`, `wasi`, …), so a computed
+    // `require(specifier)` for one of those fell through to compiled-module
+    // resolution and raised `MODULE_NOT_FOUND` instead of routing through
+    // `createRequire`. Each entry emits both the bare and `node:` spelling.
+    let builtin_predicate_cases = perry_hir::NODE_BUILTIN_MODULES
+        .iter()
+        .map(|name| format!("case '{name}': case 'node:{name}':"))
+        .collect::<Vec<_>>()
+        .join("\n            ");
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -912,48 +940,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     }}
     function __perry_cjs_require_is_builtin(specifier) {{
         switch (specifier) {{
-            case 'assert': case 'node:assert':
-            case 'assert/strict': case 'node:assert/strict':
-            case 'async_hooks': case 'node:async_hooks':
-            case 'buffer': case 'node:buffer':
-            case 'child_process': case 'node:child_process':
-            case 'cluster': case 'node:cluster':
-            case 'console': case 'node:console':
-            case 'constants': case 'node:constants':
-            case 'crypto': case 'node:crypto':
-            case 'dns': case 'node:dns':
-            case 'dns/promises': case 'node:dns/promises':
-            case 'events': case 'node:events':
-            case 'fs': case 'node:fs':
-            case 'http': case 'node:http':
-            case 'http2': case 'node:http2':
-            case 'https': case 'node:https':
-            case 'module': case 'node:module':
-            case 'net': case 'node:net':
-            case 'os': case 'node:os':
-            case 'path': case 'node:path':
-            case 'path/posix': case 'node:path/posix':
-            case 'path/win32': case 'node:path/win32':
-            case 'perf_hooks': case 'node:perf_hooks':
-            case 'process': case 'node:process':
-            case 'punycode': case 'node:punycode':
-            case 'querystring': case 'node:querystring':
-            case 'readline': case 'node:readline':
-            case 'readline/promises': case 'node:readline/promises':
-            case 'stream': case 'node:stream':
-            case 'stream/promises': case 'node:stream/promises':
-            case 'string_decoder': case 'node:string_decoder':
-            case 'sys': case 'node:sys':
-            case 'test': case 'node:test':
-            case 'test/reporters': case 'node:test/reporters':
-            case 'timers': case 'node:timers':
-            case 'timers/promises': case 'node:timers/promises':
-            case 'tty': case 'node:tty':
-            case 'url': case 'node:url':
-            case 'util': case 'node:util':
-            case 'util/types': case 'node:util/types':
-            case 'worker_threads': case 'node:worker_threads':
-            case 'zlib': case 'node:zlib':
+            {builtin_predicate_cases}
                 return true;
             default:
                 return false;

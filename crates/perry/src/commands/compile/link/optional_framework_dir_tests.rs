@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_env_lock::env_lock;
 
 /// Lay out a temp project: `<root>/perry.toml` + `<root>/src/main.ts`,
 /// with the perry.toml `[google_auth]` table set to `toml_body`.
@@ -41,6 +42,11 @@ fn returns_none_when_no_framework_dir_key() {
 
 #[test]
 fn env_var_takes_precedence_over_perry_toml() {
+    // Serialize process-env mutation with the other env-touching tests in
+    // this binary (e.g. optimized_libs/tests). Edition 2021 does not make
+    // concurrent set_var/remove_var safe; the unique var name avoids value
+    // races but not the Unix environ-table race.
+    let _guard = env_lock();
     let (_dir, entry) = scaffold("[google_auth]\nframework_dir = \"vendor/from-toml\"\n");
     // Unique name so we don't race other tests sharing process env.
     let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_SET_C";

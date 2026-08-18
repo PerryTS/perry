@@ -24,7 +24,7 @@ pub use constants::{
     current_module_has_allow_dynamic_at, current_module_line_at,
     current_module_source_mentions_global_this, current_module_source_slice, determine_module_kind,
     dynamic_stdlib_allowed_for_package, env_define_lookup, is_compile_package_override,
-    is_native_module, is_native_module_with_externals, is_node_builtin_module,
+    is_native_module, is_native_module_with_externals, is_node_builtin_module, NODE_BUILTIN_MODULES,
     package_name_for_source_path, precompile_capture_enabled, precompile_result_at,
     refuse_dynamic_stdlib_dispatch_enabled, requires_stdlib, set_allow_dynamic_stdlib_packages,
     set_compile_packages_override, set_current_module_source, set_env_defines,

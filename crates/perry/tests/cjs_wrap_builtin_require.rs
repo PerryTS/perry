@@ -89,7 +89,10 @@ console.log("join:", typeof path.join, path.join("a", "b"));
     };
     assert_eq!(
         stdout,
-        format!("platform: {expected_platform}\ncpus: function\njoin: function a/b\n")
+        format!(
+            "platform: {expected_platform}\ncpus: function\njoin: function a{sep}b\n",
+            sep = std::path::MAIN_SEPARATOR
+        )
     );
 }
 
@@ -159,7 +162,10 @@ console.log("join:", join("a", "b"));
     };
     assert_eq!(
         stdout,
-        format!("platform: {expected_platform}\narch: string\njoin: a/b\n")
+        format!(
+            "platform: {expected_platform}\narch: string\njoin: a{sep}b\n",
+            sep = std::path::MAIN_SEPARATOR
+        )
     );
 }
 
@@ -230,6 +236,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 const ns = require("process");
 const obj = Object.create(ns);
 const ctor = obj.constructor;
+// Route __toESM through the synthetic class ref (ctor) so
+// Object.getPrototypeOf(ctor) takes the class-id-tagged branch in
+// js_object_get_prototype_of — the path the sentinel-suppression fix
+// changed. Without this the heap-pointer path (for node_os below) hides a
+// regression.
+__toESM(ctor, 1);
 // Now run __toESM on another built-in — its Object.create(getPrototypeOf(mod))
 // must not trip on the registered sentinel.
 let node_os = require("os");
@@ -238,4 +250,27 @@ console.log("os.cpus:", typeof node_os.cpus);
 "#,
     );
     assert_eq!(stdout, "os.cpus: function\n");
+}
+
+/// Regression for the computed/dynamic `require` arm: a specifier held in a
+/// variable (not a string literal) must route through the synthetic require's
+/// `createRequire` arm for Node.js built-ins. Pre-fix the
+/// `__perry_cjs_require_is_builtin` predicate was a hardcoded switch that
+/// omitted 16 entries from the shared `NODE_BUILTIN_MODULES` table (`tls`,
+/// `dgram`, `diagnostics_channel`, `domain`, `fs/promises`, `inspector`,
+/// `repl`, `stream/web`, `v8`, `vm`, `wasi`, …), so `require(spec)` for one of
+/// those fell through to compiled-module resolution and raised
+/// `MODULE_NOT_FOUND`. `domain` is a stable, simple built-in that was missing.
+#[test]
+fn cjs_wrap_computed_builtin_require_resolves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+const spec = "domain";
+const mod = require(spec);
+console.log("typeof:", typeof mod);
+"#,
+    );
+    assert_eq!(stdout, "typeof: object\n");
 }
