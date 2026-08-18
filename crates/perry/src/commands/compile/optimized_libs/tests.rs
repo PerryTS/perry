@@ -1053,6 +1053,60 @@ fn retain_workspace_declared_features_keeps_all_without_manifests() {
     assert_eq!(cross_features.len(), 2);
 }
 
+/// Regression: the auto-optimize rebuild must always include
+/// `perry-runtime/keepalive-anchors` in the cross-feature set. #6917 gated
+/// the `#[used]` keepalive anchors behind the feature and only enabled it for
+/// the bitcode-LTO path, under the assumption that the classic link path
+/// "keeps every reachable runtime symbol via real undefined references from
+/// the program's objects." That assumption is wrong: `#[no_mangle] pub extern
+/// "C" fn` symbols that are only called from codegen (not from within the
+/// perry-runtime crate) are dead-code-eliminated during staticlib archive
+/// creation when no `#[used]` anchor pins them. The resulting
+/// `libperry_runtime.a` is missing core symbols (`js_box_release`,
+/// `js_bool_box_release`, `js_closure_set_box_capture_ptr`,
+/// `js_link_path_module_parent`) and programs whose codegen emits calls to
+/// them fail to link with "Undefined symbols for architecture arm64."
+#[test]
+fn auto_optimize_always_includes_keepalive_anchors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features: std::collections::BTreeSet<&'static str> =
+        std::collections::BTreeSet::new();
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let cross = auto_optimized_cross_features(&ctx, &empty_features, &[]);
+    assert!(
+        cross.iter().any(|f| f == "perry-runtime/keepalive-anchors"),
+        "auto_optimized_cross_features must always include \
+         perry-runtime/keepalive-anchors so codegen-only #[no_mangle] symbols \
+         survive into the staticlib archive, got {cross:?}"
+    );
+}
+
+/// The `keepalive-anchors` feature must NOT be conditional on
+/// `PERRY_LLVM_BITCODE_LINK` — the classic link path needs it too.
+#[test]
+fn auto_optimize_keepalive_anchors_not_bitcode_only() {
+    let _guard = env_lock();
+    let old_bitcode = std::env::var_os("PERRY_LLVM_BITCODE_LINK");
+    std::env::remove_var("PERRY_LLVM_BITCODE_LINK");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features: std::collections::BTreeSet<&'static str> =
+        std::collections::BTreeSet::new();
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let cross = auto_optimized_cross_features(&ctx, &empty_features, &[]);
+
+    set_env_var(
+        "PERRY_LLVM_BITCODE_LINK",
+        old_bitcode.as_deref().and_then(|v| v.to_str()),
+    );
+
+    assert!(
+        cross.iter().any(|f| f == "perry-runtime/keepalive-anchors"),
+        "keepalive-anchors must be present even without PERRY_LLVM_BITCODE_LINK, \
+         got {cross:?}"
+    );
+}
+
 /// The well-known flip drops `compression-brotli`/`compression-zstd` from the
 /// stdlib rebuild on a stated premise: "The ext crate carries all codecs, so
 /// nothing is lost by dropping them here."

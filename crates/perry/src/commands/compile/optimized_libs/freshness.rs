@@ -157,7 +157,10 @@ pub(crate) fn auto_optimized_cache_key(
                 ""
             }
         ),
-        std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1"),
+        // keepalive-anchors is now always enabled (see auto_optimized_cross_features),
+        // so the cache key always reflects anchors=true. The field stays in the key
+        // so a future change to gate it again would get its own cache dir.
+        true,
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -286,15 +289,32 @@ pub(crate) fn auto_optimized_cross_features(
     // system-allocator ranges, the feature stays force-on; the cfg gate in
     // perry-runtime remains for that future audit.
     cross_features.push("perry-runtime/alloc-mimalloc".to_string());
-    // The `#[used]` keep-alive anchors exist for the whole-program bitcode
-    // LTO path only (see perry-runtime's `keepalive-anchors` feature docs).
-    // The classic link keeps every reachable symbol via real undefined
-    // references, so the anchors are omitted there — that is what lets
-    // `-dead_strip` drop the never-imported node-module surface from small
-    // programs. Re-enable them whenever the bitcode link was requested.
-    if std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1") {
-        cross_features.push("perry-runtime/keepalive-anchors".to_string());
-    }
+    // `#[used]` keep-alive anchors must be present on EVERY auto-optimize
+    // rebuild, not just the bitcode-LTO path. The anchors pin codegen-only
+    // `#[no_mangle] pub extern "C" fn` symbols (e.g. `js_box_release`,
+    // `js_bool_box_release`, `js_closure_set_box_capture_ptr`,
+    // `js_link_path_module_parent`) that are never called from within the
+    // perry-runtime crate itself — only from the program's generated object
+    // files. Without `#[used]`, rustc dead-code-eliminates these unreferenced
+    // symbols during staticlib archive creation, so they are absent from
+    // `libperry_runtime.a` and the final link fails with "Undefined symbols
+    // for architecture arm64" when the program's codegen emits calls to them.
+    //
+    // #6917 gated the anchors behind `keepalive-anchors` (bitcode-LTO only)
+    // under the assumption that "the classic link keeps every reachable
+    // runtime symbol via real undefined references from the program's
+    // objects." That assumption is wrong: the program's undefined references
+    // can only resolve symbols that are IN the archive, and the archive
+    // doesn't contain symbols that were DCE'd during archive creation.
+    //
+    // In a staticlib archive (`.a`) the linker only pulls in object files
+    // that resolve an undefined reference, so `#[used]` anchors only become
+    // `-dead_strip` roots when their object file is pulled in — i.e. when
+    // the program actually references a symbol from that unit. The size
+    // regression is therefore limited to the transitive callees of symbols
+    // the program uses (which would be kept anyway), not the entire runtime
+    // surface. Re-enable unconditionally; the bitcode-LTO path already did.
+    cross_features.push("perry-runtime/keepalive-anchors".to_string());
     // Compile OUT perry-runtime's no-op fetch stubs (`js_fetch_with_options` /
     // `js_headers_new` / `js_request_new`, gated `#[cfg(not(feature =
     // "external-fetch-symbols"))]`) whenever the program uses fetch — perry-stdlib's

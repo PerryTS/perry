@@ -25,17 +25,22 @@ crate-type = ["rlib"]
 default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
-# points as dead-strip roots. They exist for the whole-program bitcode-LTO
-# link (`PERRY_LLVM_BITCODE_LINK=1`), where the merged module could otherwise
-# internalize + drop symbols only referenced from the user's separate `.o`.
-# The CLASSIC link path never needs them: every reachable runtime symbol is
-# kept by a real undefined reference from the program's objects, and the
-# anchors only defeat `-dead_strip` (measured: a hello-world binary carries
-# the entire fs/child_process/vm/node_submodules surface through ONE anchored
-# chain — KEEP_JS_MODULE_DYNAMIC_IMPORT_DEFERRED → dynamic-import fallback →
-# js_nm_install_all → every dispatch bucket). Kept in `default` so the
-# prebuilt/full archives and `cargo test` are unchanged; the auto-optimize
-# rebuild omits it unless the bitcode link was requested.
+# points so they survive into the staticlib archive. Without these anchors,
+# rustc dead-code-eliminates `#[no_mangle] pub extern "C" fn` symbols that are
+# only called from the program's generated object files (not from within the
+# perry-runtime crate itself), producing an incomplete `libperry_runtime.a`
+# that fails to link with "Undefined symbols" when the codegen emits calls to
+# them (e.g. `js_box_release`, `js_bool_box_release`,
+# `js_closure_set_box_capture_ptr`, `js_link_path_module_parent`).
+#
+# In a staticlib archive (`.a`) the linker only pulls in object files that
+# resolve an undefined reference, so `#[used]` anchors only become
+# `-dead_strip` roots when their object file is pulled in — i.e. when the
+# program actually references a symbol from that unit. The size cost is
+# therefore limited to the transitive callees of symbols the program uses
+# (which would be kept anyway), not the entire runtime surface. Kept in
+# `default` so the prebuilt/full archives and `cargo test` are unchanged;
+# the auto-optimize rebuild always re-adds it (see optimized_libs.rs).
 keepalive-anchors = []
 # Route every Rust heap allocation through mimalloc (#62) — ~3-5× faster
 # per-alloc than macOS `malloc` on hot paths, at ~140 KB of binary. In
