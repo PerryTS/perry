@@ -89,6 +89,29 @@ fn inflate_raw_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(decompressed)
 }
 
+fn unzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    if data.starts_with(&[0x1f, 0x8b]) {
+        gunzip_bytes(data)
+    } else {
+        inflate_bytes(data)
+    }
+}
+
+fn crc32_bytes_with_seed(data: &[u8], seed: u32) -> u32 {
+    let mut crc = seed ^ 0xffff_ffff;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 0 {
+                crc >> 1
+            } else {
+                0xedb8_8320 ^ (crc >> 1)
+            };
+        }
+    }
+    crc ^ 0xffff_ffff
+}
+
 // ── sync variants ─────────────────────────────────────────────
 
 /// `zlib.gzipSync(data, options?)`.
@@ -198,6 +221,37 @@ pub unsafe extern "C" fn js_zlib_inflate_raw_sync(data_value: f64) -> *mut Buffe
     }
 }
 
+/// `zlib.unzipSync(data)` — auto-detect gzip or zlib-wrapped deflate input.
+///
+/// # Safety
+///
+/// `data_value` must be a valid NaN-boxed string, Buffer, or TypedArray value.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_unzip_sync(data_value: f64) -> *mut BufferHeader {
+    let data_bits = data_value.to_bits() as i64;
+    stream::js_zlib_validate_buffer_arg(data_bits);
+    match stream::read_input_from_bits(data_bits).map(|data| unzip_bytes(&data)) {
+        Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(err)) => throw_deflate_decode_error(err),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// `zlib.crc32(data, seed?)` using the reflected IEEE polynomial.
+///
+/// # Safety
+///
+/// `data_value` must be a valid NaN-boxed string, Buffer, or TypedArray value.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_crc32(data_value: f64, seed: f64) -> f64 {
+    let data_bits = data_value.to_bits() as i64;
+    stream::js_zlib_validate_buffer_arg(data_bits);
+    match stream::read_input_from_bits(data_bits) {
+        Some(data) => f64::from(crc32_bytes_with_seed(&data, seed as u32)),
+        None => 0.0,
+    }
+}
+
 // `zlib.createBrotliDecompress` and the other `create*` Transform-stream
 // factories now live in `stream.rs` (returning real stream handles).
 
@@ -288,6 +342,20 @@ mod tests {
             .read_to_end(&mut raw)
             .unwrap();
         assert!(inflate_bytes(&raw).is_err());
+    }
+
+    #[test]
+    fn unzip_auto_detects_gzip_and_zlib_streams() {
+        let input = b"hello from unzip";
+        assert_eq!(unzip_bytes(&gzip_bytes(input).unwrap()).unwrap(), input);
+        assert_eq!(unzip_bytes(&deflate_bytes(input).unwrap()).unwrap(), input);
+    }
+
+    #[test]
+    fn crc32_matches_node_with_optional_seed() {
+        assert_eq!(crc32_bytes_with_seed(b"hello", 0), 907_060_870);
+        assert_eq!(crc32_bytes_with_seed(b"hello", 123), 3_088_217_944);
+        assert_eq!(crc32_bytes_with_seed(b"", 0), 0);
     }
 
     // End-to-end TS smoke tests cover the FFI Buffer allocation path.
