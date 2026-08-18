@@ -33,7 +33,17 @@ fn native_scalar_conversion_name<'a>(
     (module == "perry/native"
         && matches!(
             method,
-            "u8" | "i32" | "i64" | "u32" | "u64" | "usize" | "f32" | "f64"
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "f32"
+                | "f64"
         ))
     .then_some(method)
 }

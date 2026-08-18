@@ -12,6 +12,18 @@ export declare function u8(value: number): u8;
 /** Byte-sized native value; an alias for `u8`. */
 export type byte = u8;
 
+/** Exact-width signed 8-bit integer when used in a native/POD contract. */
+export type i8 = number & { readonly __perryI8?: never };
+
+/** Convert a finite integer to `i8`, throwing when it is out of range. */
+export declare function i8(value: number): i8;
+
+/** Exact-width signed 16-bit integer when used in a native/POD contract. */
+export type i16 = number & { readonly __perryI16?: never };
+
+/** Convert a finite integer to `i16`, throwing when it is out of range. */
+export declare function i16(value: number): i16;
+
 /** Exact-width signed 32-bit integer when used in a native/POD contract. */
 export type i32 = number & { readonly __perryI32?: never };
 
@@ -23,6 +35,12 @@ export type i64 = number & { readonly __perryI64?: never };
 
 /** Convert a safe integer to `i64`, throwing rather than losing precision. */
 export declare function i64(value: number): i64;
+
+/** Exact-width unsigned 16-bit integer when used in a native/POD contract. */
+export type u16 = number & { readonly __perryU16?: never };
+
+/** Convert a non-negative finite integer to `u16`, throwing when out of range. */
+export declare function u16(value: number): u16;
 
 /** Exact-width unsigned 32-bit integer when used in a native/POD contract. */
 export type u32 = number & { readonly __perryU32?: never };
@@ -41,6 +59,12 @@ export type usize = number & { readonly __perryUSize?: never };
 
 /** Convert a non-negative safe integer to `usize`. */
 export declare function usize(value: number): usize;
+
+/** Target pointer-sized signed integer in a native/POD contract. */
+export type isize = number & { readonly __perryISize?: never };
+
+/** Convert a safe integer to `isize`. */
+export declare function isize(value: number): isize;
 
 /** IEEE-754 binary32 value when used in a native/POD contract. */
 export type f32 = number & { readonly __perryF32?: never };

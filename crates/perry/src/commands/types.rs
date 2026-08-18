@@ -130,6 +130,11 @@ mod tests {
 
         let native_stub = project.path().join(".perry/types/perry/native/index.d.ts");
         let source = fs::read_to_string(native_stub).expect("read native type stub");
+        assert!(source.contains("export type i8"));
+        assert!(source.contains("export declare function i8(value: number): i8"));
+        assert!(source.contains("export type i16"));
+        assert!(source.contains("export type u16"));
+        assert!(source.contains("export type isize"));
         assert!(source.contains("export type u32"));
         assert!(source.contains("export declare function u32(value: number): u32"));
         assert!(source.contains("export type pod<T>"));

@@ -9,7 +9,7 @@ use crate::native_value::{
     PodLayoutManifest, SemanticKind,
 };
 use crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback;
-use crate::types::{DOUBLE, F32, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
 
 use super::{
     emit_root_nanbox_store_on_block, lower_expr, lower_expr_native, nanbox_pointer_inline, FnCtx,
@@ -447,9 +447,12 @@ fn coerce_js_double_to_native(
     field: &PodLayoutField,
 ) -> LoweredValue {
     let value = match field.native_rep {
+        NativeRep::I8 => ctx.block().fptosi(DOUBLE, value_js, I8),
+        NativeRep::I16 => ctx.block().fptosi(DOUBLE, value_js, I16),
         NativeRep::U8 => ctx.block().fptoui(DOUBLE, value_js, I8),
+        NativeRep::U16 => ctx.block().fptoui(DOUBLE, value_js, I16),
         NativeRep::I32 => ctx.block().fptosi(DOUBLE, value_js, I32),
-        NativeRep::I64 => ctx.block().fptosi(DOUBLE, value_js, I64),
+        NativeRep::I64 | NativeRep::ISize => ctx.block().fptosi(DOUBLE, value_js, I64),
         NativeRep::U32 | NativeRep::BufferLen => ctx.block().toint32(value_js),
         NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
             ctx.block().fptoui(DOUBLE, value_js, I64)
@@ -484,7 +487,10 @@ fn pod_field_write_compatibility_guard(
 
 fn pod_scalar_guard_rep_id(rep: &NativeRep) -> i32 {
     match rep {
+        NativeRep::I8 => 11,
+        NativeRep::I16 => 12,
         NativeRep::U8 => 10,
+        NativeRep::U16 => 13,
         NativeRep::I32 => 1,
         NativeRep::I64 => 2,
         NativeRep::U32 => 3,
@@ -494,6 +500,7 @@ fn pod_scalar_guard_rep_id(rep: &NativeRep) -> i32 {
         NativeRep::F32 => 7,
         NativeRep::BufferLen => 8,
         NativeRep::HandleId => 9,
+        NativeRep::ISize => 14,
         _ => 0,
     }
 }

@@ -9,6 +9,13 @@ type Tiny = NativeRecord<{
   marker: Byte;
 }>;
 
+type Narrow = NativeRecord<{
+  delta: SignedByte;
+  count: HalfWord;
+  offset: SignedHalfWord;
+  pointerDelta: SignedSize;
+}>;
+
 const size = sizeOf<Header>();
 const alignment = alignOf<Header>();
 const sequenceOffset = offsetOf<Header>("sequence");
@@ -22,6 +29,20 @@ const tinySize = sizeOf<Tiny>();
 const markerOffset = offsetOf<Tiny>("marker");
 const convertedOctet = Octet(255);
 const tiny: Tiny = { kind: Octet(255), marker: 7 };
+const narrowSize = sizeOf<Narrow>();
+const narrowCountOffset = offsetOf<Narrow>("count");
+const narrowOffsetOffset = offsetOf<Narrow>("offset");
+const narrowPointerOffset = offsetOf<Narrow>("pointerDelta");
+const convertedSignedByte = SignedByte(-128);
+const convertedHalfWord = HalfWord(65_535);
+const convertedSignedHalfWord = SignedHalfWord(-32_768);
+const convertedSignedSize = SignedSize(-9_007_199_254_740_991);
+const narrow: Narrow = {
+  delta: SignedByte(-5),
+  count: HalfWord(65_535),
+  offset: SignedHalfWord(-1_024),
+  pointerDelta: SignedSize(-42),
+};
 const convertedHeader: Header = {
   flags: Word(7),
   sequence: LongWord(42),
@@ -30,6 +51,10 @@ const convertedHeader: Header = {
 let rejectedFraction = false;
 let rejectedType = false;
 let rejectedOctet = false;
+let rejectedSignedByte = false;
+let rejectedHalfWord = false;
+let rejectedSignedHalfWord = false;
+let rejectedSignedSize = false;
 try {
   Word(1.5);
 } catch {
@@ -45,13 +70,37 @@ try {
 } catch {
   rejectedOctet = true;
 }
+try {
+  SignedByte(-129);
+} catch {
+  rejectedSignedByte = true;
+}
+try {
+  HalfWord(65_536);
+} catch {
+  rejectedHalfWord = true;
+}
+try {
+  SignedHalfWord(32_768);
+} catch {
+  rejectedSignedHalfWord = true;
+}
+try {
+  SignedSize(9_007_199_254_740_992);
+} catch {
+  rejectedSignedSize = true;
+}
 
 // Static imports are hoisted, including aliases used above their declaration.
 import {
+  i8 as SignedByte,
+  i16 as SignedHalfWord,
   u8 as Octet,
+  u16 as HalfWord,
   u32 as Word,
   u64 as LongWord,
   f32 as FloatWord,
+  isize as SignedSize,
   type pod as NativeRecord,
   type byte as Byte,
   type PodView,
@@ -71,10 +120,18 @@ console.log(
     ",gainRounded=" + (convertedGain > 0.1) +
     ",tiny=" + tinySize + ":" + markerOffset + ":" + convertedOctet +
     ":" + tiny.kind + ":" + tiny.marker +
+    ",narrow=" + narrowSize + ":" + narrowCountOffset + ":" + narrowOffsetOffset +
+    ":" + narrowPointerOffset + ":" + convertedSignedByte + ":" + convertedHalfWord +
+    ":" + convertedSignedHalfWord + ":" + convertedSignedSize + ":" + narrow.delta +
+    ":" + narrow.count + ":" + narrow.offset + ":" + narrow.pointerDelta +
     ",header=" + convertedHeader.flags + ":" + convertedHeader.sequence + ":" + (convertedHeader.gain > 0.1) +
     ",rejectedFraction=" + rejectedFraction +
     ",rejectedType=" + rejectedType +
-    ",rejectedOctet=" + rejectedOctet,
+    ",rejectedOctet=" + rejectedOctet +
+    ",rejectedSignedByte=" + rejectedSignedByte +
+    ",rejectedHalfWord=" + rejectedHalfWord +
+    ",rejectedSignedHalfWord=" + rejectedSignedHalfWord +
+    ",rejectedSignedSize=" + rejectedSignedSize,
 );
 
 arena.dispose();

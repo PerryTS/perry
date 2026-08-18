@@ -24,7 +24,7 @@ use crate::native_value::{
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{is_bigint_expr, is_bool_expr, is_numeric_expr};
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
 // Issue #1098: expr.rs split into expr/ submodules. These are pure
 // mechanical moves of self-contained helper clusters out of this file;
@@ -2781,15 +2781,27 @@ fn native_number_to_f64(ctx: &mut FnCtx<'_>, lowered: &LoweredValue) -> Option<S
     match &lowered.rep {
         NativeRep::F64 => Some(lowered.value.clone()),
         NativeRep::F32 => Some(ctx.block().fpext(F32, &lowered.value, DOUBLE)),
+        NativeRep::I8 => {
+            let widened = ctx.block().sext(I8, &lowered.value, I32);
+            Some(ctx.block().sitofp(I32, &widened, DOUBLE))
+        }
+        NativeRep::I16 => {
+            let widened = ctx.block().sext(I16, &lowered.value, I32);
+            Some(ctx.block().sitofp(I32, &widened, DOUBLE))
+        }
         NativeRep::I32 => Some(ctx.block().sitofp(I32, &lowered.value, DOUBLE)),
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
             Some(ctx.block().uitofp(I32, &widened, DOUBLE))
         }
+        NativeRep::U16 => {
+            let widened = ctx.block().zext(I16, &lowered.value, I32);
+            Some(ctx.block().uitofp(I32, &widened, DOUBLE))
+        }
         NativeRep::U32 | NativeRep::BufferLen => {
             Some(ctx.block().uitofp(I32, &lowered.value, DOUBLE))
         }
-        NativeRep::I64 => Some(ctx.block().sitofp(I64, &lowered.value, DOUBLE)),
+        NativeRep::I64 | NativeRep::ISize => Some(ctx.block().sitofp(I64, &lowered.value, DOUBLE)),
         NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
             Some(ctx.block().uitofp(I64, &lowered.value, DOUBLE))
         }
@@ -2856,9 +2868,21 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
     };
     let value = match lowered.rep {
         NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => lowered.value,
+        NativeRep::I8 => {
+            let raw = lowered.value;
+            ctx.block().sext(I8, &raw, I32)
+        }
+        NativeRep::I16 => {
+            let raw = lowered.value;
+            ctx.block().sext(I16, &raw, I32)
+        }
         NativeRep::U8 => {
             let raw = lowered.value;
             ctx.block().zext(I8, &raw, I32)
+        }
+        NativeRep::U16 => {
+            let raw = lowered.value;
+            ctx.block().zext(I16, &raw, I32)
         }
         NativeRep::I1 => {
             let raw = lowered.value;

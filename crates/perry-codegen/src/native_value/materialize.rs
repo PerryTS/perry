@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::expr::FnCtx;
 use crate::nanbox::{BIGINT_TAG_I64, POINTER_TAG_I64};
-use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I1, I128, I16, I32, I64, I8};
 
 use super::artifact::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
 use super::rep::{LoweredValue, NativeRep, SemanticKind};
@@ -40,7 +40,9 @@ pub(crate) enum MaterializationReason {
 
 fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
     match op {
-        NativeAbiTransitionOp::SignedIntToFloat => matches!(rep, NativeRep::I64),
+        NativeAbiTransitionOp::SignedIntToFloat => {
+            matches!(rep, NativeRep::I64 | NativeRep::ISize)
+        }
         NativeAbiTransitionOp::UnsignedIntToFloat => {
             matches!(rep, NativeRep::U64 | NativeRep::USize | NativeRep::HandleId)
         }
@@ -327,8 +329,11 @@ pub(crate) fn materialize_js_value_bits(
     let from_native_rep = lowered.rep.name().to_string();
     let conversion_op = match &lowered.rep {
         NativeRep::JsValue => NativeAbiTransitionOp::JsValueToBits,
-        NativeRep::I32 | NativeRep::I64 => NativeAbiTransitionOp::SignedIntToFloat,
+        NativeRep::I8 | NativeRep::I16 | NativeRep::I32 | NativeRep::I64 | NativeRep::ISize => {
+            NativeAbiTransitionOp::SignedIntToFloat
+        }
         NativeRep::U8
+        | NativeRep::U16
         | NativeRep::U32
         | NativeRep::U64
         | NativeRep::USize
@@ -356,16 +361,31 @@ pub(crate) fn materialize_js_value_bits(
             crate::nanbox::TAG_TRUE_I64,
             crate::nanbox::TAG_FALSE_I64,
         ),
+        NativeRep::I8 => {
+            let widened = ctx.block().sext(I8, &lowered.value, I32);
+            let value = ctx.block().sitofp(I32, &widened, DOUBLE);
+            ctx.block().bitcast_double_to_i64(&value)
+        }
+        NativeRep::I16 => {
+            let widened = ctx.block().sext(I16, &lowered.value, I32);
+            let value = ctx.block().sitofp(I32, &widened, DOUBLE);
+            ctx.block().bitcast_double_to_i64(&value)
+        }
         NativeRep::I32 => {
             let value = ctx.block().sitofp(I32, &lowered.value, DOUBLE);
             ctx.block().bitcast_double_to_i64(&value)
         }
-        NativeRep::I64 => {
+        NativeRep::I64 | NativeRep::ISize => {
             let value = ctx.block().sitofp(I64, &lowered.value, DOUBLE);
             ctx.block().bitcast_double_to_i64(&value)
         }
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
+            let value = ctx.block().uitofp(I32, &widened, DOUBLE);
+            ctx.block().bitcast_double_to_i64(&value)
+        }
+        NativeRep::U16 => {
+            let widened = ctx.block().zext(I16, &lowered.value, I32);
             let value = ctx.block().uitofp(I32, &widened, DOUBLE);
             ctx.block().bitcast_double_to_i64(&value)
         }
@@ -515,8 +535,11 @@ pub(crate) fn materialize_js_value(
     }
     let from_native_rep = lowered.rep.name().to_string();
     let conversion_op = match &lowered.rep {
-        NativeRep::I32 | NativeRep::I64 => NativeAbiTransitionOp::SignedIntToFloat,
+        NativeRep::I8 | NativeRep::I16 | NativeRep::I32 | NativeRep::I64 | NativeRep::ISize => {
+            NativeAbiTransitionOp::SignedIntToFloat
+        }
         NativeRep::U8
+        | NativeRep::U16
         | NativeRep::U32
         | NativeRep::U64
         | NativeRep::USize
@@ -547,10 +570,22 @@ pub(crate) fn materialize_js_value(
             );
             ctx.block().bitcast_i64_to_double(&bits)
         }
+        NativeRep::I8 => {
+            let widened = ctx.block().sext(I8, &lowered.value, I32);
+            ctx.block().sitofp(I32, &widened, DOUBLE)
+        }
+        NativeRep::I16 => {
+            let widened = ctx.block().sext(I16, &lowered.value, I32);
+            ctx.block().sitofp(I32, &widened, DOUBLE)
+        }
         NativeRep::I32 => ctx.block().sitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::I64 => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
+        NativeRep::I64 | NativeRep::ISize => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
+            ctx.block().uitofp(I32, &widened, DOUBLE)
+        }
+        NativeRep::U16 => {
+            let widened = ctx.block().zext(I16, &lowered.value, I32);
             ctx.block().uitofp(I32, &widened, DOUBLE)
         }
         NativeRep::U32 => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
@@ -611,10 +646,22 @@ pub(crate) fn materialize_js_value_without_record(
             );
             ctx.block().bitcast_i64_to_double(&bits)
         }
+        NativeRep::I8 => {
+            let widened = ctx.block().sext(I8, &lowered.value, I32);
+            ctx.block().sitofp(I32, &widened, DOUBLE)
+        }
+        NativeRep::I16 => {
+            let widened = ctx.block().sext(I16, &lowered.value, I32);
+            ctx.block().sitofp(I32, &widened, DOUBLE)
+        }
         NativeRep::I32 => ctx.block().sitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::I64 => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
+        NativeRep::I64 | NativeRep::ISize => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
+            ctx.block().uitofp(I32, &widened, DOUBLE)
+        }
+        NativeRep::U16 => {
+            let widened = ctx.block().zext(I16, &lowered.value, I32);
             ctx.block().uitofp(I32, &widened, DOUBLE)
         }
         NativeRep::U32 => ctx.block().uitofp(I32, &lowered.value, DOUBLE),

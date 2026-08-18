@@ -20,6 +20,12 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
 #[cfg(test)]
 mod bits_tests;
+mod native_narrow;
+
+use native_narrow::{
+    lower_expr_native_i16, lower_expr_native_i8, lower_expr_native_isize, lower_expr_native_u16,
+    lower_expr_native_u8,
+};
 
 /// Returns true if `e` provably produces a finite double whose magnitude is
 /// small enough (`|v| < 2^63`) for the unguarded `toint32_fast` lowering.
@@ -918,12 +924,16 @@ pub(crate) fn lower_expr_native(
 ) -> Result<LoweredValue> {
     match expected {
         ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
+        ExpectedNativeRep::I8 => lower_expr_native_i8(ctx, e),
+        ExpectedNativeRep::I16 => lower_expr_native_i16(ctx, e),
         ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
         ExpectedNativeRep::I64 => lower_expr_native_i64(ctx, e),
         ExpectedNativeRep::U8 => lower_expr_native_u8(ctx, e),
+        ExpectedNativeRep::U16 => lower_expr_native_u16(ctx, e),
         ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
         ExpectedNativeRep::U64 => lower_expr_native_u64(ctx, e),
         ExpectedNativeRep::USize => lower_expr_native_usize(ctx, e),
+        ExpectedNativeRep::ISize => lower_expr_native_isize(ctx, e),
         ExpectedNativeRep::I1 => lower_expr_native_i1(ctx, e),
         ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
         ExpectedNativeRep::F32 => lower_expr_native_f32(ctx, e),
@@ -945,6 +955,14 @@ fn i32_lowered(value: String) -> LoweredValue {
     LoweredValue::i32(value)
 }
 
+fn i8_lowered(value: String) -> LoweredValue {
+    LoweredValue::i8(value)
+}
+
+fn i16_lowered(value: String) -> LoweredValue {
+    LoweredValue::i16(value)
+}
+
 fn i64_lowered(value: String) -> LoweredValue {
     LoweredValue::i64(value)
 }
@@ -957,12 +975,20 @@ fn u8_lowered(value: String) -> LoweredValue {
     LoweredValue::u8(value)
 }
 
+fn u16_lowered(value: String) -> LoweredValue {
+    LoweredValue::u16(value)
+}
+
 fn u64_lowered(value: String) -> LoweredValue {
     LoweredValue::u64(value)
 }
 
 fn usize_lowered(value: String) -> LoweredValue {
     LoweredValue::usize(value)
+}
+
+fn isize_lowered(value: String) -> LoweredValue {
+    LoweredValue::isize(value)
 }
 
 fn i1_lowered(value: String) -> LoweredValue {
@@ -1670,30 +1696,6 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         native_expr_kind(e),
         None,
         "lower_expr_native_u32",
-        &lowered,
-        None,
-        None,
-        None,
-        false,
-        false,
-        Vec::new(),
-    );
-    Ok(lowered)
-}
-
-fn lower_expr_native_u8(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let value = match e {
-        Expr::Integer(n) if u8::try_from(*n).is_ok() => (*n as u8).to_string(),
-        _ => {
-            let value = lower_expr(ctx, e)?;
-            ctx.block().fptoui(DOUBLE, &value, I8)
-        }
-    };
-    let lowered = u8_lowered(value);
-    ctx.record_lowered_value(
-        native_expr_kind(e),
-        None,
-        "lower_expr_native_u8",
         &lowered,
         None,
         None,

@@ -107,6 +107,20 @@ pub(super) fn native_fact_uses_for_record(
             "string_ref",
             None,
         )),
+        NativeRep::I8 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "i8",
+            None,
+        )),
+        NativeRep::I16 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "i16",
+            None,
+        )),
         NativeRep::I32 => consumed.push(native_fact_use(
             "representation",
             local_id,
@@ -142,6 +156,13 @@ pub(super) fn native_fact_uses_for_record(
             "usize",
             None,
         )),
+        NativeRep::ISize => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "isize",
+            None,
+        )),
         NativeRep::I1 => consumed.push(native_fact_use(
             "representation",
             local_id,
@@ -168,6 +189,13 @@ pub(super) fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "u8",
+            None,
+        )),
+        NativeRep::U16 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "u16",
             None,
         )),
         NativeRep::BufferLen => consumed.push(native_fact_use(

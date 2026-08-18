@@ -554,12 +554,16 @@ mod tests {
             "sizeof",
             "alignof",
             "offsetof",
+            "i8",
+            "i16",
             "u8",
+            "u16",
             "i32",
             "i64",
             "u32",
             "u64",
             "usize",
+            "isize",
             "f32",
             "f64",
             "NativeArena",
@@ -578,7 +582,9 @@ mod tests {
             assert_eq!(entry.returns, TypeSpec::Number, "{name}");
         }
 
-        for name in ["u8", "i32", "i64", "u32", "u64", "usize", "f32", "f64"] {
+        for name in [
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "f32", "f64",
+        ] {
             let entry = module_has_symbol("perry/native", name)
                 .unwrap_or_else(|| panic!("perry/native missing conversion {name}"));
             assert!(matches!(entry.kind, ApiKind::Method { .. }));

@@ -1,13 +1,17 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2024 entries across 123 modules
+// Coverage: 2028 entries across 123 modules
 
+type PerryI8 = number & { readonly __perryI8?: never };
+type PerryI16 = number & { readonly __perryI16?: never };
 type PerryU8 = number & { readonly __perryU8?: never };
+type PerryU16 = number & { readonly __perryU16?: never };
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
 type PerryUSize = number & { readonly __perryUSize?: never };
 type PerryI32 = number & { readonly __perryI32?: never };
 type PerryI64 = number & { readonly __perryI64?: never };
+type PerryISize = number & { readonly __perryISize?: never };
 type PerryF32 = number & { readonly __perryF32?: never };
 type PerryF64 = number & { readonly __perryF64?: never };
 type PerryBufferLen = number & { readonly __perryBufferLen?: never };
@@ -2680,13 +2684,21 @@ declare module "perry/native" {
   /** stdlib */
   export function f64(value: number): number;
   /** stdlib */
+  export function i16(value: number): number;
+  /** stdlib */
   export function i32(value: number): number;
   /** stdlib */
   export function i64(value: number): number;
+  /** stdlib */
+  export function i8(value: number): number;
+  /** stdlib */
+  export function isize(value: number): number;
   /** intrinsic */
   export function offsetof(field: string): number;
   /** intrinsic */
   export function sizeof(): number;
+  /** stdlib */
+  export function u16(value: number): number;
   /** stdlib */
   export function u32(value: number): number;
   /** stdlib */

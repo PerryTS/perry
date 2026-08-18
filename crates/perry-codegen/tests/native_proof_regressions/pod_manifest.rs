@@ -3,11 +3,16 @@ use super::*;
 #[test]
 fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
     let packet_ty = pod_type(&[
+        ("signed8", Type::Named("PerryI8".to_string())),
+        ("signed16", Type::Named("PerryI16".to_string())),
+        ("unsigned8", Type::Named("PerryU8".to_string())),
+        ("unsigned16", Type::Named("PerryU16".to_string())),
         ("signed", Type::Named("PerryI32".to_string())),
         ("flags", Type::Named("PerryU32".to_string())),
         ("signed64", Type::Named("PerryI64".to_string())),
         ("sequence", Type::Named("PerryU64".to_string())),
         ("pointerSize", Type::Named("PerryUSize".to_string())),
+        ("signedPointerSize", Type::Named("PerryISize".to_string())),
         ("gain", Type::Named("PerryF32".to_string())),
         ("ratio", Type::Named("PerryF64".to_string())),
     ]);
@@ -26,6 +31,22 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
                 "packet",
                 packet_ty,
                 vec![
+                    (
+                        "signed8",
+                        native_module_call("perry/native", "i8", vec![local(1)]),
+                    ),
+                    (
+                        "signed16",
+                        native_module_call("perry/native", "i16", vec![local(1)]),
+                    ),
+                    (
+                        "unsigned8",
+                        native_module_call("perry/native", "u8", vec![local(1)]),
+                    ),
+                    (
+                        "unsigned16",
+                        native_module_call("perry/native", "u16", vec![local(1)]),
+                    ),
                     (
                         "signed",
                         native_module_call("perry/native", "i32", vec![local(1)]),
@@ -47,6 +68,10 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
                         native_module_call("perry/native", "usize", vec![local(1)]),
                     ),
                     (
+                        "signedPointerSize",
+                        native_module_call("perry/native", "isize", vec![local(1)]),
+                    ),
+                    (
                         "gain",
                         native_module_call("perry/native", "f32", vec![local(1)]),
                     ),
@@ -62,11 +87,16 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
     for helper in [
+        "js_perry_native_i8",
+        "js_perry_native_i16",
+        "js_perry_native_u8",
+        "js_perry_native_u16",
         "js_perry_native_i32",
         "js_perry_native_u32",
         "js_perry_native_i64",
         "js_perry_native_u64",
         "js_perry_native_usize",
+        "js_perry_native_isize",
         "js_perry_native_f32",
         "js_perry_native_f64",
     ] {
@@ -85,7 +115,7 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
             .any(|record| {
                 record["native_rep_name"] == "pod_record"
                     && record["consumer"] == "pod_record_stack_alloc"
-                    && record["pod_layout"]["size"] == 48
+                    && record["pod_layout"]["size"] == 64
             }),
         "checked conversions should preserve a region-local POD record:\n{artifact:#}"
     );

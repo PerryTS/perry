@@ -340,7 +340,19 @@ fn entry_visible_in_dts(entry: &ApiEntry) -> bool {
 fn emit_native_memory_globals(out: &mut String) {
     let _ = writeln!(
         out,
+        "type PerryI8 = number & {{ readonly __perryI8?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryI16 = number & {{ readonly __perryI16?: never }};"
+    );
+    let _ = writeln!(
+        out,
         "type PerryU8 = number & {{ readonly __perryU8?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryU16 = number & {{ readonly __perryU16?: never }};"
     );
     let _ = writeln!(
         out,
@@ -361,6 +373,10 @@ fn emit_native_memory_globals(out: &mut String) {
     let _ = writeln!(
         out,
         "type PerryI64 = number & {{ readonly __perryI64?: never }};"
+    );
+    let _ = writeln!(
+        out,
+        "type PerryISize = number & {{ readonly __perryISize?: never }};"
     );
     let _ = writeln!(
         out,

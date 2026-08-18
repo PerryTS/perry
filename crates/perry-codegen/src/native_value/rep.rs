@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::types::{LlvmType, DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, F32, I1, I128, I16, I32, I64, I8, PTR};
 
 use super::buffer::{AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewRep};
 
@@ -29,6 +29,10 @@ pub(crate) enum NativeRep {
     /// `JsValue`; this rep is for region-local string-key/string-ABI helper
     /// boundaries that consume a raw string handle.
     StringRef,
+    /// Exact signed 8-bit scalar carried as LLVM `i8`.
+    I8,
+    /// Exact signed 16-bit scalar carried as LLVM `i16`.
+    I16,
     I32,
     /// Legacy signed 64-bit scalar. Kept for existing native-library
     /// manifests that declare `"i64"` and expect a JS-number bridge.
@@ -42,6 +46,8 @@ pub(crate) enum NativeRep {
     U64,
     /// Native `usize` on Perry's supported 64-bit native runtime targets.
     USize,
+    /// Native `isize` on Perry's supported 64-bit native runtime targets.
+    ISize,
     /// Native boolean carried as an LLVM `i1`. JS-visible boundaries must
     /// materialize this as TAG_TRUE/TAG_FALSE rather than as a numeric 0/1.
     I1,
@@ -50,6 +56,8 @@ pub(crate) enum NativeRep {
     /// number boundaries must materialize through an explicit `fpext`.
     F32,
     U8,
+    /// Exact unsigned 16-bit scalar carried as LLVM `i16`.
+    U16,
     /// BufferHeader.length. The runtime layout is `u32`, so LLVM carries this
     /// as `i32` with unsigned conversion semantics at JS boundaries.
     BufferLen,
@@ -94,15 +102,19 @@ impl NativeRep {
             Self::JsValueBits => "js_value_bits",
             Self::JsValue => "js_value",
             Self::StringRef => "string_ref",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::USize => "usize",
+            Self::ISize => "isize",
             Self::I1 => "i1",
             Self::F64 => "f64",
             Self::F32 => "f32",
             Self::U8 => "u8",
+            Self::U16 => "u16",
             Self::BufferLen => "buffer_len",
             Self::HandleId => "handle_id",
             Self::NativeHandle => "native_handle",
@@ -121,12 +133,16 @@ pub(crate) enum ExpectedNativeRep {
     // record this rep for region-local NaN-box payload bits; external ABI
     // classifiers must still select `JsValue`.
     JsValueBits,
+    I8,
+    I16,
     I32,
     I64,
     U8,
+    U16,
     U32,
     U64,
     USize,
+    ISize,
     I1,
     F64,
     F32,
@@ -168,6 +184,14 @@ impl LoweredValue {
         Self::new(SemanticKind::JsNumber, NativeRep::I32, I32, value)
     }
 
+    pub(crate) fn i8(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsNumber, NativeRep::I8, I8, value)
+    }
+
+    pub(crate) fn i16(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsNumber, NativeRep::I16, I16, value)
+    }
+
     pub(crate) fn i64(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsNumber, NativeRep::I64, I64, value)
     }
@@ -184,12 +208,20 @@ impl LoweredValue {
         Self::new(SemanticKind::JsNumber, NativeRep::USize, I64, value)
     }
 
+    pub(crate) fn isize(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsNumber, NativeRep::ISize, I64, value)
+    }
+
     pub(crate) fn i1(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsValue, NativeRep::I1, I1, value)
     }
 
     pub(crate) fn u8(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::TypedArrayElement, NativeRep::U8, I8, value)
+    }
+
+    pub(crate) fn u16(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsNumber, NativeRep::U16, I16, value)
     }
 
     pub(crate) fn f64(value: impl Into<String>) -> Self {
@@ -274,12 +306,16 @@ impl LoweredValue {
         matches!(
             (expected, &self.rep),
             (ExpectedNativeRep::JsValueBits, NativeRep::JsValueBits)
+                | (ExpectedNativeRep::I8, NativeRep::I8)
+                | (ExpectedNativeRep::I16, NativeRep::I16)
                 | (ExpectedNativeRep::I32, NativeRep::I32)
                 | (ExpectedNativeRep::I64, NativeRep::I64)
                 | (ExpectedNativeRep::U8, NativeRep::U8)
+                | (ExpectedNativeRep::U16, NativeRep::U16)
                 | (ExpectedNativeRep::U32, NativeRep::U32)
                 | (ExpectedNativeRep::U64, NativeRep::U64)
                 | (ExpectedNativeRep::USize, NativeRep::USize)
+                | (ExpectedNativeRep::ISize, NativeRep::ISize)
                 | (ExpectedNativeRep::I1, NativeRep::I1)
                 | (ExpectedNativeRep::F64, NativeRep::F64)
                 | (ExpectedNativeRep::F32, NativeRep::F32)

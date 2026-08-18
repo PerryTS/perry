@@ -1,7 +1,7 @@
 use crate::native_value::artifact::{NativeAbiTransitionOp, NativeRepRecord, PodLayoutManifest};
 use crate::native_value::pod::recompute_layout_from_fields;
 use crate::native_value::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I128, I16, I32, I64, I8, PTR};
 
 pub(crate) fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
     Some(match rep {
@@ -11,6 +11,7 @@ pub(crate) fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::JsValueBits
         | NativeRep::StringRef
         | NativeRep::I64
+        | NativeRep::ISize
         | NativeRep::U64
         | NativeRep::USize
         | NativeRep::HandleId
@@ -19,7 +20,8 @@ pub(crate) fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::SmallBigInt => I128,
         NativeRep::I32 | NativeRep::U32 => I32,
         NativeRep::BufferLen => I32,
-        NativeRep::U8 => I8,
+        NativeRep::I8 | NativeRep::U8 => I8,
+        NativeRep::I16 | NativeRep::U16 => I16,
         NativeRep::BufferView(_) => PTR,
         NativeRep::PodRecord { .. } => PTR,
         NativeRep::PodRecordView { .. } => PTR,
@@ -181,12 +183,13 @@ pub(crate) fn valid_native_abi_transition(
             NativeAbiTransitionOp::JsValueToBits => from == "js_value" && !lossy,
             NativeAbiTransitionOp::BitsToJsValue => false,
             NativeAbiTransitionOp::SignedIntToFloat => {
-                matches!(from, "i32" | "i64") && lossy == (from == "i64")
+                matches!(from, "i8" | "i16" | "i32" | "i64" | "isize")
+                    && lossy == matches!(from, "i64" | "isize")
             }
             NativeAbiTransitionOp::UnsignedIntToFloat => {
                 matches!(
                     from,
-                    "u8" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
+                    "u8" | "u16" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
                 ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
             }
             NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
@@ -209,12 +212,13 @@ pub(crate) fn valid_native_abi_transition(
         NativeAbiTransitionOp::JsValueToBits => false,
         NativeAbiTransitionOp::BitsToJsValue => from == "js_value_bits" && !lossy,
         NativeAbiTransitionOp::SignedIntToFloat => {
-            matches!(from, "i32" | "i64") && lossy == (from == "i64")
+            matches!(from, "i8" | "i16" | "i32" | "i64" | "isize")
+                && lossy == matches!(from, "i64" | "isize")
         }
         NativeAbiTransitionOp::UnsignedIntToFloat => {
             matches!(
                 from,
-                "u8" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
+                "u8" | "u16" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
             ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,

@@ -7,11 +7,15 @@ correctness, `perry/native` provides an explicit, opt-in contract.
 
 ```typescript,no-test
 import {
+  i8,
+  i16,
   u8,
+  u16,
   i32,
   u32,
   u64,
   f32,
+  isize,
   type pod,
   type PodView,
   NativeArena,
@@ -21,6 +25,8 @@ import {
 } from "perry/native";
 
 const opcode = u8(inputOpcode);
+const delta = i8(inputDelta);
+const port = u16(inputPort);
 const flags = u32(inputFlags);
 const sequence = u64(inputSequence);
 const gain = f32(inputGain);
@@ -55,12 +61,16 @@ ABI verifier already supports:
 
 | Type | Native representation |
 |---|---|
+| `i8` | signed 8-bit integer |
+| `i16` | signed 16-bit integer |
 | `u8`, `byte` | unsigned 8-bit integer (`byte` is a type alias) |
+| `u16` | unsigned 16-bit integer |
 | `i32` | signed 32-bit integer |
 | `i64` | signed 64-bit integer |
 | `u32` | unsigned 32-bit integer |
 | `u64` | unsigned 64-bit integer |
 | `usize` | target pointer-sized unsigned integer |
+| `isize` | target pointer-sized signed integer |
 | `f32` | IEEE-754 binary32 |
 | `f64` | IEEE-754 binary64 |
 
@@ -71,19 +81,23 @@ remain available as compatibility aliases.
 Each scalar name is both a type and a checked conversion function. Integer
 conversions accept only finite integral values in range; unsigned conversions
 also reject negative values. Because standalone results remain
-JavaScript-compatible numbers, `i64`, `u64`, and `usize` reject values outside
+JavaScript-compatible numbers, `i64`, `u64`, `isize`, and `usize` reject values outside
 the safe-integer range rather than returning an imprecise number. `f32` makes
 binary32 rounding explicit and rejects values that are non-finite before or
 after rounding; `f64` validates that its input is finite. A non-number throws a
 `TypeError`; an unrepresentable number throws a `RangeError`.
 
 ```typescript,no-test
-import { u8, i32, u32, u64, f32 } from "perry/native";
+import { i8, i16, u8, u16, i32, u32, u64, isize, f32 } from "perry/native";
 
+const delta = i8(dynamicDelta);
+const offset16 = i16(dynamicOffset);
 const opcode = u8(dynamicOpcode);
+const port = u16(dynamicPort);
 const offset = i32(dynamicOffset);
 const count = u32(dynamicCount);
 const sequence = u64(dynamicSequence);
+const pointerDelta = isize(dynamicPointerDelta);
 const ratio = f32(computation);
 ```
 
@@ -92,9 +106,8 @@ supported native ABI boundaries. A matching checked conversion may initialize
 a POD field from a dynamic value without forcing the whole record back to an
 ordinary object; the conversion guard runs before the value enters the native
 record. They do not change the semantics of
-standalone TypeScript arithmetic. Additional widths (`i8`, `i16`, `u16`, and
-`isize`) and guaranteed native lanes across general-purpose
-collections are later parts of the native value profile.
+standalone TypeScript arithmetic. Guaranteed native lanes across
+general-purpose collections are a later part of the native value profile.
 
 ## POD records
 

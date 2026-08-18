@@ -53,13 +53,17 @@ fn native_rep_materializes_to_js_number(rep: &crate::native_value::NativeRep) ->
     matches!(
         rep,
         crate::native_value::NativeRep::I32
+            | crate::native_value::NativeRep::I8
+            | crate::native_value::NativeRep::I16
             | crate::native_value::NativeRep::I64
+            | crate::native_value::NativeRep::ISize
             | crate::native_value::NativeRep::U32
             | crate::native_value::NativeRep::U64
             | crate::native_value::NativeRep::USize
             | crate::native_value::NativeRep::F64
             | crate::native_value::NativeRep::F32
             | crate::native_value::NativeRep::U8
+            | crate::native_value::NativeRep::U16
             | crate::native_value::NativeRep::BufferLen
             | crate::native_value::NativeRep::HandleId
     )

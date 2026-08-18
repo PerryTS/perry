@@ -316,10 +316,14 @@ fn perry_native_imports_reuse_canonical_pod_lowering() {
     let module = lower_src(
         r#"
         import {
+            type i8 as SignedByte,
+            type i16 as Short,
             type u8 as Octet,
             type byte as Byte,
+            type u16 as Word16,
             type u32 as Word,
             type f32,
+            type isize as SignedSize,
             type pod as NativeRecord,
             type PodView,
             NativeArena as Arena,
@@ -328,7 +332,16 @@ fn perry_native_imports_reuse_canonical_pod_lowering() {
             offsetof as offsetOf,
         } from "perry/native";
 
-        type Packet = NativeRecord<{ kind: Octet; marker: Byte; tag: Word; gain: f32; }>;
+        type Packet = NativeRecord<{
+            delta: SignedByte;
+            offset: Short;
+            kind: Octet;
+            marker: Byte;
+            count: Word16;
+            tag: Word;
+            gain: f32;
+            pointerDelta: SignedSize;
+        }>;
         const packetSize = sizeOf<Packet>();
         const packetAlign = alignOf<Packet>();
         const gainOffset = offsetOf<Packet>("gain");
@@ -659,29 +672,36 @@ fn native_arena_public_view_rejects_dynamic_kind() {
 fn native_scalar_conversion_imports_lower_as_native_module_calls() {
     let module = lower_src(
         r#"
-        import { u8 as octet, u32 as word, f32 } from "perry/native";
+        import {
+            i8 as signedByte,
+            i16 as short,
+            u8 as octet,
+            u16 as word16,
+            u32 as word,
+            isize as signedSize,
+            f32,
+        } from "perry/native";
+        const delta = signedByte(-128);
+        const offset = short(-32768);
         const kind = octet(255);
+        const count16 = word16(65535);
         const count = word(42);
+        const pointerDelta = signedSize(-42);
         const ratio = f32(0.1);
         "#,
     )
     .expect("native scalar conversions should lower");
 
-    assert!(module_any(&module, |expr| matches!(
-        expr,
-        Expr::NativeMethodCall { module, method, args, .. }
-            if module == "perry/native" && method == "u8" && args.len() == 1
-    )));
-    assert!(module_any(&module, |expr| matches!(
-        expr,
-        Expr::NativeMethodCall { module, method, args, .. }
-            if module == "perry/native" && method == "u32" && args.len() == 1
-    )));
-    assert!(module_any(&module, |expr| matches!(
-        expr,
-        Expr::NativeMethodCall { module, method, args, .. }
-            if module == "perry/native" && method == "f32" && args.len() == 1
-    )));
+    for method in ["i8", "i16", "u8", "u16", "u32", "isize", "f32"] {
+        assert!(
+            module_any(&module, |expr| matches!(
+                expr,
+                Expr::NativeMethodCall { module, method: actual, args, .. }
+                    if module == "perry/native" && actual == method && args.len() == 1
+            )),
+            "missing native scalar call {method}"
+        );
+    }
 }
 
 #[test]

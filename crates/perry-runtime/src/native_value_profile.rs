@@ -12,12 +12,16 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 #[derive(Clone, Copy, Debug)]
 enum ScalarConversion {
+    I8,
+    I16,
     U8,
+    U16,
     I32,
     I64,
     U32,
     U64,
     USize,
+    ISize,
     F32,
     F64,
 }
@@ -25,12 +29,16 @@ enum ScalarConversion {
 impl ScalarConversion {
     fn name(self) -> &'static str {
         match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
             Self::U8 => "u8",
+            Self::U16 => "u16",
             Self::I32 => "i32",
             Self::I64 => "i64",
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::USize => "usize",
+            Self::ISize => "isize",
             Self::F32 => "f32",
             Self::F64 => "f64",
         }
@@ -45,13 +53,17 @@ fn checked_number(value: f64, conversion: ScalarConversion) -> Result<f64, &'sta
 
     let number = js_value.as_number();
     let valid = match conversion {
+        ScalarConversion::I8 => integer_in_range(number, i8::MIN as f64, i8::MAX as f64),
+        ScalarConversion::I16 => integer_in_range(number, i16::MIN as f64, i16::MAX as f64),
         ScalarConversion::U8 => integer_in_range(number, 0.0, u8::MAX as f64),
+        ScalarConversion::U16 => integer_in_range(number, 0.0, u16::MAX as f64),
         ScalarConversion::I32 => integer_in_range(number, i32::MIN as f64, i32::MAX as f64),
         ScalarConversion::I64 => integer_in_range(number, -MAX_SAFE_INTEGER, MAX_SAFE_INTEGER),
         ScalarConversion::U32 => integer_in_range(number, 0.0, u32::MAX as f64),
         ScalarConversion::U64 | ScalarConversion::USize => {
             integer_in_range(number, 0.0, MAX_SAFE_INTEGER)
         }
+        ScalarConversion::ISize => integer_in_range(number, -MAX_SAFE_INTEGER, MAX_SAFE_INTEGER),
         ScalarConversion::F32 => number.is_finite() && (number as f32).is_finite(),
         ScalarConversion::F64 => number.is_finite(),
     };
@@ -103,11 +115,15 @@ macro_rules! scalar_conversion {
 }
 
 scalar_conversion!(js_perry_native_i32, I32);
+scalar_conversion!(js_perry_native_i8, I8);
+scalar_conversion!(js_perry_native_i16, I16);
 scalar_conversion!(js_perry_native_u8, U8);
+scalar_conversion!(js_perry_native_u16, U16);
 scalar_conversion!(js_perry_native_i64, I64);
 scalar_conversion!(js_perry_native_u32, U32);
 scalar_conversion!(js_perry_native_u64, U64);
 scalar_conversion!(js_perry_native_usize, USize);
+scalar_conversion!(js_perry_native_isize, ISize);
 scalar_conversion!(js_perry_native_f32, F32);
 scalar_conversion!(js_perry_native_f64, F64);
 
@@ -117,6 +133,16 @@ mod tests {
 
     #[test]
     fn integer_conversions_reject_fractional_out_of_range_and_imprecise_numbers() {
+        assert_eq!(checked_number(-128.0, ScalarConversion::I8), Ok(-128.0));
+        assert_eq!(checked_number(127.0, ScalarConversion::I8), Ok(127.0));
+        assert_eq!(
+            checked_number(-32_768.0, ScalarConversion::I16),
+            Ok(-32_768.0)
+        );
+        assert_eq!(
+            checked_number(65_535.0, ScalarConversion::U16),
+            Ok(65_535.0)
+        );
         assert_eq!(checked_number(0.0, ScalarConversion::U8), Ok(0.0));
         assert_eq!(checked_number(255.0, ScalarConversion::U8), Ok(255.0));
         assert_eq!(
@@ -130,10 +156,15 @@ mod tests {
         assert!(checked_number(1.5, ScalarConversion::I32).is_err());
         assert!(checked_number(-1.0, ScalarConversion::U8).is_err());
         assert!(checked_number(256.0, ScalarConversion::U8).is_err());
+        assert!(checked_number(-129.0, ScalarConversion::I8).is_err());
+        assert!(checked_number(128.0, ScalarConversion::I8).is_err());
+        assert!(checked_number(32_768.0, ScalarConversion::I16).is_err());
+        assert!(checked_number(65_536.0, ScalarConversion::U16).is_err());
         assert!(checked_number(-1.0, ScalarConversion::U32).is_err());
         assert!(checked_number(4_294_967_296.0, ScalarConversion::U32).is_err());
         assert!(checked_number(9_007_199_254_740_992.0, ScalarConversion::U64).is_err());
         assert!(checked_number(-0.0, ScalarConversion::I64).is_err());
+        assert!(checked_number(9_007_199_254_740_992.0, ScalarConversion::ISize).is_err());
     }
 
     #[test]

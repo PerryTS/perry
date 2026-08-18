@@ -11,7 +11,7 @@ use crate::nanbox::double_literal;
 use crate::native_value::{ExpectedNativeRep, LoweredValue, MaterializationReason, NativeRep};
 use crate::rooting;
 use crate::type_analysis::{is_numeric_expr, is_provably_not_bigint};
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
 use super::{
     i32_bool_to_nanbox, lower_expr, lower_expr_native, lower_expr_value, lower_math_operand,
@@ -33,8 +33,23 @@ fn lowered_value_to_iter_result_f64(
             let value = ctx.block().sitofp(I32, &lowered.value, DOUBLE);
             (LoweredValue::f64(value), "slot_kind=raw_f64_proven")
         }
+        NativeRep::I8 => {
+            let widened = ctx.block().sext(I8, &lowered.value, I32);
+            let value = ctx.block().sitofp(I32, &widened, DOUBLE);
+            (LoweredValue::f64(value), "slot_kind=raw_f64_proven")
+        }
+        NativeRep::I16 => {
+            let widened = ctx.block().sext(I16, &lowered.value, I32);
+            let value = ctx.block().sitofp(I32, &widened, DOUBLE);
+            (LoweredValue::f64(value), "slot_kind=raw_f64_proven")
+        }
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
+            let value = ctx.block().uitofp(I32, &widened, DOUBLE);
+            (LoweredValue::f64(value), "slot_kind=raw_f64_proven")
+        }
+        NativeRep::U16 => {
+            let widened = ctx.block().zext(I16, &lowered.value, I32);
             let value = ctx.block().uitofp(I32, &widened, DOUBLE);
             (LoweredValue::f64(value), "slot_kind=raw_f64_proven")
         }
