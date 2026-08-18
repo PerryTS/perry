@@ -10,7 +10,7 @@ fn mock_function_preserves_original_name_length_and_descriptors() {
     crate::object::set_bound_native_closure_name(original, "original");
     let original = boxed_ptr(original);
 
-    let mock = create_mock_function(original, original, MockRestoreTarget::None);
+    let mock = create_mock_function(original, original, None, MockRestoreTarget::None);
     let mock_ptr = raw_ptr_from_value(mock);
 
     let name = crate::closure::closure_get_dynamic_prop(mock_ptr, "name");

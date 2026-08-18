@@ -54,6 +54,52 @@ fn mock_getter_and_setter_defaults_preserve_the_accessor_kind() {
 }
 
 #[test]
+fn mock_times_accepts_positive_integers_and_infinity() {
+    let finite = options_with_value("times", 2.0);
+    assert_eq!(parse_mock_fn_options(finite), Some(2));
+
+    let unlimited = options_with_value("times", f64::INFINITY);
+    assert_eq!(parse_mock_fn_options(unlimited), None);
+}
+
+#[test]
+fn mock_times_rejects_zero_and_fractional_values() {
+    for value in [0.0, 1.5] {
+        let options = options_with_value("times", value);
+        assert_eq!(
+            caught_error_code(|| {
+                let _ = parse_mock_fn_options(options);
+                undefined_value()
+            }),
+            "ERR_OUT_OF_RANGE"
+        );
+    }
+}
+
+#[test]
+fn mock_options_reject_arrays() {
+    let array = boxed_ptr(crate::array::js_array_alloc(0));
+    assert_eq!(
+        caught_error_code(|| {
+            let _ = parse_mock_fn_options(array);
+            undefined_value()
+        }),
+        "ERR_INVALID_ARG_TYPE"
+    );
+}
+
+#[test]
+fn mock_method_requires_an_existing_callable_target() {
+    assert_eq!(
+        caught_error_code(|| {
+            assert_mock_target_method(undefined_value());
+            undefined_value()
+        }),
+        "ERR_INVALID_ARG_VALUE"
+    );
+}
+
+#[test]
 fn mock_method_options_survive_an_allocating_getter() {
     let options = js_object_alloc(0, 2);
     install_accessor_mock(

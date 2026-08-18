@@ -33,6 +33,7 @@ fn mock_state_with_calls(call_count: usize, implementation: f64) -> MockState {
         tracked: true,
         original: implementation,
         implementation,
+        implementation_limit: None,
         once: Vec::new(),
         calls: boxed_ptr(calls),
         context: undefined_value(),
@@ -78,6 +79,20 @@ fn indexed_once_scheduling_uses_absolute_call_indices() {
 }
 
 #[test]
+fn finite_implementation_limit_falls_back_to_the_original() {
+    let mut state = mock_state_with_calls(0, 20.0);
+    state.original = 10.0;
+    state.implementation_limit = Some(2);
+
+    assert_eq!(take_mock_implementation(&mut state), 20.0);
+    set_call_count(&mut state, 2);
+    assert_eq!(take_mock_implementation(&mut state), 10.0);
+
+    schedule_mock_implementation_once(&mut state, 2, 30.0);
+    assert_eq!(take_mock_implementation(&mut state), 30.0);
+}
+
+#[test]
 fn restoring_a_mock_preserves_calls_and_scheduled_implementations() {
     let mut state = mock_state_with_calls(2, 10.0);
     state.implementation = 20.0;
@@ -96,7 +111,7 @@ fn reentrant_dispatch_uses_completed_call_indices_like_node() {
     let outer = closure_value(reentrant_implementation as *const u8, 0);
     let explicit_once = closure_value(return_twenty as *const u8, 0);
     let scheduled_inside = closure_value(return_thirty as *const u8, 0);
-    let mock = create_mock_function(outer, outer, MockRestoreTarget::None);
+    let mock = create_mock_function(outer, outer, None, MockRestoreTarget::None);
     let mock_ptr = raw_ptr_from_value(mock) as *const ClosureHeader;
     let id = closure_id(mock_ptr);
     REENTRANT_MOCK.with(|slot| slot.set(mock));

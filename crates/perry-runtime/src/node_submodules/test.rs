@@ -17,6 +17,8 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
 use crate::value::{JSValue, POINTER_MASK, TAG_UNDEFINED};
 
+#[path = "test_mock_options.rs"]
+mod mock_options;
 #[path = "test_property.rs"]
 mod property_mock;
 #[path = "test_reporters.rs"]
@@ -25,6 +27,7 @@ mod reporters;
 mod snapshot;
 
 // Re-exported / imported so the pre-split `test::<item>` paths keep resolving.
+use mock_options::{mock_option_times, parse_mock_fn_options};
 pub(crate) use reporters::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
     thunk_reporter_tap,
@@ -210,6 +213,16 @@ fn assert_callable_arg(arg: &str, value: f64) {
     }
 }
 
+fn assert_mock_target_method(value: f64) {
+    if !is_callable_value(value) {
+        crate::validators::throw_invalid_arg_value(
+            "methodName",
+            "must be a method",
+            &crate::fs::validate::describe_received(value),
+        );
+    }
+}
+
 extern "C" fn mock_timers_enable(_closure: *const ClosureHeader, options: f64) -> f64 {
     let (apis, now) = parse_mock_timer_options(options);
     crate::timer::js_mock_timers_enable(apis, now);
@@ -327,6 +340,7 @@ struct MockState {
     tracked: bool,
     original: f64,
     implementation: f64,
+    implementation_limit: Option<u64>,
     once: Vec<(usize, f64)>,
     calls: f64,
     context: f64,
@@ -376,6 +390,10 @@ fn property_name(value: f64) -> String {
 }
 
 fn object_target_addr(target: f64) -> usize {
+    let js = JSValue::from_bits(target.to_bits());
+    if !js.is_pointer() || unsafe { crate::symbol::js_is_symbol(target) } != 0 {
+        throw_invalid_arg_type("object", "object", target);
+    }
     let raw = raw_ptr_from_value(target);
     if raw < 0x10000 {
         throw_invalid_arg_type("object", "object", target);
@@ -395,6 +413,7 @@ fn accessor_function_value(bits: u64) -> f64 {
 struct MockMethodOptions {
     getter: bool,
     setter: bool,
+    times: Option<u64>,
 }
 
 fn is_non_null_object(value: f64) -> bool {
@@ -423,16 +442,20 @@ fn parse_mock_method_options(
         return MockMethodOptions {
             getter: default_getter,
             setter: default_setter,
+            times: None,
         };
     }
-    if !is_non_null_object(options) {
-        throw_invalid_arg_type("options", "object", options);
-    }
+    crate::validators::validate_object(options, "options");
     let scope = crate::gc::RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(options);
     let getter = mock_option_bool(options.get_nanbox_f64(), "getter", default_getter);
     let setter = mock_option_bool(options.get_nanbox_f64(), "setter", default_setter);
-    MockMethodOptions { getter, setter }
+    let times = mock_option_times(options.get_nanbox_f64());
+    MockMethodOptions {
+        getter,
+        setter,
+        times,
+    }
 }
 
 fn normalize_mock_method_args(implementation: f64, options: f64) -> (f64, f64) {
@@ -558,7 +581,12 @@ fn mock_function_metadata(original: f64) -> (String, u32) {
     (name, length)
 }
 
-fn create_mock_function(original: f64, implementation: f64, restore: MockRestoreTarget) -> f64 {
+fn create_mock_function(
+    original: f64,
+    implementation: f64,
+    implementation_limit: Option<u64>,
+    restore: MockRestoreTarget,
+) -> f64 {
     if !JSValue::from_bits(original.to_bits()).is_undefined() {
         assert_callable_arg("original", original);
     }
@@ -597,6 +625,7 @@ fn create_mock_function(original: f64, implementation: f64, restore: MockRestore
             tracked: true,
             original: original.get_nanbox_f64(),
             implementation: implementation.get_nanbox_f64(),
+            implementation_limit,
             once: Vec::new(),
             calls: calls.get_nanbox_f64(),
             context: context.get_nanbox_f64(),
@@ -634,6 +663,11 @@ fn take_mock_implementation(state: &mut MockState) -> f64 {
     let call = mock_state_call_count(state);
     if let Some(position) = state.once.iter().position(|(index, _)| *index == call) {
         state.once.remove(position).1
+    } else if state
+        .implementation_limit
+        .is_some_and(|limit| call as u64 >= limit)
+    {
+        state.original
     } else {
         state.implementation
     }
@@ -896,20 +930,34 @@ extern "C" fn mock_fn_thunk(
     _closure: *const ClosureHeader,
     original: f64,
     implementation_or_options: f64,
-    _options: f64,
+    options: f64,
 ) -> f64 {
-    let implementation = if is_undefined_value(original) {
-        if is_callable_value(implementation_or_options) {
-            implementation_or_options
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let original = scope.root_nanbox_f64(original);
+    let implementation_or_options = scope.root_nanbox_f64(implementation_or_options);
+    let options = scope.root_nanbox_f64(options);
+    let (implementation, options) =
+        if is_non_null_object(implementation_or_options.get_nanbox_f64()) {
+            (
+                original.get_nanbox_f64(),
+                implementation_or_options.get_nanbox_f64(),
+            )
+        } else if is_undefined_value(implementation_or_options.get_nanbox_f64()) {
+            (original.get_nanbox_f64(), options.get_nanbox_f64())
         } else {
-            undefined_value()
-        }
-    } else if is_callable_value(implementation_or_options) {
-        implementation_or_options
-    } else {
-        original
-    };
-    create_mock_function(original, implementation, MockRestoreTarget::None)
+            assert_callable_arg("implementation", implementation_or_options.get_nanbox_f64());
+            (
+                implementation_or_options.get_nanbox_f64(),
+                options.get_nanbox_f64(),
+            )
+        };
+    let times = parse_mock_fn_options(options);
+    create_mock_function(
+        original.get_nanbox_f64(),
+        implementation,
+        times,
+        MockRestoreTarget::None,
+    )
 }
 
 extern "C" fn mock_method_thunk(
@@ -924,6 +972,7 @@ extern "C" fn mock_method_thunk(
     let property = scope.root_nanbox_f64(property);
     let implementation = scope.root_nanbox_f64(implementation);
     let options = scope.root_nanbox_f64(options);
+    object_target_addr(target.get_nanbox_f64());
     let (implementation, options) =
         normalize_mock_method_args(implementation.get_nanbox_f64(), options.get_nanbox_f64());
     let implementation = scope.root_nanbox_f64(implementation);
@@ -934,6 +983,7 @@ extern "C" fn mock_method_thunk(
             target.get_nanbox_f64(),
             property.get_nanbox_f64(),
             implementation.get_nanbox_f64(),
+            options.times,
         );
     }
     if options.setter {
@@ -941,6 +991,7 @@ extern "C" fn mock_method_thunk(
             target.get_nanbox_f64(),
             property.get_nanbox_f64(),
             implementation.get_nanbox_f64(),
+            options.times,
         );
     }
     if unsafe { crate::symbol::js_is_symbol(property.get_nanbox_f64()) } != 0 {
@@ -951,6 +1002,7 @@ extern "C" fn mock_method_thunk(
                 property.get_nanbox_f64(),
             )
         };
+        assert_mock_target_method(original);
         let implementation = if is_undefined_value(implementation.get_nanbox_f64()) {
             original
         } else {
@@ -960,6 +1012,7 @@ extern "C" fn mock_method_thunk(
         let function = scope.root_nanbox_f64(create_mock_function(
             original,
             implementation,
+            options.times,
             MockRestoreTarget::ObjectSymbolMethod,
         ));
         unsafe {
@@ -974,6 +1027,7 @@ extern "C" fn mock_method_thunk(
 
     let property_name = property_name(property.get_nanbox_f64());
     let original = get_property_value(target.get_nanbox_f64(), &property_name);
+    assert_mock_target_method(original);
     let implementation = if is_undefined_value(implementation.get_nanbox_f64()) {
         original
     } else {
@@ -983,6 +1037,7 @@ extern "C" fn mock_method_thunk(
     let function = create_mock_function(
         original,
         implementation,
+        options.times,
         MockRestoreTarget::ObjectProperty {
             target: target.get_nanbox_f64(),
             property: property_name.clone(),
@@ -993,7 +1048,7 @@ extern "C" fn mock_method_thunk(
     function
 }
 
-fn create_getter_mock(target: f64, property: f64, implementation: f64) -> f64 {
+fn create_getter_mock(target: f64, property: f64, implementation: f64, times: Option<u64>) -> f64 {
     let property = property_name(property);
     let raw = object_target_addr(target);
     let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
@@ -1005,6 +1060,7 @@ fn create_getter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     };
     let existing = original_accessor.unwrap_or_default();
     let original = accessor_function_value(existing.get);
+    assert_mock_target_method(original);
     let implementation = if is_undefined_value(implementation) {
         original
     } else {
@@ -1014,6 +1070,7 @@ fn create_getter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     let function = create_mock_function(
         original,
         implementation,
+        times,
         MockRestoreTarget::ObjectAccessor {
             target,
             property: property.clone(),
@@ -1054,10 +1111,11 @@ extern "C" fn mock_getter_thunk(
         target.get_nanbox_f64(),
         property.get_nanbox_f64(),
         implementation.get_nanbox_f64(),
+        options.times,
     )
 }
 
-fn create_setter_mock(target: f64, property: f64, implementation: f64) -> f64 {
+fn create_setter_mock(target: f64, property: f64, implementation: f64, times: Option<u64>) -> f64 {
     let property = property_name(property);
     let raw = object_target_addr(target);
     let original_accessor = crate::object::get_accessor_descriptor(raw, &property);
@@ -1069,6 +1127,7 @@ fn create_setter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     };
     let existing = original_accessor.unwrap_or_default();
     let original = accessor_function_value(existing.set);
+    assert_mock_target_method(original);
     let implementation = if is_undefined_value(implementation) {
         original
     } else {
@@ -1078,6 +1137,7 @@ fn create_setter_mock(target: f64, property: f64, implementation: f64) -> f64 {
     let function = create_mock_function(
         original,
         implementation,
+        times,
         MockRestoreTarget::ObjectAccessor {
             target,
             property: property.clone(),
@@ -1118,6 +1178,7 @@ extern "C" fn mock_setter_thunk(
         target.get_nanbox_f64(),
         property.get_nanbox_f64(),
         implementation.get_nanbox_f64(),
+        options.times,
     )
 }
 
