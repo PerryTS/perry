@@ -89,9 +89,7 @@ console.log("join:", typeof path.join, path.join("a", "b"));
     };
     assert_eq!(
         stdout,
-        format!(
-            "platform: {expected_platform}\ncpus: function\njoin: function a/b\n"
-        )
+        format!("platform: {expected_platform}\ncpus: function\njoin: function a/b\n")
     );
 }
 
@@ -130,9 +128,7 @@ module.exports = { platform: node_process.platform };
     };
     assert_eq!(
         stdout,
-        format!(
-            "node_process.platform: {expected_platform}\nnode_os.cpus: function\n"
-        )
+        format!("node_process.platform: {expected_platform}\nnode_os.cpus: function\n")
     );
 }
 
@@ -163,8 +159,6 @@ console.log("join:", join("a", "b"));
     };
     assert_eq!(
         stdout,
-        format!(
-            "platform: {expected_platform}\narch: string\njoin: a/b\n"
-        )
+        format!("platform: {expected_platform}\narch: string\njoin: a/b\n")
     );
 }
