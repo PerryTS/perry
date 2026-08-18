@@ -1,0 +1,1 @@
+Convert `intl/segmenter.rs`'s ten raw handle reads to the #7341 rooted forms after #8364: nine are argument-position and take `with_const_ptr`, one is a genuine post-call reload across `to_number_reject_bigint` (ToIntegerOrInfinity can invoke user code) and takes `across_const`. Behaviour is unchanged; the module returns to zero bare reads.

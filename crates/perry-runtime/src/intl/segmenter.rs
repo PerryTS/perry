@@ -92,7 +92,8 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
     let input_ptr = js_jsvalue_to_string(value);
     let scope = crate::gc::RuntimeHandleScope::new();
     let input_handle = scope.root_string_ptr(input_ptr);
-    let input = unsafe { segmenter_input_text(input_handle.get_raw_const_ptr::<StringHeader>()) };
+    let input =
+        unsafe { input_handle.with_const_ptr::<StringHeader, _>(|ptr| segmenter_input_text(ptr)) };
     let mut arr = js_array_alloc(0);
     let mut index = 0u32;
     #[cfg(feature = "intl-segmenter")]
@@ -100,15 +101,13 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         "word" => {
             for segment in input.split_word_bounds() {
                 let end = index + utf16_len(segment);
-                let segment_ptr = crate::string::js_string_slice(
-                    input_handle.get_raw_const_ptr::<StringHeader>(),
-                    index as i32,
-                    end as i32,
-                );
+                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
+                    crate::string::js_string_slice(ptr, index as i32, end as i32)
+                });
                 let record = make_segment_record(
                     string_pointer_value(segment_ptr),
                     index,
-                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
                     Some(segment_is_word_like(segment)),
                 );
                 arr = js_array_push_f64(arr, record);
@@ -118,15 +117,13 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         "sentence" => {
             for segment in input.split_sentence_bounds() {
                 let end = index + utf16_len(segment);
-                let segment_ptr = crate::string::js_string_slice(
-                    input_handle.get_raw_const_ptr::<StringHeader>(),
-                    index as i32,
-                    end as i32,
-                );
+                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
+                    crate::string::js_string_slice(ptr, index as i32, end as i32)
+                });
                 let record = make_segment_record(
                     string_pointer_value(segment_ptr),
                     index,
-                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
                     None,
                 );
                 arr = js_array_push_f64(arr, record);
@@ -138,15 +135,13 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         _ => {
             for segment in input.graphemes(true) {
                 let end = index + utf16_len(segment);
-                let segment_ptr = crate::string::js_string_slice(
-                    input_handle.get_raw_const_ptr::<StringHeader>(),
-                    index as i32,
-                    end as i32,
-                );
+                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
+                    crate::string::js_string_slice(ptr, index as i32, end as i32)
+                });
                 let record = make_segment_record(
                     string_pointer_value(segment_ptr),
                     index,
-                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
                     None,
                 );
                 arr = js_array_push_f64(arr, record);
@@ -165,11 +160,9 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         let is_word = granularity == "word";
         for segment in input.chars().map(|c| c.to_string()).collect::<Vec<_>>() {
             let end = index + utf16_len(&segment);
-            let segment_ptr = crate::string::js_string_slice(
-                input_handle.get_raw_const_ptr::<StringHeader>(),
-                index as i32,
-                end as i32,
-            );
+            let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
+                crate::string::js_string_slice(ptr, index as i32, end as i32)
+            });
             let word_like = if is_word {
                 Some(segment.chars().any(|c| c.is_alphanumeric()))
             } else {
@@ -178,7 +171,7 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
             let record = make_segment_record(
                 string_pointer_value(segment_ptr),
                 index,
-                string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
                 word_like,
             );
             arr = js_array_push_f64(arr, record);
@@ -223,13 +216,14 @@ pub(crate) extern "C" fn segmenter_containing_thunk(
     // array rooted while coercing the index.
     let scope = crate::gc::RuntimeHandleScope::new();
     let segments_handle = scope.root_raw_const_ptr(segments);
-    let number = list_relative_plural::to_number_reject_bigint(index);
+    let (number, segments) = segments_handle.across_const::<crate::ArrayHeader, _>(|| {
+        list_relative_plural::to_number_reject_bigint(index)
+    });
     let integer = if number.is_nan() { 0.0 } else { number.trunc() };
     if integer < 0.0 || integer >= input_len {
         return undefined();
     }
 
-    let segments = segments_handle.get_raw_const_ptr::<crate::ArrayHeader>();
     let count = js_array_length(segments);
     for i in 0..count {
         let record_value = js_array_get_f64(segments, i);
