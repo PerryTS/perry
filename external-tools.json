@@ -216,6 +216,15 @@
       "repository": "github:NVIDIA/skillspector",
       "version": "2eb844780ab163f01468ecf142c40a2ec0fcaec0",
       "versionDate": "2026-05-18"
+    },
+    "cargo-fixit": {
+      "description": "cargo-fixit — crate-ci/cargo-fixit, the drop-in faster replacement for `cargo clippy --fix` (skips the re-check compile between fix rounds). Installed from source via `cargo install cargo-fixit@<version> --locked` because the crate publishes NO prebuilt binaries (no cargo binstall, no GitHub release assets). Backs the `make fix` target.",
+      "release": "cargo-install",
+      "crate": "cargo-fixit",
+      "version": "0.1.15",
+      "binary": "cargo-fixit",
+      "repository": "github:crate-ci/cargo-fixit",
+      "notes": "From-source install — no prebuilt binaries. --locked respects the published Cargo.lock (the supply-chain control). make fix-deps reads this pin and runs cargo install cargo-fixit@0.1.15 --locked."
     }
   }
 }
