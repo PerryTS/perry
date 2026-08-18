@@ -13,7 +13,7 @@ python3 scripts/ci_plan.py --self-test   # the policy's own invariants
 | tier | trigger | what it is for | fan-in job |
 |---|---|---|---|
 | **pr** | every `pull_request` push | the required gate. Small, fast, must be green on `main`. | `pr-gate` — **the only required status context** |
-| **sweep** | every `push` to `main`, coalesced | post-merge truth for `main`: the PR tier unscoped plus the medium-weight jobs that do not fit the PR budget | `main-gate` |
+| **sweep** | every `push` to `main` (coalesced) **+ a two-hourly cron backstop** | post-merge truth for `main`: the PR tier unscoped plus the medium-weight jobs that do not fit the PR budget | `main-gate` |
 | **full** | nightly `schedule`, `v*` tags, `workflow_dispatch`, PRs labelled `run-extended-tests` | everything, incl. parity, compile-smoke, doc-tests, package smokes, the 8-shard auto-optimize gap suite | `full-suite-gate` — what `release-packages.yml` waits for |
 
 ## The job × tier matrix
@@ -110,7 +110,11 @@ which costs no runner slot.
 `push` to `main` uses ONE constant concurrency group with `cancel-in-progress: false`:
 GitHub keeps at most one running + one pending run per group and replaces the pending
 run with the newest, so a burst of merges is tested at its tip instead of queueing 58
-sweeps. Sweep-only jobs are chained behind `check` so a sweep's fan-out does not take
+sweeps. **The push arm alone is not sufficient**: measured 2026-08-16..18, no push
+sweep ever reached a runner — merges replaced the pending run faster than the
+pending→running transition happened, even with an idle queue. The two-hourly cron
+(`47 */2 * * *`; the planner maps any non-nightly cron to the sweep tier) is the
+reliable arm; the push trigger stays for quiet periods. Sweep-only jobs are chained behind `check` so a sweep's fan-out does not take
 every runner slot the moment a merge lands. Attribution of a sweep failure is by
 window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly gates.
 

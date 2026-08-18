@@ -128,6 +128,11 @@ PARITY_SHARDS = 8
 
 EXTENDED_LABEL = "run-extended-tests"
 
+# The nightly (full-tier) cron in test.yml `on.schedule`. Any OTHER cron firing
+# the workflow is the two-hourly sweep backstop. Keep in lockstep with the
+# workflow; the self-test asserts both mappings.
+NIGHTLY_CRON = "0 4 * * *"
+
 # ---------------------------------------------------------------------------
 # PR scope classification.
 # ---------------------------------------------------------------------------
@@ -218,7 +223,13 @@ def classify(changed: list[str]) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 # Tier derivation.
 # ---------------------------------------------------------------------------
-def derive_tier(event: str, ref: str, labels: list[str], tier_input: str | None) -> str:
+def derive_tier(
+    event: str,
+    ref: str,
+    labels: list[str],
+    tier_input: str | None,
+    schedule: str | None = None,
+) -> str:
     if event == "pull_request":
         return "full" if EXTENDED_LABEL in labels else "pr"
     if event == "push":
@@ -230,6 +241,14 @@ def derive_tier(event: str, ref: str, labels: list[str], tier_input: str | None)
         # `on.push.branches`), but be explicit if one ever does.
         return "sweep"
     if event == "schedule":
+        # Two crons fire this workflow. The nightly is the full tier; the
+        # two-hourly is the SWEEP BACKSTOP: the push-triggered sweep uses one
+        # constant concurrency group (1 running + 1 pending, newest replaces
+        # pending), and measured 2026-08-16..18 NO push sweep ever reached a
+        # runner -- merges landed faster than pending->running could happen,
+        # even with an idle queue. The cron string is passed via --schedule.
+        if schedule and schedule != NIGHTLY_CRON:
+            return "sweep"
         return "full"
     if event == "workflow_dispatch":
         return tier_input or "full"
@@ -243,9 +262,10 @@ def plan(
     changed: list[str] | None = None,
     tier_input: str | None = None,
     update_gap_snapshot: bool = False,
+    schedule: str | None = None,
 ) -> dict:
     labels = labels or []
-    tier = derive_tier(event, ref, labels, tier_input)
+    tier = derive_tier(event, ref, labels, tier_input, schedule)
     if event == "pull_request":
         scope = classify(changed or [])
         if scope["unknown"]:
@@ -334,6 +354,10 @@ def _self_test() -> int:
     check("push main is sweep", derive_tier("push", "refs/heads/main", [], None) == "sweep")
     check("tag is full", derive_tier("push", "refs/tags/v0.5.9999", [], None) == "full")
     check("schedule is full", derive_tier("schedule", "refs/heads/main", [], None) == "full")
+    check("nightly cron is full", derive_tier("schedule", "refs/heads/main", [], None, NIGHTLY_CRON) == "full")
+    check("any other cron is the sweep backstop", derive_tier("schedule", "refs/heads/main", [], None, "47 */2 * * *") == "sweep")
+    backstop = plan("schedule", "refs/heads/main", schedule="47 */2 * * *")
+    check("sweep backstop runs windows but not parity", backstop["jobs"]["windows_build"] and not backstop["jobs"]["parity"])
     check("dispatch default is full", derive_tier("workflow_dispatch", "refs/heads/x", [], None) == "full")
     check("dispatch tier honoured", derive_tier("workflow_dispatch", "refs/heads/x", [], "sweep") == "sweep")
 
@@ -431,6 +455,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--labels", default="", help="comma-separated PR label names")
     ap.add_argument("--changed-files", help="file with one changed path per line (PR only)")
     ap.add_argument("--tier", choices=TIERS, help="workflow_dispatch tier input")
+    ap.add_argument("--schedule", help="the firing cron string (github.event.schedule)")
     ap.add_argument("--update-gap-snapshot", action="store_true")
     ap.add_argument("--table", action="store_true", help="print the tier table as markdown")
     ap.add_argument("--self-test", action="store_true")
@@ -457,6 +482,7 @@ def main(argv: list[str]) -> int:
         changed=changed,
         tier_input=args.tier,
         update_gap_snapshot=args.update_gap_snapshot,
+        schedule=args.schedule,
     )
     out = json.dumps(p, separators=(",", ":"), sort_keys=True)
     print(json.dumps(p, indent=2, sort_keys=True))

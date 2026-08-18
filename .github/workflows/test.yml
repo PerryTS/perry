@@ -41,10 +41,20 @@ on:
     branches: [main]
     tags: ['v*']
   schedule:
-    # Nightly full tier at 04:00 UTC. The sweep already runs on every merge;
-    # this is the daily arm for the slow suites (parity, compile-smoke,
-    # doc-tests, package smokes, the auto-optimize gap shards).
+    # Nightly full tier at 04:00 UTC — the daily arm for the slow suites
+    # (parity, compile-smoke, doc-tests, package smokes, the auto-optimize
+    # gap shards). Keep this string in lockstep with NIGHTLY_CRON in
+    # scripts/ci_plan.py: the planner maps THIS cron to `full` and any other
+    # cron to `sweep`.
     - cron: '0 4 * * *'
+    # Two-hourly SWEEP BACKSTOP. The push-triggered sweep coalesces in one
+    # constant concurrency group (1 running + 1 pending, newest replaces
+    # pending) — and measured 2026-08-16..18, NO push sweep ever reached a
+    # runner: merges landed faster than the pending->running transition even
+    # with an idle queue, so `main-gate` had never once executed. This cron is
+    # the reliable arm; the push trigger stays for quiet periods. :47 to dodge
+    # the contended :00 scheduler slot and the six-hourly satellite gates.
+    - cron: '47 */2 * * *'
   workflow_dispatch:
     inputs:
       tier:
@@ -123,6 +133,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
+          SCHEDULE: ${{ github.event.schedule }}
           LABELS: ${{ github.event_name == 'pull_request' && join(github.event.pull_request.labels.*.name, ',') || '' }}
           TIER_INPUT: ${{ inputs.tier }}
           UPDATE_GAP_SNAPSHOT: ${{ inputs.update_gap_snapshot }}
@@ -131,6 +142,9 @@ jobs:
           args=(--event "$EVENT_NAME" --ref "$REF" --labels "$LABELS")
           if [ "$EVENT_NAME" = "pull_request" ]; then
             args+=(--changed-files changed-files.txt)
+          fi
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            args+=(--schedule "$SCHEDULE")
           fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             args+=(--tier "${TIER_INPUT:-full}")
