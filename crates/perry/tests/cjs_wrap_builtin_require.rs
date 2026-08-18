@@ -162,3 +162,80 @@ console.log("join:", join("a", "b"));
         format!("platform: {expected_platform}\narch: string\njoin: a/b\n")
     );
 }
+
+/// #8343 followup: `Object.create(require("process"))` stamps the result with
+/// a synthetic class_id and — pre-fix — registered `NATIVE_MODULE_CLASS_ID`
+/// (0xFFFFFFFE, the `-2` sentinel) as that synthetic class's parent via
+/// `register_class`.  Later, `Object.getPrototypeOf` on the synthetic class
+/// ref (returned by `instance.constructor`) walked the parent chain and
+/// returned the raw sentinel as an INT32-tagged class ref (`-2`).
+/// `Object.create(-2)` then threw
+/// `TypeError: Object prototype may only be an Object or null: -2` — the
+/// blocker for `sdxgen --help` (rolldown's `__toESM` calls
+/// `Object.create(Object.getPrototypeOf(mod))`).
+///
+/// This witness creates the same `Object.create(builtin_namespace)` shape,
+/// reads `.constructor` to obtain the synthetic class ref, and then runs the
+/// `Object.create(Object.getPrototypeOf(ctor))` chain.  Pre-fix it threw the
+/// `-2` TypeError; post-fix it succeeds.
+#[test]
+fn cjs_wrap_object_create_on_builtin_namespace_get_prototype_of_not_sentinel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+const ns = require("process");
+const obj = Object.create(ns);
+const ctor = obj.constructor;
+const proto = Object.getPrototypeOf(ctor);
+const obj2 = Object.create(proto);
+console.log("ok");
+"#,
+    );
+    assert_eq!(stdout, "ok\n");
+}
+
+/// The full rolldown `__toESM` shape (the real one using
+/// `Object.create(Object.getPrototypeOf(mod))`) must not throw the `-2`
+/// TypeError when `mod` is a built-in module namespace AND a prior
+/// `Object.create(builtin_namespace)` has registered the sentinel parent.
+/// This mirrors the `external-pack.js` startup sequence: `__toESM` calls on
+/// `require("process")` etc. interleave with `isPlainObject`/`deepMerge`
+/// prototype-chain walks that hit `getPrototypeOf` on synthetic class refs.
+#[test]
+fn cjs_wrap_rolldown_toesm_after_object_create_on_builtin_namespace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+// First: Object.create on a built-in namespace registers the sentinel parent.
+const ns = require("process");
+const obj = Object.create(ns);
+const ctor = obj.constructor;
+// Now run __toESM on another built-in — its Object.create(getPrototypeOf(mod))
+// must not trip on the registered sentinel.
+let node_os = require("os");
+node_os = __toESM(node_os, 1);
+console.log("os.cpus:", typeof node_os.cpus);
+"#,
+    );
+    assert_eq!(stdout, "os.cpus: function\n");
+}

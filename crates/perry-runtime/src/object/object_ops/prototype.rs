@@ -115,7 +115,23 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 // instanceof C` was always false even though property /
                 // getter dispatch through the chain worked correctly.
                 let parent_class_id = unsafe { (*proto_ptr).class_id };
-                if parent_class_id != 0 && parent_class_id != cid {
+                // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
+                // sentinel tagging native-module namespace objects, NOT a real
+                // declared class. Registering it as a synthetic class's parent
+                // makes `get_parent_class_id` return it, and
+                // `js_object_get_prototype_of`'s class-ref branch then returns
+                // the raw sentinel as an INT32-tagged class ref (`-2`).
+                // `Object.create(that)` rejects it with
+                // `TypeError: Object prototype may only be an Object or null: -2`
+                // (rolldown's `__toESM` → `Object.create(Object.getPrototypeOf(mod))`
+                // chain). Skip the registration so the synthetic class is treated
+                // as a root — its prototype is already stored in
+                // `CLASS_PROTOTYPE_OBJECTS` by `class_prototype_object_root_store`
+                // above, which is what `getPrototypeOf` reads.
+                if parent_class_id != 0
+                    && parent_class_id != cid
+                    && parent_class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
+                {
                     register_class(cid, parent_class_id);
                 }
                 class_id = cid;
@@ -324,7 +340,16 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
         if let Some(parent_id) = get_parent_class_id(class_id) {
-            if parent_id != 0 {
+            // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
+            // sentinel, not a real class. A prior `Object.create(proto)` whose
+            // `proto` was a native-module namespace object registered it as a
+            // synthetic class's parent. Returning the raw sentinel as an
+            // INT32-tagged class ref (`-2`) trips `Object.create` with
+            // `TypeError: Object prototype may only be an Object or null: -2`.
+            // Treat it as a root: a native-module namespace's [[Prototype]] is
+            // %Object.prototype%, so the synthetic class whose proto was that
+            // namespace inherits Object.prototype too.
+            if parent_id != 0 && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID {
                 let parent_bits = 0x7FFE_0000_0000_0000u64 | (parent_id as u64);
                 return f64::from_bits(parent_bits);
             }
