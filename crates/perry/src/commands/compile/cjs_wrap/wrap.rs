@@ -356,6 +356,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
+        // #8342: don't emit a static `import _req_N from 'process'` for Node.js
+        // built-in specs. The codegen does not initialize native-module import
+        // bindings inside CJS-wrapped modules, so the binding would be dropped
+        // by the HIR / left undefined at runtime. Builtins resolve through the
+        // synthetic require's `createRequire` arm instead (see `require_cases`),
+        // which never references the import local.
+        .filter(|(spec, _)| !builtin_requires.contains(spec))
         .map(|(spec, local)| {
             // #4904: Node's underscore-prefixed internal http modules are
             // require-only re-exports of the public `http` surface
@@ -442,7 +449,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             } else {
                 format!("{link_child}return {local};")
             };
-            if require_site_in_try(source, spec) {
+            if builtin_requires.contains(spec) {
+                // #8342: builtins have no static import binding (we skip emitting
+                // one above), so never reference `{local}` here — always go through
+                // the `createRequire`-backed `required_value`. The try-site
+                // `typeof {local} === 'boolean'` sentinel guard does not apply
+                // (builtins are never the pruned-build TRUE sentinel).
+                format!("        if (specifier === '{spec}') {{ {required_value} }}")
+            } else if require_site_in_try(source, spec) {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
                      throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
@@ -734,6 +748,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // immutable module-scope `const alias = _req_N;` (the const write
             // would throw) nor strip its declaration below.
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
+            // #8342: don't surface `const alias = _req_N;` for Node.js built-in
+            // specs — we no longer emit a static `import _req_N from '<builtin>'`
+            // (the codegen doesn't initialize native-module import bindings in
+            // CJS-wrapped modules), so `_req_N` doesn't exist. The body's own
+            // `<kw> alias = require('<builtin>')` stays (builtins are excluded
+            // from the blanking filter below) and resolves through the synthetic
+            // require's `createRequire` arm at runtime.
+            .filter(|(_, spec, _)| !builtin_requires.contains(spec))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
                 // When the alias is already the spec's import local name

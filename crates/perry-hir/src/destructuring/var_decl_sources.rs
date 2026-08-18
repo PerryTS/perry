@@ -55,6 +55,26 @@ pub(crate) fn require_resolvable_native_specifier(init: &ast::Expr) -> Option<St
     resolvable_native_module_for_spec(&require_literal_specifier(init)?)
 }
 
+/// #8342: is the bare global `require` shadowed by a local / function-scoped /
+/// imported binding named `require`? This is exactly the situation inside a
+/// CJS-wrapped module, where the wrap injects a synthetic
+/// `function require(specifier) { ... }` (with a `createRequire`-backed
+/// built-in arm, see `cjs_wrap::wrap`) into the IIFE body. Mirrors the guard in
+/// `expr_call::intrinsics::try_require_literal` — which bails on the same
+/// shadowing — but the destructuring `var`/`let`/`const` paths run BEFORE call
+/// lowering and intercept `let x = require("process")` first, so without this
+/// check they would register `x` as a native-module namespace binding and drop
+/// the runtime local. In a CJS-wrapped module the native-module namespace is
+/// not initialized, so `x` resolves to nothing at runtime
+/// (`ReferenceError: node_process is not defined`). Returning `true` here tells
+/// the callers to let the `require(...)` call flow through to the synthetic
+/// require at runtime, which resolves builtins via `createRequire`.
+pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
+    ctx.lookup_local("require").is_some()
+        || ctx.lookup_func("require").is_some()
+        || ctx.lookup_imported_func("require").is_some()
+}
+
 /// #5216: the canonical (`node:`-stripped) native module name for a require
 /// specifier `raw`, iff it resolves to a Perry-supported native/Node-builtin
 /// module; otherwise `None`. `node:`-prefixed specifiers must name a real Node
@@ -148,6 +168,17 @@ pub(super) fn register_destructured_stream_ctors(
     let Some(init) = decl.init.as_deref() else {
         return Vec::new();
     };
+
+    // #8342: inside a CJS-wrapped module the wrap's synthetic
+    // `function require(...)` shadows the bare global `require`, and its
+    // built-in arm resolves `require("process")` etc. via `createRequire` at
+    // runtime. Don't register destructured members as native-module aliases
+    // here — the native namespace isn't initialized in a CJS-wrapped module,
+    // so the bindings would be undefined at runtime. Let the destructure run
+    // off the runtime `require(...)` call result instead.
+    if require_is_shadowed_by_local(ctx) && require_literal_specifier(init).is_some() {
+        return Vec::new();
+    }
 
     // #5216: `const { createInterface } = require("readline")` — when the RHS is
     // a `require("<native-spec>")` literal, register EVERY destructured member
