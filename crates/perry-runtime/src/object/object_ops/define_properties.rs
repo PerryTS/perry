@@ -135,8 +135,10 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
         };
         if symbols != 0 {
             let symbols_handle = scope.root_raw_mut_ptr(symbols as *mut crate::array::ArrayHeader);
-            let symbols_len = symbols_handle
-                .with_const_ptr::<crate::array::ArrayHeader, _>(crate::array::js_array_length);
+            let symbols_len =
+                symbols_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|symbols| {
+                    crate::array::js_array_length(symbols)
+                });
             for i in 0..symbols_len {
                 let symbol =
                     symbols_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|symbols| {

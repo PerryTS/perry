@@ -35,6 +35,10 @@ const proxyTarget: any = { 0: 1, foo: 2 };
 const proxySymbol = Symbol("proxy");
 proxyTarget[proxySymbol] = 3;
 const proxyBag = new Proxy(proxyTarget, {
+  ownKeys() {
+    proxyLog.push("ownKeys");
+    return [proxySymbol, "foo", "0"];
+  },
   getOwnPropertyDescriptor(_target, key) {
     proxyLog.push(key);
     return undefined;
