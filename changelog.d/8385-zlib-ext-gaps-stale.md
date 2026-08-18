@@ -1,0 +1,1 @@
+Delete `js_zlib_crc32` and `js_zlib_unzip_sync` from `KNOWN_EXT_GAPS`. #8375 implemented both in `perry-ext-zlib`, which made their allowlist entries stale and turned `ext_zlib_covers_every_stdlib_symbol_the_flip_strips` red on `main`.

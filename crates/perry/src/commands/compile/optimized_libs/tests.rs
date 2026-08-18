@@ -1150,11 +1150,9 @@ fn ext_zlib_covers_every_stdlib_symbol_the_flip_strips() {
         "js_zlib_process_pending",
         // Genuine one-shot gaps. Same shape as the #8005 pair; they have not
         // broken a link only because no gap test links them on this path yet.
-        "js_zlib_crc32",
         "js_zlib_deflate_raw",
         "js_zlib_inflate_raw",
         "js_zlib_unzip",
-        "js_zlib_unzip_sync",
     ];
 
     fn exported_zlib_symbols(dir: &Path) -> std::collections::BTreeSet<String> {
