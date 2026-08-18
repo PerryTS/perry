@@ -130,6 +130,11 @@ fn inline_shape_descriptor_facts_exact(
 /// layout into the object's `GcHeader` constant (#7834).
 pub(super) struct InstanceAlloc {
     pub(super) handle: String,
+    /// `true` when the allocator publishes this class's canonical keys and
+    /// ShapeId at birth. Both the inline bump and the stamped outlined
+    /// allocator provide the structural proof needed by constructor-free
+    /// field initialization.
+    pub(super) constructor_stores_ready: bool,
     /// `true` ⟹ the header already reads `GC_LAYOUT_POINTER_FREE |
     /// GC_OBJ_TYPED_LAYOUT_INTACT`, so the construction site owes the runtime
     /// only the address-dependent half of `js_gc_declare_typed_shape_layout`
@@ -143,9 +148,17 @@ pub(super) fn emit_instance_alloc(
     class: &Class,
 ) -> InstanceAlloc {
     let mut typed_layout_baked = false;
-    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut typed_layout_baked);
+    let mut constructor_stores_ready = false;
+    let handle = emit_instance_alloc_inner(
+        ctx,
+        class_name,
+        class,
+        &mut typed_layout_baked,
+        &mut constructor_stores_ready,
+    );
     InstanceAlloc {
         handle,
+        constructor_stores_ready,
         typed_layout_baked,
     }
 }
@@ -155,6 +168,7 @@ fn emit_instance_alloc_inner(
     class_name: &str,
     class: &Class,
     typed_layout_baked: &mut bool,
+    constructor_stores_ready: &mut bool,
 ) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
@@ -311,6 +325,11 @@ fn emit_instance_alloc_inner(
             ],
         )
     } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
+        // Both arms below stamp the canonical class keys and ShapeId. The
+        // outlined arm may allocate an old-generation object when a learned
+        // width crosses the large-object threshold; constructor-free pointer
+        // stores retain the ordinary generation-tested write barrier.
+        *constructor_stores_ready = true;
         // [#bloat] Outline the per-`new`-site allocator EXCEPT inside a loop.
         //
         // Outlining collapses ~145 lines of per-class-constant IR per site into

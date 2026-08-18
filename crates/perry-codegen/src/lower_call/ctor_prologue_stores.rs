@@ -1,5 +1,5 @@
 //! Constructor-free construction for a class whose entire constructor is a run
-//! of `this.<field> = <parameter>` stores.
+//! of `this.<field> = <parameter>` stores and typed finite-offset variants.
 //!
 //! ## What this is for
 //!
@@ -23,17 +23,16 @@
 //! (4 fields, **identical object bytes**) 0.3707 s → `churn_alloc8` 0.6143 s.
 //! The step is field *stores*, not bytes.
 //!
-//! Every one of those conditions is statically true three instructions earlier,
-//! at the allocation. This module recognizes that case and stores the fields
-//! straight into their packed slots at the `new` site, with no call and no
-//! per-field guard.
+//! The allocation establishes the structural conditions, and the pre-constructor
+//! layout declaration establishes the representation condition. This module
+//! recognizes that case and stores the fields straight into their packed slots
+//! at the `new` site, with no call and no per-field guard.
 //!
 //! ## Where the proof comes from
 //!
-//! Almost all of it from one bit: `InstanceAlloc::typed_layout_baked` (#7834).
-//! It is set only on the inline-bump arm of `new_alloc.rs`, and only when
-//! `layout_pointer_free_at_allocation` holds, so it certifies that the
-//! allocation wrote these header constants itself:
+//! Almost all of it comes from allocation with the class's canonical stamped
+//! shape. The inline bump writes these facts directly; the stamped outlined
+//! allocator establishes the same contract:
 //!
 //! | precheck condition | why it holds |
 //! |---|---|
@@ -43,16 +42,16 @@
 //! | `class_id == <this class>` | same word, `cid` is this site's class |
 //! | live-slot bound > slot | the bound is the class's own field count (the ShapeId descriptor's `live_inline_slot_count` since #8113), and every slot in the plan indexes a declared field |
 //! | `keys_array == @perry_class_keys_<C>` | the header store loads the same global the precheck compares against |
-//! | no per-object descriptors | `_reserved` is the constant `GC_LAYOUT_POINTER_FREE \| INTACT` |
-//! | not frozen | same constant |
-//! | typed layout INTACT | same constant — this is exactly what #7834 baked |
+//! | no property descriptors | the instance is freshly allocated and unpublished |
+//! | not frozen | same fresh-instance proof |
+//! | typed layout INTACT | baked by #7834 for pointer-free shapes; checked after the runtime declaration otherwise |
 //!
 //! Nothing can invalidate any of it in between: the instance has not escaped,
 //! and the arguments were lowered *before* the allocation (they are re-read from
 //! their roots by `refresh_rooted_args`, so a collection during the allocation
 //! is already handled).
 //!
-//! Two conditions are **not** static, and both are still emitted — once for the
+//! Three conditions are **not** static, and all are still emitted — once for the
 //! whole construction rather than once per field:
 //!
 //! * **The policy latch** `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`. It is
@@ -60,6 +59,10 @@
 //!   or typed-feedback tracing arms. Honouring it keeps the escape hatch real —
 //!   a knob whose off-state is not on the path it claims to gate is the failure
 //!   mode `CLAUDE.md`'s kill-policy section is about.
+//! * **The typed-layout result** for pointer-bearing shapes. The declaration
+//!   can reject an ambiguous layout, so the fast arm reads the authoritative
+//!   INTACT header bit after the call. Pointer-free shapes retain #7834's
+//!   compile-time bake and pay no extra check.
 //! * **The values.** A raw slot may hold only a plain finite double. The
 //!   conjunction of the per-value finite tests decides the whole construction,
 //!   so a single non-number sends *all* fields to the constructor call, which is
@@ -74,10 +77,16 @@
 //! `js_array_numeric_value_to_raw_f64` canonicalization (the only inputs that
 //! helper rewrites are exactly the ones the finite test rejects).
 //!
-//! GC: a plain finite double is provably not a heap pointer, the shape is
-//! `GC_LAYOUT_POINTER_FREE`, and the instance is a fresh nursery object — so no
-//! write barrier and no per-slot layout note are due. Same reasoning, same
-//! audit tag, as the #5093 loop-clone store in `expr/property_set.rs`.
+//! Pointer-bearing typed layouts are also eligible once
+//! `js_gc_declare_typed_shape_layout` has established the descriptor. The fast
+//! arm checks `GC_OBJ_TYPED_LAYOUT_INTACT` after that call, so an ambiguous or
+//! rejected layout stays on the constructor path. Only raw-f64 fields need the
+//! finite-value check; pointer/boxed slots keep their NaN-boxed bits.
+//!
+//! GC: the instance is fresh and unpublished. Pointer stores are already
+//! covered by the declared shape mask, so no per-slot layout note is due; each
+//! pointer/boxed field still emits the ordinary value-and-generation-tested
+//! write barrier for old-generation and incremental-marking correctness.
 
 use crate::expr::FnCtx;
 
@@ -87,6 +96,13 @@ pub(super) struct PrologueStore {
     pub(super) slot: u32,
     /// Index into the `new` site's lowered argument vector.
     pub(super) arg_index: usize,
+    /// For a numeric field initialized as `<number param> + <finite literal>`,
+    /// the literal to add at the construction site. `None` is a direct
+    /// parameter store.
+    pub(super) numeric_addend: Option<f64>,
+    /// The slot is read as a raw `f64`, so its argument must be a plain finite
+    /// number before the direct store is allowed.
+    pub(super) requires_raw_f64: bool,
 }
 
 /// Can `new <class_name>(…)` skip its constructor call and store the fields
@@ -110,24 +126,26 @@ pub(super) struct PrologueStore {
 ///   parameters `undefined`. Requiring exact positional correspondence is what
 ///   makes `lowered_args[i]` the value of parameter `i`.
 /// * **A body that is anything other than the full run** — every statement must
-///   be `this.<f> = <param>`, and the assigned set must cover *every* declared
-///   field exactly once. Partial coverage would leave a declared raw-f64 slot
-///   holding the allocator's `undefined` fill under an INTACT header, which is
-///   precisely the state `layout_pointer_free_at_allocation` exists to prevent.
+///   be `this.<f> = <param>` or the finite typed-number offset documented below,
+///   and the assigned set must cover *every* declared field exactly once.
+///   Partial coverage would leave a declared raw-f64 slot holding the
+///   allocator's `undefined` fill under an INTACT header, which is precisely the
+///   state the at-allocation declaration exists to prevent.
 ///
-/// A literal or a pure operator tree on the right-hand side is admissible to
-/// `field_init::ctor_prologue_param_assigned_fields` but NOT here: those values
-/// have no corresponding entry in the call site's argument vector. Widening to
-/// them means lowering the expression at the `new` site, which is a different
-/// change.
+/// A general literal or pure operator tree on the right-hand side is admissible
+/// to `field_init::ctor_prologue_param_assigned_fields` but NOT here: those
+/// values have no corresponding entry in the call site's argument vector. The
+/// one derived form admitted is `<number param> + <finite numeric literal>`;
+/// it lowers to one `fadd`, exactly as the typed constructor body does, and is
+/// the wide-record initialization pattern in issue #8289's `tree_wide` case.
 pub(super) fn prologue_store_plan(
     ctx: &FnCtx<'_>,
     class_name: &str,
     class: &perry_hir::Class,
     lowered_arg_count: usize,
-    typed_layout_baked: bool,
+    constructor_layout_ready: bool,
 ) -> Option<Vec<PrologueStore>> {
-    if !typed_layout_baked {
+    if !constructor_layout_ready {
         return None;
     }
     if class.extends.is_some()
@@ -173,11 +191,16 @@ pub(super) fn prologue_store_plan(
     let mut plan: Vec<PrologueStore> = Vec::with_capacity(ctor.body.len());
     let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for stmt in &ctor.body {
-        let (property, param_id) = param_store(stmt)?;
+        let (property, param_id, numeric_addend) = param_store(stmt)?;
         if !assigned.insert(property) {
             return None;
         }
         let arg_index = *param_slot.get(&param_id)?;
+        if numeric_addend.is_some()
+            && !matches!(ctor.params[arg_index].ty, perry_hir::types::Type::Number)
+        {
+            return None;
+        }
         // A compiled setter owns the name — never store into the slot behind it.
         if ctx
             .methods
@@ -186,7 +209,18 @@ pub(super) fn prologue_store_plan(
             return None;
         }
         let slot = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
-        plan.push(PrologueStore { slot, arg_index });
+        // Refuse an unresolved field type rather than guessing boxed: missing
+        // a raw-f64 slot here would store NaN-box bits into a slot readers
+        // reinterpret as a plain double.
+        let field_type =
+            crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
+        let requires_raw_f64 = crate::typed_shape::type_is_raw_f64_candidate(&field_type);
+        plan.push(PrologueStore {
+            slot,
+            arg_index,
+            numeric_addend,
+            requires_raw_f64,
+        });
     }
     // Every declared field written, exactly once — see the doc comment.
     if !class
@@ -199,24 +233,46 @@ pub(super) fn prologue_store_plan(
     Some(plan)
 }
 
-/// `Some((field, param_id))` when `stmt` is exactly `this.<field> = <param>`.
+/// `Some((field, param_id, addend))` when `stmt` is exactly
+/// `this.<field> = <param>` or `this.<field> = <param> + <finite number>`.
 ///
 /// Both HIR spellings, for the same reason `field_init::prologue_assigned_field`
 /// matches both: `Expr::PropertySet` is what the anon-shape lowering
 /// synthesizes, `Expr::PutValueSet` is what user source produces. Matching one
 /// of them covers exactly half the population — #7512 is the bug that shape
 /// caused.
-fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32)> {
-    use perry_hir::{Expr, Stmt};
+fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
+    use perry_hir::{BinaryOp, Expr, Stmt};
+    fn value_spec(expr: &Expr) -> Option<(u32, Option<f64>)> {
+        match expr {
+            Expr::LocalGet(id) => Some((*id, None)),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
+                let Expr::LocalGet(id) = left.as_ref() else {
+                    return None;
+                };
+                let addend = match right.as_ref() {
+                    Expr::Integer(value) => *value as f64,
+                    Expr::Number(value) => *value,
+                    _ => return None,
+                };
+                addend.is_finite().then_some((*id, Some(addend)))
+            }
+            _ => None,
+        }
+    }
     match stmt {
         Stmt::Expr(Expr::PropertySet {
             object,
             property,
             value,
-        }) if matches!(object.as_ref(), Expr::This) => match value.as_ref() {
-            Expr::LocalGet(id) => Some((property.as_str(), *id)),
-            _ => None,
-        },
+        }) if matches!(object.as_ref(), Expr::This) => {
+            let (id, addend) = value_spec(value.as_ref())?;
+            Some((property.as_str(), id, addend))
+        }
         Stmt::Expr(Expr::PutValueSet {
             target,
             key,
@@ -224,10 +280,11 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32)> {
             receiver,
             strict: _,
         }) if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
-            match (key.as_ref(), value.as_ref()) {
-                (Expr::String(property), Expr::LocalGet(id)) => Some((property.as_str(), *id)),
-                _ => None,
-            }
+            let Expr::String(property) = key.as_ref() else {
+                return None;
+            };
+            let (id, addend) = value_spec(value.as_ref())?;
+            Some((property.as_str(), id, addend))
         }
         _ => None,
     }

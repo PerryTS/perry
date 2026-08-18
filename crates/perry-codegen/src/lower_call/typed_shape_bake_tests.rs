@@ -342,6 +342,35 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
     m
 }
 
+/// One escaping `new <name>(1, <second>)` outside a loop. This selects the
+/// stamped outlined allocator and covers specialized/cold entries that do not
+/// inherit a caller's loop or allocation-hot classification.
+pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
+    let mut module = loop_new_module(name, f1_ty, second.clone());
+    module.init = vec![
+        Stmt::Let {
+            id: 20,
+            name: "x".to_string(),
+            ty: Type::Named(name.to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: name.to_string(),
+                args: vec![Expr::Integer(1), second],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(10)),
+            args: vec![Expr::LocalGet(20)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    ];
+    module
+}
+
 pub(super) fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }

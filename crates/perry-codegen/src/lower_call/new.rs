@@ -23,7 +23,7 @@ use super::new_helpers::{
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::rooting::{self, open_rooted_group, EmittedValue, Repr, RootedGroup};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I16, I32, I64, I8, PTR};
 
 /// Does `new <class_name>(…)` run user code — an own or inherited constructor
 /// body, or field initializers — between the instance allocation and the value
@@ -534,6 +534,8 @@ fn lower_new_impl_inner<'a>(
     // Before the instance root's push, so the handle this names is the one the
     // allocator returned: nothing between here and there can collect.
     let typed_layout_baked = alloc.typed_layout_baked;
+    let constructor_layout_ready = alloc.constructor_stores_ready
+        && super::typed_shape_init::layout_declared_at_allocation(ctx, class_name);
     emit_typed_shape_layout_declare(ctx, class_name, &obj_handle, typed_layout_baked);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
@@ -635,9 +637,10 @@ fn lower_new_impl_inner<'a>(
         // `ctor_prologue_stores` for the proof — the short version is that every
         // condition the per-field precheck tests is a compile-time constant this
         // very site wrote three instructions ago, so the only things left to
-        // decide at runtime are the policy latch and whether the values are
-        // plain finite numbers, and both are decided ONCE for the construction
-        // instead of once per field.
+        // decide at runtime are the policy latch, the INTACT result for a
+        // runtime-declared pointer layout, and whether raw-f64 values are plain
+        // finite numbers. All are decided ONCE for the construction instead of
+        // once per field.
         //
         // Emitted only when `saved_new_target` is absent: a `new.target`-reading
         // chain needs the runtime cell the call path sets, and a class whose
@@ -654,7 +657,7 @@ fn lower_new_impl_inner<'a>(
                     class_name,
                     class,
                     lowered_args.len(),
-                    typed_layout_baked,
+                    constructor_layout_ready,
                 )
             } else {
                 None
@@ -663,6 +666,19 @@ fn lower_new_impl_inner<'a>(
         // emitted; the slow arm is the current block from here on.
         let mut prologue_merge: Option<(usize, String)> = None;
         if let Some(plan) = prologue_plan.as_ref() {
+            // Pure derived values are safe to compute before the diamond. A
+            // non-finite result selects the ordinary constructor below, which
+            // recomputes the same `fadd` before taking its guarded slow store.
+            let prologue_values: Vec<String> = plan
+                .iter()
+                .map(|store| {
+                    let arg = &lowered_args[store.arg_index];
+                    store.numeric_addend.map_or_else(
+                        || arg.clone(),
+                        |addend| ctx.block().fadd(arg, &double_literal(addend)),
+                    )
+                })
+                .collect();
             let fast_idx = ctx.new_block("ctor_prologue.fast");
             let slow_idx = ctx.new_block("ctor_prologue.slow");
             let merge_idx = ctx.new_block("ctor_prologue.merge");
@@ -677,8 +693,27 @@ fn lower_new_impl_inner<'a>(
                 let flag =
                     blk.load_volatile(crate::types::I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
                 let mut acc = blk.icmp_eq(crate::types::I8, &flag, "0");
-                for store in plan {
-                    let bits = blk.bitcast_double_to_i64(&lowered_args[store.arg_index]);
+                // A pointer-bearing layout is installed by the declaration
+                // immediately above. Unlike the pointer-free baked case, its
+                // success is dynamic: an ambiguous ShapeId falls back to a
+                // per-object descriptor, while a rejected declaration clears
+                // INTACT. Test the authoritative header bit before bypassing
+                // the constructor's per-field guards.
+                if !typed_layout_baked {
+                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                    // `obj_handle` points just past the 8-byte GcHeader;
+                    // `_reserved: u16` starts two bytes into that header.
+                    let reserved_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+                    let reserved = blk.load(I16, &reserved_ptr);
+                    let intact_bits = blk.and(I16, &reserved, "4096");
+                    let intact = blk.icmp_ne(I16, &intact_bits, "0");
+                    acc = blk.and(crate::types::I1, &acc, &intact);
+                }
+                for (store_index, store) in plan.iter().enumerate() {
+                    if !store.requires_raw_f64 {
+                        continue;
+                    }
+                    let bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);
                     let finite =
                         crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
                             blk, &bits,
@@ -688,28 +723,47 @@ fn lower_new_impl_inner<'a>(
                 blk.cond_br(&acc, &fast_label, &slow_label);
             }
             ctx.current_block = fast_idx;
-            {
-                // arm64_32 watchOS: the fields region starts at
-                // `size_of::<ObjectHeader>()` past the user pointer (16 on
-                // both LP64 and ILP32 since #8047) — same derivation as every
-                // other packed slot access.
-                let header_skip =
-                    crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+            // arm64_32 watchOS: the fields region starts at
+            // `size_of::<ObjectHeader>()` past the user pointer (16 on both
+            // LP64 and ILP32 since #8047) — same derivation as every other
+            // packed slot access.
+            let header_skip =
+                crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+            let fields_base = {
                 let blk = ctx.block();
                 let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                let fields_base = blk.gep(crate::types::I8, &obj_ptr, &[(I64, &header_skip)]);
-                for store in plan {
+                blk.gep(crate::types::I8, &obj_ptr, &[(I64, &header_skip)])
+            };
+            let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            for (store_index, store) in plan.iter().enumerate() {
+                let (field_addr, child_bits) = {
+                    let blk = ctx.block();
                     let field_ptr =
                         blk.gep(DOUBLE, &fields_base, &[(I64, &store.slot.to_string())]);
-                    // GC_STORE_AUDIT(POINTER_FREE): the finite check above
-                    // proved every value is a genuine unboxed double, never a
-                    // heap pointer, and the shape is GC_LAYOUT_POINTER_FREE —
-                    // no edge, no write barrier, no layout note.
-                    blk.store(DOUBLE, &lowered_args[store.arg_index], &field_ptr);
+                    // GC_STORE_AUDIT(FRESH_TYPED): raw-f64 values passed the
+                    // finite check above; boxed/pointer values are covered by
+                    // the declared typed mask. The unpublished object needs no
+                    // layout note; pointer fields issue the ordinary barrier
+                    // below when generation or incremental marking requires it.
+                    blk.store(DOUBLE, &prologue_values[store_index], &field_ptr);
+                    let field_addr = blk.ptrtoint(&field_ptr, I64);
+                    let child_bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);
+                    (field_addr, child_bits)
+                };
+                if !store.requires_raw_f64 {
+                    crate::expr::emit_write_barrier_slot_value_and_generation_tested(
+                        ctx,
+                        &obj_handle,
+                        &parent_bits,
+                        &field_addr,
+                        &child_bits,
+                        "ctor_prologue",
+                    );
                 }
-                blk.br(&merge_label);
             }
-            prologue_merge = Some((merge_idx, ctx.block_label(fast_idx)));
+            let fast_pred_label = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            prologue_merge = Some((merge_idx, fast_pred_label));
             ctx.current_block = slow_idx;
         }
         if let Some(ctor_ret) = call_local_constructor_symbol(
