@@ -5,9 +5,7 @@ use std::process::Command;
 
 use crate::OutputFormat;
 
-use super::super::library_search::{
-    android_cross_env, find_harmonyos_sdk, harmonyos_cross_env,
-};
+use super::super::library_search::{android_cross_env, find_harmonyos_sdk, harmonyos_cross_env};
 use super::super::{
     find_perry_workspace_root, is_android_target, is_windows_target, rust_target_triple,
     CompilationContext,
@@ -89,15 +87,15 @@ fn build_wasm_host_runtime(
     }
 
     if matches!(format, OutputFormat::Text) {
-        println!(
-            "  wasm-host (no-auto): rebuilding perry-runtime-static with wasm-host feature"
-        );
+        println!("  wasm-host (no-auto): rebuilding perry-runtime-static with wasm-host feature");
     }
 
     // Use a dedicated target dir so the prebuilt libperry_runtime.a in
     // target/release is not overwritten. Cargo's incremental cache makes
     // repeat builds a no-op.
-    let wasm_host_target_dir = workspace_root.join("target").join("perry-wasm-host-runtime");
+    let wasm_host_target_dir = workspace_root
+        .join("target")
+        .join("perry-wasm-host-runtime");
 
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
@@ -134,9 +132,7 @@ fn build_wasm_host_runtime(
     }
     if is_android_target(target) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
-            for (k, v) in
-                android_cross_env(std::path::Path::new(&ndk), target)
-            {
+            for (k, v) in android_cross_env(std::path::Path::new(&ndk), target) {
                 cargo_cmd.env(k, v);
             }
         }
@@ -154,9 +150,7 @@ fn build_wasm_host_runtime(
         }
         Err(err) => {
             if matches!(format, OutputFormat::Text) {
-                eprintln!(
-                    "  wasm-host (no-auto): failed to spawn cargo ({err})"
-                );
+                eprintln!("  wasm-host (no-auto): failed to spawn cargo ({err})");
             }
             return None;
         }

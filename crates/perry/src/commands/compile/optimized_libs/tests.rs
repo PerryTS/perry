@@ -1299,10 +1299,8 @@ fn wasm_usage_changes_auto_optimize_cache_key() {
         ctx_no_wasm.uses_crypto_builtins,
     );
     let feature_arg = features_to_cargo_arg(&features);
-    let key_no_wasm =
-        auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm);
-    let key_wasm =
-        auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm);
+    let key_no_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm);
+    let key_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm);
     assert_ne!(
         key_no_wasm, key_wasm,
         "wasm usage must change the cache key so the target dirs don't collide"
