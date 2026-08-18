@@ -738,9 +738,10 @@ pub struct CompilationContext {
     /// URL parsing is otherwise hand-rolled, so a program with no URL API links
     /// none of the host-canonicalization/IDNA machinery.
     pub uses_url: bool,
-    /// Whether any TS module calls `String.prototype.normalize`. Gates
-    /// `perry-runtime/string-normalize` (`unicode-normalization`, ~113 KB of
-    /// NFC/NFD/NFKC/NFKD tables).
+    /// Whether any TS module calls `String.prototype.normalize` or
+    /// `String.prototype.localeCompare`. Gates `perry-runtime/string-normalize`
+    /// (`unicode-normalization`, ~113 KB of NFC/NFD/NFKC/NFKD tables); locale
+    /// comparison needs NFC to honor canonical equivalence.
     pub uses_string_normalize: bool,
     /// Whether any TS module constructs an `Intl.Segmenter`. Gates
     /// `perry-runtime/intl-segmenter` (`unicode-segmentation`, ~73 KB of UAX #29

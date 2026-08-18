@@ -56,6 +56,13 @@ fn debug_hir_uses_get_builtin_module(hir_debug: &str) -> bool {
             && hir_debug.contains("method: \"getBuiltinModule\""))
 }
 
+fn debug_hir_uses_string_normalization(hir_debug: &str) -> bool {
+    // `localeCompare` has several static/dynamic HIR spellings. A bare match
+    // deliberately over-includes the tables for a same-named user identifier;
+    // feature detection permits size-only false positives, not false negatives.
+    hir_debug.contains("property: \"normalize\"") || hir_debug.contains("localeCompare")
+}
+
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
@@ -317,14 +324,14 @@ pub(super) fn detect_optional_feature_usage(
         }
     }
 
-    // Detect `String.prototype.normalize` (gates `unicode-normalization`,
-    // ~113 KB) and `Intl.Segmenter` (gates `unicode-segmentation`, ~73 KB).
-    // Both lower to method/namespace nodes carrying the name as a `property`,
-    // so we match the exact `property: "<name>"` token. (A bare `"Segmenter"`
-    // substring would also fire on a user identifier named `Segmenter`.)
+    // Detect `String.prototype.normalize` / `localeCompare` (both need
+    // `unicode-normalization`, ~113 KB) and `Intl.Segmenter` (gates
+    // `unicode-segmentation`, ~73 KB).
+    // `normalize` and `Segmenter` lower to nodes carrying the name as a
+    // `property`, so those use the exact `property: "<name>"` token.
     {
         let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if hir_debug.contains("property: \"normalize\"") {
+        if debug_hir_uses_string_normalization(&hir_debug) {
             ctx.uses_string_normalize = true;
         }
         if hir_debug.contains("property: \"Segmenter\"") {
@@ -528,8 +535,9 @@ pub(super) fn detect_optional_feature_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_hir_uses_get_builtin_module, debug_hir_uses_regex, debug_hir_uses_zlib_brotli,
-        debug_hir_uses_zlib_zstd, imports_fs_promises_glob,
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex,
+        debug_hir_uses_string_normalization, debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd,
+        imports_fs_promises_glob,
     };
     use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
@@ -582,6 +590,19 @@ mod tests {
         ));
         assert!(!debug_hir_uses_get_builtin_module(
             r#"NativeMethodCall { module: "process", method: "cwd" }"#
+        ));
+    }
+
+    #[test]
+    fn string_normalization_gate_covers_normalize_and_locale_compare() {
+        assert!(debug_hir_uses_string_normalization(
+            r#"PropertyGet { property: "normalize" }"#
+        ));
+        assert!(debug_hir_uses_string_normalization(
+            r#"StringMethod { method: "localeCompare" }"#
+        ));
+        assert!(!debug_hir_uses_string_normalization(
+            r#"StringMethod { method: "toLowerCase" }"#
         ));
     }
 

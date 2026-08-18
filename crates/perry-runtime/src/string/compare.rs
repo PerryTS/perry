@@ -567,26 +567,34 @@ fn throw_invalid_normalize_form() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-/// String.prototype.localeCompare(other) — returns negative/zero/positive number.
-/// We don't ship a true ICU collator. We approximate the Unicode default
-/// collation with a two-pass comparison: first case-insensitive (so the
-/// character class wins) and then case-sensitive with lowercase < uppercase
-/// (matching V8's default ICU behavior where 'a' < 'A').
-#[no_mangle]
-pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const StringHeader) -> f64 {
-    let a_valid = is_valid_string_ptr(a);
-    let b_valid = is_valid_string_ptr(b);
-    if !a_valid && !b_valid {
+/// Apply the canonical-equivalence requirement shared by all locale-aware
+/// comparison modes before their approximate collation. NFC is sufficient:
+/// canonically equivalent strings have the same NFC representation.
+fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) -> f64 {
+    if a == b {
         return 0.0;
     }
-    if !a_valid {
-        return -1.0;
+    // ASCII is already NFC, which keeps the overwhelmingly common path
+    // allocation-free.
+    if a.is_ascii() && b.is_ascii() {
+        return compare(a, b);
     }
-    if !b_valid {
-        return 1.0;
+    #[cfg(feature = "string-normalize")]
+    {
+        use unicode_normalization::UnicodeNormalization;
+        let a_nfc: String = a.nfc().collect();
+        let b_nfc: String = b.nfc().collect();
+        compare(&a_nfc, &b_nfc)
     }
-    let a_str = string_as_str(a);
-    let b_str = string_as_str(b);
+    #[cfg(not(feature = "string-normalize"))]
+    compare(a, b)
+}
+
+/// Approximate the Unicode default collation with a two-pass comparison:
+/// first case-insensitive (so the character class wins) and then
+/// case-sensitive with lowercase < uppercase (matching V8's default ICU
+/// behavior where 'a' < 'A').
+fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
     // Case-insensitive primary comparison
     let a_lower = a_str.to_lowercase();
     let b_lower = b_str.to_lowercase();
@@ -622,12 +630,31 @@ pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const Str
     }
 }
 
+/// String.prototype.localeCompare(other) — returns negative/zero/positive number.
+/// We don't ship a true ICU collator, but canonical equivalence is a mandatory
+/// part of the String.prototype.localeCompare contract.
+#[no_mangle]
+pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const StringHeader) -> f64 {
+    let a_valid = is_valid_string_ptr(a);
+    let b_valid = is_valid_string_ptr(b);
+    if !a_valid && !b_valid {
+        return 0.0;
+    }
+    if !a_valid {
+        return -1.0;
+    }
+    if !b_valid {
+        return 1.0;
+    }
+    locale_compare_canonical(string_as_str(a), string_as_str(b), locale_compare_default)
+}
+
 /// Natural-order collation for `localeCompare(other, locales, { numeric: true })`:
 /// maximal runs of ASCII digits compare by numeric value (leading zeros
 /// ignored, then by digit-count and lexicographically), and non-digit runs
 /// compare with the same case-insensitive primary / case tertiary rule as
 /// `js_string_locale_compare`. So `"10" > "9"` and `"file10" > "file9"`.
-fn locale_compare_numeric(a: &str, b: &str) -> f64 {
+fn locale_compare_numeric_raw(a: &str, b: &str) -> f64 {
     let mut ai = a.chars().peekable();
     let mut bi = b.chars().peekable();
     loop {
@@ -685,6 +712,10 @@ fn locale_compare_numeric(a: &str, b: &str) -> f64 {
             }
         }
     }
+}
+
+fn locale_compare_numeric(a: &str, b: &str) -> f64 {
+    locale_compare_canonical(a, b, locale_compare_numeric_raw)
 }
 
 /// `String.prototype.localeCompare(other, locales, options)` — honors the
@@ -1040,7 +1071,7 @@ mod utf16_cmp_ascii_fast_path_tests {
 
 #[cfg(test)]
 mod numeric_collation_tests {
-    use super::locale_compare_numeric;
+    use super::{locale_compare_default, locale_compare_numeric};
 
     #[test]
     fn natural_order_compares_digit_runs_numerically() {
@@ -1059,6 +1090,23 @@ mod numeric_collation_tests {
         // A digit run vs the end of the shorter string.
         assert_eq!(locale_compare_numeric("x", "x10"), -1.0);
         assert_eq!(locale_compare_numeric("2foo", "10foo"), -1.0);
+    }
+
+    #[cfg(feature = "string-normalize")]
+    #[test]
+    fn locale_compare_treats_canonical_equivalents_as_equal() {
+        for (a, b) in [
+            ("o\u{0308}", "ö"),
+            ("a\u{0308}\u{0323}", "a\u{0323}\u{0308}"),
+            ("\u{1111}\u{1171}\u{11b6}", "퓛"),
+            ("Å", "A\u{030a}"),
+        ] {
+            assert_eq!(
+                super::locale_compare_canonical(a, b, locale_compare_default),
+                0.0
+            );
+            assert_eq!(locale_compare_numeric(a, b), 0.0);
+        }
     }
 }
 
