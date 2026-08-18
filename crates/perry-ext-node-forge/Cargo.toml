@@ -19,7 +19,7 @@ serde_json = { workspace = true }
 # RustCrypto PKI stack — all already present in the workspace Cargo.lock.
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 sha2 = "0.10"
-x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
+x509-cert = { version = "0.3", features = ["builder", "hazmat"] }
 der = { version = "0.7", features = ["oid"] }
 spki = "0.7"
 const-oid = "0.9"
