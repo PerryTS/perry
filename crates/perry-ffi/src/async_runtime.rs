@@ -158,17 +158,9 @@ impl JsPromise {
         unsafe { perry_ffi_promise_resolve_bits(self.0, nanbox_string_bits(str_handle.as_raw())) };
     }
 
-    /// Resolve with a boolean. Encoded as `1.0` / `0.0` (Perry's
-    /// FFI ABI represents booleans as f64 in async resolution
-    /// flows — this matches what perry-stdlib's bcrypt has been
-    /// doing since v0.5.0).
+    /// Resolve with a JavaScript boolean.
     pub fn resolve_bool(self, b: bool) {
-        let bits = if b {
-            1.0f64.to_bits()
-        } else {
-            0.0f64.to_bits()
-        };
-        unsafe { perry_ffi_promise_resolve_bits(self.0, bits) };
+        unsafe { perry_ffi_promise_resolve_bits(self.0, bool_resolution_bits(b)) };
     }
 
     /// Resolve with a number.
@@ -333,6 +325,11 @@ pub fn nanbox_string_bits(ptr: *mut StringHeader) -> u64 {
     STRING_TAG | (ptr as u64 & POINTER_MASK)
 }
 
+#[inline]
+fn bool_resolution_bits(value: bool) -> u64 {
+    crate::JsValue::from_bool(value).bits()
+}
+
 /// Spawn `f` on Perry's shared tokio runtime (the blocking pool).
 ///
 /// `f` typically does CPU-bound work (hashing, compression, …) and
@@ -464,4 +461,18 @@ mod tests {
     // here rather than a link error.
     #[test]
     fn module_compiles() {}
+
+    #[test]
+    fn promise_boolean_resolution_uses_javascript_boolean_tags() {
+        assert_eq!(
+            super::bool_resolution_bits(false),
+            crate::JsValue::FALSE.bits()
+        );
+        assert_eq!(
+            super::bool_resolution_bits(true),
+            crate::JsValue::TRUE.bits()
+        );
+        assert_ne!(super::bool_resolution_bits(false), 0.0f64.to_bits());
+        assert_ne!(super::bool_resolution_bits(true), 1.0f64.to_bits());
+    }
 }
