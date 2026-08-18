@@ -35,6 +35,13 @@ fn throw_non_writable_length() -> ! {
     );
 }
 
+#[cold]
+fn throw_cannot_delete_array_index(index: u32) -> ! {
+    crate::collection_iter::throw_type_error(&format!(
+        "Cannot delete property '{index}' of [object Array]"
+    ));
+}
+
 /// Install an array-growth forwarding stub after `tracked_header_for` proves
 /// allocator ownership of `old_user_addr`. Keeping the classifier injectable
 /// makes the below-2-TiB macOS case deterministic without mapping a fixed low
@@ -795,10 +802,37 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         }
 
         let new_length = length - 1;
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        let value = *elements_ptr.add(new_length as usize);
+        if !crate::array::array_iteration_is_exotic(arr) {
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let value = *elements_ptr.add(new_length as usize);
+            (*arr).length = new_length;
+            return value;
+        }
+
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        // `Get(O, ToString(newLength))` must consult the prototype chain. It
+        // can also run an accessor which allocates, moves `arr`, freezes it,
+        // or makes its length non-writable, so keep both values rooted and
+        // resolve the receiver again after every observable operation.
+        let value_handle = scope.root_nanbox_f64(crate::array::array_spec_get(arr, new_length));
+        let arr = clean_arr_ptr_mut(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
+
+        // DeletePropertyOrThrow only targets an own property. An inherited
+        // value is returned without deleting it from Array.prototype.
+        if crate::array::array_has_own_index(arr, new_length)
+            && js_array_delete(arr, new_length) == 0
+        {
+            throw_cannot_delete_array_index(new_length);
+        }
+
+        let arr = clean_arr_ptr_mut(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
+        if array_is_frozen(arr) {
+            throw_frozen_array_mutation();
+        }
+        guard_writable_length(arr);
         (*arr).length = new_length;
-        value
+        value_handle.get_nanbox_f64()
     }
 }
 
