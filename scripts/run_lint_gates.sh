@@ -15,6 +15,21 @@
 # copied, so it cannot drift from what CI actually does. If the workflow gains a
 # gate, this picks it up on the next run.
 #
+# TWO TIERS. The script tier is the `lint` job's ~48 script/fmt commands. The
+# COMPILE tier mirrors the separate `warnings` and `check` jobs -- `cargo check
+# --workspace --all-targets` under `-D warnings`, and `cargo clippy --workspace`
+# -- both over the same host-compatible package scope CI uses, derived from
+# scripts/workspace_architecture.py rather than copied.
+#
+# The compile tier exists because deriving only from `lint` is not the same as
+# "what CI runs": on 2026-08-18 #8333 left a test helper unused, `main` went red
+# on the `warnings` job, and this script reported "all 48 gates passed" for
+# every PR audited in between. A tier you do not run is a tier that did not
+# pass -- the same argument this script was written to make.
+#
+# Set SKIP_COMPILE_GATES=1 to skip it while iterating. The summary line then
+# SAYS the tier was skipped, so a fast run cannot be mistaken for a full one.
+#
 # Usage:
 #   scripts/run_lint_gates.sh              # every gate; non-zero if any fails
 #   scripts/run_lint_gates.sh --list       # print what would run, run nothing
@@ -85,10 +100,48 @@ for cmd in "${CMDS[@]}"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# Compile tier: the `warnings` and `check` jobs.
+compile_ran=0
+if [[ "${SKIP_COMPILE_GATES:-0}" == "1" ]]; then
+    echo
+    echo "  skip  compile tier (SKIP_COMPILE_GATES=1)"
+else
+    compile_ran=1
+    EXCLUDES=()
+    while IFS= read -r _pkg; do
+        [ -n "$_pkg" ] && EXCLUDES+=(--exclude "$_pkg")
+    done < <(python3 scripts/workspace_architecture.py --print-excluded-scope host-compatible)
+
+    echo
+    echo "run_lint_gates: compile tier (${#EXCLUDES[@]} exclude args from workspace_architecture.py)"
+
+    if out="$(RUSTFLAGS='-D warnings' cargo check --workspace --all-targets "${EXCLUDES[@]}" 2>&1)"; then
+        printf '  ok    warnings: cargo check --workspace --all-targets (-D warnings)\n'
+    else
+        printf '  FAIL  warnings: cargo check --workspace --all-targets (-D warnings)\n'
+        printf '%s\n' "$out" | grep -E '^(error|warning)' | head -6 | sed 's/^/          /'
+        failed+=("warnings: cargo check --workspace --all-targets")
+    fi
+
+    if out="$(cargo clippy --workspace "${EXCLUDES[@]}" 2>&1)"; then
+        printf '  ok    check: cargo clippy --workspace\n'
+    else
+        printf '  FAIL  check: cargo clippy --workspace\n'
+        printf '%s\n' "$out" | grep -E '^(error|warning)' | head -6 | sed 's/^/          /'
+        failed+=("check: cargo clippy --workspace")
+    fi
+fi
+
+total=${#CMDS[@]}
+((compile_ran)) && total=$((total + 2))
+suffix=""
+((compile_ran)) || suffix=" (compile tier SKIPPED)"
+
 echo
 if ((${#failed[@]})); then
-    echo "run_lint_gates: ${#failed[@]} of ${#CMDS[@]} FAILED"
+    echo "run_lint_gates: ${#failed[@]} of ${total} FAILED${suffix}"
     printf '  %s\n' "${failed[@]}"
     exit 1
 fi
-echo "run_lint_gates: all ${#CMDS[@]} gates passed"
+echo "run_lint_gates: all ${total} gates passed${suffix}"
