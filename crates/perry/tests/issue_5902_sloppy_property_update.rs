@@ -10,9 +10,46 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("canonicalize workspace root")
+}
+
+fn runtime_dir() -> PathBuf {
+    static BUILD_RUNTIME: Once = Once::new();
+    BUILD_RUNTIME.call_once(|| {
+        // `cargo test` rebuilds the compiler and this test binary, but it does
+        // not build staticlib targets. Compile the runtime archive explicitly
+        // so the fixture cannot link a stale pre-fix `js_with_set_binding`
+        // from an earlier checkout of the same target directory.
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let build = Command::new(cargo)
+            .current_dir(workspace_root())
+            .arg("build")
+            .arg("-p")
+            .arg("perry-runtime-static")
+            .output()
+            .expect("build static runtime archive");
+        assert!(
+            build.status.success(),
+            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+    });
+
+    perry_bin()
+        .parent()
+        .expect("Perry binary directory")
+        .to_path_buf()
 }
 
 fn compile_js(dir: &Path, name: &str, source: &str) -> PathBuf {
@@ -21,7 +58,7 @@ fn compile_js(dir: &Path, name: &str, source: &str) -> PathBuf {
     std::fs::write(&entry, source).expect("write JavaScript fixture");
 
     let perry = perry_bin();
-    let runtime_dir = perry.parent().expect("Perry binary directory");
+    let runtime_dir = runtime_dir();
     let compile = Command::new(&perry)
         .current_dir(dir)
         .arg("compile")
@@ -30,8 +67,8 @@ fn compile_js(dir: &Path, name: &str, source: &str) -> PathBuf {
         .arg(&output)
         .arg("--no-cache")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RUNTIME_DIR", runtime_dir)
-        .env("PERRY_LIB_DIR", runtime_dir)
+        .env("PERRY_RUNTIME_DIR", &runtime_dir)
+        .env("PERRY_LIB_DIR", &runtime_dir)
         .output()
         .expect("run perry compile");
     assert!(
