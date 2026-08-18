@@ -160,3 +160,18 @@ fn mock_accessor_options_reject_invalid_flags() {
         "ERR_INVALID_ARG_TYPE"
     );
 }
+
+#[test]
+fn mock_timers_exposes_dispose_as_reset() {
+    let mock = mock_object_value();
+    let timers = object_property(mock, b"timers").expect("mock.timers should exist");
+    let reset = object_property(timers, b"reset").expect("mock.timers.reset should exist");
+    let dispose = crate::symbol::well_known_symbol("dispose");
+    assert!(!dispose.is_null());
+    let symbol_value = boxed_ptr(dispose);
+    let symbol_method =
+        unsafe { crate::symbol::js_object_get_symbol_property(timers, symbol_value) };
+
+    assert!(is_callable_value(symbol_method));
+    assert_ne!(symbol_method.to_bits(), reset.to_bits());
+}

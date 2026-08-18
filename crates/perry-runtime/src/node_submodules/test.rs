@@ -1239,11 +1239,25 @@ fn mock_object_value() -> f64 {
             "setTime",
             closure_value(mock_timers_set_time as *const u8, 1),
         );
-        set_field(
-            timers,
-            "reset",
-            closure_value(mock_timers_reset as *const u8, 0),
-        );
+        let reset = closure_value(mock_timers_reset as *const u8, 0);
+        set_field(timers, "reset", reset);
+        let dispose = crate::symbol::well_known_symbol("dispose");
+        if !dispose.is_null() {
+            let dispose_closure = make_closure(mock_timers_reset as *const u8, 0, 0);
+            crate::object::set_bound_native_closure_name(dispose_closure, "[Symbol.dispose]");
+            unsafe {
+                crate::symbol::js_object_set_symbol_property(
+                    boxed_ptr(timers),
+                    boxed_ptr(dispose),
+                    boxed_ptr(dispose_closure),
+                );
+            }
+            crate::symbol::set_symbol_property_attrs(
+                timers as usize,
+                dispose as usize,
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
 
         let mock = js_object_alloc(0, 8);
         set_field(mock, "fn", closure_value(mock_fn_thunk as *const u8, 3));
