@@ -111,6 +111,11 @@ pub(crate) struct ArrayFacts {
     /// why this fact governs *profitability* rather than the soundness of the
     /// elided per-store note (which the emitted header test owns).
     pub all_pointer_element_locals: HashSet<u32>,
+    /// Array binding -> exact element class from the E1--E5 containment
+    /// proof. Unlike a TypeScript annotation, this proves the array was born
+    /// empty, receives only same-class fresh allocations, stays dense, and
+    /// never escapes to an unbounded mutator.
+    pub exact_element_classes: HashMap<u32, String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -277,6 +282,13 @@ impl TypeFacts {
     /// `collectors/all_pointer_arrays.rs`.
     pub(crate) fn declares_all_pointer_elements(&self, local_id: u32) -> bool {
         self.arrays.all_pointer_element_locals.contains(&local_id)
+    }
+
+    pub(crate) fn exact_element_class(&self, local_id: u32) -> Option<&str> {
+        self.arrays
+            .exact_element_classes
+            .get(&local_id)
+            .map(String::as_str)
     }
 
     pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
@@ -619,6 +631,7 @@ pub(crate) fn collect_type_facts(
         classes,
         module_dispatch,
     );
+    array_facts.exact_element_classes = element_shape_facts.proven_array_classes();
     // Representation-selection Phase 3b: shape-proven pointer locals. Gated
     // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
     // inside the collector.
@@ -1455,6 +1468,9 @@ impl ArrayFactCollector {
                 // Filled in by `collect_type_facts` — its own walk, with its
                 // own admission terms, over the same statements.
                 all_pointer_element_locals: HashSet::new(),
+                // Filled in by `collect_type_facts` from the E1--E5 exact
+                // element-shape proof.
+                exact_element_classes: HashMap::new(),
             },
             EffectFacts {
                 unknown_call_escape: self.unknown_call_escape,

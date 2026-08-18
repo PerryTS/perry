@@ -40,12 +40,13 @@
 //!   `copyWithin`, not `IndexSet`, not a `length` write — which is what makes
 //!   `A` **dense** and monomorphic for its whole lifetime.
 //! * **E3 — array containment.** Every *other* use of `A` is an in-bounds
-//!   element read (E5), a `.length` read, or `return A`. The return exemption
-//!   is #7034 §4's, unchanged and for the same reason. The one conditional
-//!   escape is the compiler-generated `ArrayIterationPatched` guard described
-//!   below. Anything else — call argument, closure capture, reassignment,
-//!   `IndexSet`, an unrecognised array method, being an element of another
-//!   container — disqualifies `A`.
+//!   element read (E5), a direct declared-field read from such an element, a
+//!   `.length` read, or `return A`. The return exemption is #7034 §4's,
+//!   unchanged and for the same reason. The one conditional escape is the
+//!   compiler-generated `ArrayIterationPatched` guard described below.
+//!   Anything else — call argument, closure capture, reassignment, `IndexSet`,
+//!   an unrecognised array method, being an element of another container —
+//!   disqualifies `A`.
 //! * **E4 — class admissibility.** `C` passes the same `chain_admissible`
 //!   gate rule 1 applies to a `new C(...)` local, and the module-wide rule-5
 //!   barrier scan is clear.
@@ -58,7 +59,11 @@
 //!   `A[i]` is an own element, hence an instance of `C`. **This conjunct is
 //!   the whole difference between this pass and a wrong one**: without it
 //!   `A[i]` can be `undefined`, and a guard-free fixed-offset load masks a
-//!   NaN-boxed `undefined` into a wild pointer.
+//!   NaN-boxed `undefined` into a wild pointer. A direct `A[i].field` read is
+//!   licensed under the same bound only when `field` is a declared instance
+//!   data field on `C`'s admissible, accessor-free chain. It does not hand out
+//!   the element reference, so it contributes array exactness without creating
+//!   a promoted element local.
 //!
 //! `for (const r of A)` has an E5 index arm
 //! (`lower/stmt_loops.rs::lazy_or_index_elem` — a `__idx` local, `__idx <
@@ -250,6 +255,24 @@ impl ElementShapeFacts {
         self.arrays.contains_key(root).then_some(*root)
     }
 
+    /// Exact element classes for every proven array binding, aliases included.
+    ///
+    /// This exports the E1--E5 verdict into the native-region fact graph so
+    /// later lowering does not have to reconstruct the same whole-region
+    /// proof. The class is exact, not merely declared: E2 admits only
+    /// same-class `new C(...)` pushes, while E3 rejects every other write,
+    /// escape, and mutator.
+    pub(crate) fn proven_array_classes(&self) -> HashMap<u32, String> {
+        self.array_roots
+            .iter()
+            .filter_map(|(id, root)| {
+                self.arrays
+                    .get(root)
+                    .map(|class_name| (*id, class_name.clone()))
+            })
+            .collect()
+    }
+
     /// Callback element parameters licensed by this region, paired with the
     /// closure body that owns them. Callers still intersect these sites with
     /// the full Ptr<Shape> containment/use proof.
@@ -361,6 +384,7 @@ pub(crate) fn collect_element_shape_facts(
         disqualified: HashSet::new(),
         pushes: HashMap::new(),
         reads: Vec::new(),
+        direct_reads: Vec::new(),
         callbacks: Vec::new(),
         idx_writes: HashMap::new(),
         bounded: Vec::new(),
@@ -371,6 +395,7 @@ pub(crate) fn collect_element_shape_facts(
         mut disqualified,
         pushes,
         reads,
+        direct_reads,
         callbacks,
         idx_writes,
         ..
@@ -448,6 +473,28 @@ pub(crate) fn collect_element_shape_facts(
             pushed.insert(m, (*root, class_name.to_string()));
         }
     }
+    if arrays.is_empty() {
+        return ElementShapeFacts::default();
+    }
+
+    // E5's direct `A[i].field` form does not create an element local, but it
+    // still has to discharge the identical in-bounds obligation and must name
+    // a plain field on the exact class. `chain_admissible` above has already
+    // rejected accessors and computed members, so a declared chain field is a
+    // side-effect-free value read and cannot leak the element reference.
+    for read in &direct_reads {
+        let valid_index = idx_writes.get(&read.index).copied().unwrap_or(0) == 2
+            && !boxed_vars.contains(&read.index)
+            && !module_globals.contains_key(&read.index);
+        let valid_field = arrays.get(&read.root).is_some_and(|class_name| {
+            let chain = super::ptr_shape::chain_classes(classes, class_name);
+            super::ptr_shape::chain_field_names(&chain).contains(&read.property)
+        });
+        if !valid_index || !valid_field {
+            disqualified.insert(read.root);
+        }
+    }
+    arrays.retain(|root, _| !disqualified.contains(root));
     if arrays.is_empty() {
         return ElementShapeFacts::default();
     }
@@ -554,6 +601,15 @@ struct ReadSite {
     local: u32,
 }
 
+struct DirectReadSite {
+    /// The array root read from.
+    root: u32,
+    /// The proven-bounded induction variable.
+    index: u32,
+    /// The data field read directly from the element.
+    property: String,
+}
+
 struct CallbackReadSite {
     root: u32,
     func_id: u32,
@@ -567,6 +623,7 @@ struct ArrayWalk<'a> {
     disqualified: HashSet<u32>,
     pushes: HashMap<u32, Vec<PushValue>>,
     reads: Vec<ReadSite>,
+    direct_reads: Vec<DirectReadSite>,
     callbacks: Vec<CallbackReadSite>,
     /// local id -> number of writes (`Let` / `LocalSet` / `Update`) anywhere
     /// in the region, closures included.
@@ -920,10 +977,38 @@ impl<'a> ArrayWalk<'a> {
                     self.walk_expr(callback);
                 }
             }
-            // `A.length` — the only property read admitted on the array.
+            // E5, direct spelling: `A[i].field`. Unlike a bare `A[i]`, this
+            // does not hand the element reference to an untracked consumer.
+            // Defer the declared-field check until E2 has resolved the exact
+            // element class; the bound itself is known here.
             Expr::PropertyGet {
                 object, property, ..
             } => {
+                if let Expr::IndexGet {
+                    object: array,
+                    index,
+                } = object.as_ref()
+                {
+                    if let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
+                        (array.as_ref(), index.as_ref())
+                    {
+                        if let Some(root) = self.root_of(*array_id) {
+                            if !self.in_closure
+                                && self.bounded.iter().any(|(bounded_id, bounded_root)| {
+                                    bounded_id == index_id && *bounded_root == root
+                                })
+                            {
+                                self.direct_reads.push(DirectReadSite {
+                                    root,
+                                    index: *index_id,
+                                    property: property.clone(),
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
+                // `A.length` — the only property read admitted on the array.
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.root_of(*id).is_some() {
                         if property != "length" {
@@ -1030,10 +1115,9 @@ impl<'a> ArrayWalk<'a> {
             // never sees, and `r.extra = 1` reshapes it. All three would make
             // the OTHER members' fixed-offset loads wrong.
             //
-            // So every unlicensed element read disqualifies the array. Direct
-            // `A[i].field` access is therefore not covered at all today, and
-            // widening to it needs the element class in this walk (which is
-            // only known after the push scan) — tracked in #7151.
+            // So every unlicensed element read disqualifies the array. The
+            // direct bounded declared-field form was consumed by the
+            // `PropertyGet` arm above; every other form still reaches here.
             Expr::IndexGet { object, index } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     self.disq(*id);

@@ -382,6 +382,62 @@ fn inline_reduce_promotes_the_element_not_the_accumulator() {
 }
 
 #[test]
+fn bounded_direct_field_read_preserves_the_arrays_exact_class() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        push(1, new_c()),
+        bounded_loop(
+            5,
+            1,
+            vec![Stmt::Expr(Expr::PropertyGet {
+                object: Box::new(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(5)),
+                }),
+                property: "x".to_string(),
+                byte_offset: 0,
+            })],
+        ),
+    ];
+
+    assert_eq!(
+        elements(&stmts, &classes)
+            .proven_array_classes()
+            .get(&1)
+            .map(String::as_str),
+        Some("C")
+    );
+}
+
+#[test]
+fn bounded_direct_non_field_read_denies_exactness() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        push(1, new_c()),
+        bounded_loop(
+            5,
+            1,
+            vec![Stmt::Expr(Expr::PropertyGet {
+                object: Box::new(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(5)),
+                }),
+                property: "missing".to_string(),
+                byte_offset: 0,
+            })],
+        ),
+    ];
+
+    assert!(elements(&stmts, &classes).is_empty());
+}
+
+#[test]
 fn escaping_array_callback_element_denies_the_whole_group() {
     let c = class_c();
     let cs = [c];

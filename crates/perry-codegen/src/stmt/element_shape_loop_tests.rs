@@ -462,6 +462,51 @@ fn element_shape_versioned_loop_fires_for_the_7480_access_shape() {
     );
 }
 
+/// The composite `churn` shape differs from `churn_read` in one decisive way:
+/// it builds a fresh exact-shape array immediately before reading it. The
+/// native-region E1--E5 proof already establishes every element as exactly
+/// `Node`, so rescanning the whole array in the preheader is redundant work.
+#[test]
+fn exact_local_array_construction_skips_the_runtime_shape_scan() {
+    let mut m = element_shape_module(
+        vec![accumulate_stmt(
+            SUM_ID,
+            ARRAY_ID,
+            Expr::LocalGet(COUNTER_ID),
+        )],
+        None,
+    );
+    with_bound(&mut m, length_of(ARRAY_ID));
+    m.init.insert(
+        1,
+        Stmt::Expr(Expr::ArrayPush {
+            array_id: ARRAY_ID,
+            value: Box::new(Expr::New {
+                class_name: "Node".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        }),
+    );
+
+    let ir = emit(&m);
+    assert_fast_clone_is_entered(&ir);
+    assert!(
+        !ir.contains("element_shape.loop.preheader.query"),
+        "an exact E1--E5 construction proof must bypass the runtime query block"
+    );
+    assert!(
+        !ir.contains("call i32 @js_array_ensure_element_shape"),
+        "an exact E1--E5 construction proof must not rescan the array"
+    );
+    assert!(
+        ir.contains("for.element_shape_slow.cond"),
+        "the ordinary slow clone remains the residual-check side exit"
+    );
+}
+
 /// SABOTAGE (clone selection): a body that STORES cannot be cloned — a store
 /// is the primary way to revoke the invariant mid-loop, and admitting one
 /// would be a miscompile rather than a slow path.

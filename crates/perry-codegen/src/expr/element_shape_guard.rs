@@ -4,12 +4,12 @@
 //! Two emitters live here.
 //!
 //! * [`emit_element_shape_loop_preheader_check`] — run ONCE, before the fast
-//!   clone. It brands the receiver as a genuine array, asks the runtime
-//!   whether the per-array homogeneous element-shape invariant
-//!   (`array/element_shape.rs`, #7496) holds at a specific class id, checks
-//!   that the verified prefix covers the whole index range, and caches the
-//!   elements base pointer plus the two loop-invariant words the residual
-//!   check needs.
+//!   clone. It brands the receiver as a genuine array, establishes the exact
+//!   element class either from the native-region construction proof or from
+//!   the runtime's per-array homogeneous element-shape invariant
+//!   (`array/element_shape.rs`, #7496), checks that the covered range includes
+//!   the whole loop, and caches the elements base pointer plus the two
+//!   loop-invariant words the residual check needs.
 //! * [`emit_element_shape_field_load`] — run per access inside the fast clone.
 //!   It is a bare element load followed by the *residual* facts the
 //!   element-shape invariant does NOT cover, AND-reduced into one predicate
@@ -123,10 +123,11 @@ pub(crate) enum ElementShapeLoopTripCount<'a> {
 ///    pointer, where a forwarding stub is not merely wrong but *plausibly*
 ///    wrong (see the block comment). It goes before the guard call, not after,
 ///    because the refresh can itself allocate;
-/// 4. the guard call, and only THEN the elements base — derived from a fresh
-///    load of the array's rooted slot, because the guard call can allocate and
-///    an allocation can move the array, so a base derived before it could be a
-///    from-space address.
+/// 4. the runtime guard call when static construction did not already prove
+///    the class, and only THEN the elements base — derived from a fresh load of
+///    the array's rooted slot, because either preceding helper can allocate
+///    and an allocation can move the array, so a base derived before it could
+///    be a from-space address.
 ///
 /// Returns `(elements_base, expected_shape_id, shape_ok, bound_i32)`.
 pub(crate) fn emit_element_shape_loop_preheader_check(
@@ -136,15 +137,18 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     keys_global_name: &str,
     trip_count: ElementShapeLoopTripCount<'_>,
     slow_label: &str,
+    statically_proven: bool,
 ) -> anyhow::Result<(String, String, String, String)> {
     let brand_idx = ctx.new_block("element_shape.loop.preheader.brand");
     let repair_idx = ctx.new_block("element_shape.loop.preheader.repair");
-    let query_idx = ctx.new_block("element_shape.loop.preheader.query");
+    let query_idx =
+        (!statically_proven).then(|| ctx.new_block("element_shape.loop.preheader.query"));
     let deref_idx = ctx.new_block("element_shape.loop.preheader.deref");
     let brand_label = ctx.block_label(brand_idx);
     let repair_label = ctx.block_label(repair_idx);
-    let query_label = ctx.block_label(query_idx);
+    let query_label = query_idx.map(|idx| ctx.block_label(idx));
     let deref_label = ctx.block_label(deref_idx);
+    let post_repair_label = query_label.as_deref().unwrap_or(&deref_label);
 
     // (1) Receiver is a heap pointer at all. A basic block has no
     // short-circuit, so nothing may be dereferenced until this branch is taken.
@@ -229,30 +233,35 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
         let handler = blk.and(I64, &bitsr, crate::nanbox::POINTER_MASK_I64);
         let abover = blk.icmp_ugt(I64, &handler, HANDLE_BAND_TOP);
         let okr = blk.and(I1, &is_ptrr, &abover);
-        blk.cond_br(&okr, &query_label, slow_label);
+        blk.cond_br(&okr, post_repair_label, slow_label);
     }
 
-    // (3) The live-header query. `js_array_ensure_element_shape` establishes
-    // the invariant by scan on first visit and confirms it in O(1) afterwards;
-    // either way it reads the array's CURRENT `GcHeader` bit and its record,
-    // and self-heals (clearing the bit) when the record went stale. Static
-    // declarations are never consulted — #7501's lesson.
+    // (3) The live-header query for arrays whose construction is not statically
+    // contained. `js_array_ensure_element_shape` establishes the invariant by
+    // scan on first visit and confirms it in O(1) afterwards; either way it
+    // reads the array's CURRENT `GcHeader` bit and its record, and self-heals
+    // (clearing the bit) when the record went stale. Type declarations are
+    // never sufficient — #7501's lesson. The static arm is stronger: E1--E5
+    // proves every dense slot is a fresh exact-class allocation for the whole
+    // native region.
     //
     // Deliberately re-loads the (now repaired) binding rather than reusing the
     // repair block's handle: `js_array_refresh_local_head` can allocate, so a
     // handle derived before it is a pre-move address.
-    ctx.current_block = query_idx;
-    let arrq = super::lower_expr(ctx, &perry_hir::Expr::LocalGet(array_local_id))?;
-    {
-        let blk = ctx.block();
-        let bitsq = blk.bitcast_double_to_i64(&arrq);
-        let handleq = blk.and(I64, &bitsq, crate::nanbox::POINTER_MASK_I64);
-        let class_id = blk.call(I32, "js_array_ensure_element_shape", &[(I64, &handleq)]);
-        let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
-        blk.cond_br(&cid_ok, &deref_label, slow_label);
+    if let Some(query_idx) = query_idx {
+        ctx.current_block = query_idx;
+        let arrq = super::lower_expr(ctx, &perry_hir::Expr::LocalGet(array_local_id))?;
+        {
+            let blk = ctx.block();
+            let bitsq = blk.bitcast_double_to_i64(&arrq);
+            let handleq = blk.and(I64, &bitsq, crate::nanbox::POINTER_MASK_I64);
+            let class_id = blk.call(I32, "js_array_ensure_element_shape", &[(I64, &handleq)]);
+            let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
+            blk.cond_br(&cid_ok, &deref_label, slow_label);
+        }
     }
 
-    // (4) Post-call re-derivation. Everything from here to the end of the fast
+    // (4) Post-proof re-derivation. Everything from here to the end of the fast
     // clone is call-free, so THIS pointer is the pointer the clone uses.
     ctx.current_block = deref_idx;
     let arr1 = super::lower_expr(ctx, &perry_hir::Expr::LocalGet(array_local_id))?;
