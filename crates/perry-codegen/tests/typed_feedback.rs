@@ -529,6 +529,7 @@ fn typed_feedback_guards_direct_class_field_specialization() {
 /// are indented, and are skipped. The body runs from the end of the label
 /// line to the blank line separating it from the next block (or to the
 /// function's closing brace).
+#[allow(dead_code)]
 fn block_body<'a>(ir: &'a str, label_prefix: &str) -> Option<&'a str> {
     let needle = format!("\n{label_prefix}");
     let mut from = 0;
