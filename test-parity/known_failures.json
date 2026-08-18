@@ -712,8 +712,8 @@
   "test_lodash_max_min": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lodash' after the repository's CI-equivalent npm ci because lodash is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -721,8 +721,8 @@
   "test_lodash_sum": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lodash' after the repository's CI-equivalent npm ci because lodash is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -754,20 +754,11 @@
       "linux"
     ]
   },
-  "test_parity_buffer": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_parity_cluster": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; namespace import exposes cluster.on/addListener as undefined while Perry exposes functions, despite the runtime's intended namespace/default split. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -775,8 +766,8 @@
   "test_parity_commander": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'commander' after the repository's CI-equivalent npm ci because commander is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -784,8 +775,8 @@
   "test_parity_cron": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; Perry's cron default import resolves validate/schedule as undefined and then throws while reading task.start. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -793,8 +784,8 @@
   "test_parity_crypto": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; Perry's algorithm inventories are incomplete: Linux reports 15/6/17 ciphers/curves/hashes versus Node's 134/82/52. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -802,8 +793,8 @@
   "test_parity_date_fns": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'date-fns' after the repository's CI-equivalent npm ci because date-fns is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -811,8 +802,8 @@
   "test_parity_dayjs": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; Perry's native dayjs shim returns numeric 1/0 for predicates and diverges on ISO, default, startOf, and endOf formatting. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -820,8 +811,8 @@
   "test_parity_decimal": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'decimal.js' after the repository's CI-equivalent npm ci because decimal.js is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -829,8 +820,8 @@
   "test_parity_dotenv": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'dotenv' after the repository's CI-equivalent npm ci because dotenv is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -838,8 +829,8 @@
   "test_parity_lodash": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lodash' after the repository's CI-equivalent npm ci because lodash is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -847,8 +838,8 @@
   "test_parity_lru_cache": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lru-cache' after the repository's CI-equivalent npm ci because lru-cache is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -856,8 +847,8 @@
   "test_parity_moment": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; Perry's native moment shim stops at moment.utc with an unimplemented-call error. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -865,8 +856,8 @@
   "test_parity_nanoid": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'nanoid' after the repository's CI-equivalent npm ci because nanoid is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -895,8 +886,8 @@
   "test_parity_util": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "bug-open",
+    "reason": "Node runs; Perry differs in getSystemErrorMap insertion order, transferableAbortController inspection shape, empty MIMEParams iterators, and util.inspect styles/colors shape. These are independent API-shape gaps, not a shared npm import failure. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -904,8 +895,8 @@
   "test_parity_uuid": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'uuid' after the repository's CI-equivalent npm ci because uuid is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -913,8 +904,8 @@
   "test_parity_validator": {
     "issue": "8271",
     "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
+    "category": "ci-env",
+    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'validator' after the repository's CI-equivalent npm ci because validator is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]

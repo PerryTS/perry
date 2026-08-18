@@ -300,8 +300,9 @@ pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 pub(crate) const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 pub(crate) const WORKER_THREADS_LOCK_CLASS_ID: u32 = 0xFFFF_00B2;
 
+// Node 26 raised Buffer.poolSize's initial value from 8 KiB to 64 KiB.
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(8192f64.to_bits());
+    std::sync::atomic::AtomicU64::new(65536f64.to_bits());
 
 type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 
