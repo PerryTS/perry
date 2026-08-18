@@ -1182,3 +1182,75 @@ fn ext_zlib_covers_every_stdlib_symbol_the_flip_strips() {
          them; a list that outlives its entries stops being a ratchet."
     );
 }
+
+/// Regression: a program that references `WebAssembly.*` must get the
+/// `perry-runtime/wasm-host` cross feature so the runtime archive carries
+/// `js_webassembly_*` symbol definitions. Without it the link fails with
+/// `_js_webassembly_module_new` undefined (issue #76).
+#[test]
+fn wasm_usage_enables_wasm_host_cross_feature() {
+    let workspace_root = find_perry_workspace_root().expect("workspace root");
+    let mut ctx = CompilationContext::new(workspace_root);
+    ctx.needs_wasm_runtime = true;
+
+    let features = compute_required_features(
+        &ctx.native_module_imports,
+        ctx.uses_fetch,
+        ctx.uses_crypto_builtins,
+    );
+    let cross = auto_optimized_cross_features(&ctx, &features, &[]);
+    assert!(
+        cross.iter().any(|f| f == "perry-runtime/wasm-host"),
+        "needs_wasm_runtime=true must add perry-runtime/wasm-host to the \
+         cross-feature set so the runtime archive defines js_webassembly_* \
+         symbols; got: {cross:?}"
+    );
+}
+
+/// Regression: a program that does NOT reference `WebAssembly.*` must NOT
+/// get the `perry-runtime/wasm-host` cross feature — non-wasm programs
+/// don't pay for wasmi (the feature is deliberately kept out of `default`).
+#[test]
+fn non_wasm_usage_does_not_enable_wasm_host_cross_feature() {
+    let workspace_root = find_perry_workspace_root().expect("workspace root");
+    let ctx = CompilationContext::new(workspace_root);
+
+    let features = compute_required_features(
+        &ctx.native_module_imports,
+        ctx.uses_fetch,
+        ctx.uses_crypto_builtins,
+    );
+    let cross = auto_optimized_cross_features(&ctx, &features, &[]);
+    assert!(
+        !cross.iter().any(|f| f == "perry-runtime/wasm-host"),
+        "needs_wasm_runtime=false must NOT add perry-runtime/wasm-host — \
+         non-wasm programs must not link the wasmi host; got: {cross:?}"
+    );
+}
+
+/// Regression: the auto-optimize cache key must differ between a wasm-using
+/// program and a non-wasm program so cargo doesn't serve a cached non-wasm
+/// runtime archive (missing `js_webassembly_*`) to a wasm program, or vice
+/// versa (an archive carrying unresolved `perry_wasm_host_*` refs).
+#[test]
+fn wasm_usage_changes_auto_optimize_cache_key() {
+    let workspace_root = find_perry_workspace_root().expect("workspace root");
+    let ctx_no_wasm = CompilationContext::new(workspace_root.clone());
+    let mut ctx_wasm = CompilationContext::new(workspace_root);
+    ctx_wasm.needs_wasm_runtime = true;
+
+    let features = compute_required_features(
+        &ctx_no_wasm.native_module_imports,
+        ctx_no_wasm.uses_fetch,
+        ctx_no_wasm.uses_crypto_builtins,
+    );
+    let feature_arg = features_to_cargo_arg(&features);
+    let key_no_wasm =
+        auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm);
+    let key_wasm =
+        auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm);
+    assert_ne!(
+        key_no_wasm, key_wasm,
+        "wasm usage must change the cache key so the target dirs don't collide"
+    );
+}

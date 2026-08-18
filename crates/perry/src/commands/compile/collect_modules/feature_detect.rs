@@ -131,6 +131,32 @@ pub(super) fn detect_optional_feature_usage(
         ctx.needs_wasm_runtime = true;
     }
 
+    // Robust fallback for WebAssembly detection. The static lowering in
+    // `module_static.rs` sets `hir_module.uses_webassembly` for direct
+    // `WebAssembly.Module`/`instantiate`/etc. call sites, but a minified
+    // bundle can reach the `WebAssembly` global via dynamic property access
+    // (`const WA = WebAssembly; WA.Module(bytes)`, `globalThis.WebAssembly`,
+    // `globalThis["WebAssembly"]`) that lowers to an ordinary `PropertyGet`
+    // or `Ident` without hitting any set-site. The codegen still emits
+    // `js_webassembly_*` FFI calls for those paths, so without this fallback
+    // the `wasm-host` feature stays off and the link dies with
+    // `_js_webassembly_module_new` undefined. Mirror the fetch/crypto
+    // fallbacks above: scan the final HIR for the `WebAssembly` token.
+    // Over-matching only over-links the wasm host (a size cost); the rule
+    // is zero false negatives.
+    if !ctx.needs_wasm_runtime {
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
+        if hir_debug.contains("property: \"WebAssembly\"")
+            || hir_debug.contains("class_name: \"WebAssembly\"")
+            || hir_debug.contains("\"WebAssembly\"")
+        {
+            ctx.needs_wasm_runtime = true;
+        }
+    }
+
     // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used
     // without `import crypto`). The runtime symbols live behind the
     // perry-stdlib `crypto` Cargo feature, so we need to flip that on for

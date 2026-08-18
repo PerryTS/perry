@@ -5285,7 +5285,19 @@ pub fn run_with_parse_cache(
     // both the symbol-stub scan below and the final link resolve it. Cargo's
     // freshness check makes this a no-op when it is already current; programs
     // that do not use wasm skip the check entirely.
-    let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
+    //
+    // `--enable-wasm-runtime` is an explicit override: fold it into
+    // `ctx.needs_wasm_runtime` so EVERY downstream path (the `wasm-host`
+    // cargo feature in `auto_optimized_cross_features`, the no-auto runtime
+    // rebuild, the library link, and the symbol-stub scan) treats it the
+    // same as auto-detected `WebAssembly.*` usage. Without this fold the
+    // flag only linked `libperry_wasm_host.a` but never enabled the
+    // `perry-runtime/wasm-host` cargo feature, so `js_webassembly_*`
+    // symbols stayed undefined in the runtime archive.
+    if args.enable_wasm_runtime {
+        ctx.needs_wasm_runtime = true;
+    }
+    let use_wasm_host = ctx.needs_wasm_runtime;
     let wasm_host_lib_resolved = if use_wasm_host {
         // Prefer a Cargo freshness check when workspace source is available.
         // Merely finding an archive is insufficient after the host ABI grows:
