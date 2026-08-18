@@ -7,6 +7,10 @@ use crate::value::js_nanbox_pointer;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+const KEY_SEGMENTS_BRAND: &str = "__intlSegmentsBrand";
+const KEY_SEGMENTS_LENGTH: &str = "__intlSegmentsLength";
+const SEGMENTS_BRAND: &str = "Segments";
+
 pub(crate) fn normalize_granularity(value: Option<String>) -> String {
     match value.as_deref() {
         None | Some("grapheme") => "grapheme".to_string(),
@@ -30,14 +34,45 @@ pub(crate) fn utf16_len(segment: &str) -> u32 {
     segment.chars().map(|c| c.len_utf16() as u32).sum()
 }
 
+fn string_pointer_value(ptr: *const StringHeader) -> f64 {
+    f64::from_bits(JSValue::string_ptr(ptr as *mut StringHeader).bits())
+}
+
+unsafe fn segmenter_input_text(ptr: *const StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let data = unsafe { (ptr as *const u8).add(std::mem::size_of::<StringHeader>()) };
+    let len = unsafe { (*ptr).byte_len as usize };
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+
+    // `unicode-segmentation` requires valid UTF-8. Represent each WTF-8 lone
+    // surrogate as one U+FFFD while computing boundaries; both occupy exactly
+    // one UTF-16 code unit, so offsets still map back to the original string.
+    let mut text = String::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let (advance, _, code_point) = crate::string::wtf8_step(bytes, offset);
+        match char::from_u32(code_point) {
+            Some(ch) if !(0xD800..=0xDFFF).contains(&code_point) => text.push(ch),
+            _ => text.push('\u{FFFD}'),
+        }
+        offset = (offset + advance).min(bytes.len());
+    }
+    text
+}
+
 pub(crate) fn make_segment_record(
-    segment: &str,
+    segment_value: f64,
     index: u32,
     input_value: f64,
     word_like: Option<bool>,
 ) -> f64 {
     let obj = js_object_alloc(0, 4);
-    set_field(obj, "segment", string_value(segment));
+    set_field(obj, "segment", segment_value);
     // `index` is a plain Number (UTF-16 code-unit offset into the input).
     set_field(obj, "index", index as f64);
     set_field(obj, "input", input_value);
@@ -47,44 +82,75 @@ pub(crate) fn make_segment_record(
     js_nanbox_pointer(obj as i64)
 }
 
-/// Build the segment list for `input` under `granularity`. We return a plain
-/// JS array of segment records, which is iterable / spreadable — enough for
-/// `[...seg.segment(s)]` and `for (const {segment} of seg.segment(s))`, the
-/// shapes `string-width` / `wrap-ansi` actually use. (The spec's `Segments`
-/// object additionally exposes `.containing()`; that is not yet needed.)
+/// Build the segment list for `input` under `granularity`. The backing array
+/// keeps the existing iterable / spreadable representation while exposing the
+/// `Segments.prototype.containing()` surface required by ECMA-402.
 pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
-    let input = value_to_string(value);
-    let input_value = string_value(&input);
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        throw_type_error("Cannot convert a Symbol value to a string");
+    }
+    let input_ptr = js_jsvalue_to_string(value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input_handle = scope.root_string_ptr(input_ptr);
+    let input = unsafe { segmenter_input_text(input_handle.get_raw_const_ptr::<StringHeader>()) };
     let mut arr = js_array_alloc(0);
     let mut index = 0u32;
     #[cfg(feature = "intl-segmenter")]
     match granularity {
         "word" => {
             for segment in input.split_word_bounds() {
+                let end = index + utf16_len(segment);
+                let segment_ptr = crate::string::js_string_slice(
+                    input_handle.get_raw_const_ptr::<StringHeader>(),
+                    index as i32,
+                    end as i32,
+                );
                 let record = make_segment_record(
-                    segment,
+                    string_pointer_value(segment_ptr),
                     index,
-                    input_value,
+                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
                     Some(segment_is_word_like(segment)),
                 );
                 arr = js_array_push_f64(arr, record);
-                index += utf16_len(segment);
+                index = end;
             }
         }
         "sentence" => {
             for segment in input.split_sentence_bounds() {
-                let record = make_segment_record(segment, index, input_value, None);
+                let end = index + utf16_len(segment);
+                let segment_ptr = crate::string::js_string_slice(
+                    input_handle.get_raw_const_ptr::<StringHeader>(),
+                    index as i32,
+                    end as i32,
+                );
+                let record = make_segment_record(
+                    string_pointer_value(segment_ptr),
+                    index,
+                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                    None,
+                );
                 arr = js_array_push_f64(arr, record);
-                index += utf16_len(segment);
+                index = end;
             }
         }
         // "grapheme" (default): extended grapheme clusters (emoji ZWJ
         // sequences, combining marks, regional-indicator flags).
         _ => {
             for segment in input.graphemes(true) {
-                let record = make_segment_record(segment, index, input_value, None);
+                let end = index + utf16_len(segment);
+                let segment_ptr = crate::string::js_string_slice(
+                    input_handle.get_raw_const_ptr::<StringHeader>(),
+                    index as i32,
+                    end as i32,
+                );
+                let record = make_segment_record(
+                    string_pointer_value(segment_ptr),
+                    index,
+                    string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                    None,
+                );
                 arr = js_array_push_f64(arr, record);
-                index += utf16_len(segment);
+                index = end;
             }
         }
     }
@@ -98,17 +164,100 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         // — the compiler enables `intl-segmenter` on any `Intl.Segmenter` use).
         let is_word = granularity == "word";
         for segment in input.chars().map(|c| c.to_string()).collect::<Vec<_>>() {
+            let end = index + utf16_len(&segment);
+            let segment_ptr = crate::string::js_string_slice(
+                input_handle.get_raw_const_ptr::<StringHeader>(),
+                index as i32,
+                end as i32,
+            );
             let word_like = if is_word {
                 Some(segment.chars().any(|c| c.is_alphanumeric()))
             } else {
                 None
             };
-            let record = make_segment_record(&segment, index, input_value, word_like);
+            let record = make_segment_record(
+                string_pointer_value(segment_ptr),
+                index,
+                string_pointer_value(input_handle.get_raw_const_ptr::<StringHeader>()),
+                word_like,
+            );
             arr = js_array_push_f64(arr, record);
-            index += utf16_len(&segment);
+            index = end;
         }
     }
+    let segments = arr as *mut ObjectHeader;
+    set_internal_field(segments, KEY_SEGMENTS_BRAND, string_value(SEGMENTS_BRAND));
+    set_internal_field(segments, KEY_SEGMENTS_LENGTH, index as f64);
+    install_function(
+        segments,
+        "containing",
+        segmenter_containing_thunk as *const u8,
+        1,
+        1,
+        false,
+    );
     js_nanbox_pointer(arr as i64)
+}
+
+fn segments_from_this() -> *const crate::ArrayHeader {
+    let this_value = crate::object::js_implicit_this_get();
+    let Some(segments) = array_ptr_from_value(this_value) else {
+        throw_type_error("Intl.Segments.prototype.containing called on incompatible receiver");
+    };
+    let brand = get_string_field(segments as *const ObjectHeader, KEY_SEGMENTS_BRAND);
+    if brand.as_deref() != Some(SEGMENTS_BRAND) {
+        throw_type_error("Intl.Segments.prototype.containing called on incompatible receiver");
+    }
+    segments
+}
+
+pub(crate) extern "C" fn segmenter_containing_thunk(
+    _closure: *const ClosureHeader,
+    index: f64,
+) -> f64 {
+    let segments = segments_from_this();
+    let input_len =
+        get_number_field(segments as *const ObjectHeader, KEY_SEGMENTS_LENGTH).unwrap_or(0.0);
+
+    // ToIntegerOrInfinity may invoke user code, so keep the Segments backing
+    // array rooted while coercing the index.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let segments_handle = scope.root_raw_const_ptr(segments);
+    let number = list_relative_plural::to_number_reject_bigint(index);
+    let integer = if number.is_nan() { 0.0 } else { number.trunc() };
+    if integer < 0.0 || integer >= input_len {
+        return undefined();
+    }
+
+    let segments = segments_handle.get_raw_const_ptr::<crate::ArrayHeader>();
+    let count = js_array_length(segments);
+    for i in 0..count {
+        let record_value = js_array_get_f64(segments, i);
+        let Some(record) = object_ptr_from_value(record_value) else {
+            continue;
+        };
+        let start = get_number_field(record, "index").unwrap_or(0.0);
+        let end = if i + 1 < count {
+            let next_value = js_array_get_f64(segments, i + 1);
+            object_ptr_from_value(next_value)
+                .and_then(|next| get_number_field(next, "index"))
+                .unwrap_or(input_len)
+        } else {
+            input_len
+        };
+        if integer >= start && integer < end {
+            let segment_value = get_field(record, "segment");
+            let input_value = get_field(record, "input");
+            let word_like_value = get_field(record, "isWordLike");
+            let word_like = if JSValue::from_bits(word_like_value.to_bits()).is_undefined() {
+                None
+            } else {
+                Some(crate::value::js_is_truthy(word_like_value) != 0)
+            };
+            return make_segment_record(segment_value, start as u32, input_value, word_like);
+        }
+    }
+    undefined()
 }
 
 pub(crate) extern "C" fn segmenter_segment_thunk(
