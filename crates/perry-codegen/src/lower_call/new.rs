@@ -740,11 +740,7 @@ fn lower_new_impl_inner<'a>(
                     let blk = ctx.block();
                     let field_ptr =
                         blk.gep(DOUBLE, &fields_base, &[(I64, &store.slot.to_string())]);
-                    // GC_STORE_AUDIT(FRESH_TYPED): raw-f64 values passed the
-                    // finite check above; boxed/pointer values are covered by
-                    // the declared typed mask. The unpublished object needs no
-                    // layout note; pointer fields issue the ordinary barrier
-                    // below when generation or incremental marking requires it.
+                    // GC_STORE_AUDIT(INIT): constructor prologue initializes a freshly allocated, unpublished object's field.
                     blk.store(DOUBLE, &prologue_values[store_index], &field_ptr);
                     let field_addr = blk.ptrtoint(&field_ptr, I64);
                     let child_bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);

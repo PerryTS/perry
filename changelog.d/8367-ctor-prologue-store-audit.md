@@ -1,0 +1,1 @@
+Mark the inlined constructor-prologue store in `lower_call/new.rs` as `GC_STORE_AUDIT(INIT)` and register `ctor_prologue` in `VERIFIED_BARRIER_STEMS` with a probe that reaches the tier, so #8363's new barrier cannot be deleted without a gate noticing (#8185).

@@ -88,6 +88,7 @@ pub(super) enum StemKind {
 pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("apush", StemKind::GenerationTested),
     ("class_field_set", StemKind::PointerTestedStore),
+    ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("idxset.inbounds", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("put.pic", StemKind::PointerTestedStore),
@@ -489,12 +490,21 @@ fn apush_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// `class Boxed { v: any; constructor(v) { this.v = v } }` plus an escaping
+/// `new Boxed(1)` — the complete parameter-to-field constructor is what selects
+/// constructor-free prologue stores, and the boxed field requires their
+/// value-and-generation-tested barrier.
+fn ctor_prologue_ir() -> String {
+    super::class_field_barrier_tests::ir()
+}
+
 /// The pristine IR for a stem. Exhaustive on the registry: an entry added
 /// without a probe panics HERE, named, instead of passing silently.
 fn probe_ir(stem: &str) -> String {
     match stem {
         "apush" => apush_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
+        "ctor_prologue" => ctor_prologue_ir(),
         "idxset.inbounds" => idxset_inbounds_ir(),
         "idxset.recv_prop" => super::index_set_barrier_tests::ir(),
         "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
