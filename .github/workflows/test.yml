@@ -1170,8 +1170,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Cheap gate: no toolchain, no cargo, no cache restore. Every step below
-      # is skipped when the diff names no suite.
+      # Cheap gate: no toolchain, no cargo, no cache restore. Rust setup below
+      # is skipped when the diff names no suite and there are no exclusions to
+      # validate. The whole job is absent on docs-only PRs via ci_plan.py.
       - name: Compute e2e suite scope
         id: scope
         env:
@@ -1181,13 +1182,20 @@ jobs:
           changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
             --json files --jq '.files[].path')"
           suites="$(printf '%s\n' "$changed_files" | python3 scripts/ci_e2e_scope.py)"
-          # #7708: the held-out tests, so the run step can skip them AND assert
-          # each one still fails.
+          # #7708/#8266: selected suites skip held-out tests, while a separate
+          # scope-independent step below asserts every held-out test still
+          # fails on every core PR.
+          exclusions="$(python3 scripts/ci_e2e_scope.py --exclusions)"
           {
             echo 'exclusions<<PERRY_EOF'
-            python3 scripts/ci_e2e_scope.py --exclusions
+            printf '%s\n' "$exclusions"
             echo 'PERRY_EOF'
           } >> "$GITHUB_OUTPUT"
+          if [ -n "$suites" ] || [ -n "$exclusions" ]; then
+            echo "rust_work=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust_work=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ -z "$suites" ]; then
             echo "No integration suite named by this diff — nothing to run."
             echo "suites=" >> "$GITHUB_OUTPUT"
@@ -1202,16 +1210,17 @@ jobs:
           fi
 
       - name: Install Rust toolchain
-        if: steps.scope.outputs.suites != ''
+        if: steps.scope.outputs.rust_work == 'true'
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22
+        if: steps.scope.outputs.rust_work == 'true'
 
       - name: Install sccache
-        if: steps.scope.outputs.suites != ''
+        if: steps.scope.outputs.rust_work == 'true'
         uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Restore sccache objects
-        if: steps.scope.outputs.suites != ''
+        if: steps.scope.outputs.rust_work == 'true'
         uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.sccache
@@ -1220,7 +1229,7 @@ jobs:
             sccache-${{ runner.os }}-perry-
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.scope.outputs.suites != ''
+        if: steps.scope.outputs.rust_work == 'true'
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1229,7 +1238,7 @@ jobs:
       # keys only on perry-runtime's source hash and would link stale ext
       # archives into the binaries these suites compile (#5892).
       - name: Evict stale auto-opt archives (#5892)
-        if: steps.scope.outputs.suites != ''
+        if: steps.scope.outputs.rust_work == 'true'
         run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Run scoped integration suites
@@ -1280,23 +1289,33 @@ jobs:
             echo "::endgroup::"
           done <<< "$SUITES"
 
-          # #7708: the exclusions are self-invalidating. A held-out test that
-          # now PASSES (or that no longer exists under that name) fails the job,
-          # so a fix cannot land while leaving its entry behind — the failure
-          # mode #797 recorded for the parity skip-list.
-          if printf '%s\n' "$SUITES" | grep -q '^perry-codegen '; then
-            while read -r xpkg xsuite xtest; do
-              [ -n "$xpkg" ] || continue
-              echo "::group::known-failure check $xpkg::$xsuite::$xtest"
-              out="$(timeout 300 cargo test -p "$xpkg" --test "$xsuite" -- --exact "$xtest" 2>&1 || true)"
-              printf '%s\n' "$out"
-              if ! printf '%s\n' "$out" | grep -q '1 failed'; then
-                echo "::error::$xpkg::$xsuite::$xtest is listed in SUITE_EXCLUSIONS but did not fail (it passed, or no test matched that name). Delete its entry from SUITE_EXCLUSIONS in scripts/ci_e2e_scope.py and let the suite run it."
-                status=1
-              fi
-              echo "::endgroup::"
-            done <<< "$EXCLUSIONS"
-          fi
+          exit "$status"
+
+      # #7708/#8266: exclusions are self-invalidating independently of the
+      # selected suite set. A held-out test that now PASSES (or no longer
+      # exists under that name) fails every core PR, including a fix in HIR,
+      # transform, or another dependency that selects no codegen suite.
+      - name: Validate known-failure exclusions
+        if: steps.scope.outputs.exclusions != ''
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_BUILD_JOBS: "1"
+          EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
+        run: |
+          status=0
+          while read -r xpkg xsuite xtest; do
+            [ -n "$xpkg" ] || continue
+            echo "::group::known-failure check $xpkg::$xsuite::$xtest"
+            out="$(timeout 300 cargo test -p "$xpkg" --test "$xsuite" -- --exact "$xtest" 2>&1 || true)"
+            printf '%s\n' "$out"
+            if ! printf '%s\n' "$out" | grep -q '1 failed'; then
+              echo "::error::$xpkg::$xsuite::$xtest is listed in SUITE_EXCLUSIONS but did not fail (it passed, or no test matched that name). Delete its entry from SUITE_EXCLUSIONS in scripts/ci_e2e_scope.py and let the suite run it."
+              status=1
+            fi
+            echo "::endgroup::"
+          done <<< "$EXCLUSIONS"
           exit "$status"
 
       # sccache SAVE is main-line only (restore above is unconditional). PR

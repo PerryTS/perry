@@ -54,6 +54,12 @@ Within the **pr** tier the changed-file list narrows the plan further:
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,
   …) → additionally the `security-audit` reusable workflow.
 
+`e2e-scoped` runs integration suites selected by the diff, but its
+`SUITE_EXCLUSIONS` check is deliberately not scoped: whenever that list is
+nonempty, every core PR reruns each excluded exact test and fails if it no
+longer fails. This catches fixes made in HIR, transform, or another dependency
+without adding Rust setup to docs-only PRs.
+
 An empty or failed file listing is treated as **core** and a failed `plan` job fails
 the gate outright — a broken planner must never turn into "everything skipped,
 therefore green".
