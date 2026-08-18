@@ -148,8 +148,8 @@ console.log("file:", localValue, localCall("C"));
 /// compiled `compilePackages` module must bind to a createRequire-backed closure
 /// instead of throwing `ReferenceError: require is not defined`. Builtins resolve
 /// by string, `typeof require` is "function", a non-builtin package specifier
-/// throws the descriptive ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE (not a
-/// ReferenceError), and a shadowing local `require` still wins.
+/// throws Node-compatible MODULE_NOT_FOUND (not a ReferenceError), and a
+/// shadowing local `require` still wins.
 #[test]
 fn ambient_require_in_compiled_package_resolves_builtins_without_reference_error() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -247,7 +247,7 @@ console.log(shadowed());
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(
         stdout,
-        "typeof=function | builtin-ok | Error:ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE\nshadow:zzz\n"
+        "typeof=function | builtin-ok | Error:MODULE_NOT_FOUND\nshadow:zzz\n"
     );
 }
 
@@ -257,7 +257,7 @@ console.log(shadowed());
 /// target namespace — reusing the dynamic-`import()` resolver but returning the
 /// value directly (no Promise). A specifier that does not const-fold falls back
 /// to the Tier-1 ambient require (builtins resolve by string; unknown packages
-/// throw `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`).
+/// throw Node-compatible `MODULE_NOT_FOUND`).
 #[test]
 fn computed_require_const_folds_to_compiled_package_modules() {
     let dir = tempfile::tempdir().expect("tempdir");

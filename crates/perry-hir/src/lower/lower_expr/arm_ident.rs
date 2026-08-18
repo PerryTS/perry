@@ -203,8 +203,8 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // and throw `ReferenceError: require is not defined`. Bind a
         // bare unshadowed `require` to a real createRequire-backed
         // closure instead — builtins (`node:os`, …) resolve by string;
-        // package/file specifiers throw the descriptive
-        // ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Reaching this arm means
+        // unresolved package/file specifiers throw Node-compatible
+        // MODULE_NOT_FOUND. Reaching this arm means
         // `require` is unshadowed (a local/func/imported/native binding
         // would have matched an earlier arm). Gated to external modules:
         // in first-party source the bare-require compile error (#668)

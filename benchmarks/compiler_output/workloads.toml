@@ -261,7 +261,10 @@ required = true
 no_runtime_calls = true
 
 [[workloads.loop_data_dependent.named_regions.selectors]]
-label_prefix_any = ["for.body.4", "arr.merge."]
+# The measured loop's FP work lives in the numeric-array merge blocks. Do not
+# select a `for.body.*` by its generated suffix: the preceding data-setup loop
+# can receive that suffix and legitimately contains the one seed `sitofp`.
+label_prefix_any = ["arr.merge."]
 counter_any_min = { fmul = 1, fadd = 1 }
 
 [[workloads.loop_data_dependent.named_regions.checks]]

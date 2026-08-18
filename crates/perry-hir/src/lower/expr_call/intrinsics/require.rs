@@ -110,8 +110,8 @@ pub(crate) fn try_require_literal(
 /// import edge. Codegen then dispatches to the matching compiled-module
 /// namespace **synchronously** (no Promise), with the Tier-1 ambient
 /// createRequire-backed `require` as the no-match / unresolved fallthrough
-/// (builtins resolve by string; unknown packages throw the descriptive
-/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`).
+/// (builtins resolve by string; unknown packages throw Node-compatible
+/// `MODULE_NOT_FOUND`).
 ///
 /// Gated to external modules: in first-party source a bare `require` keeps the
 /// deliberate compile-time behavior (#668). Returns `Some(expr)` when matched.

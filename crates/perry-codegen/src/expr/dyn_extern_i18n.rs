@@ -63,8 +63,8 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
 /// returns the target **namespace value directly** (no Promise wrap) and uses the
 /// ambient createRequire-backed require (`js_module_ambient_require_apply`) as the
 /// unresolved / no-match fallthrough instead of a rejected promise — so builtins
-/// keep resolving by string and unknown packages throw the descriptive
-/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`. `paths` is populated by the same
+/// keep resolving by string and unknown packages throw Node-compatible
+/// `MODULE_NOT_FOUND`. `paths` is populated by the same
 /// `collect_modules` resolver as `import()`.
 fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> Result<String> {
     // Empty `paths` → genuinely runtime-computed specifier (didn't const-fold).

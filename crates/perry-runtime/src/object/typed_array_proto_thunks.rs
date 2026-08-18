@@ -758,14 +758,18 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             let cb = RootedCallback3::new(&scope, validate_callback(args));
             // `uint8_alloc_like` allocates, so the receiver read is
             // sequenced AFTER it.
-            let out = uint8_alloc_like(recv.live().0, len) as usize;
+            // Keep the fresh output live while the callback can run a full
+            // mark-sweep. Unlike a copying minor, the full collector can
+            // reclaim an old-arena Buffer that exists only in a Rust local.
+            let out = RootedUint8Buffer::new(&scope, uint8_alloc_like(recv.live().0, len) as usize);
             let (addr, receiver) = recv.live();
+            let out_addr = out.live().0;
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
                 let mapped = cb.call(value, i as f64, receiver);
-                uint8_set(out, i, to_uint8(mapped));
+                uint8_set(out_addr, i, to_uint8(mapped));
             }
-            pointer_value(out)
+            out.live().1
         }
         "filter" => {
             let cb = RootedCallback3::new(&scope, validate_callback(args));
@@ -918,11 +922,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
         "sort" | "toSorted" => {
             let cmp = validate_comparator(args);
             let (addr, receiver) = recv.live();
-            let out_addr = if method == "sort" {
-                addr
-            } else {
-                uint8_copy_to_new(addr) as usize
-            };
+            // `toSorted`'s fresh Buffer must remain a GC root while the user
+            // comparator runs. The receiver root covers in-place `sort`.
+            let out = (method == "toSorted")
+                .then(|| RootedUint8Buffer::new(&scope, uint8_copy_to_new(addr) as usize));
+            let out_addr = out.as_ref().map_or(addr, |root| root.live().0);
             let mut values: Vec<u8> = (0..len).map(|i| uint8_get(out_addr, i)).collect();
             if cmp.is_null() {
                 values.sort_unstable();
@@ -945,7 +949,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             if method == "sort" {
                 receiver
             } else {
-                pointer_value(out_addr)
+                out.as_ref().expect("toSorted output root").live().1
             }
         }
         "toReversed" => {

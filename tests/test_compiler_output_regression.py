@@ -758,11 +758,11 @@ entry:
         numeric_ir = """
 define i32 @main() {
 entry:
-  br label %for.body.4
-for.body.4:
+  br label %arr.merge.4
+arr.merge.4:
   %x = fmul double %a, %b
   %y = fadd double %x, %c
-  br label %for.body.4
+  br label %arr.merge.4
 }
 """
         report = HARNESS.verify_artifacts(
@@ -784,11 +784,11 @@ for.body.4:
         numeric_ir = """
 define i32 @main() {
 entry:
-  br label %for.body.4
-for.body.4:
+  br label %arr.merge.4
+arr.merge.4:
   %x = fmul double %a, %b
   %y = fadd double %x, %c
-  br label %for.body.4
+  br label %arr.merge.4
 }
 """
         cases = [
@@ -2816,11 +2816,11 @@ middle.block:
         ir = """
 define double @main() {
 entry:
-  br label %for.body.2
-for.body.2:
-  %setup = sitofp i32 %seed to double
   br label %for.body.4
 for.body.4:
+  %setup = sitofp i32 %seed to double
+  br label %arr.merge.24
+arr.merge.24:
   %mul = fmul double %sum, %x
   %add = fadd double %mul, %y
   br label %exit
@@ -2849,6 +2849,41 @@ exit:
                 check["name"] == "named_region_numeric_loop_no_fp_int_conversions"
                 and check["status"] == "pass"
                 for check in report["checks"]
+            )
+        )
+
+    def test_loop_data_dependent_rejects_conversion_inside_numeric_merge(self):
+        ir = """
+define double @main() {
+entry:
+  br label %arr.merge.24
+arr.merge.24:
+  %converted = sitofp i32 %index to double
+  %mul = fmul double %sum, %x
+  %add = fadd double %mul, %converted
+  ret double %add
+}
+"""
+        report = HARNESS.verify_artifacts(
+            workload="loop_data_dependent",
+            ir_before=ir,
+            ir_after=ir,
+            assembly="main:\n  retq\n",
+            benchmark=None,
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+                "missed_reason_kinds": {},
+            },
+            target="x86_64-unknown-linux-gnu",
+            native_reps=[{"records": loop_data_dependent_native_records()}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "named_region_numeric_loop_no_fp_int_conversions" in error
+                for error in report["errors"]
             )
         )
 

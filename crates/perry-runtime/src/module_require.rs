@@ -1143,9 +1143,8 @@ pub extern "C" fn js_require_json_disk(specifier: f64) -> f64 {
 /// defined`. This returns the same `createRequire`-backed closure as
 /// `js_module_create_require`, but takes no base argument (it is produced where a
 /// bare `require` identifier appears, not from an explicit `createRequire(base)`).
-/// Builtins resolve by string today; package/file specifiers throw the descriptive
-/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` until Tier 2 lands static package
-/// resolution.
+/// Builtins resolve by string; unresolved package/file specifiers throw Node's
+/// `MODULE_NOT_FOUND` error code.
 #[no_mangle]
 pub extern "C" fn js_module_ambient_require() -> f64 {
     let base = std::env::current_dir()
@@ -1167,9 +1166,8 @@ static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambien
 /// not const-fold to a compiled-module target, the dynamic-require dispatch calls
 /// this with the runtime specifier value: it resolves exactly like a
 /// createRequire-backed `require(spec)` — builtins (`node:os`, …) by string,
-/// unknown package/file specifiers throw the descriptive
-/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`. Returns the required value directly
-/// (no Promise).
+/// unknown package/file specifiers throw Node-compatible `MODULE_NOT_FOUND`.
+/// Returns the required value directly (no Promise).
 #[no_mangle]
 pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
     require_thunk(std::ptr::null(), spec)

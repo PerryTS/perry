@@ -840,7 +840,7 @@ fn collect_module_one(
                     // doesn't const-fold (and didn't glob-match above) falls back
                     // to the Tier-1 ambient createRequire-backed `require` at
                     // codegen — builtins resolve by string, unknown packages throw
-                    // the descriptive ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Leave
+                    // Node-compatible MODULE_NOT_FOUND. Leave
                     // `paths` empty (no `deferred_error`); the empty-paths +
                     // synchronous codegen arm emits the ambient require. This
                     // never participates in the strict-dynamic-import hard error.
