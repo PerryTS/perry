@@ -140,6 +140,14 @@ struct MessagePortState {
     closed: bool,
     /// Whether a close event still needs to be delivered.
     close_pending: bool,
+    /// Node's MessagePort handle reference state. A newly-created port is
+    /// unreferenced; attaching its first message listener references it, and
+    /// ref()/unref() then update this flag explicitly.
+    refed: bool,
+    /// Last observed callability of the public `onmessage` slot. Property
+    /// writes use the ordinary object path, so hasRef() folds a transition in
+    /// this slot into the handle state lazily.
+    onmessage_callable: bool,
 }
 
 #[derive(Default)]
@@ -494,10 +502,6 @@ fn listener_once(options: f64) -> bool {
 
 extern "C" fn worker_threads_noop0(_closure: *const ClosureHeader) -> f64 {
     js_undefined()
-}
-
-extern "C" fn worker_threads_has_ref(_closure: *const ClosureHeader) -> f64 {
-    js_bool(true)
 }
 
 /// Build a closure that captures a single f64 (the port id) in capture slot 0.

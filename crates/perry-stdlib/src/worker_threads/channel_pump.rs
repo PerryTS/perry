@@ -55,6 +55,12 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                     state.message_cbs.retain(|listener| !listener.once);
                     let event_cbs = state.message_event_cbs.clone();
                     state.message_event_cbs.retain(|listener| !listener.once);
+                    if state.message_cbs.is_empty()
+                        && state.message_event_cbs.is_empty()
+                        && handler_cb.is_none()
+                    {
+                        state.refed = false;
+                    }
                     MessageDispatch {
                         target_bits: state.object_bits,
                         raw_cbs,

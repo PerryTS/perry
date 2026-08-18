@@ -73,17 +73,17 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
     set_object_field(
         obj,
         "ref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        port_bound_closure(port_ref as *const u8, 0, port_id),
     );
     set_object_field(
         obj,
         "unref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        port_bound_closure(port_unref as *const u8, 0, port_id),
     );
     set_object_field(
         obj,
         "hasRef",
-        closure_value(worker_threads_has_ref as *const u8, 0),
+        port_bound_closure(port_has_ref as *const u8, 0, port_id),
     );
     set_object_field(obj, "__perryPortId", f64::from_bits(port_id));
     set_object_field(obj, "onmessage", js_null());
@@ -160,6 +160,9 @@ fn port_add_node_listener(
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
                 "message" => {
+                    let first_listener = state.message_cbs.is_empty()
+                        && state.message_event_cbs.is_empty()
+                        && object_event_handler(state.object_bits, "onmessage").is_none();
                     if !state
                         .message_cbs
                         .iter()
@@ -169,6 +172,9 @@ fn port_add_node_listener(
                             callback_bits: cb_bits,
                             once,
                         });
+                        if first_listener {
+                            state.refed = true;
+                        }
                     }
                     // Attaching a `message` listener implicitly starts the port.
                     state.started = true;
@@ -210,9 +216,17 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64)
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
-                "message" => state
-                    .message_cbs
-                    .retain(|listener| listener.callback_bits != cb_bits),
+                "message" => {
+                    state
+                        .message_cbs
+                        .retain(|listener| listener.callback_bits != cb_bits);
+                    if state.message_cbs.is_empty()
+                        && state.message_event_cbs.is_empty()
+                        && object_event_handler(state.object_bits, "onmessage").is_none()
+                    {
+                        state.refed = false;
+                    }
+                }
                 "close" => state
                     .close_cbs
                     .retain(|listener| listener.callback_bits != cb_bits),
@@ -232,7 +246,15 @@ extern "C" fn port_listener_count(closure: *const ClosureHeader, event: f64) -> 
             return 0.0;
         };
         match event_name.as_str() {
-            "message" => (state.message_cbs.len() + state.message_event_cbs.len()) as f64,
+            "message" => {
+                (state.message_cbs.len()
+                    + state.message_event_cbs.len()
+                    + if object_event_handler(state.object_bits, "onmessage").is_some() {
+                        1
+                    } else {
+                        0
+                    }) as f64
+            }
             "close" => (state.close_cbs.len() + state.close_event_cbs.len()) as f64,
             _ => 0.0,
         }
@@ -256,6 +278,9 @@ extern "C" fn port_add_event_listener(
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
                 "message" => {
+                    let first_listener = state.message_cbs.is_empty()
+                        && state.message_event_cbs.is_empty()
+                        && object_event_handler(state.object_bits, "onmessage").is_none();
                     state.started = true;
                     if !state
                         .message_event_cbs
@@ -266,6 +291,9 @@ extern "C" fn port_add_event_listener(
                             callback_bits: cb_bits,
                             once: listener_once(options),
                         });
+                        if first_listener {
+                            state.refed = true;
+                        }
                     }
                 }
                 "close" => {
@@ -301,9 +329,17 @@ extern "C" fn port_remove_event_listener(
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
-                "message" => state
-                    .message_event_cbs
-                    .retain(|listener| listener.callback_bits != cb_bits),
+                "message" => {
+                    state
+                        .message_event_cbs
+                        .retain(|listener| listener.callback_bits != cb_bits);
+                    if state.message_cbs.is_empty()
+                        && state.message_event_cbs.is_empty()
+                        && object_event_handler(state.object_bits, "onmessage").is_none()
+                    {
+                        state.refed = false;
+                    }
+                }
                 "close" => state
                     .close_event_cbs
                     .retain(|listener| listener.callback_bits != cb_bits),
@@ -325,6 +361,66 @@ extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
+extern "C" fn port_ref(closure: *const ClosureHeader) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let has_handler = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .get(&port_id)
+            .is_some_and(|state| object_event_handler(state.object_bits, "onmessage").is_some())
+    });
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            if !state.closed {
+                state.refed = true;
+                state.onmessage_callable = has_handler;
+            }
+        }
+    });
+    js_undefined()
+}
+
+extern "C" fn port_unref(closure: *const ClosureHeader) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let has_handler = MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .get(&port_id)
+            .is_some_and(|state| object_event_handler(state.object_bits, "onmessage").is_some())
+    });
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
+            if !state.closed {
+                state.refed = false;
+                state.onmessage_callable = has_handler;
+            }
+        }
+    });
+    js_undefined()
+}
+
+extern "C" fn port_has_ref(closure: *const ClosureHeader) -> f64 {
+    let port_id = port_id_from_closure(closure);
+    let has_handler = MESSAGE_PORTS.with(|ports| {
+        let ports = ports.borrow();
+        ports
+            .get(&port_id)
+            .is_some_and(|state| object_event_handler(state.object_bits, "onmessage").is_some())
+    });
+    let refed = MESSAGE_PORTS.with(|ports| {
+        let mut ports = ports.borrow_mut();
+        let Some(state) = ports.get_mut(&port_id) else {
+            return false;
+        };
+        if has_handler != state.onmessage_callable {
+            state.onmessage_callable = has_handler;
+            state.refed = has_handler;
+        }
+        !state.closed && state.refed
+    });
+    js_bool(refed)
+}
+
 /// port.close() — mark closed and queue `close` events on both ends (#3157).
 extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
     let port_id = port_id_from_closure(closure);
@@ -336,6 +432,7 @@ extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
                 state.close_pending = true;
             }
             state.closed = true;
+            state.refed = false;
             state.inbox.clear();
         }
         if let Some(peer_id) = peer_id {
@@ -344,6 +441,7 @@ extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
                     peer.close_pending = true;
                 }
                 peer.closed = true;
+                peer.refed = false;
                 peer.inbox.clear();
             }
         }

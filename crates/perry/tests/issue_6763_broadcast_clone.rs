@@ -268,3 +268,83 @@ sender.postMessage("second");
         )
     );
 }
+
+#[test]
+fn message_port_reference_state_tracks_listeners_and_close() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+    std::fs::write(
+        &entry,
+        r#"
+import { MessageChannel } from "node:worker_threads";
+
+const { port1, port2 } = new MessageChannel();
+console.log("initial", port1.hasRef());
+
+const listener = () => {};
+port1.on("message", listener);
+console.log("listener", port1.hasRef(), port1.listenerCount("message"));
+console.log("unref", port1.unref(), port1.hasRef());
+console.log("ref", port1.ref(), port1.hasRef());
+port1.off("message", listener);
+console.log("removed", port1.hasRef(), port1.listenerCount("message"));
+
+port1.onmessage = () => {};
+console.log("handler", port1.hasRef(), port1.listenerCount("message"));
+(port1 as any).onmessage = { not: "callable" };
+console.log("cleared", port1.hasRef(), port1.listenerCount("message"));
+port1.onmessage = () => {};
+port1.ref();
+port1.onmessage = null;
+console.log("handler removed", port1.hasRef(), port1.listenerCount("message"));
+
+port2.ref();
+console.log("peer refed", port2.hasRef());
+port1.close();
+console.log("closed", port1.hasRef(), port2.hasRef());
+"#,
+    )
+    .expect("write fixture");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output)
+        .output()
+        .expect("run compiled fixture");
+    assert!(
+        run.status.success(),
+        "compiled fixture failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "initial false\n",
+            "listener true 1\n",
+            "unref undefined false\n",
+            "ref undefined true\n",
+            "removed false 0\n",
+            "handler true 1\n",
+            "cleared false 0\n",
+            "handler removed false 0\n",
+            "peer refed true\n",
+            "closed false false\n",
+        )
+    );
+}
