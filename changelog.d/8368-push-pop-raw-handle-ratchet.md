@@ -1,0 +1,1 @@
+Convert the two post-call receiver reloads in `array/push_pop.rs` from `get_raw_mut_ptr` to `RuntimeHandle::across_mut`, returning the module to its raw-handle ceiling after #8366. Semantics are unchanged — both sites already re-resolved the receiver after an observable operation.

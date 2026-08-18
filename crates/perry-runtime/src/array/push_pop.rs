@@ -815,18 +815,22 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         // can also run an accessor which allocates, moves `arr`, freezes it,
         // or makes its length non-writable, so keep both values rooted and
         // resolve the receiver again after every observable operation.
-        let value_handle = scope.root_nanbox_f64(crate::array::array_spec_get(arr, new_length));
-        let arr = clean_arr_ptr_mut(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
+        let (value_handle, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+            scope.root_nanbox_f64(crate::array::array_spec_get(arr, new_length))
+        });
+        let arr = clean_arr_ptr_mut(arr);
 
         // DeletePropertyOrThrow only targets an own property. An inherited
         // value is returned without deleting it from Array.prototype.
-        if crate::array::array_has_own_index(arr, new_length)
-            && js_array_delete(arr, new_length) == 0
-        {
-            throw_cannot_delete_array_index(new_length);
-        }
+        let (_, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+            if crate::array::array_has_own_index(arr, new_length)
+                && js_array_delete(arr, new_length) == 0
+            {
+                throw_cannot_delete_array_index(new_length);
+            }
+        });
 
-        let arr = clean_arr_ptr_mut(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
+        let arr = clean_arr_ptr_mut(arr);
         if array_is_frozen(arr) {
             throw_frozen_array_mutation();
         }
