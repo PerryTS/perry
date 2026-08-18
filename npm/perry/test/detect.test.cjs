@@ -10,7 +10,7 @@
 // It also cross-checks the launcher against the things it has to agree with:
 //   * every package it can name is a real optionalDependency of @perryts/perry
 //   * the release matrix really does build the musl targets it falls back to
-//   * the glibc targets are still built on the image GLIBC_BUILD_FLOOR assumes
+//   * the glibc targets are still built in the old-sysroot image the floor assumes
 
 const assert = require("assert");
 const fs = require("fs");
@@ -58,11 +58,13 @@ console.log("\nglibc / musl routing (linux-x64, floor = " + GLIBC_BUILD_FLOOR + 
 console.log("  glibc            → package                          reason");
 console.log("  ---------------------------------------------------------------");
 const table = [
-  ["2.31 (Ubuntu 20.04)", glibcHost("x64", "2.31"), "linux-x64-musl", "glibc-too-old"],
-  ["2.34 (RHEL 9 / AL2023)", glibcHost("x64", "2.34"), "linux-x64-musl", "glibc-too-old"],
-  ["2.35 (Ubuntu 22.04)", glibcHost("x64", "2.35"), "linux-x64-musl", "glibc-too-old"],
-  ["2.36 (Debian 12)", glibcHost("x64", "2.36"), "linux-x64-musl", "glibc-too-old"],
-  ["2.39 (Ubuntu 24.04)", glibcHost("x64", "2.39"), "linux-x64", "native"],
+  ["2.27 (older)", glibcHost("x64", "2.27"), "linux-x64-musl", "glibc-too-old"],
+  ["2.28 (RHEL 8)", glibcHost("x64", "2.28"), "linux-x64-musl", "glibc-too-old"],
+  ["2.30 (older)", glibcHost("x64", "2.30"), "linux-x64-musl", "glibc-too-old"],
+  ["2.31 (build floor / Ubuntu 20.04)", glibcHost("x64", "2.31"), "linux-x64", "native"],
+  ["2.34 (RHEL 9 / AL2023)", glibcHost("x64", "2.34"), "linux-x64", "native"],
+  ["2.35 (Ubuntu 22.04)", glibcHost("x64", "2.35"), "linux-x64", "native"],
+  ["2.36 (Debian 12)", glibcHost("x64", "2.36"), "linux-x64", "native"],
   ["2.41 (newer)", glibcHost("x64", "2.41"), "linux-x64", "native"],
   ["(musl / Alpine)", muslHost("x64"), "linux-x64-musl", "musl"],
 ];
@@ -78,13 +80,13 @@ for (const [label, host, wantKey, wantReason] of table) {
 }
 
 console.log("\nother platforms");
-check("linux-arm64 glibc 2.35 → linux-arm64-musl", () => {
-  const got = detectPlatform(glibcHost("arm64", "2.35"));
+check("linux-arm64 glibc 2.30 → linux-arm64-musl", () => {
+  const got = detectPlatform(glibcHost("arm64", "2.30"));
   assert.strictEqual(got.candidates[0], "linux-arm64-musl");
   assert.strictEqual(got.reason, "glibc-too-old");
 });
-check("linux-arm64 glibc 2.39 → linux-arm64", () => {
-  assert.strictEqual(detectPlatform(glibcHost("arm64", "2.39")).candidates[0], "linux-arm64");
+check("linux-arm64 glibc 2.31 → linux-arm64", () => {
+  assert.strictEqual(detectPlatform(glibcHost("arm64", "2.31")).candidates[0], "linux-arm64");
 });
 check("linux-arm64 musl → linux-arm64-musl", () => {
   assert.strictEqual(detectPlatform(muslHost("arm64")).candidates[0], "linux-arm64-musl");
@@ -135,19 +137,19 @@ check("empty glibcVersionRuntime (musl) falls back to the glibc pkg — #116", (
 });
 check("glibc-too-old does NOT fall back to the glibc pkg", () => {
   // That binary physically cannot load — a fallback would just resurrect the
-  // "GLIBC_2.39 not found" error the user reported.
-  const got = detectPlatform(glibcHost("x64", "2.35"));
+  // Avoid resurrecting the dynamic-loader error on pre-2.31 systems.
+  const got = detectPlatform(glibcHost("x64", "2.30"));
   assert.deepStrictEqual(got.candidates, ["linux-x64-musl"]);
 });
 
 console.log("\nversion comparison");
 check("compareVersions is numeric, not lexical", () => {
-  assert.ok(compareVersions("2.35", "2.39") < 0);
-  assert.ok(compareVersions("2.39", "2.39") === 0);
-  assert.ok(compareVersions("2.40", "2.39") > 0);
-  assert.ok(compareVersions("2.9", "2.39") < 0, "2.9 must sort below 2.39");
-  assert.ok(compareVersions("3.0", "2.39") > 0);
-  assert.ok(compareVersions("2.39.1", "2.39") > 0);
+  assert.ok(compareVersions("2.30", "2.31") < 0);
+  assert.ok(compareVersions("2.31", "2.31") === 0);
+  assert.ok(compareVersions("2.32", "2.31") > 0);
+  assert.ok(compareVersions("2.9", "2.31") < 0, "2.9 must sort below 2.31");
+  assert.ok(compareVersions("3.0", "2.31") > 0);
+  assert.ok(compareVersions("2.31.1", "2.31") > 0);
 });
 check("a garbage glibc string is not treated as 'newer than the floor'", () => {
   const got = detectPlatform({
@@ -191,36 +193,39 @@ check("release matrix builds the musl targets the fallback relies on", () => {
   assert.ok(wf.includes("x86_64-unknown-linux-musl"), "x86_64 musl target missing");
   assert.ok(wf.includes("aarch64-unknown-linux-musl"), "aarch64 musl target missing");
 });
-check(`glibc legs still build on the image GLIBC_BUILD_FLOOR=${GLIBC_BUILD_FLOOR} assumes`, () => {
-  // The floor is a property of the *builder image*, not of Perry. If the glibc
-  // legs move to another runner, this fails and whoever moved them has to
-  // revisit GLIBC_BUILD_FLOOR in bin/detect.cjs instead of silently shipping a
-  // binary that the launcher's routing no longer describes.
-  //   ubuntu-24.04 / ubuntu-24.04-arm → glibc 2.39
+check(`glibc legs use glibc ${GLIBC_BUILD_FLOOR} builders`, () => {
+  // GTK4 still builds on the matrix's noble runner, but the compiler and core
+  // archives must come from the old-sysroot image. Pin this coupling so a
+  // workflow refactor cannot silently make the launcher floor a lie.
   const wf = fs.readFileSync(
     path.join(REPO_ROOT, ".github", "workflows", "release-packages.yml"),
     "utf8"
   );
-  const entries = [
-    ...wf.matchAll(/-\s+os:\s*(\S+)\s*\n\s+target:\s*(\S+)/g),
-  ].map((m) => ({ os: m[1], target: m[2] }));
+  const entries = [...wf.matchAll(
+    /-\s+os:\s*(\S+)\s*\n\s+target:\s*(\S+)\s*\n\s+artifact:\s*(\S+)\s*\n\s+old_glibc_image:\s*(\S+)/g
+  )].map((m) => ({ os: m[1], target: m[2], image: m[4] }));
   const gnu = entries.filter((e) => e.target.endsWith("-unknown-linux-gnu"));
-  assert.ok(gnu.length >= 2, `expected the linux-gnu legs in the matrix, saw ${gnu.length}`);
-  const IMAGE_GLIBC = { "ubuntu-24.04": "2.39", "ubuntu-24.04-arm": "2.39" };
+  assert.strictEqual(gnu.length, 2, `expected two linux-gnu legs, saw ${gnu.length}`);
   for (const leg of gnu) {
-    const glibc = IMAGE_GLIBC[leg.os];
     assert.ok(
-      glibc,
-      `${leg.target} now builds on '${leg.os}', an image this test doesn't know the ` +
-        `glibc of. Add it to IMAGE_GLIBC and re-check GLIBC_BUILD_FLOOR in bin/detect.cjs.`
-    );
-    assert.strictEqual(
-      glibc,
-      GLIBC_BUILD_FLOOR,
-      `${leg.target} builds on ${leg.os} (glibc ${glibc}) but GLIBC_BUILD_FLOOR is ` +
-        `${GLIBC_BUILD_FLOOR} — update bin/detect.cjs.`
+      leg.image.includes("debian:bullseye-slim@sha256:"),
+      `${leg.target} uses ${leg.image}; expected the pinned Debian 11 builder image`
     );
   }
+  assert.deepStrictEqual(
+    gnu.map((leg) => leg.target).sort(),
+    ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
+  );
+  assert.strictEqual(GLIBC_BUILD_FLOOR, "2.31");
+  assert.ok(wf.includes("scripts/build_linux_glibc_2_31.sh"));
+  assert.ok(wf.includes(`libc6 (>= ${GLIBC_BUILD_FLOOR})`));
+
+  const dockerfile = fs.readFileSync(
+    path.join(REPO_ROOT, "scripts", "linux-glibc-2.31.Dockerfile"),
+    "utf8"
+  );
+  assert.ok(dockerfile.includes("debian:bullseye-slim@sha256:"));
+  assert.ok(dockerfile.includes("llvm-toolchain-bullseye-22"));
 });
 
 console.log("");

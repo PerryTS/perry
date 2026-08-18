@@ -27,7 +27,7 @@ Installing picks the right prebuilt binary for your platform automatically — `
 
 ### Linux: glibc version
 
-The glibc packages are built on Ubuntu 24.04 (glibc 2.39), so they need **glibc ≥ 2.39**. On an older glibc — Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — the launcher automatically runs the fully-static musl build instead, which has no libc dependency at all and works everywhere ([#6298](https://github.com/PerryTS/perry/issues/6298)). It prints a one-time notice when it does; set `PERRY_NO_FALLBACK_NOTICE=1` to silence it.
+The glibc packages are built against a glibc 2.31 sysroot, so they need **glibc ≥ 2.31**. That covers Ubuntu 20.04+, Debian 11+, RHEL 9+ and Amazon Linux 2023 with the native glibc build. On an older glibc the launcher automatically runs the fully-static musl build instead, which has no libc dependency ([#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351)). It prints a one-time notice when it does; set `PERRY_NO_FALLBACK_NOTICE=1` to silence it.
 
 npm only installs the musl package when it thinks the machine is musl-based, so on an old-glibc host you have to ask for it once:
 
@@ -35,7 +35,7 @@ npm only installs the musl package when it thinks the machine is musl-based, so 
 npm install --force @perryts/perry-linux-x64-musl   # or -arm64-musl
 ```
 
-The launcher tells you this (with the exact command) instead of letting the binary die with `GLIBC_2.39 not found`. The static build is the same compiler; the one thing it cannot do is build `perry/ui` GTK4 desktop apps.
+The launcher tells you this (with the exact command) instead of letting the binary fail in the dynamic loader. The static build is the same compiler; the one thing it cannot do is build `perry/ui` GTK4 desktop apps. The glibc package includes GTK4 support, whose system development libraries must be available when linking a UI app.
 
 ## Host requirements
 

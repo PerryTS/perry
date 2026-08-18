@@ -312,27 +312,35 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
+            old_glibc_image: ""
           - os: macos-15
             target: x86_64-apple-darwin
             artifact: perry-macos-x86_64
+            old_glibc_image: ""
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: perry-linux-x86_64
+            old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: perry-linux-aarch64
+            old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             artifact: perry-linux-x86_64-musl
+            old_glibc_image: ""
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             artifact: perry-linux-aarch64-musl
+            old_glibc_image: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
+            old_glibc_image: ""
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             artifact: perry-windows-aarch64
+            old_glibc_image: ""
 
     runs-on: ${{ matrix.os }}
     env:
@@ -352,7 +360,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
+      # Its host-side GTK4 build does not depend on perry-codegen, so avoid
+      # installing a second LLVM copy on the noble runner for these two legs.
       - uses: ./.github/actions/setup-llvm22
+        if: matrix.old_glibc_image == ''
 
       # Cache cargo registry + target/ per (matrix.target, Cargo.lock).
       # First run on a target is still a cold build, but every subsequent
@@ -362,6 +374,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "release-${{ matrix.target }}"
+          workspaces: |
+            . -> target
+            . -> target-glibc231
+            . -> target-glibc231-abort
 
       # #4856 — evict workspace-crate fingerprints from the restored cache.
       # rust-cache's own workspace cleanup misses cross-target dirs, so a
@@ -379,7 +395,11 @@ jobs:
           set -euo pipefail
           while IFS= read -r pkg; do
             rm -rf target/dist/.fingerprint/"$pkg"-* \
-                   target/*/dist/.fingerprint/"$pkg"-*
+                   target/*/dist/.fingerprint/"$pkg"-* \
+                   target-glibc231/dist/.fingerprint/"$pkg"-* \
+                   target-glibc231/*/dist/.fingerprint/"$pkg"-* \
+                   target-glibc231-abort/dist/.fingerprint/"$pkg"-* \
+                   target-glibc231-abort/*/dist/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
@@ -435,9 +455,11 @@ jobs:
         # the next step. (Perry is V8-free — the former perry-jsruntime
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
+        if: matrix.old_glibc_image == ''
         run: cargo build --profile dist --target ${{ matrix.target }} -p perry
 
       - name: Build runtime libraries
+        if: matrix.old_glibc_image == ''
         run: |
           cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
@@ -450,7 +472,7 @@ jobs:
         # See optimized_libs.rs (find_runtime_abort_library selection).
         # Separate CARGO_TARGET_DIR so the profile override doesn't
         # invalidate the main build's incremental cache.
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.old_glibc_image == ''
         run: |
           CARGO_TARGET_DIR=target-abort CARGO_PROFILE_DIST_PANIC=abort \
             cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
@@ -474,7 +496,7 @@ jobs:
         # Best-effort per crate: a wrapper that can't build on this host must
         # not fail the whole release — the packaging glob below ships
         # whatever was produced.
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.old_glibc_image == ''
         run: |
           for d in crates/perry-ext-*; do
             [ -d "$d" ] || continue
@@ -484,6 +506,52 @@ jobs:
               -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
+          done
+
+      # #6351: only GTK4 needs noble. Build the compiler, runtime, stdlib and
+      # extension archives in a Debian 11 container so their ABI floor is
+      # glibc 2.31, then let the ordinary host step below add GTK4 to the same
+      # package. apt.llvm.org still publishes LLVM 22 for this sysroot, keeping
+      # the now-default in-process backend enabled.
+      - name: Build Linux GNU core artifacts on glibc 2.31
+        if: matrix.old_glibc_image != ''
+        env:
+          OLD_GLIBC_IMAGE: ${{ matrix.old_glibc_image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "OLD_GLIBC_IMAGE=$OLD_GLIBC_IMAGE" \
+            --tag perry-glibc-2.31-llvm22 \
+            --file scripts/linux-glibc-2.31.Dockerfile \
+            .
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/perry-home \
+            --env CARGO_HOME=/tmp/cargo-home \
+            --env RUSTUP_HOME=/tmp/rustup-home \
+            --env LLVM_SYS_221_PREFIX=/usr/lib/llvm-22 \
+            --env CARGO_TARGET_DIR=/work/target-glibc231 \
+            --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
+            --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --volume "$HOME/.cargo:/tmp/cargo-home" \
+            --volume "$HOME/.rustup:/tmp/rustup-home" \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            perry-glibc-2.31-llvm22 \
+            bash scripts/build_linux_glibc_2_31.sh "$TARGET"
+
+          # Keep old-sysroot objects isolated from the noble GTK4 build. Only
+          # the outputs release packaging consumes cross that boundary.
+          src="target-glibc231/$TARGET/dist"
+          dst="target/$TARGET/dist"
+          mkdir -p "$dst"
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
+            test -s "$src/$artifact"
+            cp "$src/$artifact" "$dst/$artifact"
+          done
+          for archive in "$src"/libperry_ext_*.a; do
+            [ -f "$archive" ] && cp "$archive" "$dst/"
           done
 
       - name: Build UI library (macOS)
@@ -1803,7 +1871,7 @@ jobs:
           require_staging_file libperry_runtime.a
           require_staging_file libperry_stdlib.a
 
-          MAIN_DEPENDS="gcc | clang, perry-runtime (= ${VERSION}), perry-stdlib (= ${VERSION})"
+          MAIN_DEPENDS="libc6 (>= 2.31), gcc | clang, perry-runtime (= ${VERSION}), perry-stdlib (= ${VERSION})"
           if [ -f staging/libperry_ui_gtk4.a ]; then
             MAIN_DEPENDS="${MAIN_DEPENDS}, perry-ui-gtk4 (= ${VERSION})"
           fi

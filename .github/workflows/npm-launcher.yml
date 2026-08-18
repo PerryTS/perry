@@ -44,12 +44,14 @@ jobs:
       - name: install.sh is valid POSIX sh
         run: sh -n packaging/install.sh
 
-  # End-to-end on the platform from #6298: Ubuntu 22.04 = glibc 2.35, older than
-  # the glibc 2.39 the release matrix builds the linux-gnu binaries against.
-  # Installs the *published* platform packages and runs this repo's launcher
-  # against them.
+  # Published-package verification for the platform from #6298. This is manual
+  # because a PR changes the launcher before the matching old-glibc binary can
+  # exist in npm; release-packages.yml exercises the just-built artifact inside
+  # the glibc 2.31 build container before publication. Run this after a release to verify that
+  # the registry package uses the native glibc build on Ubuntu 22.04.
   ubuntu-2204:
-    name: Ubuntu 22.04 (glibc 2.35) end-to-end
+    if: github.event_name == 'workflow_dispatch'
+    name: Ubuntu 22.04 native glibc end-to-end
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -77,43 +79,25 @@ jobs:
           echo "installed platform packages:"
           ls node_modules/@perryts/
 
-      - name: Show the bug — the glibc binary npm picked cannot load here
+      - name: Native glibc binary loads on Ubuntu 22.04
         run: |
           cd /tmp/e2e
-          set +e
-          out=$(./node_modules/@perryts/perry-linux-x64/bin/perry --version 2>&1)
-          code=$?
-          set -e
-          echo "exit=$code"
-          echo "$out"
-          if [ "$code" -eq 0 ]; then
-            echo "::warning::the prebuilt glibc binary loaded on glibc 2.35 — the floor in bin/detect.cjs may be too high"
-          else
-            echo "$out" | grep -qi "GLIBC" || { echo "failed for some other reason than glibc"; exit 1; }
-          fi
+          ./node_modules/@perryts/perry-linux-x64/bin/perry --version
 
-      - name: "Install the static build (npm skips it here: libc is musl)"
-        run: |
-          cd /tmp/e2e
-          version=$(node -p "require('@perryts/perry/package.json').version")
-          npm install --force "@perryts/perry-linux-x64-musl@$version" --no-audit --no-fund
-
-      - name: Launcher under test routes to the static build
+      - name: Launcher under test routes to the native build
         run: |
           cd /tmp/e2e
           cp "$GITHUB_WORKSPACE/npm/perry/bin/perry.js" node_modules/@perryts/perry/bin/perry.js
           cp "$GITHUB_WORKSPACE/npm/perry/bin/detect.cjs" node_modules/@perryts/perry/bin/detect.cjs
           node node_modules/@perryts/perry/bin/perry.js --version
 
-      # Perry's LLVM backend emits opaque-pointer IR (`ptr`) and shells out to
-      # `clang -c`. Jammy's default clang is 14, which predates opaque pointers
-      # and rejects the IR with "expected type" — nothing to do with libc, and it
-      # bites the glibc binary just as hard. Ubuntu 22.04 users need clang >= 15
-      # (in the jammy archive) on PATH or in PERRY_LLVM_CLANG.
+      # The in-process LLVM backend emits objects itself, but the final native
+      # link still needs a system C toolchain. Install clang 15 explicitly so
+      # this smoke does not depend on jammy's older default clang 14.
       - name: Install clang 15 (jammy default clang is too old for opaque-pointer IR)
         run: sudo apt-get update && sudo apt-get install -y clang-15
 
-      - name: Compile and run a TypeScript program with the fallback binary
+      - name: Compile and run a TypeScript program with the native binary
         env:
           PERRY_LLVM_CLANG: /usr/bin/clang-15
         run: |

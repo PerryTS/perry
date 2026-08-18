@@ -46,17 +46,14 @@ esac
 # Pick the glibc or the fully-static (musl) Linux build.
 #
 # The Linux glibc tarballs are built by .github/workflows/release-packages.yml
-# on ubuntu-24.04 / ubuntu-24.04-arm, whose glibc is 2.39. Their ELF carries
-# GLIBC_2.39 symbol-version references, so the dynamic loader refuses to start
-# them on anything older — Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 and
-# Amazon Linux 2023 (2.34) all die with "GLIBC_2.39 not found" before Perry runs
-# (#6298). The musl tarball is a fully-static binary with no interpreter and no
-# libc dependency at all, so it runs on every one of them.
+# in old-sysroot containers and checked for a glibc 2.31 symbol floor. This
+# covers Ubuntu 20.04+, Debian 11+, RHEL 9+ and Amazon Linux 2023 natively. The
+# musl tarball remains the fully-static fallback for older glibc and musl hosts.
 #
 # KEEP IN SYNC with the builder image and with GLIBC_BUILD_FLOOR in
 # npm/perry/bin/detect.cjs.
 GLIBC_FLOOR_MAJOR=2
-GLIBC_FLOOR_MINOR=39
+GLIBC_FLOOR_MINOR=31
 
 LIBC="glibc"
 if [ "$OS" = "linux" ]; then

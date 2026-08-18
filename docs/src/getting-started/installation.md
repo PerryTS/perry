@@ -73,9 +73,9 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 
 #### Linux glibc requirement
 
-The Linux **glibc** binaries are built on Ubuntu 24.04, so they require **glibc ≥ 2.39**. Older distributions — Ubuntu 22.04 (glibc 2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — cannot load them; the dynamic loader fails with `GLIBC_2.39 not found` before Perry starts.
+The Linux **glibc** binaries are built against a glibc 2.31 sysroot, so they require **glibc ≥ 2.31**. This includes Ubuntu 20.04+, Debian 11+, RHEL 9+ and Amazon Linux 2023. Release CI checks the compiler's imported glibc symbol versions and exercises a compiled program inside that environment.
 
-On those hosts Perry uses the **fully-static musl build** instead, which has no libc dependency and runs on any Linux:
+On older glibc hosts Perry uses the **fully-static musl build** instead, which has no libc dependency and runs on any Linux:
 
 - **`install.sh`** detects the glibc version and downloads `perry-linux-<arch>-musl.tar.gz` automatically.
 - **npm** — the launcher routes to `@perryts/perry-linux-x64-musl` (or `-arm64-musl`) and prints a one-time notice. npm does not install that package on a glibc machine by itself (its `libc` selector says `musl`), so install it once:
@@ -84,7 +84,7 @@ On those hosts Perry uses the **fully-static musl build** instead, which has no 
   npm install --force @perryts/perry-linux-x64-musl
   ```
 
-The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. Tracking issue: [#6298](https://github.com/PerryTS/perry/issues/6298).
+The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. The glibc package includes the GTK4 archive, built separately on Ubuntu 24.04; linking a UI app still requires the GTK4, WebKitGTK, libshumate and GStreamer development libraries. Tracking issues: [#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351).
 
 ### Homebrew (macOS)
 

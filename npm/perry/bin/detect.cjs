@@ -19,11 +19,9 @@ const PLATFORM_PACKAGES = {
 // Minimum glibc the prebuilt *glibc* Linux binaries can run on.
 //
 // KEEP IN SYNC WITH THE BUILDER IMAGE. `.github/workflows/release-packages.yml`
-// builds `x86_64-unknown-linux-gnu` on `ubuntu-24.04` and
-// `aarch64-unknown-linux-gnu` on `ubuntu-24.04-arm`. Both images ship glibc
-// 2.39, so the emitted ELF carries GLIBC_2.39 symbol-version references and the
-// dynamic loader refuses to start it on anything older — the process dies with
-// `GLIBC_2.39 not found` before Perry's own code runs (#6298).
+// builds both GNU targets in architecture-matched glibc 2.31 containers.
+// The release build checks the final ELF symbol versions and runs a compile
+// smoke test inside that container before packaging it (#6351).
 //
 // A binary only requires the glibc version whose symbols it actually pulls in,
 // so this is an upper bound: it is the version of the builder image, and the
@@ -32,7 +30,7 @@ const PLATFORM_PACKAGES = {
 // otherwise hosts that *could* run the glibc build get silently pushed onto the
 // static build (too high a value), or hosts that can't get the loader error back
 // (too low a value).
-const GLIBC_BUILD_FLOOR = "2.39";
+const GLIBC_BUILD_FLOOR = "2.31";
 
 // Compare two dotted numeric versions ("2.35", "2.39.1"). Returns <0, 0, >0.
 // Non-numeric components sort as 0 — glibc versions are always numeric, and a

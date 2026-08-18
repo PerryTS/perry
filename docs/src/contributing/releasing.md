@@ -98,9 +98,11 @@ triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
 runners build:
 
 - `macos-14` / `macos-15` — arm64 + x86_64 Darwin binaries
-- `ubuntu-24.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64 (glibc 2.39 floor:
-  the npm launcher and `install.sh` route older-glibc hosts to the musl build — if
-  you move these runners, update `GLIBC_BUILD_FLOOR` in `npm/perry/bin/detect.cjs`)
+- `ubuntu-24.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64; the compiler,
+  runtime, stdlib and extension archives build inside architecture-matched
+  Debian 11 (glibc 2.31) containers, while GTK4 builds on the noble host and is added
+  afterward (glibc 2.31 compiler floor; keep `GLIBC_BUILD_FLOOR` in
+  `npm/perry/bin/detect.cjs` synchronized)
 - `ubuntu-24.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64 (fully static)
 - `windows-latest` — x86_64 MSVC
 

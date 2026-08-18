@@ -130,7 +130,7 @@ function reportResolutionFailure() {
     // spell the command out rather than leaving the user with a loader error.
     console.error(
       `[perry] This system has glibc ${detected.glibc}, but Perry's prebuilt Linux binary\n` +
-        `        needs glibc >= ${GLIBC_BUILD_FLOOR} (it is built on ubuntu-24.04). Running it would fail\n` +
+        `        needs glibc >= ${GLIBC_BUILD_FLOOR} (it is built on a glibc 2.31 sysroot). Running it would fail\n` +
         `        in the dynamic loader with "GLIBC_${GLIBC_BUILD_FLOOR} not found".\n` +
         `\n` +
         `        Perry also ships a fully-static Linux build that needs no glibc at all, but\n` +
