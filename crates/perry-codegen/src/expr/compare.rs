@@ -786,14 +786,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // the wrapper first. Strict `=== "lit"` is unaffected (both sides are
                 // real strings at runtime). #boxed-loose-eq.
                 if one_side_string && matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                    // Reuse the no-literal string prefix instead of sending
+                    // every comparison through two unified-unbox calls. This
+                    // is the hot shape of a specialized generic container:
+                    // `this.keys[i]` has a concrete string type while `k`
+                    // retains its `K` spelling. Identical pooled strings now
+                    // leave after one bit compare; distinct heap strings call
+                    // only `js_string_equals`. The boxed arm is byte-for-byte
+                    // the old helper composition, so a lying annotation keeps
+                    // its existing behaviour.
+                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true);
                     let blk = ctx.block();
-                    let l_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &l)]);
-                    let r_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &r)]);
-                    let i32_eq = blk.call(
-                        I32,
-                        "js_string_equals",
-                        &[(I64, &l_handle), (I64, &r_handle)],
-                    );
                     let bit = blk.icmp_ne(I32, &i32_eq, "0");
                     let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
                         blk.xor(crate::types::I1, &bit, "true")

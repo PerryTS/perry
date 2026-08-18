@@ -250,6 +250,45 @@ fn strict_eq_between_two_any_locals_does_not_use_the_literal_dispatch() {
     );
 }
 
+#[test]
+fn string_vs_generic_key_uses_the_identity_first_dispatch() {
+    let ir = ir_for(
+        "streq_generic_key",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "stored".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("stored".to_string())),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "key".to_string(),
+                ty: Type::TypeVar("K".to_string()),
+                mutable: false,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: R,
+                name: "same".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+
+    assert!(
+        ir.contains("streq.tag"),
+        "string-vs-generic comparison did not enter the identity-first dispatch:\n{ir}"
+    );
+}
+
 /// The SSO immediate is hand-built here but consumed by `perry-runtime`'s
 /// canonical encoding (`JSValue::try_short_string`): tag `0x7FF9` in bits
 /// 48..=63, byte length in bits 40..=47, bytes little-endian in bits 0..=39,
