@@ -680,7 +680,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     // surface `named_export_decls` uses below.
                     Some(format!("export const {name} = _cjs.{name};"))
                 } else {
-                    Some(format!("export {{ {} as {} }};", import_local_names[n], name))
+                    Some(format!(
+                        "export {{ {} as {} }};",
+                        import_local_names[n], name
+                    ))
                 }
             })
             .collect::<Vec<_>>()
