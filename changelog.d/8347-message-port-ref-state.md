@@ -1,0 +1,3 @@
+- **`MessagePort.ref()`, `unref()`, and `hasRef()` now expose real per-port state.** New ports begin unreferenced, their first message listener references them, explicit ref/unref calls update the state, and removing or consuming the final listener releases the reference. Closing either endpoint also leaves both ports unreferenced.
+
+- **`onmessage` now participates in MessagePort reference and listener accounting.** Assigning a callable handler references the port and contributes to `listenerCount("message")`; replacing or clearing it reverses both effects. This closes the focused `ref-state`, `ref-after-peer-close`, `unref-delivery`, and `onmessage-nonfunction` gaps from #6763.
