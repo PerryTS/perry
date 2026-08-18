@@ -133,6 +133,7 @@ impl LoweringContext {
             resolved_types: None,
             pre_registered_module_vars: HashSet::new(),
             pre_registered_module_var_decls: HashSet::new(),
+            script_var_decl_names: HashSet::new(),
             module_level_ids: HashSet::new(),
             sloppy_implicit_globals: Vec::new(),
             sloppy_implicit_global_ids: HashSet::new(),

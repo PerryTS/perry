@@ -55,10 +55,9 @@ fn run_global(src: &str) -> (bool, String) {
     );
 
     let run = Command::new(&output).output().expect("run compiled binary");
-    (
-        run.status.success(),
-        String::from_utf8_lossy(&run.stdout).to_string(),
-    )
+    let mut output = String::from_utf8_lossy(&run.stdout).to_string();
+    output.push_str(&String::from_utf8_lossy(&run.stderr));
+    (run.status.success(), output)
 }
 
 /// A block-scoped function declaration hoisted by a *global* direct `eval` must
@@ -106,23 +105,22 @@ fn direct_eval_new_global_var_binding_is_configurable() {
     assert!(out.contains("PASS"), "{out}");
 }
 
-/// A `var` declared inside `eval` for a name that already exists as a global
-/// must update the value via a plain assignment, not the create-if-absent
-/// `Object.defineProperty` prelude this PR touches (test262 `language/eval-
-/// code/direct/var-env-var-init-global-exstng`, which additionally asserts the
-/// pre-existing descriptor's `configurable: false` survives untouched — not
-/// checked here: Perry does not yet reify a top-level *script* `var`
-/// declaration as a real `globalThis` own-property until something touches it
-/// via reflection, so `hasOwnProperty` reads `false` before the eval runs and
-/// the create-if-absent prelude (correctly, per its own contract) creates a
-/// fresh `configurable: true` binding — a separate, pre-existing gap in how
-/// Perry models module-top `var`, orthogonal to this PR's eval-configurable
-/// fix and out of scope here).
+/// A direct-eval `var` that reuses a Script-level global must update its value
+/// without changing the Script binding's non-configurable descriptor (test262
+/// `language/eval-code/direct/var-env-var-init-global-exstng`, #5903).
 const DIRECT_EXISTING_VAR_VALUE_UPDATED: &str = r#"
+var initial;
 var __perry_5841_existing = 23;
-eval("var __perry_5841_existing = 45;");
+eval("initial = __perry_5841_existing; var __perry_5841_existing = 45;");
+if (initial !== 23) {
+  throw new Error("expected initial value 23, got " + initial);
+}
 if (__perry_5841_existing !== 45) {
   throw new Error("expected value 45, got " + __perry_5841_existing);
+}
+var d = Object.getOwnPropertyDescriptor(globalThis, "__perry_5841_existing");
+if (d.value !== 45 || d.writable !== true || d.enumerable !== true || d.configurable !== false) {
+  throw new Error("unexpected descriptor: " + JSON.stringify(d));
 }
 console.log("PASS");
 "#;
@@ -170,6 +168,32 @@ console.log("PASS");
 #[test]
 fn indirect_eval_new_global_var_binding_is_configurable() {
     let (ok, out) = run_global(INDIRECT_NEW_VAR_CONFIGURABLE);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(out.contains("PASS"), "{out}");
+}
+
+/// Indirect-eval form of [`direct_eval_existing_global_var_value_is_updated`]
+/// (test262 `language/eval-code/indirect/var-env-var-init-global-exstng`).
+const INDIRECT_EXISTING_VAR_VALUE_UPDATED: &str = r#"
+var initial;
+var __perry_5903_existing = 23;
+(0, eval)("initial = __perry_5903_existing; var __perry_5903_existing = 45;");
+if (initial !== 23) {
+  throw new Error("expected initial value 23, got " + initial);
+}
+if (__perry_5903_existing !== 45) {
+  throw new Error("expected value 45, got " + __perry_5903_existing);
+}
+var d = Object.getOwnPropertyDescriptor(globalThis, "__perry_5903_existing");
+if (d.value !== 45 || d.writable !== true || d.enumerable !== true || d.configurable !== false) {
+  throw new Error("unexpected descriptor: " + JSON.stringify(d));
+}
+console.log("PASS");
+"#;
+
+#[test]
+fn indirect_eval_existing_global_var_value_and_descriptor_are_updated() {
+    let (ok, out) = run_global(INDIRECT_EXISTING_VAR_VALUE_UPDATED);
     assert!(ok, "binary did not exit cleanly\n{out}");
     assert!(out.contains("PASS"), "{out}");
 }

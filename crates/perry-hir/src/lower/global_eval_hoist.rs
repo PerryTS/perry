@@ -118,6 +118,45 @@ fn synth_inert_assign_stmt(sink: &str, name: &str, init: Box<ast::Expr>) -> Opti
     Some(block)
 }
 
+/// Completion-inert publish for an eval `var` that reuses a Script-level
+/// `var` binding. Perry keeps the Script binding in a module slot, so update
+/// both that slot and its reflected global-object property in one initializer:
+/// `{ let <sink> = (globalThis["x"] = (x = <init>)); }`.
+fn synth_inert_existing_script_var_assign_stmt(
+    sink: &str,
+    name: &str,
+    init: Box<ast::Expr>,
+) -> Option<ast::Stmt> {
+    let local_assign = synth_assign_stmt(name, init)?;
+    let ast::Stmt::Expr(local_es) = local_assign else {
+        return None;
+    };
+
+    let mut global_assign = parse_single_stmt(&format!("globalThis[{name:?}] = 0;"))?;
+    let ast::Stmt::Expr(global_es) = &mut global_assign else {
+        return None;
+    };
+    let ast::Expr::Assign(global) = global_es.expr.as_mut() else {
+        return None;
+    };
+    global.right = local_es.expr;
+
+    let mut block = parse_single_stmt("{ let __perry_eval_void = 0; }")?;
+    let ast::Stmt::Block(b) = &mut block else {
+        return None;
+    };
+    let Some(ast::Stmt::Decl(ast::Decl::Var(var))) = b.stmts.first_mut() else {
+        return None;
+    };
+    let decl = var.decls.first_mut()?;
+    let ast::Pat::Ident(binding) = &mut decl.name else {
+        return None;
+    };
+    binding.id.sym = sink.into();
+    decl.init = Some(global_es.expr.clone());
+    Some(block)
+}
+
 /// CreateGlobalFunctionBinding for a renamed hidden *top-level* function:
 /// publish its value to the global name `<name>` with the spec's descriptor
 /// rules. This is declaration-instantiation machinery, not a statement of the
@@ -211,6 +250,19 @@ fn synth_create_if_absent_stmt(name: &str) -> Option<ast::Stmt> {
               {{ throw new TypeError(\"Cannot declare global var: {name}\"); }} \
             void Object.defineProperty(globalThis, {name:?}, \
               {{ value: void 0, writable: true, enumerable: true, configurable: true }}); }}"
+    ))
+}
+
+/// Materialize Perry's module-slot representation of an existing Script
+/// `var` as the non-configurable global-object property that
+/// GlobalDeclarationInstantiation created before the Script began executing.
+/// The value is copied at eval entry, immediately before the eval declaration
+/// checks whether the global binding already exists (#5903).
+fn synth_materialize_existing_script_var_stmt(name: &str) -> Option<ast::Stmt> {
+    parse_single_stmt(&format!(
+        "if (!({{}}).hasOwnProperty.call(globalThis, {name:?})) \
+         {{ void Object.defineProperty(globalThis, {name:?}, \
+              {{ value: {name}, writable: true, enumerable: true, configurable: false }}); }}"
     ))
 }
 
@@ -620,6 +672,10 @@ struct GlobalEvalHoist {
     /// `void (x = init)` global publish (the `void` keeps the statement's empty
     /// completion value). (test262 `language/eval-code/*/var-env-var-*`.)
     var_prelude_names: Vec<String>,
+    /// Script-level `var` names already backed by module slots. Eval reuses
+    /// these non-configurable bindings and must mirror initializer writes to
+    /// both representations (#5903).
+    existing_script_vars: std::collections::HashSet<String>,
     /// Top-level `function` declarations — CreateGlobalFunctionBinding: the
     /// function value is present at instantiation, so each is renamed to a hidden
     /// binding and published with a `void (f = <hidden>)` at the top of the body
@@ -795,7 +851,16 @@ impl GlobalEvalHoist {
                             // is in TDZ while `init` evaluates, so a name the
                             // user's `init` could reference would throw spuriously.
                             let sink = self.fresh_hidden();
-                            match synth_inert_assign_stmt(&sink, &name, init.clone()) {
+                            let publish = if self.existing_script_vars.contains(&name) {
+                                synth_inert_existing_script_var_assign_stmt(
+                                    &sink,
+                                    &name,
+                                    init.clone(),
+                                )
+                            } else {
+                                synth_inert_assign_stmt(&sink, &name, init.clone())
+                            };
+                            match publish {
                                 Some(s) => publishes.push(s),
                                 None => {
                                     self.ok = false;
@@ -935,6 +1000,13 @@ impl GlobalEvalHoist {
 /// the unmodified fold. Operates on a clone, so a mid-way bail never leaves a
 /// partially rewritten body.
 pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::Stmt>> {
+    apply_global_eval_hoist_with_script_vars(stmts, &std::collections::HashSet::new())
+}
+
+pub(super) fn apply_global_eval_hoist_with_script_vars(
+    stmts: &[ast::Stmt],
+    existing_script_vars: &std::collections::HashSet<String>,
+) -> Option<Vec<ast::Stmt>> {
     // The prelude / publishes read `globalThis` and `Object` (the
     // create-if-absent slot and CreateGlobalFunctionBinding); if the eval body
     // rebinds either name at function scope (`var globalThis`, top-level
@@ -950,6 +1022,7 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
         counter: 0,
         prelude_names: Vec::new(),
         var_prelude_names: Vec::new(),
+        existing_script_vars: existing_script_vars.clone(),
         top_fn_publishes: Vec::new(),
         // `rewrite_list` adds each block scope's lexical bindings as it descends,
         // starting from the eval body's own top level.
@@ -976,7 +1049,13 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
         .chain(hoist.var_prelude_names.iter())
     {
         if seen.insert(name.clone()) {
-            result.push(synth_create_if_absent_stmt(name)?);
+            let reuses_script_var = hoist.existing_script_vars.contains(name)
+                && hoist.var_prelude_names.iter().any(|var| var == name);
+            result.push(if reuses_script_var {
+                synth_materialize_existing_script_var_stmt(name)?
+            } else {
+                synth_create_if_absent_stmt(name)?
+            });
         }
     }
     // Top-level functions are published (CreateGlobalFunctionBinding) with their
@@ -1016,6 +1095,7 @@ pub(super) fn apply_function_eval_hoist(
         counter: 0,
         prelude_names: Vec::new(),
         var_prelude_names: Vec::new(),
+        existing_script_vars: std::collections::HashSet::new(),
         top_fn_publishes: Vec::new(),
         lexical: std::collections::HashSet::new(),
         ok: true,

@@ -736,6 +736,9 @@ pub fn lower_module_full(
                 }
                 if let ast::Pat::Ident(ident) = &decl.name {
                     let name = ident.id.sym.to_string();
+                    if var_decl.kind == ast::VarDeclKind::Var {
+                        ctx.script_var_decl_names.insert(name.clone());
+                    }
                     if decl.init.as_deref().and_then(require_literal_specifier) == Some("util")
                         || decl.init.as_deref().and_then(require_literal_specifier)
                             == Some("node:util")
@@ -788,6 +791,9 @@ pub fn lower_module_full(
                     let mut leaf_names = Vec::new();
                     crate::lower_patterns::collect_binding_names(&decl.name, &mut leaf_names);
                     for name in leaf_names {
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.script_var_decl_names.insert(name.clone());
+                        }
                         if ctx.lookup_local(&name).is_none() {
                             ctx.define_local(name.clone(), Type::Any);
                             ctx.pre_registered_module_vars.insert(name.clone());
@@ -825,6 +831,7 @@ pub fn lower_module_full(
         names.sort();
         names.dedup();
         for name in names {
+            ctx.script_var_decl_names.insert(name.clone());
             if ctx.lookup_local(&name).is_none() {
                 let id = ctx.define_local(name.clone(), Type::Any);
                 ctx.var_hoisted_ids.insert(id);
@@ -883,6 +890,7 @@ pub fn lower_module_full(
         names.sort();
         names.dedup();
         for name in names {
+            ctx.script_var_decl_names.insert(name.clone());
             // Reuse an existing global `var`, else mint a fresh hoisted slot;
             // either way emit an entry slot so the block's B.3.3 write (which
             // runs before any source-position `var f = …`) has storage to target.

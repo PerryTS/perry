@@ -30,7 +30,8 @@ use crate::ir::Expr;
 
 use super::expr_function::lower_fn_expr;
 use super::global_eval_hoist::{
-    apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names,
+    apply_function_eval_hoist, apply_global_eval_hoist, apply_global_eval_hoist_with_script_vars,
+    collect_nested_fn_decl_names,
 };
 use super::lower_expr::lower_expr;
 use super::LoweringContext;
@@ -802,7 +803,9 @@ pub(crate) fn try_indirect_eval_general(
         // stay invisible). Strict eval keeps its own variable environment, which
         // the completion IIFE already models, so it skips the hoist.
         if !eval_strict {
-            if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+            if let Some(hoisted) =
+                apply_global_eval_hoist_with_script_vars(&body_stmts, &ctx.script_var_decl_names)
+            {
                 return build_eval_completion_iife(ctx, hoisted, false, span);
             }
         }
@@ -1655,7 +1658,9 @@ fn try_const_fold_eval(
     // folding (otherwise the completion IIFE traps them as arrow-locals). Strict
     // eval keeps its own variable environment (the IIFE already models that).
     if !eval_strict && eval_is_module_top_global(ctx) {
-        if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+        if let Some(hoisted) =
+            apply_global_eval_hoist_with_script_vars(&body_stmts, &ctx.script_var_decl_names)
+        {
             return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
         }
     }

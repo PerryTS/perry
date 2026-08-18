@@ -378,6 +378,12 @@ pub struct LoweringContext {
     /// declarations. Sloppy assignments before a later `var` need an early
     /// backing slot; `let`/`const` should not use that path.
     pub(crate) pre_registered_module_var_decls: HashSet<String>,
+    /// Persistent names introduced by Script-level `var` declarations.
+    /// Unlike `pre_registered_module_var_decls`, entries are not consumed when
+    /// the declaration is lowered: constant global eval needs to know that an
+    /// eval `var` reuses an existing non-configurable global binding rather
+    /// than creating a fresh configurable one (#5903).
+    pub(crate) script_var_decl_names: HashSet<String>,
     /// LocalIds that are defined at module top level (outside any function or
     /// block). Closure `captures` referencing these IDs are filtered out at
     /// lowering time because codegen loads module-level bindings from their
