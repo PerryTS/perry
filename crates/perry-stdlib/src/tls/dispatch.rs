@@ -125,8 +125,9 @@ pub unsafe fn dispatch_tls_handle(handle: i64, method: &str, args: &[f64]) -> f6
         match method {
             "listen" => {
                 let port = args.first().copied().unwrap_or(0.0);
-                let cb = callback_bits(args, 1);
-                js_tls_server_listen(handle, port, cb);
+                let host_or_cb = callback_bits(args, 1);
+                let cb = callback_bits(args, 2);
+                js_tls_server_listen(handle, port, host_or_cb, cb);
                 return nanbox_handle(handle);
             }
             "close" => {

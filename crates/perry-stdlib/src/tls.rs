@@ -671,11 +671,31 @@ pub unsafe extern "C" fn js_tls_tlssocket_constructor(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_tls_server_listen(handle: i64, port: f64, callback_bits: i64) -> i64 {
+pub unsafe extern "C" fn js_tls_server_listen(
+    handle: i64,
+    port: f64,
+    host_or_callback_bits: i64,
+    callback_bits: i64,
+) -> i64 {
     crate::common::async_bridge::ensure_pump_registered();
     ensure_tls_gc_scanner_registered();
     let port = port as u16;
-    let host = "0.0.0.0".to_string();
+    let host_or_callback = f64_from_raw_bits(host_or_callback_bits);
+    let callback = f64_from_raw_bits(callback_bits);
+    let host = if JSValue::from_bits(host_or_callback.to_bits()).is_any_string() {
+        value_to_string(host_or_callback).unwrap_or_else(|| "0.0.0.0".to_string())
+    } else {
+        "0.0.0.0".to_string()
+    };
+    let callback_bits = if pointer_addr(callback).is_some() {
+        callback_bits
+    } else if pointer_addr(host_or_callback).is_some()
+        && !JSValue::from_bits(host_or_callback.to_bits()).is_any_string()
+    {
+        host_or_callback_bits
+    } else {
+        TAG_UNDEFINED_BITS as i64
+    };
     let config = {
         let mut all = servers().lock().unwrap();
         let Some(server) = all.get_mut(&handle) else {
@@ -1029,7 +1049,7 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 drain_once_listeners(server_id, "listening");
             }
             PendingTlsEvent::ServerSecureConnection(server_id, socket_id) => {
-                let socket = raw_handle_value(socket_id);
+                let socket = nanbox_handle(socket_id);
                 for event_name in ["secureConnection", "connection"] {
                     for cb in listeners_for(server_id, event_name) {
                         if cb != 0 {

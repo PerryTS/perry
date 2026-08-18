@@ -41,7 +41,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("Server"),
         runtime: "js_tls_server_listen",
-        args: &[NA_F64, NA_JSV],
+        args: &[NA_F64, NA_JSV, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {

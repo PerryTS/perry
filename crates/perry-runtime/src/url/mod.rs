@@ -252,6 +252,13 @@ mod tests {
 
         let resolved = resolve_url("..", "file:///Users/test/lib/file.ts");
         assert_eq!(resolved, "file:/Users/test");
+
+        let fixture = resolve_url("../fixtures/", "file:///Users/test/tls/handshake/test.ts");
+        assert_eq!(fixture, "file:/Users/test/tls/fixtures/");
+        assert_eq!(
+            resolve_url("localhost-key.pem", &fixture),
+            "file:/Users/test/tls/fixtures/localhost-key.pem"
+        );
     }
 
     #[test]

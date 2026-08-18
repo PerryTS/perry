@@ -246,7 +246,14 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
         }
     }
 
-    let resolved_path = format!("/{}", segments.join("/"));
+    let mut resolved_path = format!("/{}", segments.join("/"));
+    // A trailing slash is semantically significant for URL resolution: the
+    // result remains a directory base for a subsequent `new URL(...)` call.
+    // Dropping it made `new URL("cert.pem", new URL("../fixtures/", base))`
+    // resolve next to `fixtures` instead of inside it (#6765).
+    if url_str.ends_with('/') && !resolved_path.ends_with('/') {
+        resolved_path.push('/');
+    }
 
     if base_protocol == "file:" {
         format!("{}{}", base_protocol, resolved_path)
