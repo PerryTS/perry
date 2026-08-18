@@ -218,6 +218,63 @@ fn release_boxes_lowers_through_closure_captures() {
             "release must lower inside the step closure (missing `{call}`):\n{ir}"
         );
     }
+    assert!(
+        !ir.contains("call void @js_closure_set_box_capture_ptr("),
+        "the compiler-private step closure is covered by the activation refcount, \
+         so its complete frame must not become escaped GC-closure edges:\n{ir}"
+    );
+}
+
+/// #8213 still requires exact lifetime tracking for a user closure created by
+/// the generated step. Only the nested user closure should declare an edge;
+/// the step closure's own complete-frame captures are activation-owned.
+#[test]
+fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
+    let mut body = activation_frame();
+    body.push(Stmt::Expr(Expr::Closure {
+        func_id: 900,
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::Closure {
+                func_id: 901,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::LocalGet(SENT)))],
+                captures: vec![SENT],
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_strict: false,
+                is_async: false,
+                is_generator: false,
+            }),
+            Stmt::ReleaseBoxes(vec![STATE, DONE, SENT]),
+            Stmt::Return(Some(Expr::Undefined)),
+        ],
+        captures: vec![STATE, DONE, SENT],
+        mutable_captures: vec![STATE, DONE, SENT],
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: false,
+        is_strict: false,
+        is_async: false,
+        is_generator: false,
+    }));
+    body.push(Stmt::Return(Some(Expr::Undefined)));
+
+    let ir = ir_for_fn_body("release_nested_user_capture", body);
+    let tracked_edges = ir
+        .lines()
+        .filter(|line| line.contains("call void @js_closure_set_box_capture_ptr("))
+        .count();
+    assert_eq!(
+        tracked_edges, 1,
+        "only the nested user closure should retain the released box cell:\n{ir}"
+    );
 }
 
 /// A release with no visible cell must be a silent skip, not an error: the

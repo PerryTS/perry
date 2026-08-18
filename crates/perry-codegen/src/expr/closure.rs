@@ -5,12 +5,65 @@
 //! `lower_expr`'s outer dispatch.
 
 use anyhow::Result;
-use perry_hir::Expr;
+use perry_hir::{Expr, Stmt};
 
 use crate::type_analysis::compute_auto_captures;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
+
+/// Whether this is the compiler-private step closure for a lowered plain
+/// async activation. `ReleaseBoxes` is emitted only in that closure's
+/// terminal arms; user-authored closures can never contain it.
+///
+/// Queued and running instances of this closure are already covered by the
+/// activation token's refcount. Counting its boxed capture slots as escaping
+/// GC-closure edges would make every cell in the complete activation frame
+/// wait for a full collection, even when no user closure can observe it.
+fn is_plain_async_step_body(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::ReleaseBoxes(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            is_plain_async_step_body(then_branch)
+                || else_branch.as_deref().is_some_and(is_plain_async_step_body)
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => is_plain_async_step_body(body),
+        Stmt::For { init, body, .. } => {
+            init.as_deref()
+                .is_some_and(|stmt| is_plain_async_step_body(std::slice::from_ref(stmt)))
+                || is_plain_async_step_body(body)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            is_plain_async_step_body(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| is_plain_async_step_body(&catch.body))
+                || finally.as_deref().is_some_and(is_plain_async_step_body)
+        }
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|case| is_plain_async_step_body(&case.body)),
+        Stmt::Labeled { body, .. } => is_plain_async_step_body(std::slice::from_ref(body.as_ref())),
+        Stmt::Let { .. }
+        | Stmt::Expr(_)
+        | Stmt::Return(_)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::Throw(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => false,
+    })
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -324,16 +377,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // The captured-singleton helper writes captures internally. Boxed
             // slots still take the dedicated, idempotent setter afterward so
             // their lifetime edges are declared; fresh closures need every
-            // slot initialized here.
+            // slot initialized here. The compiler-private plain-async step
+            // closure is different: its activation refcount already covers
+            // every queued/running instance, so declaring its whole boxed
+            // frame as escaped would delay every terminal cell until a full
+            // GC. User closures nested inside it still take the dedicated
+            // setter and therefore preserve #8213's escaped-cell lifetime.
+            let is_plain_async_step = is_plain_async_step_body(body);
             let boxed_capture_slots = auto_captures
                 .iter()
                 .map(|cap_id| ctx.boxed_vars.contains(cap_id))
                 .collect::<Vec<_>>();
             let blk = ctx.block();
             for (idx, val_bits) in captured_value_bits.iter().enumerate() {
-                if !captured_singleton || boxed_capture_slots[idx] {
+                let track_box_capture = boxed_capture_slots[idx] && !is_plain_async_step;
+                if !captured_singleton || track_box_capture {
                     let idx_str = idx.to_string();
-                    let setter = if boxed_capture_slots[idx] {
+                    let setter = if track_box_capture {
                         "js_closure_set_box_capture_ptr"
                     } else {
                         "js_closure_set_capture_bits"
