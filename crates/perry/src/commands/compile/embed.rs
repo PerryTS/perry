@@ -20,13 +20,10 @@
 //! and it keeps binary assets byte-exact. The runtime keeps `&'static` slices
 //! into the resulting `.rodata` (no copy).
 //!
-//! Embedding runs the host `cc` over the generated translation unit and links
-//! its `.o` into the executable, so it is supported only on Unix-like hosts
-//! (macOS/Linux). On Windows Perry links with MSVC `link.exe`, which neither
-//! consumes a `cc`-produced object nor supports `__attribute__((constructor))`
-//! / `.incbin`; [`generate_embedded_asset_object`] fails loudly there rather
-//! than emitting an object that silently won't link. Cross-target / Windows
-//! embedding is a tracked follow-up to #5731.
+//! Embedding runs the host C compiler over the generated translation unit and
+//! links its object into the executable. Unix-like hosts use `cc` plus a GNU
+//! constructor; Windows uses Perry's discovered LLVM clang to emit native COFF
+//! and registers through MSVC's `.CRT$XCU` initializer section.
 
 use anyhow::{anyhow, Result};
 use std::fmt::Write as _;
@@ -250,21 +247,15 @@ pub(super) fn generate_embedded_asset_object(
     if assets.is_empty() {
         return Ok(None);
     }
-    // The generated object is compiled with `cc` and linked into the executable.
-    // On a Windows host Perry links with MSVC `link.exe`, which is ABI-
-    // incompatible with a `cc`-produced object (and `cl.exe` supports neither
-    // `__attribute__((constructor))` nor `.incbin`). Fail loudly here rather
-    // than emit an object that silently won't link — Windows / cross-target
-    // embedding is a tracked follow-up to #5731.
-    if cfg!(windows) {
-        return Err(anyhow!(
-            "`--embed` is currently supported only on Unix-like hosts (macOS/Linux); \
-             Windows embedding is a follow-up to #5731"
-        ));
-    }
-
+    // Match the host linker: `cc` emits Mach-O/ELF, while LLVM clang emits
+    // MSVC-compatible COFF on Windows. Both integrated assemblers support the
+    // `.incbin` payload used below.
     let c_path = output_dir.join("__perry_embedded_assets.c");
-    let obj_path = output_dir.join("__perry_embedded_assets.o");
+    let obj_path = output_dir.join(if cfg!(windows) {
+        "__perry_embedded_assets.obj"
+    } else {
+        "__perry_embedded_assets.o"
+    });
 
     // Mach-O prefixes C symbols with `_` and names its read-only-const section
     // `__TEXT,__const`; ELF uses the bare symbol and `.rodata`. Perry runs on
@@ -273,6 +264,8 @@ pub(super) fn generate_embedded_asset_object(
     let sym_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
     let rodata_section = if cfg!(target_os = "macos") {
         "__TEXT,__const"
+    } else if cfg!(windows) {
+        ".rdata,\"dr\""
     } else {
         ".rodata"
     };
@@ -328,10 +321,19 @@ pub(super) fn generate_embedded_asset_object(
         writeln!(c, "extern const char PERRY_ASSET_END_{idx}[];").ok();
     }
 
-    // Constructor priority 101: runs before `main`'s `js_runtime_init`, so the
-    // registry is populated by the time any user code or fs read consults it.
-    c.push_str("__attribute__((constructor(101)))\n");
-    c.push_str("static void perry_register_embedded_assets(void) {\n");
+    // Register before `main`'s `js_runtime_init`. Unix hosts use a priority
+    // constructor; Windows uses the CRT's user-initializer range.
+    if cfg!(windows) {
+        c.push_str("static void __cdecl perry_register_embedded_assets(void);\n");
+        c.push_str("typedef void (__cdecl *perry_embedded_ctor_fn)(void);\n");
+        c.push_str("#pragma section(\".CRT$XCU\", read)\n");
+        c.push_str("#pragma comment(linker, \"/include:PERRY_EMBEDDED_ASSETS_CTOR\")\n");
+        c.push_str("__declspec(allocate(\".CRT$XCU\")) perry_embedded_ctor_fn PERRY_EMBEDDED_ASSETS_CTOR = perry_register_embedded_assets;\n");
+        c.push_str("static void __cdecl perry_register_embedded_assets(void) {\n");
+    } else {
+        c.push_str("__attribute__((constructor(101)))\n");
+        c.push_str("static void perry_register_embedded_assets(void) {\n");
+    }
     for idx in 0..assets.len() {
         writeln!(
             c,
@@ -343,17 +345,34 @@ pub(super) fn generate_embedded_asset_object(
 
     fs::write(&c_path, &c)?;
 
-    let status = Command::new("cc")
+    let compiler = if cfg!(windows) {
+        perry_codegen::linker::find_clang().ok_or_else(|| {
+            anyhow!(
+                "clang is required to embed assets on Windows; install LLVM or set \
+                 PERRY_LLVM_CLANG to a clang 22 executable"
+            )
+        })?
+    } else {
+        PathBuf::from("cc")
+    };
+    let status = Command::new(&compiler)
         .arg("-c")
         .arg(&c_path)
         .arg("-O0")
         .arg("-o")
         .arg(&obj_path)
         .status()
-        .map_err(|e| anyhow!("failed to invoke cc for embedded assets: {}", e))?;
+        .map_err(|e| {
+            anyhow!(
+                "failed to invoke {} for embedded assets: {}",
+                compiler.display(),
+                e
+            )
+        })?;
     if !status.success() {
         return Err(anyhow!(
-            "cc failed to compile embedded asset table ({})",
+            "{} failed to compile embedded asset table ({})",
+            compiler.display(),
             c_path.display()
         ));
     }

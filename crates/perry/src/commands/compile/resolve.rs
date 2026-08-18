@@ -313,8 +313,21 @@ fn is_compile_package_dir(candidate: &Path, package_name: &str) -> bool {
 /// and the many `compile_packages.contains(name)` sites) all match exact
 /// package names, so the wildcard has to be expanded before routing or it is a
 /// silent no-op. Returns scoped names as `@scope/name`.
+#[cfg(test)]
 pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<String> {
-    let mut out = HashSet::new();
+    enumerate_installed_package_roots(project_root)
+        .into_keys()
+        .collect()
+}
+
+/// Enumerate installed package names together with every directory that
+/// supplied that name. Wildcard compile routing normally needs only the names,
+/// but policy checks such as the Node native-addon guard must inspect package
+/// roots before deciding whether the wildcard may select them.
+pub(super) fn enumerate_installed_package_roots(
+    project_root: &Path,
+) -> HashMap<String, Vec<PathBuf>> {
+    let mut out = HashMap::new();
     if let Some(nm) = find_node_modules(project_root) {
         collect_packages_in_node_modules(&nm, &mut out);
     }
@@ -351,7 +364,7 @@ pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<Strin
 /// ordinary `node_modules` directory, so walk it with the same collector.
 /// `node_modules` need not exist (`fs::read_dir` on the derived `.bun` path
 /// simply fails and returns).
-fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashSet<String>) {
+fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashMap<String, Vec<PathBuf>>) {
     let bun_dir = node_modules.join(".bun");
     let entries = match fs::read_dir(&bun_dir) {
         Ok(e) => e,
@@ -367,7 +380,7 @@ fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashSet<String>)
 
 /// Walk a single `node_modules` directory, recording each package name and
 /// recursing into any nested `node_modules` it contains.
-fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashSet<String>) {
+fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashMap<String, Vec<PathBuf>>) {
     let entries = match fs::read_dir(node_modules) {
         Ok(e) => e,
         Err(_) => return,
@@ -396,7 +409,9 @@ fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashSet<Strin
                     if !sub_path.is_dir() {
                         continue;
                     }
-                    out.insert(format!("{}/{}", name, sub_name));
+                    out.entry(format!("{}/{}", name, sub_name))
+                        .or_default()
+                        .push(sub_path.clone());
                     let nested = sub_path.join("node_modules");
                     if nested.is_dir() {
                         collect_packages_in_node_modules(&nested, out);
@@ -405,7 +420,7 @@ fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashSet<Strin
             }
             continue;
         }
-        out.insert(name.to_string());
+        out.entry(name.to_string()).or_default().push(path.clone());
         let nested = path.join("node_modules");
         if nested.is_dir() {
             collect_packages_in_node_modules(&nested, out);

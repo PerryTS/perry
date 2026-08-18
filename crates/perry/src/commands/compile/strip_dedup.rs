@@ -1606,10 +1606,8 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
 }
 
 mod stub_symbols;
+pub(super) use stub_symbols::localize_stdlib_stub_symbols;
 use stub_symbols::strip_members_present_in_reference;
-pub(super) use stub_symbols::{
-    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows,
-};
 
 /// Tier-3 (tvOS/watchOS, no prebuilt std): perry-stdlib is built with
 /// `-Zbuild-std` and bundles its own copy of std's allocator/panic runtime

@@ -195,6 +195,7 @@ pub(crate) mod helpers;
 mod method;
 mod method_registry;
 mod module_globals_emit;
+mod native_namespace_exports;
 #[cfg(test)]
 mod number_exactness_tests;
 mod opts;

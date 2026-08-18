@@ -110,9 +110,8 @@ use resolve::{
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
     dedup_ui_lib_against_linked_libs, localize_stdlib_stub_symbols,
-    localize_stdlib_stub_symbols_for_windows, strip_bundled_runtime_from_well_known_lib,
-    strip_bundled_shared_deps_from_well_known_lib, strip_duplicate_objects_from_lib,
-    strip_duplicate_objects_from_well_known_lib,
+    strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
     apple_sdk_version, find_visionos_swift_runtime, find_watchos_swift_runtime,
@@ -169,7 +168,11 @@ pub fn run(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
-    run_with_parse_cache(args, None, format, use_color, verbose)
+    // Cross-module metadata can require a complete second lowering pass.
+    // Retain parsed ASTs for the lifetime of this build so large source-first
+    // graphs do not reread and reparse every module during that pass.
+    let mut parse_cache = ParseCache::with_capacity(usize::MAX);
+    run_with_parse_cache(args, Some(&mut parse_cache), format, use_color, verbose)
 }
 
 #[cfg(test)]

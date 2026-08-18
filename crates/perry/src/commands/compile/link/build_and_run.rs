@@ -330,7 +330,7 @@ pub(crate) fn build_and_run_link(
     let skip_runtime = (is_android || is_watchos || is_visionos)
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
-    let well_known_libs: Vec<PathBuf> = if prefer_well_known_before_stdlib {
+    let mut well_known_libs: Vec<PathBuf> = if prefer_well_known_before_stdlib {
         well_known_libs
             .iter()
             .map(|wk| {
@@ -389,46 +389,21 @@ pub(crate) fn build_and_run_link(
     } else {
         well_known_libs.to_vec()
     };
+    // Multiple specifiers can route to the same native archive (`http` and
+    // `https` both select perry_ext_http). Repeating it adds no symbols and on
+    // COFF can make lld-link choose a different duplicate COMDAT provider.
+    let mut seen_well_known = std::collections::HashSet::new();
+    well_known_libs.retain(|path| seen_well_known.insert(path.clone()));
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
             // declares all stdlib extern functions, creating import references that MSVC
             // won't dead-strip. On macOS/Linux, the linker ignores unreferenced archives.
             if let Some(ref stdlib) = stdlib_lib {
-                // Windows: link the standalone perry_runtime.lib FIRST so
-                // its symbols win lld-link's /FORCE:MULTIPLE "first
-                // definition wins" rule over the perry-runtime copies
-                // *bundled* inside perry_stdlib.lib and the
-                // /WHOLEARCHIVE'd perry_ui_windows.lib. Auto-optimize
-                // refreshes perry-runtime + perry-stdlib but NOT
-                // perry-ui-windows, so the UI lib's bundled runtime is
-                // perpetually stale; the /WHOLEARCHIVE force-includes its
-                // js_* symbols, and without this the stale copy shadows a
-                // genuine runtime fix (e.g. the js_shadow_frame_pop bounds
-                // guard, #880) — the crash it fixes still fires because the
-                // guarded function never gets linked. The standalone
-                // runtime_lib is the canonical / auto-optimize-fresh
-                // source; making it authoritative on Windows matches every
-                // other platform (all of which already link runtime_lib).
-                //
-                // #5000: but the standalone runtime is built WITHOUT the
-                // `stdlib` feature, so it also defines the no-op
-                // `stdlib_stubs` symbols (js_fetch_with_options,
-                // js_stdlib_init_dispatch, js_ws_*, js_readline_*). Linked
-                // first, those stubs shadow perry-stdlib's REAL fetch /
-                // WebSocket / readline implementations — `fetch()` then
-                // silently no-ops and `response.json()` fails with "Invalid
-                // response handle". Localize exactly those stub symbols in a
-                // copy of the runtime archive so they no longer satisfy
-                // user-code references; lld-link resolves them from
-                // perry_stdlib.lib instead, while every other runtime symbol
-                // keeps its first-definition win. Non-fatal: falls back to the
-                // untouched runtime_lib if the LLVM archive tools are missing.
-                if is_windows {
-                    let runtime_for_link =
-                        localize_stdlib_stub_symbols_for_windows(runtime_lib, stdlib);
-                    cmd.arg(&runtime_for_link);
-                }
+                // COFF archives must have one authoritative Rust dependency
+                // graph. Put selected wrappers first, then let stdlib fill the
+                // unresolved surface. The stdlib staticlib already bundles
+                // perry-runtime, so Windows must not add it again.
                 if prefer_well_known_before_stdlib {
                     for wk in &well_known_libs {
                         cmd.arg(wk);
@@ -441,19 +416,25 @@ pub(crate) fn build_and_run_link(
                 // `_js_*` symbol gap that was just opened by stripping the
                 // corresponding feature from the perry-stdlib rebuild.
                 //
-                // In no-auto/fallback mode the full prebuilt stdlib may still
-                // contain method-value bridge objects that reference wrapper
-                // symbols (for example external net Socket helpers). Archives
-                // are scanned left-to-right, so repeat the well-known libs
-                // after stdlib as well: the first occurrence lets wrapper
-                // definitions win over duplicate bundled stdlib functions,
-                // and the second resolves stdlib bridge references.
-                for wk in &well_known_libs {
-                    cmd.arg(wk);
+                // Non-Windows archive linkers retain the historical repeat for
+                // stdlib bridge references. On Windows each wrapper appears
+                // exactly once; if there was no wrapper-first pass, put it here.
+                if !is_windows || !prefer_well_known_before_stdlib {
+                    for wk in &well_known_libs {
+                        cmd.arg(wk);
+                    }
                 }
                 // Also link runtime for symbols DCE'd from stdlib's bundled
                 // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
-                if !is_android && !is_windows {
+                if !is_android && is_windows && ctx.needs_wasm_runtime {
+                    // The normal Windows link deliberately lets stdlib's
+                    // bundled runtime be authoritative. A wasm program's
+                    // on-demand runtime archive is the one exception: stdlib
+                    // is built without `wasm-host`, so append the feature-
+                    // augmented archive after stdlib to fill only the still-
+                    // unresolved `js_webassembly_*` surface.
+                    cmd.arg(runtime_lib);
+                } else if !is_android && !is_windows {
                     // #5000 (macOS/Linux): the standalone runtime archive is built
                     // WITHOUT the `stdlib` feature, so it also defines the no-op
                     // stdlib_stubs (js_fetch_with_options, js_headers_new,

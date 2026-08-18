@@ -395,6 +395,10 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
 ///      output occasionally falls back to) was unsupported, so the consumer
 ///      `import { X } from "pkg"` link-failed because no named export was
 ///      ever extracted.
+///
+/// esbuild's `__export(target, { X: () => value })` helper form is also
+/// recognized. The helper installs getters on `target`, which is later passed
+/// through `__toCommonJS` into `module.exports`.
 pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let push_unique = |names: &mut Vec<String>, name: &str| {
@@ -556,6 +560,79 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         let body = &source[body_start..body_end];
         extract_object_literal_keys(body, &mut |name| push_unique(&mut names, name));
         search_from = q;
+    }
+
+    // Shape 3: esbuild's generated export table:
+    //
+    //     __export(src_exports, {
+    //       getContext: () => import_get_context.getContext,
+    //       refreshToken: () => refreshToken
+    //     });
+    //
+    // The helper definition itself has a non-object second parameter and is
+    // therefore not matched. Accept numeric suffixes (`__export2`) used when
+    // a bundle has to avoid colliding with an existing binding.
+    let esbuild_export_re = regex::Regex::new(
+        r"(?:^|[^A-Za-z0-9_$])__export[0-9]*\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*,\s*\{",
+    )
+    .unwrap();
+    for export_call in esbuild_export_re.find_iter(source) {
+        let Some(open_rel) = source[export_call.start()..export_call.end()].rfind('{') else {
+            continue;
+        };
+        let open = export_call.start() + open_rel;
+        let mut depth: i32 = 1;
+        let mut q = open + 1;
+        while q < bytes.len() && depth > 0 {
+            match bytes[q] {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                b'"' | b'\'' => {
+                    let quote = bytes[q];
+                    q += 1;
+                    while q < bytes.len() && bytes[q] != quote {
+                        if bytes[q] == b'\\' && q + 1 < bytes.len() {
+                            q += 2;
+                            continue;
+                        }
+                        q += 1;
+                    }
+                }
+                b'`' => {
+                    q += 1;
+                    while q < bytes.len() && bytes[q] != b'`' {
+                        if bytes[q] == b'\\' && q + 1 < bytes.len() {
+                            q += 2;
+                            continue;
+                        }
+                        q += 1;
+                    }
+                }
+                b'/' if q + 1 < bytes.len() && bytes[q + 1] == b'/' => {
+                    q += 2;
+                    while q < bytes.len() && bytes[q] != b'\n' {
+                        q += 1;
+                    }
+                    continue;
+                }
+                b'/' if q + 1 < bytes.len() && bytes[q + 1] == b'*' => {
+                    q += 2;
+                    while q + 1 < bytes.len() && !(bytes[q] == b'*' && bytes[q + 1] == b'/') {
+                        q += 1;
+                    }
+                    if q + 1 < bytes.len() {
+                        q += 2;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            q += 1;
+        }
+        if depth == 0 {
+            let body = &source[open + 1..q - 1];
+            extract_object_literal_keys(body, &mut |name| push_unique(&mut names, name));
+        }
     }
 
     names

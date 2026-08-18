@@ -81,6 +81,7 @@ const STDLIB_STUB_SYMBOLS: &[&str] = &[
 /// Best-effort: a missing LLVM tool or any failed sub-step returns the
 /// original `runtime_lib` path unchanged, preserving the pre-fix behavior
 /// rather than failing the build.
+#[allow(dead_code)]
 pub(crate) fn localize_stdlib_stub_symbols_for_windows(
     runtime_lib: &Path,
     stdlib_lib: &Path,

@@ -911,7 +911,8 @@ pub fn run_with_parse_cache(
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
-    // Issue #489 followup: canonical defining path keyed by class id. The
+    // Issue #489 followup: canonical defining path keyed by HIR class object
+    // identity. The
     // re-export propagation loop below adds extra `(re_export_path,
     // class_name)` entries pointing at the same class, and the transitive
     // parent-class closure later picks `exported_classes`'s first BTreeMap
@@ -927,27 +928,27 @@ pub fn run_with_parse_cache(
     // closure (`MySqlPreparedQuery extends QueryPromise`), but the
     // canonical path is `query-promise.js`, not `index.js` which
     // re-exports it via `export *`.
-    // Issue #5987: `ClassId` is meant to be unique across the whole program
-    // (module lowering threads a `next_class_id` counter forward precisely
-    // to guarantee this), but a real multi-thousand-module compile can still
-    // produce two unrelated classes with the same id (e.g. via parallel
-    // lowering or object-cache reuse of a previously-lowered module) — this
-    // showed up for `effect`'s two distinct `ClientAbort` classes (in
-    // `RpcSchema.ts` and `HttpServerError.ts`) resolving to a third,
-    // unrelated module (`SchemaAST.ts`) that doesn't define either. Store
-    // the class's own name alongside its path so a lookup can detect an id
-    // collision (name mismatch) and refuse the entry rather than silently
-    // trusting it — every caller already has a reliable fallback for this
-    // case (the compound `(path, name)` key that found `class` in the first
-    // place already proves the origin is correct).
-    let mut class_canonical_path: std::collections::HashMap<perry_hir::ClassId, (String, String)> =
+    // Cached/parallel lowering can reuse a ClassId. An id/name key is still
+    // ambiguous for platform siblings with identical class names (OpenTUI's
+    // node/bun BoxRenderable variants), while the references stored in
+    // `exported_classes` point directly into `native_modules` and therefore
+    // have unambiguous addresses for this pipeline run. Keep a second legacy
+    // id map only for transitive-parent lookup, whose ImportedClass record
+    // currently retains the id but not the HIR reference.
+    let mut class_canonical_path: std::collections::HashMap<usize, String> =
         std::collections::HashMap::new();
+    let mut class_canonical_path_by_id: std::collections::HashMap<
+        perry_hir::ClassId,
+        (String, String),
+    > = std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for class in &hir_module.classes {
             if class.is_exported {
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
                 class_canonical_path
+                    .insert(class as *const perry_hir::Class as usize, path_str.clone());
+                class_canonical_path_by_id
                     .entry(class.id)
                     .or_insert_with(|| (path_str.clone(), class.name.clone()));
             }
@@ -1264,20 +1265,31 @@ pub fn run_with_parse_cache(
                 // `class_ids["Number"]` (the export alias) — a miss — and
                 // `S.Number` falls back to the global `Number`, losing all
                 // inherited statics (effect's `S.Number.ast` → undefined →
-                // Schema decode crash). Scoped to classes: renamed var/func
-                // exports route through wrapper-symbol emission that keys on the
-                // export name, and feeding the origin name there breaks linking.
-                if local != exported
-                    && hir_module
-                        .classes
-                        .iter()
-                        .any(|c| c.name == *local && c.is_exported)
-                {
+                // Schema decode crash). Declared functions need the same origin
+                // mapping when a public alias collides with another local body
+                // (`Record3 as Record` beside an unrelated local `Record`).
+                // Variable/closure exports remain on the public getter ABI.
+                let is_renamed_class = hir_module
+                    .classes
+                    .iter()
+                    .any(|c| c.name == *local && c.is_exported);
+                let is_renamed_declared_function = hir_module
+                    .functions
+                    .iter()
+                    .any(|f| f.name == *local && f.is_exported);
+                if local != exported && (is_renamed_class || is_renamed_declared_function) {
                     all_module_export_origin_names
                         .entry(path_str.clone())
                         .or_default()
                         .insert(exported.clone(), local.clone());
                 }
+            }
+            // A namespace re-export is itself a runtime value export. Record
+            // the declaring module as its origin so `export *` barrels carry
+            // the namespace name forward and named-import analysis can walk
+            // back to the `NamespaceReExport` that defines its shape.
+            if let perry_hir::Export::NamespaceReExport { name, .. } = export {
+                exports.insert(name.clone(), path_str.clone());
             }
             // ReExport is handled in the propagation loop below (avoids borrow issues)
         }
@@ -2160,30 +2172,35 @@ pub fn run_with_parse_cache(
     //
     // Keyed by re-exporting module path → exported alias → target module path.
     let mut namespace_reexport_targets: HashMap<String, BTreeMap<String, PathBuf>> = HashMap::new();
+    let lookup = |name: &str| module_name_to_module.get(name);
     for (path, hir_module) in &ctx.native_modules {
-        for export in &hir_module.exports {
-            let perry_hir::Export::NamespaceReExport { source, name } = export else {
+        // Do not stop at declarations written directly in this module. A
+        // namespace value retains its identity through ordinary named and
+        // export-all barrels too:
+        //
+        //   export * as util from "./util.js";  // core/index
+        //   export { util } from "./core/index.js"; // external
+        //   export * from "./external.js";      // public entry
+        //
+        // `flatten_exports` already follows those chains (and imported local
+        // aliases) cycle-safely. Reusing its `nested_namespace_of` provenance
+        // keeps the member pointed at the defining module's namespace instead
+        // of inventing a callable/getter symbol in whichever barrel happened
+        // to expose it last.
+        for flat in perry_hir::flatten_exports(&hir_module.name, &lookup) {
+            let Some(nested_name) = flat.nested_namespace_of else {
                 continue;
             };
-            // `source` was rewritten to `Module::name` on `module_name_to_module`
-            // above, but `hir_module` here is the ORIGINAL, so this is still the
-            // specifier as written.
-            let Some((target_path, _)) = resolve_import(
-                source,
-                path,
-                &ctx.project_root,
-                &ctx.compile_packages,
-                &ctx.compile_package_dirs,
-            ) else {
+            let Some(target_path) = module_name_to_path.get(&nested_name).cloned() else {
+                // Native namespaces (`node:path`, etc.) are classified by the
+                // namespace-populator path and do not have a native-module
+                // object/global to register here.
                 continue;
             };
-            if !ctx.native_modules.contains_key(&target_path) {
-                continue;
-            }
             namespace_reexport_targets
                 .entry(path.to_string_lossy().to_string())
                 .or_default()
-                .insert(name.clone(), target_path.clone());
+                .insert(flat.name, target_path.clone());
             // The target needs its own `@__perry_ns_` global emitted and
             // populated, which is what being in this set means.
             dyn_target_paths.insert(target_path);
@@ -2209,12 +2226,21 @@ pub fn run_with_parse_cache(
                 .map(|m| sanitize_module_name(&m.name))
                 .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
             let kind = if let Some(nested) = &fe.nested_namespace_of {
-                let nested_prefix = module_name_to_module
-                    .get(nested)
-                    .map(|m| sanitize_module_name(&m.name))
-                    .unwrap_or_else(|| sanitize_module_name(nested));
-                perry_codegen::NamespaceEntryKind::NestedNamespace {
-                    source_prefix: nested_prefix,
+                let native_name = nested.strip_prefix("node:").unwrap_or(nested);
+                if !module_name_to_module.contains_key(nested)
+                    && perry_hir::NATIVE_MODULES.contains(&native_name)
+                {
+                    perry_codegen::NamespaceEntryKind::NativeNamespace {
+                        specifier: nested.clone(),
+                    }
+                } else {
+                    let nested_prefix = module_name_to_module
+                        .get(nested)
+                        .map(|m| sanitize_module_name(&m.name))
+                        .unwrap_or_else(|| sanitize_module_name(nested));
+                    perry_codegen::NamespaceEntryKind::NestedNamespace {
+                        source_prefix: nested_prefix,
+                    }
                 }
             } else if fe.source_module == target_name {
                 // Local binding — find what kind it is in target_hir.
@@ -2493,8 +2519,11 @@ pub fn run_with_parse_cache(
                 started: codegen_started,
                 enabled: codegen_progress_enabled,
             };
-            // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
-            // and return the object bytes for the linker to consume.
+            // Compile this module to LLVM IR (or .ll text in bitcode-link mode).
+            // Linking builds return an artifact for the linker. `--no-link`
+            // writes each cold object in this worker as soon as it is ready so
+            // a large graph does not retain every object byte until all module
+            // jobs finish.
             let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
             progress.record(ProgressSnapshot {
                 stage: "codegen",
@@ -3054,24 +3083,6 @@ pub fn run_with_parse_cache(
                                 }
                             }
                         }
-                        // #7189: the source module's `export * as ns` aliases.
-                        // These are NOT in `all_module_exports` — that map holds
-                        // name → module-that-declares-the-binding, and a
-                        // namespace alias has no declaring binding to point at.
-                        // Registering the alias here is what puts it in
-                        // `Object.keys(ns)`, since the whole-value materializer
-                        // enumerates `namespace_member_prefixes`.
-                        if let Some(nested) = namespace_reexport_targets.get(&resolved_path_str) {
-                            for (alias, target_path) in nested {
-                                let target_prefix =
-                                    compute_module_prefix(&target_path.to_string_lossy(), &ctx.project_root);
-                                namespace_member_prefixes.insert(
-                                    (local.clone(), alias.clone()),
-                                    target_prefix,
-                                );
-                                namespace_member_nested.insert((local.clone(), alias.clone()));
-                            }
-                        }
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                             for (export_name, origin_path) in exports {
@@ -3224,6 +3235,21 @@ pub fn run_with_parse_cache(
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
                                 }
+                            }
+                        }
+                        // Namespace aliases also participate in
+                        // `all_module_exports`, so repeat this after the
+                        // ordinary walk and let the TARGET prefix win over the
+                        // declaring barrel's prefix.
+                        if let Some(nested) = namespace_reexport_targets.get(&resolved_path_str) {
+                            for (alias, target_path) in nested {
+                                let target_prefix = compute_module_prefix(
+                                    &target_path.to_string_lossy(),
+                                    &ctx.project_root,
+                                );
+                                namespace_member_prefixes
+                                    .insert((local.clone(), alias.clone()), target_prefix);
+                                namespace_member_nested.insert((local.clone(), alias.clone()));
                             }
                         }
                         if source_module.is_some_and(|module| is_wrapped_cjs(module)) {
@@ -3402,19 +3428,40 @@ pub fn run_with_parse_cache(
                         }) {
                             break;
                         }
-                        // Follow `export { <ns_scan_name> } from "<src>"`.
-                        let Some((hop_src, hop_imported)) =
-                            hir.exports.iter().find_map(|e| match e {
-                                perry_hir::Export::ReExport {
+                        // Follow either an explicit named re-export or an
+                        // `export *` barrel whose target owns this name. The
+                        // latter is how Effect and OpenCode expose namespace
+                        // values through public entry points.
+                        let named_hop = hir.exports.iter().find_map(|e| match e {
+                            perry_hir::Export::ReExport {
+                                source,
+                                imported,
+                                exported,
+                            } if *exported == ns_scan_name => {
+                                Some((source.clone(), imported.clone()))
+                            }
+                            _ => None,
+                        });
+                        let export_all_hop = || {
+                            hir.exports.iter().find_map(|e| {
+                                let perry_hir::Export::ExportAll { source } = e else {
+                                    return None;
+                                };
+                                let (target_path, _) = resolve_import(
                                     source,
-                                    imported,
-                                    exported,
-                                } if *exported == ns_scan_name => {
-                                    Some((source.clone(), imported.clone()))
-                                }
-                                _ => None,
+                                    std::path::Path::new(&ns_scan_path),
+                                    &ctx.project_root,
+                                    &ctx.compile_packages,
+                                    &ctx.compile_package_dirs,
+                                )?;
+                                let target = target_path.to_string_lossy().to_string();
+                                all_module_exports
+                                    .get(&target)
+                                    .is_some_and(|exports| exports.contains_key(&ns_scan_name))
+                                    .then(|| (source.clone(), ns_scan_name.clone()))
                             })
-                        else {
+                        };
+                        let Some((hop_src, hop_imported)) = named_hop.or_else(export_all_hop) else {
                             break;
                         };
                         let Some((hop_path, _)) = resolve_import(
@@ -3453,6 +3500,29 @@ pub fn run_with_parse_cache(
                             {
                                 if name != &ns_scan_name {
                                     continue;
+                                }
+                                // Native namespace targets (for example
+                                // `export * as NodeWS from "ws"`) have no HIR
+                                // module and no `@__perry_ns_ws` global. The
+                                // declaring module emits a zero-arg namespace
+                                // getter; classify this named import as a var so
+                                // consumer code calls that getter.
+                                if perry_hir::NATIVE_MODULES.contains(
+                                    &ns_src.strip_prefix("node:").unwrap_or(ns_src),
+                                ) {
+                                    let declaring_prefix = compute_module_prefix(
+                                        &ns_scan_path,
+                                        &ctx.project_root,
+                                    );
+                                    import_function_prefixes
+                                        .insert(local_name.clone(), declaring_prefix);
+                                    if local_name != ns_scan_name {
+                                        import_function_origin_names
+                                            .insert(local_name.clone(), ns_scan_name.clone());
+                                    }
+                                    imported_vars.insert(local_name.clone());
+                                    handled_as_namespace_reexport = true;
+                                    break;
                                 }
                                 let importer = std::path::Path::new(&ns_scan_path);
                                 let Some((ns_target, _)) = resolve_import(
@@ -3616,6 +3686,29 @@ pub fn run_with_parse_cache(
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
                                         imported_enums.push((export_name.clone(), members.clone()));
+                                    }
+                                }
+                                // A named namespace re-export can itself expose
+                                // nested namespace aliases (Zod's `z.core`,
+                                // `z.locales`, `z.iso`, and `z.coerce` shape).
+                                // Mark those members explicitly and overwrite
+                                // the declaring-barrel prefixes registered by
+                                // the ordinary export walk above with the
+                                // namespace TARGET prefixes.
+                                if let Some(nested) =
+                                    namespace_reexport_targets.get(&ns_target_str)
+                                {
+                                    for (alias, target_path) in nested {
+                                        let target_prefix = compute_module_prefix(
+                                            &target_path.to_string_lossy(),
+                                            &ctx.project_root,
+                                        );
+                                        namespace_member_prefixes.insert(
+                                            (local_name.clone(), alias.clone()),
+                                            target_prefix,
+                                        );
+                                        namespace_member_nested
+                                            .insert((local_name.clone(), alias.clone()));
                                     }
                                 }
                                 handled_as_namespace_reexport = true;
@@ -4472,14 +4565,13 @@ pub fn run_with_parse_cache(
                 let field_types_clone = imported_classes[idx].field_types.clone();
                 let parent_name_clone = imported_classes[idx].parent_name.clone();
                 // The child's own canonical source path, used to resolve its
-                // `extends` parent in the child's module scope. Issue #5987:
-                // guard against a `ClassId` collision the same way
-                // `canonical_class_source_prefix` does — only trust the
-                // recorded path if its name matches this child's own name.
+                // `extends` parent in the child's module scope. This legacy
+                // ImportedClass path only retains a ClassId, so keep the name
+                // guard here; direct class provenance above uses identity.
                 let child_name_clone = imported_classes[idx].name.clone();
                 let child_src_path: Option<String> = imported_classes[idx]
                     .source_class_id
-                    .and_then(|cid| class_canonical_path.get(&cid).cloned())
+                    .and_then(|cid| class_canonical_path_by_id.get(&cid).cloned())
                     .filter(|(_, name)| name == &child_name_clone)
                     .map(|(path, _)| path);
                 // Issue #485: include the class's parent in the transitive
@@ -4533,8 +4625,8 @@ pub fn run_with_parse_cache(
                             exported_classes.iter().find(|((path, cname), class)| {
                                 cname == &ref_name
                                     && class_canonical_path
-                                        .get(&class.id)
-                                        .map(|(cp, cid_name)| cp == path && cid_name == cname)
+                                        .get(&(**class as *const perry_hir::Class as usize))
+                                        .map(|cp| cp == path)
                                         .unwrap_or(true)
                             })
                         })
@@ -4543,12 +4635,50 @@ pub fn run_with_parse_cache(
                                 .iter()
                                 .find(|((_, cname), _)| cname == &ref_name)
                         })
-                        .map(|((path, _), class)| (path.clone(), *class));
+                        .map(|((path, _), class)| {
+                            // `exported_classes` deliberately carries alias
+                            // entries stamped under barrel paths. Selecting an
+                            // alias in the child's module is correct for scope
+                            // resolution, but constructor/method symbols still
+                            // live in the HIR class's defining module.
+                            let canonical_path = class_canonical_path
+                                .get(&(*class as *const perry_hir::Class as usize))
+                                .cloned()
+                                .unwrap_or_else(|| path.clone());
+                            (canonical_path, *class)
+                        });
                     // Dedup: parent refs key on (resolved_path, name) so a
                     // distinct same-named parent in another module is still
                     // imported; all other refs key on name only (legacy).
                     if is_parent_ref {
-                        if let Some((src_path, _)) = &found {
+                        if let Some((src_path, class)) = &found {
+                            let source_prefix =
+                                compute_module_prefix(src_path, &ctx.project_root);
+                            let effective_name = if ref_name != class.name {
+                                ref_name.as_str()
+                            } else {
+                                class.name.as_str()
+                            };
+                            // The initial import walk may already contain this
+                            // exact canonical class. A barrel-local child
+                            // extending a re-exported parent must not append a
+                            // second copy under the barrel path: the later
+                            // duplicate would overwrite the correct ctor in
+                            // codegen's name-keyed map (OpenTUI's index.node.js
+                            // / chunk-node BoxRenderable shape).
+                            if imported_classes.iter().any(|imported| {
+                                imported.source_prefix == source_prefix
+                                    && imported.name == class.name
+                                    && imported
+                                        .local_alias
+                                        .as_deref()
+                                        .unwrap_or(&imported.name)
+                                        == effective_name
+                            }) {
+                                visited_parent_paths
+                                    .insert((src_path.clone(), ref_name.clone()));
+                                continue;
+                            }
                             if !visited_parent_paths
                                 .insert((src_path.clone(), ref_name.clone()))
                             {
@@ -4915,15 +5045,35 @@ pub fn run_with_parse_cache(
                     });
                 }
             }
+            // A no-link build's object is the final product. Flush it from the
+            // module worker instead of collecting its bytes in
+            // `compile_results`: multi-thousand-module graphs otherwise hold
+            // gigabytes of completed objects at once and can exhaust host
+            // commit before the deferred parallel-write phase begins. Module
+            // destinations are unique, so the existing codegen pool already
+            // provides safe parallel I/O here.
+            if args.no_link {
+                fs::write(&obj_path, &object_code).map_err(|e| {
+                    format!(
+                        "failed to write object file {}: {}",
+                        obj_path.display(),
+                        e
+                    )
+                })?;
+                return Ok(NativeObjectArtifact {
+                    path: obj_path,
+                    bytes: None,
+                    fingerprint: object_fingerprint,
+                    cleanup_after_link: false,
+                    reused_cache_path: false,
+                    stored_cache_path: false,
+                });
+            }
             Ok(NativeObjectArtifact {
                 path: obj_path,
                 bytes: Some(object_code),
                 fingerprint: object_fingerprint,
-                // #7167: a staged object is an intermediate; a `--no-link`
-                // object is the product and must never be listed for cleanup.
-                // Nothing consults this before the `--no-link` return today —
-                // it is set correctly so that stays true if cleanup ever moves.
-                cleanup_after_link: !args.no_link,
+                cleanup_after_link: true,
                 reused_cache_path: false,
                 stored_cache_path: false,
             })
@@ -4931,14 +5081,12 @@ pub fn run_with_parse_cache(
         .collect()
     });
 
-    // Tier 4.4 (v0.5.336): partition compile results, then write object
-    // files in parallel via rayon. The OS handles concurrent writes to
-    // distinct paths, and codegen typically finishes producing bytes
-    // faster than a single thread can drain them to disk for projects
-    // with many modules. Pre-fix this was a single sequential
-    // `for ... fs::write(...)`. Errors from compilation print in source
-    // order (preserved); successful writes' "Wrote ..." messages print
-    // after all writes complete.
+    // Tier 4.4 (v0.5.336): partition compile results, then write any retained
+    // object files in parallel via rayon. No-link workers have already flushed
+    // cold objects above to keep memory bounded; linking builds without an
+    // object-cache path still arrive here as bytes. Errors from compilation
+    // print in source order (preserved); successful writes' "Wrote ..."
+    // messages print after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
     let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
     for result in compile_results {
@@ -5880,7 +6028,21 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    let embedded_assets = embed::resolve_embedded_assets(&args.embed, &ctx.cache_root)?;
+    let mut embedded_assets = embed::resolve_embedded_assets(&args.embed, &ctx.cache_root)?;
+    // `{ type: "file" }` imports are discovered while walking the module graph
+    // and already carry their virtual registry names. Merge those automatic
+    // assets with explicit `--embed`/config matches before generating the one
+    // registration object. A path can be named explicitly and imported; keep
+    // both names because user code may address either virtual path.
+    for (name, path) in &ctx.embedded_assets {
+        if !embedded_assets
+            .iter()
+            .any(|(existing_name, _)| existing_name == name)
+        {
+            embedded_assets.push((name.clone(), path.clone()));
+        }
+    }
+    embedded_assets.sort_by(|a, b| a.0.cmp(&b.0));
     if !embedded_assets.is_empty() {
         if let Some(obj) =
             embed::generate_embedded_asset_object(&embedded_assets, &object_output_dir)?

@@ -5,8 +5,9 @@
 //! re-parse is skipped when the source bytes haven't changed since the
 //! last call. Counters track hit / miss for diagnostics.
 //!
-//! Scope is strictly per-process: the cache lives for the duration of
-//! one `perry dev` invocation. `perry compile` never sees it.
+//! Scope is strictly per-process: `perry dev` retains one across rebuilds,
+//! while `perry compile` uses a build-scoped instance so its intentional
+//! cross-module metadata re-lowering pass can reuse the first pass's ASTs.
 
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, VecDeque};

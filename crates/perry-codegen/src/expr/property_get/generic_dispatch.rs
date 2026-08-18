@@ -86,7 +86,7 @@ pub(crate) fn lower_generic_property_get(
         // unchanged.
         let cache_site = ctx.ic_site_counter;
         ctx.ic_site_counter += 1;
-        let cache_name = format!("perry_ic_{}", cache_site);
+        let cache_name = super::super::inline_cache_global_name(ctx, cache_site);
         ctx.pending_declares
             .push((format!("__ic_decl_{}", cache_site), DOUBLE, vec![]));
         ctx.ic_globals.push(cache_name.clone());
@@ -262,7 +262,7 @@ pub(crate) fn lower_generic_property_get(
     // full lookup and primes the cache for next time.
     let site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
-    let cache_name = format!("perry_ic_{}", site_id);
+    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
     ctx.pending_declares
         .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
     ctx.ic_globals.push(cache_name.clone());

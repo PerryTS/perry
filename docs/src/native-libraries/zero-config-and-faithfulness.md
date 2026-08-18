@@ -12,8 +12,13 @@ file resolution does not walk into the installed package source.
 
 Other reachable packages are AOT-compiled by default. When the host
 `package.json` omits `perry.compilePackages`, Perry enumerates installed
-packages, skips natively shimmed packages, and routes the remaining package
-source through the compiler. This is equivalent to:
+packages, skips natively shimmed packages, and routes the remaining usable
+TypeScript/JavaScript source through the compiler. Packages marked as Node
+native addons are excluded from wildcard selection: this preserves guarded
+optional acceleration such as `msgpackr-extract`, while a statically imported
+pure source subpath can still be promoted into the AOT graph. Reaching an
+actual `.node` binary still fails, and listing the addon by exact name retains
+the actionable whole-package hard error. This is equivalent to:
 
 ```json
 {

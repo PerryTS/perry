@@ -3,7 +3,8 @@
 
 use super::{
     collect_js_module_imports, collect_modules, env_defines_for_lowering,
-    expand_dynamic_import_glob, refuse_compile_package_native_addon,
+    expand_dynamic_import_glob, package_has_unsupported_node_addon,
+    refuse_compile_package_native_addon,
 };
 use crate::commands::compile::{CompilationContext, DefineValue};
 use crate::commands::progress::VerboseProgress;
@@ -544,6 +545,120 @@ fn compile_package_with_binding_gyp_is_rejected() {
         },
         "binding.gyp",
     );
+}
+
+#[test]
+fn file_loader_import_registers_binary_asset_without_utf8_decoding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let asset = root.join("tone.mp3");
+    let entry = root.join("entry.ts");
+    std::fs::write(&asset, [0xff, 0xfb, 0x90, 0x64, 0x00]).expect("write binary asset");
+    std::fs::write(
+        &entry,
+        r#"
+import tone from "./tone.mp3" with { type: "file" };
+console.log(tone);
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    let canonical_asset = asset.canonicalize().unwrap();
+    let (name, path) = ctx.embedded_assets.first().expect("registered file asset");
+    assert_eq!(path, &canonical_asset);
+    assert!(name.starts_with("__perry_imports/"));
+    assert!(name.ends_with("/tone.mp3"));
+    assert!(ctx.native_modules.contains_key(&canonical_asset));
+}
+
+#[test]
+fn wildcard_preflight_skips_node_native_addon_package() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(root, "optional-accelerator", "");
+    let package = root.join("node_modules/optional-accelerator");
+    std::fs::write(package.join("binding.gyp"), "{}\n").expect("write binding.gyp");
+
+    assert!(package_has_unsupported_node_addon(&package));
+}
+
+#[test]
+fn static_pure_js_subpath_of_auto_skipped_native_addon_is_aot_compiled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/native-with-wrapper");
+    std::fs::create_dir_all(&package).expect("create package");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{
+  "name": "native-with-wrapper",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": { "./wrapper": "./wrapper.js" }
+}"#,
+    )
+    .expect("write package json");
+    std::fs::write(package.join("binding.gyp"), "{}\n").expect("write binding.gyp");
+    let wrapper = package.join("wrapper.js");
+    std::fs::write(
+        &wrapper,
+        "export function createWrapper(binding) { return binding; }\n",
+    )
+    .expect("write wrapper");
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import { createWrapper } from "native-with-wrapper/wrapper";
+console.log(createWrapper({ ok: true }).ok);
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.auto_skipped_node_addon_packages
+        .insert("native-with-wrapper".to_string());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect pure wrapper subpath");
+
+    let canonical_wrapper = wrapper.canonicalize().unwrap();
+    assert!(ctx.aot_discovered_modules.contains(&canonical_wrapper));
+    assert!(ctx.native_modules.contains_key(&canonical_wrapper));
+    assert!(ctx.js_modules.is_empty());
 }
 
 #[test]

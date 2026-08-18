@@ -83,6 +83,13 @@ const html = readFileSync("$perryfs/dist/index.html", "utf8");
 that array methods dispatch on its result. `readEmbedded(path)` and `node:fs`
 accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 
+Bun-compatible file-loader imports embed the referenced binary automatically
+and bind the default import to its `$perryfs` path:
+
+```typescript,no-test
+import sound from "./sound.mp3" with { type: "file" };
+```
+
 > **Note**
 > `node:fs` consults the embedded registry *before* disk, and a bare
 > embed-relative key matches too — so `readFileSync("dist/index.html")` returns
@@ -90,9 +97,10 @@ accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 > binary. Read a real on-disk file by absolute path, and use the explicit
 > `$perryfs/<path>` form when you specifically mean the embedded copy.
 >
-> Embedding currently requires a Unix-like host toolchain (macOS/Linux); on a
-> Windows host `--embed` errors out. Cross-target / Windows embedding is a
-> tracked follow-up.
+> Embedding supports host builds on macOS, Linux, and Windows. Windows uses
+> LLVM clang to emit a COFF registration object; set `PERRY_LLVM_CLANG` when
+> the matching clang is not first on `PATH`. Cross-target embedding is not
+> currently supported.
 
 ## Debug Flags
 

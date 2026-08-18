@@ -131,7 +131,7 @@ pub struct LoweringContext {
     /// Used by the "infer fields from ctor body" pass to skip fields inherited from parents,
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
-    pub(crate) class_field_names: Vec<(String, Vec<String>)>,
+    pub(crate) class_field_names: HashMap<String, Vec<String>>,
     /// Issue #665 (sixth pass): per-class set of getter and setter property names.
     /// Used by the "infer fields from ctor body `this.x = ...`" pass to avoid
     /// mis-categorising a setter assignment as an own data field — the
@@ -142,7 +142,7 @@ pub struct LoweringContext {
     /// Populated alongside `register_class_field_names`; looked up via
     /// `lookup_class_accessor_names` and walked across the parent chain when
     /// processing a subclass's ctor body.
-    pub(crate) class_accessor_names: Vec<(String, ClassAccessorNames)>,
+    pub(crate) class_accessor_names: HashMap<String, ClassAccessorNames>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`
@@ -157,7 +157,7 @@ pub struct LoweringContext {
     /// path doesn't apply. Parallel to `class_field_names` but stores
     /// `(field_name, declared_type)` pairs. Populated by
     /// `register_class_field_types` next to `register_class_field_names`.
-    pub(crate) class_field_types: Vec<(String, Vec<(String, Type)>)>,
+    pub(crate) class_field_types: HashMap<String, Vec<(String, Type)>>,
     /// Enums: name -> (id, members with values)
     pub(crate) enums: Vec<(String, EnumId, Vec<(String, EnumValue)>)>,
     /// Enums declared inside a FUNCTION BODY, awaiting attachment to the

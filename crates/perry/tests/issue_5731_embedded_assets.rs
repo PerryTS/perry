@@ -7,10 +7,8 @@
 //!   * `node:fs` (`readFileSync` / `existsSync`) via the `$perryfs/<path>` path
 //! plus `isStandaloneExecutable` (always `true` in a compiled binary).
 //!
-//! Asset embedding is host-only (Unix-like): it compiles a `cc` object that
-//! MSVC `link.exe` can't consume, so the feature errors on a Windows host and
-//! this end-to-end test is skipped there.
-#![cfg(not(windows))]
+//! Asset embedding is host-targeted: Unix-like systems compile a `cc` object;
+//! Windows uses clang's COFF output and a `.CRT$XCU` startup initializer.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -61,16 +59,19 @@ catch (e) { console.log("throwMissing: yes"); }
     .expect("write entry");
 
     let output = root.join("app");
-    let compile = Command::new(perry_bin())
+    let mut compile_command = Command::new(perry_bin());
+    compile_command
         .current_dir(root)
         .arg("compile")
         .arg(&entry)
         .arg("--embed")
         .arg("./dist/**")
         .arg("-o")
-        .arg(&output)
-        .output()
-        .expect("run perry compile");
+        .arg(&output);
+    if cfg!(windows) {
+        compile_command.env("PERRY_RS4GC", "0");
+    }
+    let compile = compile_command.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",

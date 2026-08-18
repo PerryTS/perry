@@ -49,7 +49,13 @@ pub(crate) fn is_nextjs_runtime_module(path: &Path) -> bool {
 pub(super) fn aot_promotion_is_authorized(resolved_path: &Path, ctx: &CompilationContext) -> bool {
     super::super::audit_manifest::package_name_for_path(&resolved_path.to_string_lossy())
         .is_none_or(|package| {
-            ctx.compile_packages.contains(&package)
-                && super::super::allowlist_matches(&package, &ctx.allow_compile_packages)
+            (ctx.compile_packages.contains(&package)
+                && super::super::allowlist_matches(&package, &ctx.allow_compile_packages))
+                // Automatic whole-package routing deliberately omits Node
+                // native addons, but a package can expose a pure JS/TS helper
+                // subpath. A static edge to that exact file is safe to
+                // AOT-promote; collection still rejects any `.node` file it
+                // actually reaches.
+                || ctx.auto_skipped_node_addon_packages.contains(&package)
         })
 }

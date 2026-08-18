@@ -1622,6 +1622,21 @@ pub(super) fn emit_namespace_populator(
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
                     .block()
                     .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
+                NamespaceEntryKind::NativeNamespace { specifier } => {
+                    let name = specifier.strip_prefix("node:").unwrap_or(specifier);
+                    let name_idx = ctx.strings.intern(name);
+                    let name_global = format!("@{}", ctx.strings.entry(name_idx).bytes_global);
+                    let name_len = name.len().to_string();
+                    let blk = ctx.block();
+                    if let Some(install) = crate::nm_install::nm_install_symbol(name) {
+                        blk.call_void(install, &[]);
+                    }
+                    blk.call(
+                        DOUBLE,
+                        "js_create_native_module_namespace",
+                        &[(PTR, &name_global), (I64, &name_len)],
+                    )
+                }
             };
 
             handles.push(group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &val_str, true));

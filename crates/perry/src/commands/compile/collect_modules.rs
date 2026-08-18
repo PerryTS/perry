@@ -11,7 +11,7 @@ use perry_transform::{
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
     transform_async_to_generator, transform_generators, MethodCandidate,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +39,7 @@ mod script_string;
 mod static_require_transform;
 #[cfg(test)]
 mod tests;
+mod walk;
 mod wasm_asset;
 
 use binding_faithfulness::audit_native_binding_choice;
@@ -50,116 +51,14 @@ pub(super) use import_helpers::known_node_submodule_key;
 use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
 };
+pub(super) use native_addon::package_has_unsupported_node_addon;
 use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
+pub(super) use walk::collect_modules;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
-
-/// Collect all modules to compile (transitive closure of imports)
-pub(super) fn collect_modules(
-    entry_path: &PathBuf,
-    ctx: &mut CompilationContext,
-    visited: &mut HashSet<PathBuf>,
-    format: OutputFormat,
-    target: Option<&str>,
-    next_class_id: &mut perry_hir::ClassId,
-    skip_transforms: bool,
-    progress: &VerboseProgress,
-    mut parse_cache: Option<&mut ParseCache>,
-) -> Result<()> {
-    let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
-    let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
-    // Next.js wall 54 (part 2): a standalone `server.js` loads its page, route,
-    // and turbopack chunk modules from `<entry_dir>/.next/server/**` by a path
-    // computed at request time (`require(getPagePath(...))`, turbopack
-    // `R.c("chunkpath")`) — never via a static `import`/`require` literal — so
-    // the import walk below never reaches them and they would not be AOT
-    // compiled. Seed every `.next/server/**/*.js` file as an additional root so
-    // each compiles natively and self-registers under its absolute path (see
-    // cjs_wrap `__perry_register_path_module`), letting the runtime
-    // `require(absolutePath)` resolve it. Detected only when the entry sits next
-    // to a `.next/server` directory (a Next.js standalone bundle).
-    if let Some(entry_dir) = entry_path.parent() {
-        let next_server_dir = entry_dir.join(".next").join("server");
-        if next_server_dir.is_dir() {
-            let mut next_js_files = Vec::new();
-            collect_js_files_recursive(&next_server_dir, &mut next_js_files);
-            if !next_js_files.is_empty() {
-                if matches!(format, OutputFormat::Text) {
-                    println!(
-                        "Next.js standalone: discovered {} runtime module(s) under {}",
-                        next_js_files.len(),
-                        next_server_dir.display()
-                    );
-                }
-                // Push after the entry so the entry is processed first; order
-                // among the discovered files does not matter (the walk dedups).
-                for f in next_js_files {
-                    stack.push(WorkFrame::Enter(f));
-                }
-            }
-        }
-    }
-    while let Some(frame) = stack.pop() {
-        match frame {
-            WorkFrame::Enter(next_path) => {
-                let canonical = next_path.canonicalize().map_err(|e| {
-                    anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
-                })?;
-
-                if matches!(
-                    states.get(&canonical),
-                    Some(VisitState::InProgress | VisitState::Done)
-                ) {
-                    continue;
-                }
-                if visited.contains(&canonical) {
-                    states.insert(canonical, VisitState::Done);
-                    continue;
-                }
-
-                states.insert(canonical.clone(), VisitState::InProgress);
-                visited.insert(canonical.clone());
-                progress.record(ProgressSnapshot {
-                    stage: "collect-module",
-                    module_path: Some(&canonical),
-                    visited: Some(visited.len()),
-                    collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-                    ..Default::default()
-                });
-
-                let discovered = collect_module_one(
-                    &next_path,
-                    canonical.clone(),
-                    ctx,
-                    visited,
-                    format,
-                    target,
-                    next_class_id,
-                    progress,
-                    parse_cache.as_deref_mut(),
-                )?;
-
-                if let Some(prepared) = discovered.finish {
-                    stack.push(WorkFrame::Finish(prepared));
-                } else {
-                    states.insert(canonical, VisitState::Done);
-                }
-                for child in discovered.children.into_iter().rev() {
-                    stack.push(WorkFrame::Enter(child));
-                }
-            }
-            WorkFrame::Finish(prepared) => {
-                let canonical = prepared.canonical.clone();
-                collect_module_finish(prepared, ctx, visited, target, skip_transforms, progress)?;
-                states.insert(canonical, VisitState::Done);
-            }
-        }
-    }
-    Ok(())
-}
 
 enum VisitState {
     InProgress,
@@ -180,6 +79,57 @@ struct PreparedModule {
     canonical: PathBuf,
     module_name: String,
     hir_module: perry_hir::Module,
+}
+
+/// Return imports that request Bun's file loader:
+/// `import path from "./asset.bin" with { type: "file" }`.
+fn file_loader_import_sources(module: &swc_ecma_ast::Module) -> HashSet<String> {
+    use swc_ecma_ast::{Expr, Lit, ModuleDecl, ModuleItem, Prop, PropName, PropOrSpread};
+
+    module
+        .body
+        .iter()
+        .filter_map(|item| {
+            let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+                return None;
+            };
+            let attributes = import.with.as_deref()?;
+            let uses_file_loader = attributes.props.iter().any(|prop| {
+                let PropOrSpread::Prop(prop) = prop else {
+                    return false;
+                };
+                let Prop::KeyValue(property) = prop.as_ref() else {
+                    return false;
+                };
+                let is_type = match &property.key {
+                    PropName::Ident(name) => name.sym == *"type",
+                    PropName::Str(name) => name.value == *"type",
+                    _ => false,
+                };
+                is_type
+                    && matches!(
+                        property.value.as_ref(),
+                        Expr::Lit(Lit::Str(value)) if value.value == *"file"
+                    )
+            });
+            uses_file_loader.then(|| import.src.value.as_str().unwrap_or("").to_string())
+        })
+        .collect()
+}
+
+/// Produce a stable virtual asset name without leaking an absolute source path.
+fn imported_file_asset_name(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in normalized.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("asset.bin");
+    format!("__perry_imports/{hash:016x}/{filename}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,6 +154,18 @@ fn collect_module_one(
     // default export is the file contents as a JS string (see the text branch
     // below, mirroring the JSON-module path).
     let is_text_asset = is_recognized_text_asset(&canonical);
+    // Bun's `{ type: "file" }` loader exposes a virtual path string while
+    // keeping the imported bytes out of the TypeScript parser. The importer
+    // registers this canonical path before the child frame is visited.
+    let imported_file_asset = ctx
+        .file_loader_asset_paths
+        .contains(&canonical)
+        .then(|| {
+            ctx.embedded_assets
+                .iter()
+                .find_map(|(name, path)| (path == &canonical).then(|| name.clone()))
+        })
+        .flatten();
     // #5234: `.wasm` is binary, so collect it through an executable synthetic
     // module instead of the UTF-8 source reader.
     let is_wasm = is_wasm_asset(&canonical);
@@ -353,14 +315,30 @@ fn collect_module_one(
     // #5234: synthesize a TypeScript adapter that embeds and instantiates the
     // binary at module initialization, then feed it through the normal native
     // module pipeline used by JSON and text assets.
-    let raw_source = if is_wasm {
-        let display_name = canonical
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("module.wasm");
+    let raw_source = if let Some(asset_name) = &imported_file_asset {
+        let virtual_path = format!("$perryfs/{asset_name}");
+        let literal = serde_json::to_string(&virtual_path).map_err(|e| {
+            anyhow!(
+                "Failed to encode imported file asset path {}: {}",
+                canonical.display(),
+                e
+            )
+        })?;
+        format!("export default {literal};\n")
+    } else if is_wasm {
         let bytes = fs::read(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
-        synthesize_wasm_module(&bytes, display_name).source
+        let asset_name = imported_file_asset_name(&canonical);
+        if !ctx
+            .embedded_assets
+            .iter()
+            .any(|(_, path)| path == &canonical)
+        {
+            ctx.embedded_assets
+                .push((asset_name.clone(), canonical.clone()));
+        }
+        let virtual_path = format!("$perryfs/{asset_name}");
+        synthesize_wasm_module(&bytes, &virtual_path).source
     } else {
         // It's a TypeScript (or synthetic JSON/text) file to compile natively.
         refuse_node_addon_binary(&canonical)?;
@@ -404,7 +382,7 @@ fn collect_module_one(
     } else {
         raw_source
     };
-    if is_in_compiled_pkg {
+    if is_in_compiled_pkg && !ctx.aot_discovered_modules.contains(&canonical) {
         refuse_compile_package_native_addon(ctx, &canonical)?;
     }
 
@@ -534,6 +512,7 @@ fn collect_module_one(
             }
         },
     };
+    let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
 
     // If type checking is enabled, resolve types from tsgo before lowering
@@ -1067,6 +1046,7 @@ fn collect_module_one(
         if import.type_only {
             continue;
         }
+        let uses_file_loader = file_loader_sources.contains(&import.source);
         progress.record(ProgressSnapshot {
             stage: "resolve-import",
             module_path: Some(&canonical),
@@ -1258,6 +1238,17 @@ fn collect_module_one(
         {
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
+            if uses_file_loader {
+                let name = imported_file_asset_name(&resolved_path);
+                ctx.file_loader_asset_paths.insert(resolved_path.clone());
+                if !ctx
+                    .embedded_assets
+                    .iter()
+                    .any(|(_, path)| path == &resolved_path)
+                {
+                    ctx.embedded_assets.push((name, resolved_path.clone()));
+                }
+            }
             let kind = if resolved.kind == ModuleKind::Interpreted
                 && !is_in_perry_native_package(&resolved_path)
                 && !is_declaration_file(&resolved_path)

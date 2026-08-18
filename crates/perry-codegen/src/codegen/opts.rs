@@ -460,11 +460,10 @@ pub enum NamespaceEntryKind {
         source_prefix: String,
         source_local: String,
     },
-    /// Re-exported function from another module. Codegen declares the
-    /// target's `perry_fn_*` as extern, emits a per-callsite
-    /// `__perry_wrap_extern_*` thin wrapper (if not already emitted by
-    /// the import-wrapper pass), and calls
-    /// `js_closure_alloc_singleton` against that wrapper.
+    /// Re-exported function from another module. The namespace populator
+    /// declares the target's `perry_fn_*`, emits its own
+    /// `__perry_wrap_extern_*` thunk, and calls `js_closure_alloc_singleton`
+    /// against that wrapper.
     ForeignFunction {
         source_prefix: String,
         source_local: String,
@@ -474,6 +473,10 @@ pub enum NamespaceEntryKind {
     /// nested value IS the target module's `@__perry_ns_<source_prefix>`
     /// global, populated by the target's own `__init`.
     NestedNamespace { source_prefix: String },
+    /// `export * as Name from "node:..."` (or another Perry-native module).
+    /// Native modules have no compiled `@__perry_ns_*` global, so codegen asks
+    /// the runtime to materialize their namespace directly.
+    NativeNamespace { specifier: String },
 }
 
 /// A class imported from another native module.

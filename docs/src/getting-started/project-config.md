@@ -73,6 +73,14 @@ When a package is listed here, Perry:
 
 This is useful for pure TypeScript/JavaScript packages that don't rely on Node.js APIs. Packages that use native bindings, `eval()`, or dynamic `require()` won't work.
 
+Universal forms (`"auto"`, `"all"`, `true`, or a `"*"` wildcard) skip packages
+identified as Node native addons instead of trying to compile N-API binaries as
+source. This lets a dependency's guarded optional native accelerator fall back
+to its JavaScript implementation. A statically imported pure-source subpath of
+such a package can still be compiled, but an actual `.node` edge fails. Naming
+the addon package exactly still fails immediately with the native-addon
+diagnostic.
+
 #### `codegen`
 
 Perry is an ahead-of-time compiler: it never runs a code string at runtime. Many libraries that would normally JIT a function from a schema or a config (`ajv`, `fast-json-stringify`, Prisma, Drizzle, …) ship a **build-time** mode that emits plain, eval-free source instead. The `codegen` field declares the commands that produce that source. Perry runs them **before** compiling, then compiles the generated output natively — so the shipped binary links no JavaScript engine.

@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
@@ -279,39 +279,110 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Both wildcard imports and namespaces reached through a
                     // re-export use the same getter ABI.
                     if ctx.imported_vars.contains(method_name) {
-                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                        for a in args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
-                        if lowered.len() > 16 {
-                            bail!(
-                                "perry-codegen: namespace static-method closure call with {} args (max 16)",
-                                lowered.len()
-                            );
-                        }
                         ctx.pending_declares.push((fn_name.clone(), DOUBLE, vec![]));
+                        // Preserve JavaScript evaluation order: fetch the
+                        // callable namespace member before evaluating any
+                        // argument, then root it across that argument window.
                         let closure_box = ctx.block().call(DOUBLE, &fn_name, &[]);
-                        let blk = ctx.block();
-                        let closure_handle = unbox_to_i64(blk, &closure_box);
-                        let runtime_fn = format!("js_closure_call{}", lowered.len());
-                        let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered {
-                            call_args.push((DOUBLE, v.as_str()));
-                        }
-                        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+                        let arg_refs: Vec<&Expr> = args.iter().collect();
+                        let lowered_args = std::cell::RefCell::new(Vec::<String>::new());
+                        let result = crate::rooting::with_rooted_accumulator(
+                            ctx,
+                            crate::rooting::Repr::Boxed,
+                            &closure_box,
+                            crate::rooting::any_operand_may_collect(ctx, args.iter()),
+                            |ctx, _closure| {
+                                crate::rooting::with_operands_rooted(
+                                    ctx,
+                                    &arg_refs,
+                                    |_ctx, vals| {
+                                        *lowered_args.borrow_mut() = vals.to_vec();
+                                        Ok(())
+                                    },
+                                )
+                            },
+                            |ctx, closure_box| {
+                                let lowered = lowered_args.borrow();
+                                let closure_handle = {
+                                    let blk = ctx.block();
+                                    unbox_to_i64(blk, closure_box)
+                                };
+                                if lowered.len() <= 16 {
+                                    let runtime_fn = format!("js_closure_call{}", lowered.len());
+                                    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
+                                        vec![(I64, &closure_handle)];
+                                    for value in lowered.iter() {
+                                        call_args.push((DOUBLE, value.as_str()));
+                                    }
+                                    return Ok(ctx.block().call(DOUBLE, &runtime_fn, &call_args));
+                                }
+
+                                // #3527: namespace members backed by exported
+                                // closure getters need the same arbitrary-arity
+                                // array dispatch as ordinary closure values.
+                                // Effect's `Layer.mergeAll` is a rest closure
+                                // and OpenCode passes 18 layers here.
+                                let n = lowered.len();
+                                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                                let blk = ctx.block();
+                                for (i, value) in lowered.iter().enumerate() {
+                                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                                    blk.store(DOUBLE, value, &slot);
+                                }
+                                let argc = n.to_string();
+                                Ok(blk.call(
+                                    DOUBLE,
+                                    "js_closure_call_array",
+                                    &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
+                                ))
+                            },
+                        )?;
+                        return Ok(result);
                     }
-                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                    for a in args {
-                        lowered.push(lower_expr(ctx, a)?);
+                    // Function-declaration namespace members need the same ABI
+                    // adaptation as the lowercase namespace-call path. In
+                    // particular, a rest declaration receives its trailing
+                    // arguments as one array parameter; passing the source
+                    // arguments directly makes `Event.inventory(...defs)` read
+                    // a scalar as an array and return `undefined`.
+                    let declared_count = ctx
+                        .imported_func_param_counts
+                        .get(method_name)
+                        .copied()
+                        .unwrap_or(args.len());
+                    if ctx.imported_func_has_rest.contains(method_name) {
+                        let fixed_count = declared_count.saturating_sub(1);
+                        let (lowered, guard) = crate::lower_call::lower_rest_call_args_rooted(
+                            ctx,
+                            args,
+                            fixed_count,
+                            &[crate::lower_call::RestBundle {
+                                from: fixed_count,
+                                mark_arguments_object: false,
+                            }],
+                        )?;
+                        let arg_kinds: Vec<crate::types::LlvmType> =
+                            std::iter::repeat_n(DOUBLE, lowered.len()).collect();
+                        ctx.pending_declares
+                            .push((fn_name.clone(), DOUBLE, arg_kinds));
+                        return Ok(crate::lower_call::emit_rooted_call(
+                            ctx, &fn_name, &lowered, guard,
+                        ));
                     }
+
+                    let (mut lowered, guard) =
+                        crate::lower_call::lower_call_args_rooted(ctx, args)?;
+                    lowered.resize(
+                        lowered.len().max(declared_count),
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                    );
                     let arg_kinds: Vec<crate::types::LlvmType> =
-                        std::iter::repeat_n(DOUBLE, args.len()).collect();
+                        std::iter::repeat_n(DOUBLE, lowered.len()).collect();
                     ctx.pending_declares
                         .push((fn_name.clone(), DOUBLE, arg_kinds));
-                    let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                        lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+                    return Ok(crate::lower_call::emit_rooted_call(
+                        ctx, &fn_name, &lowered, guard,
+                    ));
                 }
             }
             // Issue #818 (Effect.succeed pattern): the receiver is a NAMED

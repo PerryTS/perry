@@ -50,7 +50,7 @@
 //! is a gap in the API, filed with the slice, not a decision this file makes.
 //! Delegating to an audited helper is the same posture as calling `lower_expr`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use perry_hir::Expr;
 
 use super::extern_timers::fill_arg_buffer;
@@ -305,12 +305,6 @@ pub fn try_lower_namespace_member_call(
     if ctx.imported_vars.contains(property) {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
-        if args.len() > 16 {
-            bail!(
-                "perry-codegen: namespace closure call with {} args (max 16)",
-                args.len()
-            );
-        }
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
         // The getter runs FIRST and must keep running first: it is the callee
         // reference, and the spec evaluates that before the arguments. Sinking
@@ -348,15 +342,37 @@ pub fn try_lower_namespace_member_call(
                 // Below every collection point: the inner group's re-reads, then
                 // the accumulator's own re-read, then nothing that allocates.
                 let lowered = lowered_args.borrow();
-                let blk = ctx.block();
-                let closure_handle = unbox_to_i64(blk, closure_box);
-                let runtime_fn = format!("js_closure_call{}", lowered.len());
-                let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                    vec![(I64, &closure_handle)];
-                for v in lowered.iter() {
-                    call_args.push((DOUBLE, v.as_str()));
+                let closure_handle = {
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, closure_box)
+                };
+                if lowered.len() <= 16 {
+                    let runtime_fn = format!("js_closure_call{}", lowered.len());
+                    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
+                        vec![(I64, &closure_handle)];
+                    for v in lowered.iter() {
+                        call_args.push((DOUBLE, v.as_str()));
+                    }
+                    return Ok(ctx.block().call(DOUBLE, &runtime_fn, &call_args));
                 }
-                Ok(blk.call(DOUBLE, &runtime_fn, &call_args))
+
+                // #3527: the runtime's array dispatcher owns arbitrary-arity
+                // closure calls (including rest bundling). Keep the fixed-N
+                // entry points as the small fast path and marshal wider calls
+                // into a stack buffer after all rooted operand re-reads.
+                let n = lowered.len();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                let blk = ctx.block();
+                for (i, value) in lowered.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                    blk.store(DOUBLE, value, &slot);
+                }
+                let argc = n.to_string();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_closure_call_array",
+                    &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
+                ))
             },
         )?;
         return Ok(Some(result));

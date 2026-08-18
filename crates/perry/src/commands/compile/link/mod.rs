@@ -37,11 +37,10 @@ use super::{
     find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
     find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
     find_watchos_swift_runtime, is_android_target, is_native_windows_target, is_windows_target,
-    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows, rust_target_triple,
-    strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
-    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
-    windows_pe_subsystem_flag, windows_subsystem_needs_ui, windows_target_arch, CompilationContext,
-    WindowsTargetArch,
+    localize_stdlib_stub_symbols, rust_target_triple, strip_bundled_runtime_from_well_known_lib,
+    strip_bundled_shared_deps_from_well_known_lib, strip_duplicate_objects_from_lib,
+    strip_duplicate_objects_from_well_known_lib, windows_pe_subsystem_flag,
+    windows_subsystem_needs_ui, windows_target_arch, CompilationContext, WindowsTargetArch,
 };
 
 mod build_and_run;

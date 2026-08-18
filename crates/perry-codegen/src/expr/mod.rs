@@ -1827,6 +1827,45 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
     })
 }
 
+/// Build a linker-unique inline-cache global name.
+///
+/// `ic_site_counter` is only module-wide. LLVM codegen-unit splitting can
+/// promote a private global for cross-unit use, so the source-module prefix is
+/// also required to keep separately compiled modules from defining the same
+/// `perry_ic_N` symbol at the final application link.
+pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String {
+    inline_cache_global_name_for_prefix(ctx.strings.module_prefix(), site_id)
+}
+
+fn inline_cache_global_name_for_prefix(module_prefix: &str, site_id: u32) -> String {
+    if module_prefix.is_empty() {
+        format!("perry_ic_{site_id}")
+    } else {
+        format!("perry_ic_{module_prefix}__{site_id}")
+    }
+}
+
+#[cfg(test)]
+mod inline_cache_name_tests {
+    use super::inline_cache_global_name_for_prefix;
+
+    #[test]
+    fn cache_symbols_are_unique_across_source_modules() {
+        assert_eq!(
+            inline_cache_global_name_for_prefix("packages_a_ts", 7),
+            "perry_ic_packages_a_ts__7"
+        );
+        assert_eq!(
+            inline_cache_global_name_for_prefix("packages_b_ts", 7),
+            "perry_ic_packages_b_ts__7"
+        );
+        assert_ne!(
+            inline_cache_global_name_for_prefix("packages_a_ts", 7),
+            inline_cache_global_name_for_prefix("packages_b_ts", 7)
+        );
+    }
+}
+
 impl<'a> FnCtx<'a> {
     /// Return runtime-derived initializer evidence only when no write anywhere
     /// in this region can have invalidated it.

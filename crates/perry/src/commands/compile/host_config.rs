@@ -766,10 +766,21 @@ pub(super) fn apply_pkg_and_toml_config(
         .filter_map(|p| p.strip_suffix("/*").map(|s| s.to_string()))
         .collect();
     if has_universal || !scope_wildcards.is_empty() {
-        let installed = super::resolve::enumerate_installed_packages(project_root);
+        // Preserve exact entries when they are combined with a wildcard. An
+        // exact opt-in must still receive the native-addon hard error; only
+        // packages selected by broad automatic routing are eligible for the
+        // safe skip below.
+        let exact_compile_packages: std::collections::HashSet<String> = ctx
+            .compile_packages
+            .iter()
+            .filter(|name| *name != "*" && !name.ends_with("/*"))
+            .cloned()
+            .collect();
+        let installed = super::resolve::enumerate_installed_package_roots(project_root);
         let mut added = 0usize;
         let mut skipped_native = 0usize;
-        for name in installed {
+        let mut skipped_node_addons = 0usize;
+        for (name, roots) in installed {
             let matches = has_universal
                 || scope_wildcards.iter().any(|scope| {
                     name.strip_prefix(scope.as_str())
@@ -797,6 +808,20 @@ pub(super) fn apply_pkg_and_toml_config(
                 skipped_native += 1;
                 continue;
             }
+            // A wildcard means "compile all usable JS/TS source", not "force
+            // Node native addons through a compiler that cannot host N-API".
+            // Optional guarded accelerators stay off whole-package routing;
+            // statically imported pure source subpaths may still be promoted,
+            // while an actual `.node` edge remains a hard error.
+            if !exact_compile_packages.contains(&name)
+                && roots
+                    .iter()
+                    .any(|root| super::collect_modules::package_has_unsupported_node_addon(root))
+            {
+                ctx.auto_skipped_node_addon_packages.insert(name);
+                skipped_node_addons += 1;
+                continue;
+            }
             if ctx.compile_packages.insert(name) {
                 added += 1;
             }
@@ -814,8 +839,11 @@ pub(super) fn apply_pkg_and_toml_config(
         // package(s)" line purely because the default now injects `"*"`
         // internally, making an additive default non-additive for the stdout
         // of every existing build.
-        let report_expansion =
-            should_report_wildcard_expansion(compile_packages_auto_default, added, skipped_native);
+        let report_expansion = should_report_wildcard_expansion(
+            compile_packages_auto_default,
+            added,
+            skipped_native + skipped_node_addons,
+        );
         if matches!(format, OutputFormat::Text) && report_expansion {
             println!(
                 "  Compile package wildcard: expanded to {} installed package(s)",
@@ -826,6 +854,12 @@ pub(super) fn apply_pkg_and_toml_config(
                     "  Compile package wildcard: kept {} package(s) on Perry's \
                      native shim (list explicitly to compile the real source)",
                     skipped_native
+                );
+            }
+            if skipped_node_addons > 0 {
+                println!(
+                    "  Compile package wildcard: left {} Node native-addon package(s) out of whole-package AOT routing (static pure-source subpaths can still compile; list explicitly for a hard error)",
+                    skipped_node_addons
                 );
             }
         }

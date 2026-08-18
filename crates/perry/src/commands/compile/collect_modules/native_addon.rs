@@ -76,6 +76,22 @@ fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathB
 }
 
 fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
+    if let Some(marker) = wildcard_node_addon_marker(package_root) {
+        return Some(marker);
+    }
+    if let Some(node_file) = find_node_addon_file(package_root, 5) {
+        return Some(("*.node", node_file.display().to_string()));
+    }
+    None
+}
+
+/// Cheap preflight used while expanding a wildcard across an entire install.
+/// Reading package-level markers is bounded; recursively walking every file in
+/// thousands of pure JS/TS packages would make source-first startup needlessly
+/// expensive. A sidecar package containing a root-level `.node` file is still
+/// detected, while the full guard retains its depth-five scan for packages
+/// that are actually selected explicitly.
+fn wildcard_node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
     let binding_gyp = package_root.join("binding.gyp");
     if binding_gyp.exists() {
         return Some(("binding.gyp", binding_gyp.display().to_string()));
@@ -107,10 +123,21 @@ fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, St
             }
         }
     }
-    if let Some(node_file) = find_node_addon_file(package_root, 5) {
+    if let Some(node_file) = find_node_addon_file(package_root, 1) {
         return Some(("*.node", node_file.display().to_string()));
     }
     None
+}
+
+/// Whether wildcard/auto `compilePackages` routing should leave this package
+/// off the AOT path. Exact package opt-ins are still checked by
+/// `refuse_compile_package_native_addon` and remain hard errors; this helper is
+/// for broad automatic selection, where a package may be an optional
+/// try/catch-guarded accelerator such as `msgpackr-extract`.
+pub(in crate::commands::compile) fn package_has_unsupported_node_addon(
+    package_root: &std::path::Path,
+) -> bool {
+    !has_perry_native_library(package_root) && wildcard_node_addon_marker(package_root).is_some()
 }
 
 fn package_json_dependency_uses_native_addon_loader(

@@ -85,10 +85,10 @@ impl LoweringContext {
             func_defaults: Vec::new(),
             classes: Vec::new(),
             class_statics: Vec::new(),
-            class_field_names: Vec::new(),
-            class_accessor_names: Vec::new(),
+            class_field_names: HashMap::new(),
+            class_accessor_names: HashMap::new(),
             class_native_extends: Vec::new(),
-            class_field_types: Vec::new(),
+            class_field_types: HashMap::new(),
             enums: Vec::new(),
             pending_body_enums: Vec::new(),
             interfaces: Vec::new(),
@@ -524,24 +524,14 @@ impl LoweringContext {
         class_name: String,
         field_names: Vec<String>,
     ) {
-        // Replace existing entry if present; otherwise append.
-        if let Some(entry) = self
-            .class_field_names
-            .iter_mut()
-            .find(|(n, _)| *n == class_name)
-        {
-            entry.1 = field_names;
-        } else {
-            self.class_field_names.push((class_name, field_names));
-        }
+        self.class_field_names.insert(class_name, field_names);
     }
 
     /// Look up the list of instance field names declared on a class (NOT including inherited).
     pub(crate) fn lookup_class_field_names(&self, class_name: &str) -> Option<&[String]> {
         self.class_field_names
-            .iter()
-            .find(|(n, _)| n == class_name)
-            .map(|(_, f)| f.as_slice())
+            .get(class_name)
+            .map(|fields| fields.as_slice())
     }
 
     /// Issue #665: register getter and setter property names for a class.
@@ -553,15 +543,7 @@ impl LoweringContext {
         class_name: String,
         accessor_names: crate::ClassAccessorNames,
     ) {
-        if let Some(entry) = self
-            .class_accessor_names
-            .iter_mut()
-            .find(|(n, _)| *n == class_name)
-        {
-            entry.1 = accessor_names;
-        } else {
-            self.class_accessor_names.push((class_name, accessor_names));
-        }
+        self.class_accessor_names.insert(class_name, accessor_names);
     }
 
     /// Look up the accessor property names registered for a
@@ -572,10 +554,7 @@ impl LoweringContext {
         &self,
         class_name: &str,
     ) -> Option<&crate::ClassAccessorNames> {
-        self.class_accessor_names
-            .iter()
-            .find(|(n, _)| n == class_name)
-            .map(|(_, f)| f)
+        self.class_accessor_names.get(class_name)
     }
 
     /// Issue #302: register declared field types for a class (parallel to
@@ -587,15 +566,7 @@ impl LoweringContext {
         class_name: String,
         field_types: Vec<(String, Type)>,
     ) {
-        if let Some(entry) = self
-            .class_field_types
-            .iter_mut()
-            .find(|(n, _)| *n == class_name)
-        {
-            entry.1 = field_types;
-        } else {
-            self.class_field_types.push((class_name, field_types));
-        }
+        self.class_field_types.insert(class_name, field_types);
     }
 
     /// Pre-seed `class_field_types` (and `class_field_names`) with cross-module
@@ -614,13 +585,12 @@ impl LoweringContext {
         seeds: &std::collections::HashMap<String, Vec<(String, Type)>>,
     ) {
         for (name, fields) in seeds {
-            if !self.class_field_types.iter().any(|(n, _)| n == name) {
-                self.class_field_types.push((name.clone(), fields.clone()));
-            }
-            if !self.class_field_names.iter().any(|(n, _)| n == name) {
-                let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                self.class_field_names.push((name.clone(), names));
-            }
+            self.class_field_types
+                .entry(name.clone())
+                .or_insert_with(|| fields.clone());
+            self.class_field_names
+                .entry(name.clone())
+                .or_insert_with(|| fields.iter().map(|(field, _)| field.clone()).collect());
         }
     }
 
@@ -632,10 +602,9 @@ impl LoweringContext {
         seeds: &std::collections::HashMap<String, crate::ClassAccessorNames>,
     ) {
         for (name, accessors) in seeds {
-            if !self.class_accessor_names.iter().any(|(n, _)| n == name) {
-                self.class_accessor_names
-                    .push((name.clone(), accessors.clone()));
-            }
+            self.class_accessor_names
+                .entry(name.clone())
+                .or_insert_with(|| accessors.clone());
         }
     }
 
@@ -648,9 +617,9 @@ impl LoweringContext {
         field_name: &str,
     ) -> Option<&Type> {
         self.class_field_types
-            .iter()
-            .find(|(n, _)| n == class_name)
-            .and_then(|(_, fs)| fs.iter().find(|(n, _)| n == field_name).map(|(_, ty)| ty))
+            .get(class_name)
+            .and_then(|fields| fields.iter().find(|(name, _)| name == field_name))
+            .map(|(_, ty)| ty)
     }
 
     /// Issue #212: register the outer-scope LocalIds that a nested class

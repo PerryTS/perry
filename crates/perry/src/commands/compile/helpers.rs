@@ -98,20 +98,17 @@ pub(crate) fn is_windows_reserved_file_stem(stem: &str) -> bool {
 
 pub(crate) fn canonical_class_source_prefix(
     class: &perry_hir::Class,
-    class_canonical_path: &HashMap<perry_hir::ClassId, (String, String)>,
+    class_canonical_path: &HashMap<usize, String>,
     project_root: &Path,
     fallback_prefix: &str,
 ) -> String {
-    // Issue #5987: `ClassId` is meant to be globally unique, but a large
-    // multi-module compile can still produce a collision (two unrelated
-    // classes assigned the same id). Only trust the recorded path if its
-    // class NAME also matches this class — a mismatch means the id
-    // collided with some other class, and `fallback_prefix` (derived from
-    // the caller's own already-verified origin lookup) is reliable.
+    // Large cached/parallel source graphs can reuse a ClassId. Key canonical
+    // provenance by the stable address of the HIR class stored in
+    // `native_modules` instead: even two platform variants with the same id
+    // AND name (OpenTUI's node/bun BoxRenderable classes) remain distinct.
     class_canonical_path
-        .get(&class.id)
-        .filter(|(_, name)| name == &class.name)
-        .map(|(path, _)| compute_module_prefix(path, project_root))
+        .get(&(class as *const perry_hir::Class as usize))
+        .map(|path| compute_module_prefix(path, project_root))
         .unwrap_or_else(|| fallback_prefix.to_string())
 }
 
@@ -297,11 +294,8 @@ mod tests {
         let project_root = PathBuf::from("/repo");
         let mut class_canonical_path = HashMap::new();
         class_canonical_path.insert(
-            class.id,
-            (
-                "/repo/node_modules/rxjs/src/internal/Observable.ts".to_string(),
-                "Observable".to_string(),
-            ),
+            &class as *const perry_hir::Class as usize,
+            "/repo/node_modules/rxjs/src/internal/Observable.ts".to_string(),
         );
 
         assert_eq!(
@@ -316,12 +310,9 @@ mod tests {
     }
 
     #[test]
-    fn canonical_class_source_prefix_falls_back_on_id_collision() {
-        // Issue #5987: a `ClassId` collision (two unrelated classes assigned
-        // the same id) must not silently misattribute the wrong module —
-        // the recorded entry's name has to match this class's own name, or
-        // the caller's fallback (already verified correct by the caller)
-        // wins instead.
+    fn canonical_class_source_prefix_falls_back_on_identity_collision() {
+        // A cached ClassId collision must not silently misattribute the class,
+        // even when both platform variants also share the same class name.
         let class = perry_hir::Class {
             id: 7,
             name: "ClientAbort".to_string(),
@@ -350,14 +341,15 @@ mod tests {
         };
         let project_root = PathBuf::from("/repo");
         let mut class_canonical_path = HashMap::new();
-        // Same id (7), but recorded for a DIFFERENT class ("SchemaAST") —
-        // simulates an id collision from an unrelated module.
+        let colliding_class = perry_hir::Class {
+            name: "ClientAbort".to_string(),
+            ..class.clone()
+        };
+        // Same id AND name, but a distinct HIR class object. This is the
+        // platform-sibling collision that an id/name key cannot distinguish.
         class_canonical_path.insert(
-            class.id,
-            (
-                "/repo/node_modules/effect/src/SchemaAST.ts".to_string(),
-                "SchemaAST".to_string(),
-            ),
+            &colliding_class as *const perry_hir::Class as usize,
+            "/repo/node_modules/opentui/chunk-bun.js".to_string(),
         );
 
         assert_eq!(
@@ -368,8 +360,7 @@ mod tests {
                 "node_modules_effect_src_unstable_rpc_RpcSchema_ts",
             ),
             "node_modules_effect_src_unstable_rpc_RpcSchema_ts",
-            "name mismatch on the ClassId entry must fall back to the caller's \
-             already-verified prefix, not the colliding entry's path"
+            "a same-id, same-name class must not steal this class's provenance"
         );
     }
 

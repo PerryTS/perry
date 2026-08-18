@@ -26,11 +26,13 @@ use super::super::{
 /// `libperry_runtime.a` is insufficient: `wasm-host` is deliberately kept out
 /// of perry-runtime's `default` feature set so non-wasm programs don't pay for
 /// wasmi. The no-auto path can't enable a cargo feature on an already-built
-/// archive, so it does a targeted rebuild of just `perry-runtime-static` with
-/// default features + `perry-runtime/wasm-host` into a dedicated target dir.
+/// archive, so it does a targeted rebuild with
+/// `perry-runtime/wasm-host` into a dedicated target dir.
 /// This is the same on-demand build pattern `build_missing_prebuilt_ext_lib`
-/// uses for CPU-only ext wrappers. `perry-wasm-host` has no tokio dep, so
-/// there is no #507 shared-tokio concern with the prebuilt stdlib.
+/// uses for CPU-only ext wrappers. On Windows the rebuilt runtime and stdlib
+/// must come from one Cargo graph: mixing a feature-augmented standalone
+/// runtime with the prebuilt stdlib splits process-global registries such as
+/// Buffer ownership across two runtime copies.
 pub(crate) fn resolve_no_auto_optimized_libs(
     ctx: &CompilationContext,
     target: Option<&str>,
@@ -47,16 +49,21 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     };
     // Issue #76 — the prebuilt runtime is built WITHOUT `wasm-host` (kept
     // out of `default` to avoid wasmi bloat on non-wasm programs). When the
-    // program uses `WebAssembly.*`, rebuild just the runtime with the
-    // feature on so `js_webassembly_*` symbols are defined. The prebuilt
-    // stdlib is unaffected (wasm-host only adds a module to perry-runtime).
-    let runtime = if ctx.needs_wasm_runtime {
-        build_wasm_host_runtime(target, format, verbose)
+    // program uses `WebAssembly.*`, rebuild the runtime with the feature on so
+    // `js_webassembly_*` symbols are defined. Windows also rebuilds stdlib in
+    // that Cargo invocation so its bundled runtime shares the same global
+    // registries as the wasm-enabled runtime.
+    let (runtime, stdlib) = if ctx.needs_wasm_runtime {
+        match build_wasm_host_runtime(target, format, verbose) {
+            Some((runtime, stdlib)) => (Some(runtime), stdlib),
+            None => (None, None),
+        }
     } else {
-        None
+        (None, None)
     };
     OptimizedLibs {
         runtime,
+        stdlib,
         prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
         ..OptimizedLibs::empty()
@@ -65,16 +72,20 @@ pub(crate) fn resolve_no_auto_optimized_libs(
 
 /// Build `perry-runtime-static` with default features + `perry-runtime/wasm-host`
 /// into a dedicated target dir so the prebuilt `libperry_runtime.a` is not
-/// clobbered. Returns the path to the rebuilt archive, or `None` when there's
-/// no workspace source or the build fails (the caller falls back to the
-/// prebuilt runtime, which will fail to link with `_js_webassembly_*`
-/// undefined — the error message points the user at the cause).
+/// clobbered. Windows also builds `perry-stdlib-static` in the same graph and
+/// returns it as the authoritative archive. Returns `(runtime, stdlib)` or
+/// `None` when there's no workspace source or the build fails.
 fn build_wasm_host_runtime(
     target: Option<&str>,
     format: OutputFormat,
     verbose: u8,
-) -> Option<PathBuf> {
-    let workspace_root = find_perry_workspace_root()?;
+) -> Option<(PathBuf, Option<PathBuf>)> {
+    // Canonical Windows paths can carry a `\\?\` prefix. Cargo forwards an
+    // absolute verbatim `CARGO_TARGET_DIR` to cc-rs, where MSVC interprets the
+    // generated `\\?\...\mimalloc-static.cc` argument as `\mimalloc-static.cc`.
+    // Match the auto-optimize path: normalize the workspace and use a relative
+    // target-dir env value on Windows.
+    let workspace_root = cargo_target_dir_path(find_perry_workspace_root()?);
     let crate_dir = workspace_root.join("crates").join("perry-runtime-static");
     if !crate_dir.is_dir() {
         if matches!(format, OutputFormat::Text) && verbose > 0 {
@@ -87,26 +98,33 @@ fn build_wasm_host_runtime(
     }
 
     if matches!(format, OutputFormat::Text) {
-        println!("  wasm-host (no-auto): rebuilding perry-runtime-static with wasm-host feature");
+        println!("  wasm-host (no-auto): rebuilding runtime with wasm-host feature");
     }
 
     // Use a dedicated target dir so the prebuilt libperry_runtime.a in
     // target/release is not overwritten. Cargo's incremental cache makes
     // repeat builds a no-op.
-    let wasm_host_target_dir = workspace_root
-        .join("target")
-        .join("perry-wasm-host-runtime");
+    let relative_target_dir = PathBuf::from("target").join("perry-wasm-host-runtime");
+    let wasm_host_target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
+    let cargo_target_dir = if cfg!(windows) {
+        relative_target_dir
+    } else {
+        wasm_host_target_dir.clone()
+    };
 
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
         .current_dir(&workspace_root)
-        .env("CARGO_TARGET_DIR", &wasm_host_target_dir)
+        .env("CARGO_TARGET_DIR", &cargo_target_dir)
         .arg("build")
         .arg("--release")
         .arg("-p")
         .arg("perry-runtime-static")
         .arg("--features")
         .arg("perry-runtime/wasm-host");
+    if is_windows_target(target) {
+        cargo_cmd.arg("-p").arg("perry-stdlib-static");
+    }
     if let Some(triple) = rust_target_triple(target) {
         cargo_cmd.arg("--target").arg(triple);
     }
@@ -143,7 +161,7 @@ fn build_wasm_host_runtime(
         Ok(status) => {
             if matches!(format, OutputFormat::Text) {
                 eprintln!(
-                    "  wasm-host (no-auto): cargo build for perry-runtime-static failed ({status})"
+                    "  wasm-host (no-auto): cargo build for wasm-enabled archives failed ({status})"
                 );
             }
             return None;
@@ -165,18 +183,33 @@ fn build_wasm_host_runtime(
     if let Some(triple) = rust_target_triple(target) {
         release_dir = release_dir.join(triple);
     }
-    let built = release_dir.join("release").join(lib_name);
-    if built.exists() {
-        return Some(built);
+    let release_dir = release_dir.join("release");
+    let runtime = release_dir.join(lib_name);
+    if !runtime.exists() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  wasm-host (no-auto): cargo finished but {lib_name} was not produced at {}",
+                runtime.display()
+            );
+        }
+        return None;
     }
-
-    if matches!(format, OutputFormat::Text) && verbose > 0 {
-        eprintln!(
-            "  wasm-host (no-auto): cargo finished but {lib_name} was not produced at {}",
-            built.display()
-        );
-    }
-    None
+    let stdlib = if is_windows_target(target) {
+        let path = release_dir.join("perry_stdlib.lib");
+        if !path.exists() {
+            if matches!(format, OutputFormat::Text) && verbose > 0 {
+                eprintln!(
+                    "  wasm-host (no-auto): cargo finished but perry_stdlib.lib was not produced at {}",
+                    path.display()
+                );
+            }
+            return None;
+        }
+        Some(path)
+    } else {
+        None
+    };
+    Some((runtime, stdlib))
 }
 
 /// #2532 / #3954 — resolve the `perry-ext-*` staticlibs a program needs

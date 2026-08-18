@@ -14,6 +14,8 @@ use super::wrap::{wrap_commonjs, wrap_commonjs_for_target, wrap_commonjs_with_bo
 use std::fs;
 use std::path::PathBuf;
 
+mod source_graph;
+
 // #5247: the wrapped output must report where the ORIGINAL body begins, and
 // because blanking/hoisting preserve newlines, the prefix line count lets a
 // wrapped body line map back to its original-source line. This is the unit

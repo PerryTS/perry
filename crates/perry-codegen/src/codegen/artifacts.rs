@@ -2,7 +2,7 @@
 //! globals, the module entry function, and string-pool initialization.
 //! Split from `codegen/mod.rs` to keep the compiler pipeline navigable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -26,6 +26,7 @@ use super::method::{
     compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
     compile_typed_string_method,
 };
+use super::native_namespace_exports::emit_native_namespace_reexport_getters;
 use super::opts::CrossModuleCtx;
 use super::spec_function_length;
 use super::typed_abi::TypedFunctionTrampolineKind;
@@ -765,6 +766,52 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         blk.ret(DOUBLE, &result);
     }
 
+    // Exported function names use a stable, plain-sanitized cross-module ABI,
+    // while local function bodies use the injective `sanitize_member` mangling
+    // so hostile-but-valid identifiers cannot collide inside one module. The
+    // direct-call aliases bridge those schemes above; closure values need the
+    // identical bridge for their `__perry_wrap_*` symbols.
+    {
+        let func_by_id: HashMap<u32, &perry_hir::Function> =
+            hir.functions.iter().map(|f| (f.id, f)).collect();
+        let mut emitted_aliases: HashSet<String> = HashSet::new();
+        for (exported_name, func_id) in &hir.exported_functions {
+            let Some(f) = func_by_id.get(func_id) else {
+                continue;
+            };
+            let Some(target_name) = func_names.get(func_id) else {
+                continue;
+            };
+            let target_wrap = format!("__perry_wrap_{}", target_name);
+            let alias_wrap = format!(
+                "__perry_wrap_perry_fn_{}__{}",
+                module_prefix,
+                sanitize(exported_name)
+            );
+            if alias_wrap == target_wrap
+                || llmod.has_function(&alias_wrap)
+                || !emitted_aliases.insert(alias_wrap.clone())
+            {
+                continue;
+            }
+
+            let arity = f.params.len().min(16);
+            let mut params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
+            params.extend((0..arity).map(|i| (DOUBLE, format!("%a{}", i))));
+            let alias = llmod.define_function(&alias_wrap, DOUBLE, params);
+            let _ = alias.create_block("entry");
+            let blk = alias.block_mut(0).unwrap();
+            let mut args: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
+            args.extend((0..arity).map(|i| (DOUBLE, format!("%a{}", i))));
+            let arg_refs: Vec<(LlvmType, &str)> = args
+                .iter()
+                .map(|(ty, value)| (*ty, value.as_str()))
+                .collect();
+            let result = blk.call(DOUBLE, &target_wrap, &arg_refs);
+            blk.ret(DOUBLE, &result);
+        }
+    }
+
     // Closes #837 / refs #836: emit `__perry_wrap_perry_fn_<src>__<exported>`
     // closure wrappers for every `Export::Named { local, exported }` rename
     // where `exported != local`. The regular wrapper loop above keys
@@ -836,7 +883,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                 let _ = wf.create_block("entry");
                 let blk = wf.block_mut(0).unwrap();
-                let target = scoped_fn_name(module_prefix, &f.name);
+                let target = func_names
+                    .get(&f.id)
+                    .cloned()
+                    .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                 let call_args: Vec<(LlvmType, String)> =
                     (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                 let call_args_ref: Vec<(LlvmType, &str)> =
@@ -1017,6 +1067,25 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 }
             }
 
+            // Namespace initialization reads renamed values through the local
+            // getter name. Forward that name to the public getter when this is
+            // not a real function alias.
+            if local != exported && !func_by_local_name.contains_key(local.as_str()) {
+                let local_target = format!("perry_fn_{}__{}", module_prefix, sanitize(local));
+                let exported_target = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+                if local_target != exported_target
+                    && !llmod.has_function(&local_target)
+                    && llmod.has_function(&exported_target)
+                    && emitted_aliases.insert(local_target.clone())
+                {
+                    let getter = llmod.define_function(&local_target, DOUBLE, vec![]);
+                    let _ = getter.create_block("entry");
+                    let blk = getter.block_mut(0).unwrap();
+                    let value = blk.call(DOUBLE, &exported_target, &[]);
+                    blk.ret(DOUBLE, &value);
+                }
+            }
+
             // Sub-bug B: emit no-op wrapper for `local==exported` named
             // exports where local isn't a HIR function and no wrapper
             // is yet defined. Catches `import * as z; export { z };`
@@ -1067,7 +1136,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
                         let _ = wf.create_block("entry");
                         let blk = wf.block_mut(0).unwrap();
-                        let target = scoped_fn_name(module_prefix, &f.name);
+                        let target = func_names
+                            .get(&f.id)
+                            .cloned()
+                            .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
                         let call_args: Vec<(LlvmType, String)> =
                             (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
                         let call_args_ref: Vec<(LlvmType, &str)> =
@@ -1199,152 +1271,13 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         blk.ret(DOUBLE, "0x7FFC000000000001");
     }
 
-    // Emit ExternFuncRef-as-value wrappers for every imported function in
-    // `opts.import_function_prefixes`. Each gets a thin wrapper plus a
-    // static `ClosureHeader` so the value can be passed as a callback,
-    // stored in a variable, or used in a truthiness / equality check —
-    // all the things you can do with a regular closure pointer.
-    //
-    // The wrappers are `internal` linkage so multiple modules can each
-    // emit their own copy without colliding at link time. Dead-code
-    // elimination strips wrappers for externs that are never referenced
-    // as values.
-    //
-    // Why this exists: when an imported function appears as a STANDALONE
-    // value (`if (this.ffi.setCursors)` capability check, `arr.forEach(
-    // importedFn)` callback, or `someFn === otherFn` reference equality),
-    // the lowering needs *some* JSValue to thread through. The previous
-    // pragmatic fix returned `TAG_TRUE` — correct for truthiness but it
-    // would crash at runtime the moment anything called the value via
-    // `js_closure_callN` (the runtime would dereference garbage from
-    // the function pointer's prefix bytes looking for a `ClosureHeader`).
-    // The static-ClosureHeader approach makes those calls actually work:
-    // `get_valid_func_ptr` reads `type_tag` at offset 12, sees
-    // `CLOSURE_MAGIC = 0x434C4F53 ("CLOS")`, and dispatches to the
-    // wrapper, which forwards the args to `perry_fn_<src>__<name>`.
-    {
-        use std::collections::HashSet;
-        let mut emitted_wrappers: HashSet<String> = HashSet::new();
-        // Build a quick lookup of imported class names (and their local aliases).
-        // Classes have no `perry_fn_<src>__<Class>` symbol — method/constructor/
-        // static dispatch happens via separate tables. For these we still need
-        // the `__perry_extern_closure_*` global (other code may load it as a
-        // value), but the wrapper body must NOT call a missing function: emit
-        // a no-op that returns `undefined` so any indirect call through the
-        // closure header fails closed instead of failing at link time.
-        let mut imported_class_names: HashSet<String> = HashSet::new();
-        for ic in opts.imported_classes {
-            imported_class_names.insert(ic.name.clone());
-            if let Some(alias) = &ic.local_alias {
-                imported_class_names.insert(alias.clone());
-            }
-        }
-        // Stable iteration order for deterministic IR output.
-        let mut imports: Vec<(&String, &String)> = opts.import_function_prefixes.iter().collect();
-        imports.sort_by(|a, b| a.0.cmp(b.0));
-        for (name, source_prefix) in imports {
-            let is_class = imported_class_names.contains(name);
-            // Issue #678 followup: V8-fallback imports have no native target
-            // — the wrapper body cannot call `perry_fn_<src>__<name>` because
-            // that symbol doesn't exist. Emit the same no-op wrapper +
-            // ClosureHeader as the imported-class branch so direct calls of
-            // the function-reference-as-value still link (and fail closed at
-            // runtime). Actual call sites — Call/PropertyGet-Call/namespace
-            // member call — route through `emit_v8_export_call` and do NOT
-            // touch this wrapper.
-            let is_v8_import = cross_module
-                .import_function_v8_specifiers
-                .contains_key(name);
-            let wrapper_name = format!("__perry_wrap_extern_{}__{}", source_prefix, name);
-            if !emitted_wrappers.insert(wrapper_name.clone()) {
-                continue;
-            }
-            if is_class || is_v8_import {
-                // No-op wrapper + a closure header that points at it. The
-                // wrapper returns NaN-tagged `undefined` so any indirect call
-                // (`MyClass.somethingThatIsActuallyAFn()`) returns undefined.
-                // Match the regular wrapper's calling convention — `%this_closure`
-                // followed by 6 double params — so direct calls in the IR don't
-                // tear off into garbage stack slots.
-                let mut wrap_params: Vec<(LlvmType, String)> = Vec::with_capacity(7);
-                wrap_params.push((I64, "%this_closure".to_string()));
-                for i in 0..6 {
-                    wrap_params.push((DOUBLE, format!("%a{}", i)));
-                }
-                let wf = llmod.define_function(&wrapper_name, DOUBLE, wrap_params);
-                wf.linkage = "internal".to_string();
-                let _ = wf.create_block("entry");
-                let blk = wf.block_mut(0).unwrap();
-                let undef =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                blk.ret(DOUBLE, &undef);
-                let global_name = format!("__perry_extern_closure_{}__{}", source_prefix, name);
-                let init = format!("{{ ptr @{}, i32 0, i32 1129074515 }}", wrapper_name);
-                llmod.add_internal_constant(&global_name, "{ ptr, i32, i32 }", &init);
-                continue;
-            }
-            // Issue #678: when a re-export rename routes this name to an
-            // origin export with a different suffix (`export { default as
-            // render }`), call into the origin's real symbol — `perry_fn_<
-            // src>__default`, not `perry_fn_<src>__render`. The local
-            // wrapper still uses the consumer-visible name so this
-            // module's own callers can find it.
-            let origin_suffix =
-                crate::expr::import_origin_suffix(&cross_module.import_function_origin_names, name);
-            let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-            // Look up the param count from the import metadata. Fall back
-            // to 0 if missing — emits a no-arg wrapper, which is wrong
-            // for nonzero-arity functions but won't break compilation.
-            // (Read from `cross_module.imported_func_param_counts` rather
-            // than `opts.imported_func_param_counts` because the latter
-            // was moved into `cross_module` earlier in this function.)
-            let param_count = cross_module
-                .imported_func_param_counts
-                .get(name)
-                .copied()
-                .unwrap_or(0);
-            // Make sure the target is declared. The lazy-declares path
-            // in `lower_call.rs::ExternFuncRef` only fires when the
-            // function is actually CALLED — if it's only referenced as
-            // a value, the declare would be missing without this.
-            let param_types: Vec<crate::types::LlvmType> =
-                std::iter::repeat_n(DOUBLE, param_count).collect();
-            llmod.declare_function(&target_name, DOUBLE, &param_types);
-            // Wrapper: `define internal double @__perry_wrap_extern_<src>__<name>(
-            //              i64 %this_closure, double %a0, …, double %aN-1)`
-            // discards the closure pointer and forwards the doubles to
-            // `perry_fn_<src>__<name>`.
-            let mut wrap_params: Vec<(LlvmType, String)> = Vec::with_capacity(param_count + 1);
-            wrap_params.push((I64, "%this_closure".to_string()));
-            for i in 0..param_count {
-                wrap_params.push((DOUBLE, format!("%a{}", i)));
-            }
-            let wf = llmod.define_function(&wrapper_name, DOUBLE, wrap_params);
-            wf.linkage = "internal".to_string();
-            let _ = wf.create_block("entry");
-            let blk = wf.block_mut(0).unwrap();
-            let arg_names: Vec<String> = (0..param_count).map(|i| format!("%a{}", i)).collect();
-            let call_args: Vec<(LlvmType, &str)> =
-                arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
-            let result = blk.call(DOUBLE, &target_name, &call_args);
-            blk.ret(DOUBLE, &result);
-            // Static `ClosureHeader` global pointing at the wrapper.
-            // Layout matches `crates/perry-runtime/src/closure.rs`:
-            //   { *const u8 func_ptr (8 bytes),
-            //     u32 capture_count (4 bytes),
-            //     u32 type_tag      (4 bytes) }
-            // The runtime's `get_valid_func_ptr` reads `type_tag` at
-            // offset 12 and validates against `CLOSURE_MAGIC = 0x434C4F53`
-            // ("CLOS" in ASCII = 1129074515 decimal). If the magic doesn't
-            // match, the call fast-paths to `undefined` instead of
-            // dispatching, so any non-closure value passed where a closure
-            // is expected fails closed rather than crashing.
-            let global_name = format!("__perry_extern_closure_{}__{}", source_prefix, name);
-            let init = format!("{{ ptr @{}, i32 0, i32 1129074515 }}", wrapper_name);
-            llmod.add_internal_constant(&global_name, "{ ptr, i32, i32 }", &init);
-        }
-    }
+    emit_native_namespace_reexport_getters(llmod, hir, module_prefix);
 
+    // Imported function values now materialize the source module's canonical
+    // wrapper through `js_closure_alloc_singleton` in ExternFuncRef lowering.
+    // The former consumer-local `__perry_wrap_extern_*` globals are no longer
+    // referenced; omitting them also avoids creating undefined runtime symbols
+    // for imports that survive only as cross-module TypeScript metadata.
     progress.checkpoint("method, fallback, and imported function wrappers");
 
     // Issue #100: emit the per-module `@__perry_ns_<prefix>` global iff

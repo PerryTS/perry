@@ -2,9 +2,9 @@
 //!
 //! A wasm file is binary, so it cannot enter the normal TypeScript source
 //! reader. We parse its export names and synthesize a small TypeScript adapter
-//! that embeds the bytes, instantiates the module during module initialization,
-//! and re-exports the live instance exports through Perry's normal module
-//! pipeline.
+//! that reads bytes from Perry's native embedded-asset registry, instantiates
+//! the module during module initialization, and re-exports the live instance
+//! exports through Perry's normal module pipeline.
 
 /// True when `path` is a `.wasm` file (case-insensitive extension).
 pub(crate) fn is_wasm_asset(path: &std::path::Path) -> bool {
@@ -160,20 +160,23 @@ pub(crate) struct WasmModuleSource {
 
 /// Build an executable TypeScript adapter for a `.wasm` import.
 ///
-/// The generated module uses Perry's compile-time `embedWasm` intrinsic, so
-/// the produced executable does not need the source wasm file at runtime. The
-/// instance exports object is also the default export. Wasm names that cannot
-/// be represented as static ESM names remain available through bracket access
-/// on that default object.
-pub(crate) fn synthesize_wasm_module(bytes: &[u8], display_name: &str) -> WasmModuleSource {
+/// The caller registers the wasm file in Perry's embedded-asset table and
+/// passes its `$perryfs/...` path here. Keeping the bytes out of HIR avoids a
+/// million-element array literal (and an enormous LLVM function) for parser
+/// wasm files. The instance exports object is also the default export. Wasm
+/// names that cannot be represented as static ESM names remain available
+/// through bracket access on that default object.
+pub(crate) fn synthesize_wasm_module(bytes: &[u8], embedded_path: &str) -> WasmModuleSource {
     let names = parse_wasm_exports(bytes)
         .map(|exports| exports.names)
         .unwrap_or_default();
     let imports = parse_wasm_imports(bytes).unwrap_or_default();
-    let path_lit = serde_json::to_string(display_name).unwrap_or_else(|_| "\"module.wasm\"".into());
+    let path_lit =
+        serde_json::to_string(embedded_path).unwrap_or_else(|_| "\"$perryfs/module.wasm\"".into());
 
     let mut source = String::new();
     source.push_str("// #5234: synthesized executable adapter for a .wasm import.\n");
+    source.push_str("import { readEmbedded as __perry_read_embedded } from \"perry\";\n");
     let mut import_groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
     for (index, import) in imports.iter().enumerate() {
@@ -193,7 +196,7 @@ pub(crate) fn synthesize_wasm_module(bytes: &[u8], display_name: &str) -> WasmMo
     }
     if import_groups.is_empty() {
         source.push_str(&format!(
-            "const __perry_wasm_result = WebAssembly.instantiate(embedWasm({path_lit}));\n"
+            "const __perry_wasm_result = WebAssembly.instantiate(__perry_read_embedded({path_lit}));\n"
         ));
     } else {
         source.push_str("const __perry_wasm_imports = {\n");
@@ -208,7 +211,7 @@ pub(crate) fn synthesize_wasm_module(bytes: &[u8], display_name: &str) -> WasmMo
         }
         source.push_str("};\n");
         source.push_str(&format!(
-            "const __perry_wasm_result = WebAssembly.instantiate(embedWasm({path_lit}), __perry_wasm_imports);\n"
+            "const __perry_wasm_result = WebAssembly.instantiate(__perry_read_embedded({path_lit}), __perry_wasm_imports);\n"
         ));
     }
     source.push_str("const __perry_wasm_exports = __perry_wasm_result.instance.exports;\n");
@@ -266,8 +269,10 @@ mod tests {
 
     #[test]
     fn synthesizes_instantiated_named_and_default_exports() {
-        let source = synthesize_wasm_module(&add_wasm(), "add.wasm").source;
-        assert!(source.contains("WebAssembly.instantiate(embedWasm(\"add.wasm\"))"));
+        let source = synthesize_wasm_module(&add_wasm(), "$perryfs/add.wasm").source;
+        assert!(source.contains("readEmbedded as __perry_read_embedded"));
+        assert!(source
+            .contains("WebAssembly.instantiate(__perry_read_embedded(\"$perryfs/add.wasm\"))"));
         assert!(source.contains("as add"));
         assert!(source.contains("export default __perry_wasm_exports"));
     }
@@ -282,12 +287,12 @@ mod tests {
                 name: "inc".to_string(),
             }])
         );
-        let source = synthesize_wasm_module(&bytes, "imported.wasm").source;
+        let source = synthesize_wasm_module(&bytes, "$perryfs/imported.wasm").source;
         assert!(source.contains("import { inc as __perry_wasm_import_0 } from \"./glue\""));
         assert!(source.contains("\"./glue\": {"));
         assert!(source.contains("\"inc\": __perry_wasm_import_0"));
         assert!(source.contains(
-            "WebAssembly.instantiate(embedWasm(\"imported.wasm\"), __perry_wasm_imports)"
+            "WebAssembly.instantiate(__perry_read_embedded(\"$perryfs/imported.wasm\"), __perry_wasm_imports)"
         ));
         assert!(source.contains("as call"));
     }
@@ -295,10 +300,10 @@ mod tests {
     #[test]
     fn malformed_header_still_instantiates_for_a_host_compile_error() {
         assert!(parse_wasm_exports(b"not a wasm file at all").is_none());
-        let source = synthesize_wasm_module(b"garbage", "bad.wasm").source;
+        let source = synthesize_wasm_module(b"garbage", "$perryfs/bad.wasm").source;
         assert!(source.contains("WebAssembly.instantiate"));
         assert!(source.contains("export default __perry_wasm_exports"));
-        assert!(!source.contains(" as "));
+        assert!(!source.contains("__perry_wasm_export_"));
     }
 
     #[test]

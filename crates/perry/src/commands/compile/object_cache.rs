@@ -1148,6 +1148,10 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
             out.push_str("nested_ns:");
             out.push_str(source_prefix);
         }
+        perry_codegen::NamespaceEntryKind::NativeNamespace { specifier } => {
+            out.push_str("native_ns:");
+            out.push_str(specifier);
+        }
     }
 }
 /// On-disk per-module object cache at `<cache_dir>/objects/<target>/<hash:016x>.o`,
