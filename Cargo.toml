@@ -382,7 +382,7 @@ stacker = "0.1.24"
 # (`rust_crypto` or `aws_lc_rs`) and opting into PEM parsing for
 # `from_ec_pem` / `from_rsa_pem`. `rust_crypto` keeps the deps tree small
 # relative to `aws_lc_rs`; users who need FIPS validation can fork.
-jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 
 # Terminal UI
 indicatif = "0.18"
