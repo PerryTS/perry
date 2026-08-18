@@ -236,15 +236,22 @@ perl -0pi -e 's/("crates\/perry-runtime",\n)/$1    "crates\/next-app-route-provi
 
 runtime_build_library="$provider_target_dir/$profile/libperry_runtime.$library_extension"
 provider_linker="$fixture/provider-linker.sh"
-env \
-    CARGO_TARGET_DIR="$provider_target_dir" \
-    PERRY_NEXT_RUNTIME_LIBRARY="$runtime_build_library" \
-    PERRY_NEXT_REQUIRED_SYMBOLS="$required_symbols" \
-    PERRY_NEXT_REAL_CC="$real_cc" \
-    "$cargo_linker_env=$provider_linker" \
-    cargo build --manifest-path "$runtime_source/Cargo.toml" \
-        --profile "$profile" --jobs "$cargo_jobs" \
-        -p perry-runtime -p next-app-route-provider
+(
+    # Cargo discovers .cargo/config.toml from the invocation directory, not
+    # from --manifest-path. Build from the repository root so the provider
+    # runtime always inherits the required force-unwind-tables rustflag, even
+    # when this gate is invoked from another directory.
+    cd "$repo_root"
+    env \
+        CARGO_TARGET_DIR="$provider_target_dir" \
+        PERRY_NEXT_RUNTIME_LIBRARY="$runtime_build_library" \
+        PERRY_NEXT_REQUIRED_SYMBOLS="$required_symbols" \
+        PERRY_NEXT_REAL_CC="$real_cc" \
+        "$cargo_linker_env=$provider_linker" \
+        cargo build --manifest-path "$runtime_source/Cargo.toml" \
+            --profile "$profile" --jobs "$cargo_jobs" \
+            -p perry-runtime -p next-app-route-provider
+)
 
 runtime_library="$providers/$runtime_filename"
 cp "$runtime_build_library" "$runtime_library"
