@@ -152,7 +152,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     if !dead_platform_requires.is_empty() {
         require_specs.retain(|spec| !dead_platform_requires.contains(spec));
     }
-
+    // #sdxgen: Identify Node.js built-in requires (`require("process")`,
+    // `require("os")`, etc.) so the synthetic `require` function can resolve
+    // them via `createRequire` at runtime instead of relying on the hoisted
+    // static import binding (which the codegen does not initialize for
+    // native modules inside CJS-wrapped modules).
+    let builtin_requires: Vec<String> = require_specs
+        .iter()
+        .filter(|spec| {
+            let normalized = spec.strip_prefix("node:").unwrap_or(spec);
+            let base = normalized.split('/').next().unwrap_or(normalized);
+            perry_hir::is_node_builtin_module(base)
+        })
+        .cloned()
+        .collect();
     // Issue #652: hoist top-level `class X { ... }` declarations OUT of the
     // IIFE so the consumer's `import { X } from "pkg"` resolves to the real
     // class instead of a runtime property access on `_cjs.X`.
@@ -284,6 +297,17 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
+        // #sdxgen: Don't adopt aliases for Node.js built-in modules. The
+        // codegen doesn't initialize native-module import bindings inside
+        // CJS-wrapped modules, so an adopted alias would be undefined at
+        // runtime. Keeping the alias un-adopted means the declaration stays
+        // in the IIFE body and `require("process")` goes through the
+        // synthetic require, which resolves builtins via createRequire.
+        let normalized = spec.strip_prefix("node:").unwrap_or(spec);
+        let base = normalized.split('/').next().unwrap_or(normalized);
+        if perry_hir::is_node_builtin_module(base) {
+            continue;
+        }
         if import_local_names.iter().any(|n| n == alias) {
             continue;
         }
@@ -391,7 +415,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                                 .into_iter()
                                 .map(|property| {
                                     format!(
-                                        "if (childBefore && childBefore.loaded === false) process.emitWarning(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
+                                        "if (childBefore && childBefore.loaded === false) globalThis.process?.emitWarning?.(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
                                     )
                                 })
                                 .collect::<String>()
@@ -406,7 +430,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             } else {
                 None
             };
-            let required_value = if needs_runtime_record {
+            let required_value = if builtin_requires.contains(spec) {
+                // #sdxgen: For Node.js built-in modules, resolve via createRequire
+                // at runtime instead of the hoisted import binding (which the
+                // codegen does not initialize for native modules in CJS-wrapped
+                // modules). createRequire calls js_create_native_module_namespace
+                // under the hood — the same path Node.js uses for require("process").
+                format!("{link_child}return __perry_cjs_create_require({:?})(specifier);", source_path.to_string_lossy())
+            } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
             } else {
                 format!("{link_child}return {local};")
@@ -722,6 +753,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .into_iter()
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
+            // #sdxgen: Don't blank alias declarations for Node.js built-in
+            // modules — let them stay in the IIFE body and resolve through
+            // the synthetic require (which uses createRequire for builtins).
+            .filter(|(_, spec, _)| {
+                let normalized = spec.strip_prefix("node:").unwrap_or(spec);
+                let base = normalized.split('/').next().unwrap_or(normalized);
+                !perry_hir::is_node_builtin_module(base)
+            })
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
         (lines, ranges)
@@ -902,6 +941,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
+        // #sdxgen: Node.js built-in modules that were NOT hoisted as static
+        // imports (see the builtin_requires filter above). Resolve them via
+        // createRequire at runtime, which calls js_create_native_module_namespace
+        // under the hood — the same path Node.js uses for require("process").
+        if (__perry_cjs_require_is_builtin(specifier)) {{
+            return __perry_cjs_create_require({module_path_literal})(specifier);
+        }}
         // Runtime `require(path)` of a module Perry AOT-compiled but that is
         // only reachable via a computed path. Next's webpack runtime uses both
         // absolute page paths and relative chunk paths (`./chunks/` + id).
