@@ -29,6 +29,13 @@ fn compile_and_run(source: &str) -> String {
     );
 
     let run = Command::new(&output)
+        .env_remove("PERRY_GEN_GC")
+        .env_remove("PERRY_GEN_GC_EVACUATE")
+        .env_remove("PERRY_GC_SCAVENGE")
+        .env_remove("PERRY_GC_MOVING_SAFEPOINT")
+        .env_remove("PERRY_GC_FORCE_EVACUATE")
+        .env_remove("PERRY_CONSERVATIVE_STACK_SCAN")
+        .env_remove("PERRY_WRITE_BARRIERS")
         .output()
         .expect("run compiled fixture");
     assert!(

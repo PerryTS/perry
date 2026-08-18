@@ -1005,16 +1005,21 @@ fn schedule_callback_timer(
 
     let id = next_timer_id();
 
-    let ids = crate::async_hooks::init_resource(type_name, timer_handle_value(id), true);
+    let mut context = crate::async_context::capture_context();
+    let context_roots = crate::async_context::root_snapshot(&scope, &context);
+    let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        crate::async_hooks::init_resource(type_name, timer_handle_value(id), true)
+    });
+    crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
         kind,
         deadline,
         delay_ms,
-        callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+        callback: callback as i64,
         args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
-        context: crate::async_context::capture_context(),
+        context,
         async_id: ids.async_id,
         trigger_async_id: ids.trigger_async_id,
         cleared: false,

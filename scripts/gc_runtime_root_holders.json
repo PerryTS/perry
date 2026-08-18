@@ -35,6 +35,18 @@
       "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
     },
     {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_HOOK_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of Box::into_raw AsyncHookHandle pointers allocated by Rust's global allocator, outside Perry's GC heap. The boxes are never freed or moved; membership is used only to recognize dynamic AsyncHook receivers."
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_HOOK_HANDLE_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic count of AsyncHookHandle boxes registered in ASYNC_HOOK_HANDLES. It holds no address and is used only as a fast-path emptiness check."
+    },
+    {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_NEXT_LIVE_ID",
       "verdict": "not_a_gc_pointer",

@@ -698,16 +698,15 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let resource_handle = scope.root_raw_mut_ptr(resource);
     let mut context = capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
-    let ids = crate::async_hooks::init_resource(
-        "Microtask",
-        crate::value::js_nanbox_pointer(resource_handle.get_raw_mut_ptr::<u8>() as i64),
-        true,
-    );
+    let resource_value = resource_handle
+        .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
+    let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        crate::async_hooks::init_resource("Microtask", resource_value, true)
+    });
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::Microtask {
-            callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>()
-                as ClosurePtr,
+            callback: callback as ClosurePtr,
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,

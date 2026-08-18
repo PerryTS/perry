@@ -1073,15 +1073,15 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
     let resource_handle = scope.root_raw_mut_ptr(resource);
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
-    let ids = crate::async_hooks::init_resource(
-        type_name,
-        crate::value::js_nanbox_pointer(resource_handle.get_raw_mut_ptr::<u8>() as i64),
-        true,
-    );
+    let resource_value = resource_handle
+        .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
+    let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        crate::async_hooks::init_resource(type_name, resource_value, true)
+    });
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     QUEUED_MICROTASKS.with(|q| {
         q.borrow_mut().push_back(QueuedMicrotask {
-            callback: callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
+            callback: callback as i64,
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,
