@@ -810,7 +810,6 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
     }
 }
 
-
 #[cfg(test)]
 mod rel_numeric_fastpath_tests {
     use super::*;
