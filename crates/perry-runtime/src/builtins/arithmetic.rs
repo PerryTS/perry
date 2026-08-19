@@ -433,28 +433,64 @@ unsafe fn string_content_for_bigint(value: f64) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// Both operands already numeric (plain IEEE double or int32-tagged)?
+///
+/// `abstract_relational` opens a `RuntimeHandleScope`, roots both operands and
+/// runs `ToPrimitive` on each — necessary only because a *heap* operand can run
+/// user `valueOf`/`toString`. For a number `ToPrimitive` is the identity and
+/// there is no pointer to root, so the whole apparatus is dead weight. This is
+/// the same predicate and the same reasoning `dynamic_arith`'s binary operators
+/// already use; the relational operators were simply never given it.
+///
+/// NaN must stay `false` for all four operators, which Rust's `<`/`>`/`<=`/`>=`
+/// on `f64` already deliver.
+#[inline(always)]
+fn rel_numeric_operand(v: f64) -> Option<f64> {
+    const TAG_BAND_FLOOR: u64 = 0x7FF9_0000_0000_0000;
+    if (v.to_bits() & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR {
+        return Some(v);
+    }
+    let jv = crate::value::JSValue::from_bits(v.to_bits());
+    if jv.is_int32() {
+        return Some(jv.as_int32() as f64);
+    }
+    None
+}
+
 /// `x < y` — codegen routes here for any relational `<` whose operands are not
 /// both statically numeric. Returns a NaN-boxed boolean (`f64`).
 #[no_mangle]
 pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
+    if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
+        return rel_bool_f64(a < b);
+    }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_TRUE)
 }
 
 /// `x > y` ⇔ `IsLessThan(y, x, false)` is true (right operand `ToPrimitive`'d first).
 #[no_mangle]
 pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
+    if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
+        return rel_bool_f64(a > b);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_TRUE)
 }
 
 /// `x <= y` ⇔ `IsLessThan(y, x, false)` is `false` (not `true`, not `undefined`).
 #[no_mangle]
 pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
+    if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
+        return rel_bool_f64(a <= b);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_FALSE)
 }
 
 /// `x >= y` ⇔ `IsLessThan(x, y, true)` is `false` (not `true`, not `undefined`).
 #[no_mangle]
 pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
+    if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
+        return rel_bool_f64(a >= b);
+    }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_FALSE)
 }
 
@@ -771,5 +807,87 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         }
         // Regular f64 number
         get_cached(&TYPEOF_NUMBER, "number")
+    }
+}
+
+
+#[cfg(test)]
+mod rel_numeric_fastpath_tests {
+    use super::*;
+
+    const INT32: u64 = 0x7FFE_0000_0000_0000;
+    const UNDEF: u64 = 0x7FFC_0000_0000_0001;
+    const NULLV: u64 = 0x7FFC_0000_0000_0002;
+    const FALSEV: u64 = 0x7FFC_0000_0000_0003;
+    const TRUEV: u64 = 0x7FFC_0000_0000_0004;
+
+    fn i32v(n: i32) -> f64 {
+        f64::from_bits(INT32 | (n as u32 as u64))
+    }
+    fn is_true(v: f64) -> bool {
+        v.to_bits() == TAG_TRUE_BITS
+    }
+
+    /// The early-out accepts exactly the operands for which `ToPrimitive` is
+    /// the identity and there is nothing to root; everything else must fall
+    /// through to the full abstract relational comparison.
+    #[test]
+    fn fast_path_accepts_only_numbers() {
+        assert!(rel_numeric_operand(1.5).is_some());
+        assert!(rel_numeric_operand(-0.0).is_some());
+        assert!(rel_numeric_operand(f64::INFINITY).is_some());
+        assert!(rel_numeric_operand(f64::NEG_INFINITY).is_some());
+        assert!(rel_numeric_operand(f64::NAN).is_some());
+        assert_eq!(rel_numeric_operand(i32v(7)), Some(7.0));
+        assert_eq!(rel_numeric_operand(i32v(-7)), Some(-7.0));
+        for tag in [UNDEF, NULLV, FALSEV, TRUEV] {
+            assert!(
+                rel_numeric_operand(f64::from_bits(tag)).is_none(),
+                "tag {tag:#x} must not take the numeric fast path"
+            );
+        }
+    }
+
+    /// NaN makes all four operators false. This is the one way a naive `fcmp`
+    /// early-out silently diverges from the spec, so pin it in both operand
+    /// positions.
+    #[test]
+    fn nan_is_false_for_every_operator() {
+        let n = f64::NAN;
+        for (name, got) in [
+            ("NaN <  x", js_rel_lt(n, 1.0)),
+            ("NaN >  x", js_rel_gt(n, 1.0)),
+            ("NaN <= x", js_rel_le(n, 1.0)),
+            ("NaN >= x", js_rel_ge(n, 1.0)),
+            ("x <  NaN", js_rel_lt(1.0, n)),
+            ("x >  NaN", js_rel_gt(1.0, n)),
+            ("x <= NaN", js_rel_le(1.0, n)),
+            ("x >= NaN", js_rel_ge(1.0, n)),
+        ] {
+            assert!(!is_true(got), "{name} must be false");
+        }
+    }
+
+    /// `-0 < 0` is false while `-0 <= 0` is true.
+    #[test]
+    fn signed_zero_matches_the_spec() {
+        assert!(!is_true(js_rel_lt(-0.0, 0.0)));
+        assert!(!is_true(js_rel_gt(-0.0, 0.0)));
+        assert!(is_true(js_rel_le(-0.0, 0.0)));
+        assert!(is_true(js_rel_ge(-0.0, 0.0)));
+    }
+
+    #[test]
+    fn ordinary_numeric_comparisons_are_unchanged() {
+        assert!(is_true(js_rel_lt(1.0, 2.0)));
+        assert!(!is_true(js_rel_lt(2.0, 1.0)));
+        assert!(is_true(js_rel_ge(2.0, 2.0)));
+        assert!(is_true(js_rel_le(2.0, 2.0)));
+        assert!(is_true(js_rel_gt(f64::INFINITY, 1e308)));
+        assert!(is_true(js_rel_lt(f64::NEG_INFINITY, 0.0)));
+        assert!(is_true(js_rel_lt(i32v(3), i32v(9))));
+        assert!(!is_true(js_rel_gt(i32v(3), i32v(9))));
+        assert!(is_true(js_rel_lt(i32v(3), 3.5)));
+        assert!(is_true(js_rel_gt(3.5, i32v(3))));
     }
 }
