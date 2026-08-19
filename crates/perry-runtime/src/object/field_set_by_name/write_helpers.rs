@@ -160,7 +160,7 @@ pub(crate) unsafe fn nm_field_set_override(
     // instead of falling through to the frozen-object throw.
     if !module_name.is_empty() && property_name != "__module__" {
         super::native_module::native_namespace_prop_override_store(
-            module_name,
+            &module_name,
             property_name,
             value,
         );

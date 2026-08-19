@@ -28,6 +28,8 @@ mod web_locks;
 pub(crate) use callable_export_check::is_native_module_callable_export;
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
+#[cfg(test)]
+pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
     bound_native_callable_export_value, bound_native_callable_module_and_method,
     bound_native_callable_value_arity, buffer_constructor_value,
@@ -1081,7 +1083,7 @@ pub extern "C" fn js_module_run_main() -> f64 {
 /// For constant properties (e.g., `path.sep`, `fs.constants`), returns the value directly.
 #[no_mangle]
 pub extern "C" fn js_native_module_bind_method(
-    _namespace_obj: f64,
+    namespace_obj: f64,
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
@@ -1092,8 +1094,12 @@ pub extern "C" fn js_native_module_bind_method(
         ))
     };
 
-    // Extract module name from the namespace object's first field
-    let module_name = unsafe { get_module_name_from_namespace(_namespace_obj) };
+    // Keep the namespace current across constant/callable resolution: both
+    // paths may allocate. The module name is an owned Rust string so a short
+    // name such as `net` is never materialized into an unrooted GC string.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let namespace = scope.root_nanbox_f64(namespace_obj);
+    let module_name = unsafe { get_module_name_from_namespace(namespace.get_nanbox_f64()) };
 
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
@@ -1107,25 +1113,26 @@ pub extern "C" fn js_native_module_bind_method(
     }
 
     // Check for known constant properties first
-    if let Some(val) =
-        unsafe { get_native_module_constant(module_name, property_name, _namespace_obj) }
-    {
+    if let Some(val) = unsafe {
+        get_native_module_constant(&module_name, property_name, namespace.get_nanbox_f64())
+    } {
         return val;
     }
 
     // Not a constant. Only synthesize callables for
     // exports that are actually callable on this platform; otherwise namespace
     // reads such as Linux `fs.lchmodSync` must stay `undefined`.
-    if is_native_module_callable_export(module_name, property_name) {
-        if let Some(bound) = instance_bound_perf_method(module_name, property_name, _namespace_obj)
+    if is_native_module_callable_export(&module_name, property_name) {
+        if let Some(bound) =
+            instance_bound_perf_method(&module_name, property_name, namespace.get_nanbox_f64())
         {
             return bound;
         }
-        return bound_native_callable_export_value(module_name, property_name);
+        return bound_native_callable_export_value(&module_name, property_name);
     }
 
     // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
-    let js_val = crate::value::native_module_try_js_property(module_name, property_name);
+    let js_val = crate::value::native_module_try_js_property(&module_name, property_name);
     if js_val.to_bits() != crate::value::TAG_UNDEFINED {
         return js_val;
     }
@@ -1133,11 +1140,11 @@ pub extern "C" fn js_native_module_bind_method(
     // Not a constant or JS-backed property. Only synthesize callables for
     // exports that are actually callable on this platform; otherwise namespace
     // reads such as Linux `fs.lchmodSync` must stay `undefined`.
-    if !is_native_module_callable_export(module_name, property_name) {
+    if !is_native_module_callable_export(&module_name, property_name) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
-    bound_native_callable_export_value(module_name, property_name)
+    bound_native_callable_export_value(&module_name, property_name)
 }
 
 /// Build a "bound method" closure for `obj.method` PropertyGet on a known class
@@ -1769,34 +1776,22 @@ pub extern "C" fn js_class_prototype_method_value(class_ref: f64, method_key: f6
     class_prototype_method_value_for_name(class_id, &method_name)
 }
 
-/// Extract the module name string from a native module namespace object.
-pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'static str {
+/// Extract an owned module name from a native module namespace object.
+///
+/// Short-string fields must stay inline here. Materializing one on the GC heap
+/// and returning a borrowed slice fabricates a `'static` lifetime over an
+/// unrooted allocation; the next allocation can evacuate it while callers are
+/// still comparing the module name (#8403).
+pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> String {
     let jsval = JSValue::from_bits(namespace_obj.to_bits());
     if !jsval.is_pointer() {
-        return "";
+        return String::new();
     }
     let obj = jsval.as_pointer::<ObjectHeader>();
     if crate::value::addr_class::is_handle_band(obj as usize) {
-        return "";
+        return String::new();
     }
-    let module_field = js_object_get_field(obj as *mut _, 0);
-    if !module_field.is_any_string() {
-        return "";
-    }
-    // #1781: SSO-aware — ≤5-byte module names (fs, os, …) arrive as
-    // SHORT_STRING_TAG values; route through `js_get_string_pointer_unified`
-    // so SSO materializes onto the GC-managed heap (where its bytes
-    // share the lifetime story the STRING_TAG path already assumes
-    // for the `&'static` lie this signature carries).
-    let module_f64 = f64::from_bits(module_field.bits());
-    let str_ptr =
-        crate::value::js_get_string_pointer_unified(module_f64) as *const crate::StringHeader;
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
-        return "";
-    }
-    let len = (*str_ptr).byte_len as usize;
-    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
+    read_native_module_name(obj).unwrap_or_default()
 }
 
 // ─── Vtable impls relocated from field_get_set.rs (EN size work) ───────
@@ -1821,11 +1816,11 @@ unsafe fn vt_get_own_field(
         std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
     // A user override (`require('node:timers').setImmediate = patched`)
     // wins all built-in resolution below — CJS exports are mutable in Node.
-    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+    if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
         return Some(JSValue::from_bits(value.to_bits()));
     }
     if matches!(
-        module_name,
+        module_name.as_str(),
         "process" | "process.namespace" | "process.default"
     ) {
         if let Some(value) = crate::process::process_ipc_property(property_name) {
@@ -1840,10 +1835,10 @@ unsafe fn vt_get_own_field(
     // pre-relocation site in field_get_set.rs history).
     if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
         return Some(JSValue::from_bits(
-            bound_native_callable_export_value(module_name, property_name).to_bits(),
+            bound_native_callable_export_value(&module_name, property_name).to_bits(),
         ));
     }
-    if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
+    if let Some(val) = get_native_module_constant(&module_name, property_name, nb_ptr) {
         return Some(JSValue::from_bits(val.to_bits()));
     }
     if module_name == "crypto.webcrypto" {
@@ -1858,12 +1853,12 @@ unsafe fn vt_get_own_field(
     }
     // Issue #894: callable exports (`("events", "EventEmitter")` …) get a
     // bound-method closure for require-then-member-access parity.
-    if is_native_module_callable_export(module_name, property_name) {
+    if is_native_module_callable_export(&module_name, property_name) {
         if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
             return Some(JSValue::from_bits(bound.to_bits()));
         }
         return Some(JSValue::from_bits(
-            bound_native_callable_export_value(module_name, property_name).to_bits(),
+            bound_native_callable_export_value(&module_name, property_name).to_bits(),
         ));
     }
     // Object-valued exports (e.g. `perf_hooks.performance` / `.constants`) are

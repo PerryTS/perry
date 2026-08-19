@@ -1841,7 +1841,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             crate::object::set_buffer_pool_size(value);
                         } else {
                             crate::object::native_namespace_prop_override_store(
-                                module_name,
+                                &module_name,
                                 &prop,
                                 value,
                             );

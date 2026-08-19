@@ -8,6 +8,16 @@ pub(crate) use module_cjs::{
     module_constants_value,
 };
 
+#[cfg(test)]
+thread_local! {
+    static TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_collect_native_export_after_alloc() {
+    TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| armed.set(true));
+}
+
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they
@@ -63,6 +73,12 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     });
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_ptr(c, 2, method_bytes.len() as i64);
+    });
+    #[cfg(test)]
+    TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| {
+        if armed.replace(false) {
+            crate::gc::gc_collect_minor();
+        }
     });
     let exposed_name = if export_module_name == "fs" {
         native_callable_export_display_name(export_module_name, property_name)
@@ -1313,7 +1329,7 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
         return None;
     }
     let ns = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let module = get_module_name_from_namespace(ns).to_string();
+    let module = get_module_name_from_namespace(ns);
     let method_ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
     let method_len = crate::closure::js_closure_get_capture_ptr(closure, 2) as usize;
     if method_ptr.is_null() {
