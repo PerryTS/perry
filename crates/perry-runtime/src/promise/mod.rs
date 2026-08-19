@@ -147,6 +147,7 @@ pub(crate) fn is_definitely_primitive(value: f64) -> bool {
 
 // Instrumentation counters (set PERRY_MT_PROFILE=1 to print at exit).
 pub static MT_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static MT_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_THENABLE_PROBE_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_NEW_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MT_PROMISE_THEN_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -216,6 +217,29 @@ extern "C" fn mt_profile_atexit() {
         // fired measured nothing about it — this counter is what tells an A/B
         // its subject was live.
         then_probe::MT_THENABLE_FAST_NEGATIVE.load(Ordering::Relaxed),
+    );
+    eprintln!(
+        "[mt-profile] drains={} timer_reg={{promise:{},callback:{},interval:{}}} timer_tick={{promise:{},callback:{},interval:{}}} timer_fired={{promise:{},callback:{},interval:{}}}",
+        MT_DRAIN_COUNT.load(Ordering::Relaxed),
+        crate::timer::PROFILE_PROMISE_TIMER_REGISTRATIONS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_CALLBACK_TIMER_REGISTRATIONS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_INTERVAL_TIMER_REGISTRATIONS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_PROMISE_TIMER_TICKS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_CALLBACK_TIMER_TICKS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_INTERVAL_TIMER_TICKS.load(Ordering::Relaxed),
+        crate::timer::PROFILE_PROMISE_TIMERS_FIRED.load(Ordering::Relaxed),
+        crate::timer::PROFILE_CALLBACK_TIMERS_FIRED.load(Ordering::Relaxed),
+        crate::timer::PROFILE_INTERVAL_TIMERS_FIRED.load(Ordering::Relaxed),
+    );
+    eprintln!(
+        "[mt-profile] event_notify={{sent:{},during_drain:{}}} event_wait={{total:{},fast:{},zero:{},driver:{},condvar:{}}}",
+        crate::event_pump::PROFILE_NOTIFY_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_NOTIFY_DURING_DRAIN_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_WAIT_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_WAIT_FAST_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_WAIT_ZERO_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_WAIT_DRIVER_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_WAIT_CONDVAR_COUNT.load(Ordering::Relaxed),
     );
     let q = MT_TIME_NS_QUEUE.load(Ordering::Relaxed);
     let cb = MT_TIME_NS_CALLBACK.load(Ordering::Relaxed);
@@ -1120,9 +1144,7 @@ pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
 
 pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
     let previous = enter_context(snapshot);
-    MICROTASK_PREV_CONTEXTS.with(|stack| {
-        stack.borrow_mut().push(previous);
-    });
+    MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
 
 pub(crate) fn restore_microtask_context() {

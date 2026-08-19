@@ -229,6 +229,13 @@ static PUMP: Pump = Pump {
 /// an actual `cvar.wait_timeout` sleep counts as progress.
 static NOTIFIED: AtomicBool = AtomicBool::new(false);
 static WAITER_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_NOTIFY_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_NOTIFY_DURING_DRAIN_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_WAIT_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_WAIT_FAST_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_WAIT_ZERO_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_WAIT_DRIVER_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_WAIT_CONDVAR_COUNT: AtomicI64 = AtomicI64::new(0);
 #[cfg(test)]
 static TEST_FORCE_ZERO_BUDGET: AtomicBool = AtomicBool::new(false);
 
@@ -313,6 +320,12 @@ pub extern "C" fn js_main_thread_notified() -> i32 {
 /// consumer drains the entire queue each pass anyway.
 #[no_mangle]
 pub extern "C" fn js_notify_main_thread() {
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_NOTIFY_COUNT.fetch_add(1, Ordering::Relaxed);
+        if crate::promise::microtasks::microtask_drain_active() {
+            PROFILE_NOTIFY_DURING_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
     // Mark notification visible to the consumer regardless of which
     // path it took (Release so subsequent producer side-effects are
     // visible).
@@ -480,6 +493,9 @@ pub extern "C" fn js_event_loop_host_driven() -> i32 {
 /// and `await` busy-wait.
 #[no_mangle]
 pub extern "C" fn js_wait_for_event() {
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     // FAST PATH: a notify was already issued since the last wait. The
     // hot async/await steady-state hits this every iteration.
     //
@@ -507,6 +523,9 @@ pub extern "C" fn js_wait_for_event() {
     // #1114: do NOT reset the spin streak on this path.
     let was_notified = NOTIFIED.swap(false, Ordering::Acquire);
     if was_notified || unsafe { js_microtasks_pending() } > 0 {
+        if crate::promise::mt_profile_enabled() {
+            PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         invoke_wait_driver_fast();
         return;
     }
@@ -530,6 +549,9 @@ pub extern "C" fn js_wait_for_event() {
     }
 
     if budget_ms == 0 {
+        if crate::promise::mt_profile_enabled() {
+            PROFILE_WAIT_ZERO_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         // A timer reads as due now — don't block. Transient hits stay
         // zero-latency; only a *sustained* budget-0 spin (the #1114
         // wedge) gets throttled so it can't peg a core and starve the
@@ -562,6 +584,9 @@ pub extern "C" fn js_wait_for_event() {
     // lose; `perry_poll` drains it on the next loop turn. A real tick yielded
     // the core, so it counts as progress for the #1114 spin throttle.
     if wait_driver_sleep(budget_ms) {
+        if crate::promise::mt_profile_enabled() {
+            PROFILE_WAIT_DRIVER_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         spin_streak_reset();
         return;
     }
@@ -573,6 +598,9 @@ pub extern "C" fn js_wait_for_event() {
     // they checked WAITER_COUNT and we'd miss the wake). The
     // mutex-protected `flag` covers the lost-wakeup window.
     WAITER_COUNT.fetch_add(1, Ordering::Release);
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_WAIT_CONDVAR_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     let mut flag = PUMP.flag.lock().unwrap();
     // Re-check NOTIFIED under the lock — a producer may have set it
     // between our atomic-load above and the WAITER_COUNT increment.

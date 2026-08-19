@@ -171,6 +171,26 @@ fn executable_exit_releases_collection_side_allocations_last() {
 }
 
 #[test]
+fn event_loop_microtask_pump_is_the_single_timer_phase_owner() {
+    let ir = emitted_ir("executable");
+    assert!(
+        ir.contains("call i32 @js_promise_run_microtasks_event_loop()"),
+        "the executable entry must retain its event-loop checkpoint\n{ir}"
+    );
+    for redundant_call in [
+        "call i32 @js_timer_tick()",
+        "call i32 @js_timer_tick_if_refed()",
+        "call i32 @js_callback_timer_tick()",
+        "call i32 @js_interval_timer_tick()",
+    ] {
+        assert!(
+            !ir.contains(redundant_call),
+            "{redundant_call} duplicates the timer phases already owned by the event-loop checkpoint\n{ir}"
+        );
+    }
+}
+
+#[test]
 fn dylib_entry_does_not_release_process_owned_collection_storage() {
     let ir = emitted_ir("dylib");
     assert!(

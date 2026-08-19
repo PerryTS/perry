@@ -1062,9 +1062,13 @@ pub(super) fn compile_module_entry(
                 let body_label = ctx.block_label(body_idx);
                 let exit_label = ctx.block_label(exit_idx);
 
-                // Initial microtask flush (4 rounds) before entering the
-                // event loop — handles fire-and-forget .then() chains that
-                // don't need the full event loop.
+                // Initial event-loop flush (4 rounds) before entering the
+                // main loop — handles fire-and-forget .then() chains that
+                // don't need the full event loop. The event-loop microtask
+                // entry drains the three timer queues after its promise jobs;
+                // do not tick those queues a second time here. Apart from the
+                // wasted queue scans, a second tick can run a zero-delay timer
+                // scheduled by another timer in the same turn.
                 //
                 // #6077: `js_promise_run_microtasks_event_loop` is
                 // `js_promise_run_microtasks` plus the unhandled-rejection
@@ -1079,9 +1083,6 @@ pub(super) fn compile_module_entry(
                     let _ = ctx
                         .block()
                         .call(I32, "js_promise_run_microtasks_event_loop", &[]);
-                    let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
-                    let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
-                    let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
@@ -1146,14 +1147,13 @@ pub(super) fn compile_module_entry(
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
                 ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
-                // loop_body: tick everything, sleep, loop
+                // loop_body: the event-loop microtask drain also owns the
+                // promise/callback/interval timer phases. Cron remains an
+                // explicit stdlib queue, then the pump sleeps and loops.
                 ctx.current_block = body_idx;
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
-                let _ = ctx.block().call(I32, "js_timer_tick", &[]);
-                let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
-                let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 if cross_module.needs_stdlib {
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);
                 }
@@ -1183,9 +1183,6 @@ pub(super) fn compile_module_entry(
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
-                let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
-                let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
-                let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
                 ctx.block().call_void("js_trace_events_flush_output", &[]);

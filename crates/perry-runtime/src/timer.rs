@@ -14,7 +14,7 @@ use async_lifecycle::{enqueue_destroy_ids, IntervalCallback};
 use std::any::Any;
 use std::os::raw::c_int;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -47,6 +47,19 @@ unsafe impl Send for Timer {}
 // Global timer queues (Mutex-protected for cross-thread access)
 per_test_global!(static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new()));
 static START_TIME: Mutex<Option<Instant>> = Mutex::new(None);
+
+// Opt-in event-path counters printed with `PERRY_MT_PROFILE=1`. Keeping these
+// beside the queues makes registrations, scans, and firings independently
+// visible instead of asking a sampling profiler to catch sub-microsecond work.
+pub static PROFILE_PROMISE_TIMER_REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_CALLBACK_TIMER_REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_INTERVAL_TIMER_REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_PROMISE_TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_CALLBACK_TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_INTERVAL_TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_PROMISE_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_CALLBACK_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
+pub static PROFILE_INTERVAL_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize the timer system (called once at startup)
 fn ensure_initialized() {
@@ -89,6 +102,7 @@ pub extern "C" fn js_set_timeout_value_ref(
 }
 
 fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Promise {
+    crate::promise::bump(&PROFILE_PROMISE_TIMER_REGISTRATIONS);
     ensure_initialized();
 
     let promise = js_promise_new();
@@ -191,6 +205,7 @@ fn order_expired_callback_batch(expired: &mut [CallbackTimer]) {
 /// Returns the number of timers that fired
 #[no_mangle]
 pub extern "C" fn js_timer_tick() -> i32 {
+    crate::promise::bump(&PROFILE_PROMISE_TIMER_TICKS);
     let now = Instant::now();
     let allow_unref = should_run_unref_promise_timers();
     let mut fired = 0;
@@ -230,6 +245,9 @@ pub extern "C" fn js_timer_tick() -> i32 {
         fired += 1;
     }
 
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_PROMISE_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);
+    }
     fired
 }
 
@@ -991,6 +1009,7 @@ fn schedule_callback_timer(
     type_name: &str,
     kind: CallbackTimerKind,
 ) -> i64 {
+    crate::promise::bump(&PROFILE_CALLBACK_TIMER_REGISTRATIONS);
     if let Some(id) = schedule_mock_callback_timer(callback, delay_ms, args.clone(), kind) {
         return id;
     }
@@ -1086,6 +1105,7 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
 /// Returns the number of callbacks that were called
 #[no_mangle]
 pub extern "C" fn js_callback_timer_tick() -> i32 {
+    crate::promise::bump(&PROFILE_CALLBACK_TIMER_TICKS);
     // First turn of the codegen event loop — `nodeTiming.loopStart` stops being
     // the "not started" sentinel here.
     crate::perf_hooks::note_event_loop_start();
@@ -1234,6 +1254,9 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // this is a cheap empty-buffer check when there's no input.
     crate::os::pump_process_stdin();
 
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);
+    }
     fired
 }
 
@@ -1438,6 +1461,7 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
 }
 
 fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
+    crate::promise::bump(&PROFILE_INTERVAL_TIMER_REGISTRATIONS);
     if let Some(id) = schedule_mock_interval_timer(callback, interval_ms, args.clone()) {
         return id;
     }
@@ -1522,6 +1546,7 @@ pub extern "C" fn clearInterval(interval_id: i64) {
 /// Returns the number of callbacks that were called
 #[no_mangle]
 pub extern "C" fn js_interval_timer_tick() -> i32 {
+    crate::promise::bump(&PROFILE_INTERVAL_TIMER_TICKS);
     use crate::closure::{
         js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
         js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
@@ -1609,6 +1634,9 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     // count threshold check, which fire during allocation when values are
     // guaranteed to be stored.
 
+    if crate::promise::mt_profile_enabled() {
+        PROFILE_INTERVAL_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);
+    }
     fired
 }
 

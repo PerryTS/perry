@@ -39,6 +39,17 @@ crate::perry_thread_local! {
     static ESM_EVAL_CHECKPOINT_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Whether this thread is already executing a microtask checkpoint.
+///
+/// A same-thread enqueue during a checkpoint does not need to wake the event
+/// loop: the runner drains the queue to quiescence before returning. Producers
+/// on other threads observe their own depth (zero) and still take the normal
+/// cross-thread wake path.
+#[inline(always)]
+pub(crate) fn microtask_drain_active() -> bool {
+    MICROTASK_RUN_DEPTH.with(|depth| depth.get() != 0)
+}
+
 /// Called once from the compiled entry (before top-level statements) when the
 /// entry module uses import/export syntax — i.e. Node would load it as ESM.
 #[no_mangle]
@@ -172,6 +183,7 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
+    bump(&MT_DRAIN_COUNT);
     let async_box_ref_depth = async_box_execution_ref_depth();
     let reentrant = MICROTASK_RUN_DEPTH.with(|depth| {
         let current = depth.get();
