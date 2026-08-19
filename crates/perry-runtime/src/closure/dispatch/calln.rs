@@ -35,7 +35,9 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
 
 /// Call a closure with 1 argument, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
+// The one-argument value-call path can run arbitrary generated code and must
+// let a JS exception unwind to the generated caller's catch landing pad.
+pub extern "C-unwind" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0]);
@@ -50,7 +52,7 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
         },
         _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64) -> f64 =
+            let func: extern "C-unwind" fn(*const ClosureHeader, f64) -> f64 =
                 unsafe { std::mem::transmute(func_ptr) };
             func(closure, arg0)
         }

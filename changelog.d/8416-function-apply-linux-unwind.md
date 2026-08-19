@@ -1,0 +1,1 @@
+Fixed Linux debug/static builds aborting when a dynamically dispatched one-argument closure threw into a surrounding `try`/`catch`. Dynamic `Function.apply` deferrals now reach the generated catch landing pad and report the located ahead-of-time limitation instead of terminating the process.

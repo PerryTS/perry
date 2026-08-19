@@ -14,7 +14,11 @@ use super::*;
 /// NOTE: This function is named js_native_call_value to avoid symbol collision
 /// with js_call_value in perry-jsruntime which handles V8 JavaScript values.
 #[no_mangle]
-pub unsafe extern "C" fn js_native_call_value(
+// A dynamically-dispatched closure can throw into a generated caller's catch
+// landing pad. Keep this value-call bridge unwind-capable just like
+// `js_native_call_method`; otherwise debug/static runtime builds install an
+// abort-on-unwind guard here and Linux aborts before the landing pad is reached.
+pub unsafe extern "C-unwind" fn js_native_call_value(
     func_value: f64,
     args_ptr: *const f64,
     args_len: usize,
