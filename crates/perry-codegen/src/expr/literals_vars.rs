@@ -8,7 +8,7 @@ use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UpdateOp};
 
-use crate::lower_string_concat::lower_string_self_append;
+use crate::lower_string_concat::{flatten_string_add_chain, lower_string_self_append};
 use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
 use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
@@ -491,7 +491,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                 return Ok(v);
             }
-            // Detect the `x = x + y` self-append pattern.
+            // Detect the `x = x + y` self-append pattern. For a longer
+            // left-associated concat (`x = x + a + b + c`), retain `x` as
+            // the accumulator and rebuild only `a + b + c` as the append
+            // operand. Lowering the whole expression through
+            // `js_string_concat_chain` would copy the growing `x` prefix on
+            // every loop iteration, turning the otherwise-amortized append
+            // path back into O(n^2) work (#8394).
             // The fast path requires a plain alloca slot in `ctx.locals` —
             // module globals (use `@global` loads), closure captures (use
             // `js_closure_{get,set}_capture_bits`), and boxed vars (use
@@ -526,6 +532,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                             return Ok(v);
                         }
+                    }
+
+                    // `flatten_string_add_chain` applies the same soundness
+                    // rules as the ordinary n-way fold. In particular, it
+                    // stops before an Add whose operands do not guarantee
+                    // string semantics, so splitting after the leading local
+                    // cannot change a numeric `+` into concatenation.
+                    let in_loop = ctx
+                        .loop_targets
+                        .iter()
+                        .any(|(continue_label, _, _)| !continue_label.is_empty());
+                    let accumulator_parts = if in_loop {
+                        flatten_string_add_chain(ctx, left, right).filter(|parts| {
+                            parts.len() >= 3
+                                && matches!(parts[0], Expr::LocalGet(left_id) if left_id == id)
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(parts) = accumulator_parts {
+                        let mut suffix = parts[1].clone();
+                        for part in &parts[2..] {
+                            suffix = Expr::Binary {
+                                op: BinaryOp::Add,
+                                left: Box::new(suffix),
+                                right: Box::new((*part).clone()),
+                            };
+                        }
+                        let v = lower_string_self_append(ctx, *id, &suffix)?;
+                        emit_shadow_slot_update_for_expr(ctx, *id, &v, value);
+                        super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
+                        return Ok(v);
                     }
                 }
             }

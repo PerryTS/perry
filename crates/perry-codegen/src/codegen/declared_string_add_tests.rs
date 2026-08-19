@@ -42,13 +42,17 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn probe_fn(params: Vec<Param>, body: Expr) -> Function {
+    probe_fn_with_body(params, vec![Stmt::Return(Some(body))])
+}
+
+fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
     Function {
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
         params,
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(body))],
+        body,
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -98,6 +102,10 @@ fn module_with(function: Function) -> Module {
 
 fn ir(params: Vec<Param>, body: Expr) -> String {
     let module = module_with(probe_fn(params, body));
+    function_ir(module)
+}
+
+fn function_ir(module: Module) -> String {
     let ir =
         String::from_utf8(compile_module(&module, ir_opts()).unwrap()).expect("LLVM IR is UTF-8");
     // An ordinary typed parameter may now produce a public guard wrapper plus
@@ -318,6 +326,71 @@ fn a_chain_whose_second_part_is_proven_still_folds() {
     assert!(
         ir.contains("call i64 @js_string_concat_chain("),
         "`s + \",\" + t` concatenates at every node whatever `s` holds:\n{ir}"
+    );
+}
+
+#[test]
+fn a_self_append_chain_retains_the_accumulator_and_fuses_only_the_suffix() {
+    // `s = s + "[" + name + "]"` is the #8394 accumulator shape. Folding
+    // all four parts into `js_string_concat_chain` copies the growing `s`
+    // prefix on every iteration. The self-append lowering must instead build
+    // the three-part suffix once and hand it to `js_string_append`, whose
+    // unique-owner path grows the accumulator geometrically.
+    let value = add(
+        add(
+            add(Expr::LocalGet(1), Expr::String("[".to_string())),
+            Expr::LocalGet(2),
+        ),
+        Expr::String("]".to_string()),
+    );
+    let module = module_with(probe_fn_with_body(
+        vec![str_param(), param(2, "name", Type::String)],
+        vec![
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(value)))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    let ir = function_ir(module);
+
+    assert!(
+        ir.contains("call i64 @js_string_append("),
+        "the growing prefix must reach the amortized append path:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call i64 @js_string_concat_chain(").count(),
+        1,
+        "only the fixed-size suffix should use the n-way concat fold:\n{ir}"
+    );
+}
+
+#[test]
+fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
+    // `s = s + n + "x"` cannot split after `s`: when a lying string slot and
+    // `n` both contain numbers, the head pair is numeric addition before the
+    // trailing literal forces concatenation. `flatten_string_add_chain`
+    // preserves that pair as one opaque part, so this must not select append.
+    let value = add(
+        add(Expr::LocalGet(1), Expr::LocalGet(2)),
+        Expr::String("x".to_string()),
+    );
+    let module = module_with(probe_fn_with_body(
+        vec![str_param(), param(2, "n", Type::Number)],
+        vec![
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(value)))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    let ir = function_ir(module);
+
+    assert!(
+        !ir.contains("call i64 @js_string_append("),
+        "an opaque numeric-capable head pair must remain in source-tree order:\n{ir}"
     );
 }
 
