@@ -1293,7 +1293,7 @@ pub(super) fn build_wasm_host_library(
         cargo_cmd.arg("--target").arg(triple);
     }
 
-    match cargo_cmd.status() {
+    match super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
         Ok(status) if status.success() => {}
         Ok(status) => {
             if matches!(format, OutputFormat::Text) {
@@ -1721,7 +1721,11 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
 
 /// Auto-build geisterhand-enabled libraries when they're missing.
 /// Uses a separate target dir (target/geisterhand/) to avoid mixing with normal builds.
-pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat) -> Result<()> {
+pub(super) fn build_geisterhand_libs(
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> Result<()> {
     if matches!(target, Some("visionos") | Some("visionos-simulator")) {
         return Err(anyhow!("Geisterhand is not supported on visionOS yet."));
     }
@@ -1807,8 +1811,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         cargo_cmd.env("RUSTFLAGS", tls_flag);
     }
 
-    let status = cargo_cmd
-        .status()
+    let status = super::tool_output::run_internal_tool(&mut cargo_cmd, verbose)
         .map_err(|e| anyhow!("Failed to run cargo: {}", e))?;
 
     if !status.success() {

@@ -13,6 +13,11 @@ Available on all commands:
 | `-q, --quiet` | Suppress non-error output |
 | `--no-color` | Disable ANSI color codes |
 
+Successful compilation keeps Cargo, clang, Swift, and linker implementation
+details out of the default output. Pass `--verbose` to stream those toolchain
+diagnostics; if an internal tool fails, Perry shows its captured output even
+without `--verbose`.
+
 ## Compilation Targets
 
 Use `--target` to cross-compile:

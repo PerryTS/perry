@@ -909,26 +909,6 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
     h.field(
-        "env_ll_o0_threshold_bytes",
-        env_var("PERRY_LL_O0_THRESHOLD_BYTES")
-            .as_deref()
-            .unwrap_or(""),
-    );
-    h.field(
-        "env_ll_size_opt",
-        env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
-    );
-    h.field(
-        "env_ll_size_opt_max_fn_bytes",
-        env_var("PERRY_LL_SIZE_OPT_MAX_FN_BYTES")
-            .as_deref()
-            .unwrap_or(""),
-    );
-    h.field(
-        "env_ll_o0_max_fn_bytes",
-        env_var("PERRY_LL_O0_MAX_FN_BYTES").as_deref().unwrap_or(""),
-    );
-    h.field(
         "env_entry_symbol",
         env_var("PERRY_ENTRY_SYMBOL").as_deref().unwrap_or(""),
     );

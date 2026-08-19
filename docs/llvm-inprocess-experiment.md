@@ -100,7 +100,7 @@ Companion artifacts:
 Perry builds LLVM IR as strings, writes a `.ll`, and shells out to a
 user-supplied `clang -c`. That is an LLVM dependency that is *runtime,
 unpinned, and owned by the user's machine*: 1,376 MB of transient IR text on
-the Claude Code bundle, the #4880 whole-module `-Os` demotion, Apple clang 21
+the Claude Code bundle, large functions that stress optimization, Apple clang 21
 unable to parse LLVM 22 attribute output, and errors reported as line numbers
 in gigabyte files. The experiment: own the pipeline via the LLVM C API, make
 textual `.ll` a debug view instead of the transport.
@@ -172,8 +172,8 @@ header has always called it "the seam" — gets a second implementation:
 parse-from-memory → verify → `default<O_n>` → `TargetMachine`
 object-to-memory. No `.ll` touches disk (KEEP_IR and on-failure debugging
 still write one). Decision parity is by construction: the in-process path
-interprets the *same* plan argv the clang path builds (`-O3`/`-Os`/`-O0`
-incl. the #4880 oversized fallback, `-mcpu=native`, inlinehint), so the
+interprets the *same* plan argv the clang path builds (`-O3`,
+`-mcpu=native`, inlinehint), so the
 backends cannot drift on a decision without the plan's own tests catching it.
 Unknown flags are a hard error, never silently dropped. `PERRY_LLVM_INPROCESS`
 joins both the build-cache and object-cache keys (vacuous-A/B defense), a
@@ -292,8 +292,8 @@ quotable benchmark; the quotable run needs a quiet box and the big corpus.
 The compile-time *win* thesis was **not** demonstrated at small scale — and
 that is a real Phase 0 result: the payoffs that justified the experiment live
 at the 1.4 GB-of-IR scale (parse + disk transit), in version control, and in
-what the seam unlocks (per-function opt levels instead of #4880's
-whole-module demotion, DWARF via `DIBuilder`, in-process RS4GC). Those are
+what the seam unlocks (structured function outlining, DWARF via `DIBuilder`,
+in-process RS4GC). Those are
 Phase 2/3 measurements, gated on a quiet box, ≥25 GB free disk, and the gap
 suite green under the flag.
 

@@ -88,8 +88,8 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
     rooting::with_operands_rooted(ctx, &element_refs, |ctx, vals| {
         // #5391: oversized modules outline array-literal construction. The inline
         // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
-        // data-table builders huge (single 18MB functions clang -O0 can't compile
-        // in practical time). Instead spill the already-evaluated element values to
+        // data-table builders huge (single 18MB functions are impractical to
+        // optimize). Instead spill the already-evaluated element values to
         // a per-literal stack buffer and build the array in ONE runtime call. The
         // buffer is hoisted to the entry block (fixed size per site; bounded total
         // stack) and consumed immediately by the call, so no GC-visible window.

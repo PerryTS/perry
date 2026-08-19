@@ -1647,8 +1647,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // class-field-GET diamond (guard + fast load + fallback +
                         // phi) to a single `js_class_field_get_ic(...)` call that
                         // returns the field value. This shrinks large minified
-                        // user functions enough for clang -O0 to compile them
-                        // (the per-function compile time is superlinear in size).
+                        // user functions enough for LLVM to optimize them in
+                        // practical time (per-function cost is superlinear in size).
                         // Mirrors the field-SET full-outline (#5334 lever B).
                         if crate::codegen::full_outline_ic_enabled() {
                             let key_raw = {

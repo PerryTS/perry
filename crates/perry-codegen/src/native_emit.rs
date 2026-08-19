@@ -164,8 +164,6 @@ struct FrozenUnit {
     skeleton: String,
     functions: Vec<FrozenFunction>,
     function_count: usize,
-    estimated_bytes: usize,
-    max_function_bytes: usize,
 }
 
 fn freeze_unit(
@@ -196,13 +194,8 @@ fn freeze_unit(
         }
     }
     let function_count = funcs.len();
-    let mut estimated_bytes = skeleton.len();
-    let mut max_function_bytes = 0usize;
     let mut functions = Vec::with_capacity(function_count);
     for f in funcs {
-        let function_bytes = f.estimated_ir_bytes();
-        estimated_bytes += function_bytes;
-        max_function_bytes = max_function_bytes.max(function_bytes);
         if f.personality.is_some() {
             // Windows SEH funclets (`catchswitch`/`catchpad`/`catchret`) have
             // no inkwell builders. Let LLVM's in-process assembly parser build
@@ -248,8 +241,6 @@ fn freeze_unit(
         skeleton,
         functions,
         function_count,
-        estimated_bytes,
-        max_function_bytes,
     })
 }
 
@@ -330,13 +321,7 @@ pub fn compile_module_units_native(
         let (t, r) = stream_frozen_functions(&context, &module, &unit.functions)
             .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
         debug_dump(&module, &format!("{module_prefix}.unit{i}"));
-        let (effective_target, args) = crate::linker::native_plan_args(
-            target,
-            unit.estimated_bytes,
-            unit.function_count,
-            unit.max_function_bytes,
-            native_roots,
-        );
+        let (effective_target, args) = crate::linker::native_plan_args(target, native_roots);
         let unit_bytes = crate::inprocess::optimize_and_emit_module(
             &module,
             &effective_target,
@@ -523,18 +508,10 @@ pub fn compile_module_units_diff(
     Ok(bytes_text)
 }
 
-/// The plan argv for a natively-built module. Same decision code as the text
-/// path (`build_clang_compile_plan`), with the byte-size input taken from the
-/// render-free size estimate the codegen-unit balancer already uses.
-fn plan_for(llmod: &LlModule, target: Option<&str>, native_roots: bool) -> (String, Vec<String>) {
-    let funcs = llmod.deduped_function_refs();
-    let est_bytes: usize = funcs.iter().map(|f| f.estimated_ir_bytes()).sum();
-    let max_fn_bytes = funcs
-        .iter()
-        .map(|f| f.estimated_ir_bytes())
-        .max()
-        .unwrap_or(0);
-    crate::linker::native_plan_args(target, est_bytes, funcs.len(), max_fn_bytes, native_roots)
+/// The plan argv for a natively-built module. Uses the same decision code as
+/// the text path (`build_clang_compile_plan`).
+fn plan_for(target: Option<&str>, native_roots: bool) -> (String, Vec<String>) {
+    crate::linker::native_plan_args(target, native_roots)
 }
 
 pub fn compile_module_native(
@@ -546,7 +523,7 @@ pub fn compile_module_native(
     let module = build_native_module(&context, llmod)?;
     debug_dump(&module, module_prefix);
     let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
-    let (effective_target, args) = plan_for(llmod, target, native_roots);
+    let (effective_target, args) = plan_for(target, native_roots);
     // #7982: under the statepoint backends the plan asks for `-S`, so this
     // returns assembler TEXT. It must go through the compact-map rewrite and
     // the assembler before it can be called an object — the textual path has
@@ -954,7 +931,7 @@ pub fn compile_module_diff(
     let ctx_text = Context::create();
     let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_native_module")?;
     let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
-    let (effective_target, args) = plan_for(llmod, target, native_roots);
+    let (effective_target, args) = plan_for(target, native_roots);
 
     let ctx_native = Context::create();
     let native = build_native_module(&ctx_native, llmod);

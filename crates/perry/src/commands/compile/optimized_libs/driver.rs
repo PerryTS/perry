@@ -960,7 +960,7 @@ pub(crate) fn build_optimized_libs(
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
 
-    let status = match cargo_cmd.status() {
+    let status = match super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
         Ok(s) => s,
         Err(e) => {
             if matches!(format, OutputFormat::Text) {
@@ -1115,7 +1115,7 @@ pub(crate) fn build_optimized_libs(
             }
             cmd.arg("--").arg("--emit=llvm-bc,link");
 
-            match cmd.status() {
+            match super::super::tool_output::run_internal_tool(&mut cmd, verbose) {
                 Ok(s) if s.success() => {}
                 Ok(s) => {
                     if matches!(format, OutputFormat::Text) {

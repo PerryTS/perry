@@ -187,9 +187,9 @@ pub struct LlBlock {
     /// so any bit-level work unboxes (`bitcast double -> i64`) and any value
     /// production re-boxes (`bitcast i64 -> double`). When a value is boxed
     /// then immediately unboxed again (or vice versa) the pair is identity:
-    /// `bitcast(bitcast(x)) == x`. `clang -O1+` folds these via instcombine,
-    /// but the oversized-module path forces `-O0` (see #4880), which does not
-    /// — so we fold at emit time. Maps a bitcast RESULT reg to its
+    /// `bitcast(bitcast(x)) == x`. LLVM folds these via instcombine, but doing
+    /// so at emit time reduces optimizer input and compile time too. Maps a
+    /// bitcast RESULT reg to its
     /// pre-bitcast source of the OPPOSITE type, scoped to this block so the
     /// source is guaranteed to dominate (SSA, emitted earlier in the same
     /// block).
@@ -609,8 +609,7 @@ impl LlBlock {
     }
 
     /// Load with `volatile` — prevents the optimizer from caching,
-    /// reordering, or eliminating the load. Used for module globals
-    /// that may be written by `optnone` functions.
+    /// reordering, or eliminating loads of runtime-mutated guard globals.
     pub fn load_volatile(&mut self, ty: LlvmType, ptr: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Load {

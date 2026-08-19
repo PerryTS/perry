@@ -1219,7 +1219,7 @@ pub(crate) fn build_and_run_link(
             || (ctx.needs_stdlib && find_geisterhand_stdlib(target).is_none())
             || (ctx.needs_ui && find_geisterhand_ui(target).is_none());
         if gh_missing {
-            build_geisterhand_libs(target, format)?;
+            build_geisterhand_libs(target, format, verbose)?;
         }
 
         if let Some(gh_lib) = find_geisterhand_library(target) {
@@ -1439,7 +1439,8 @@ pub(crate) fn build_and_run_link(
                         }
                     }
 
-                    let cargo_status = cargo_cmd.status()?;
+                    let cargo_status =
+                        super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose)?;
                     if !cargo_status.success() {
                         return Err(anyhow!(
                             "Failed to build native library crate for {}: {}",
@@ -1755,7 +1756,8 @@ pub(crate) fn build_and_run_link(
                         .and_then(|s| s.to_str())
                         .unwrap_or("swift_src");
                     let obj_out = swift_obj_dir.join(format!("{}.o", stem));
-                    let status = Command::new(&swiftc)
+                    let mut swift_cmd = Command::new(&swiftc);
+                    swift_cmd
                         .arg("-target")
                         .arg(swift_triple)
                         .arg("-sdk")
@@ -1765,8 +1767,9 @@ pub(crate) fn build_and_run_link(
                         .arg("-O")
                         .arg("-o")
                         .arg(&obj_out)
-                        .arg(swift_src)
-                        .status()?;
+                        .arg(swift_src);
+                    let status =
+                        super::super::tool_output::run_internal_tool(&mut swift_cmd, verbose)?;
                     if !status.success() {
                         return Err(anyhow!(
                             "Failed to compile Swift source: {}",
@@ -1928,7 +1931,7 @@ pub(crate) fn build_and_run_link(
             .collect();
         eprintln!("[link] invoking: {} {}", program, rendered.join(" "));
     }
-    let status_result = cmd.status();
+    let status_result = super::super::tool_output::run_internal_tool(&mut cmd, verbose);
     if verbose > 0 {
         match &status_result {
             Ok(status) => eprintln!("[link] linker exited: {status}"),

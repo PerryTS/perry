@@ -1286,8 +1286,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // fallback) to a single `js_class_field_set_ic(...)` call.
                                 // This trades a call frame on the (cold, startup-
                                 // dominated) field-set path for a large per-site IR
-                                // reduction, so clang -O0 — which oversized modules are
-                                // forced to (#4880) — can actually compile the module.
+                                // reduction, keeping the function tractable for LLVM's
+                                // `-O3` pipeline.
                                 // Only the call's own operands are materialized (the key
                                 // handle + expected ShapeId), not the inline-store scaffolding.
                                 let expected_shape_id = crate::typed_shape::load_class_shape_id(

@@ -396,9 +396,9 @@ pub(crate) fn emit_module_globals(
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
                 // Use default (external) linkage for ALL module globals.
-                // `internal` linkage lets clang -O3 assume the global is
-                // never written by optnone functions,
-                // causing it to constant-fold reads to 0.0. With external
+                // `internal` linkage lets clang -O3 assume the global cannot
+                // be written outside this translation unit, causing it to
+                // constant-fold reads to 0.0. With external
                 // linkage, the optimizer can't make cross-TU assumptions.
                 // The module-unique name (perry_global_<prefix>__N)
                 // prevents symbol collisions across modules.

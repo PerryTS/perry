@@ -5166,7 +5166,14 @@ pub fn run_with_parse_cache(
                 } else {
                     "Wrote object file"
                 };
-                println!("{}: {}", label, artifact.path.display());
+                // Linked builds can contain hundreds of implementation-level
+                // object paths. The final executable is the user-facing
+                // artifact; keep the per-object inventory for --verbose.
+                // With --no-link the object/IR itself *is* the requested
+                // output, so continue reporting it at normal verbosity.
+                if verbose > 0 || args.no_link {
+                    println!("{}: {}", label, artifact.path.display());
+                }
             }
             OutputFormat::Json => {}
         }
@@ -6140,7 +6147,7 @@ pub fn run_with_parse_cache(
         for obj_path in &obj_paths {
             cmd.arg(obj_path);
         }
-        let status = cmd.status()?;
+        let status = tool_output::run_internal_tool(&mut cmd, verbose)?;
         if !status.success() {
             return Err(anyhow!("Archiving staticlib failed"));
         }
@@ -6392,7 +6399,7 @@ pub fn run_with_parse_cache(
             cmd.arg("-o").arg(&exe_path);
         }
 
-        let status = cmd.status()?;
+        let status = tool_output::run_internal_tool(&mut cmd, verbose)?;
         if !status.success() {
             return Err(anyhow!("Linking dylib failed"));
         }
@@ -6474,7 +6481,7 @@ pub fn run_with_parse_cache(
             || (ctx.needs_stdlib && find_geisterhand_stdlib(target.as_deref()).is_none())
             || (ctx.needs_ui && find_geisterhand_ui(target.as_deref()).is_none());
         if gh_missing {
-            build_geisterhand_libs(target.as_deref(), format)?;
+            build_geisterhand_libs(target.as_deref(), format, verbose)?;
         }
         match find_geisterhand_runtime(target.as_deref()) {
             Some(gh_rt) => gh_rt,

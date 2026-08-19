@@ -156,7 +156,7 @@ fn build_wasm_host_runtime(
         }
     }
 
-    match cargo_cmd.status() {
+    match super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
         Ok(status) if status.success() => {}
         Ok(status) => {
             if matches!(format, OutputFormat::Text) {
@@ -420,7 +420,7 @@ pub(crate) fn build_missing_prebuilt_ext_lib(
         }
     }
 
-    let status = match cargo_cmd.status() {
+    let status = match super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
         Ok(status) => status,
         Err(err) => {
             if matches!(format, OutputFormat::Text) && verbose > 0 {

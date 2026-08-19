@@ -53,6 +53,7 @@ mod sandbox_buildrs;
 mod shared_tokio;
 mod strip_dedup;
 mod targets;
+mod tool_output;
 pub mod well_known;
 pub(crate) mod widget_build;
 use android_target::{android_target, is_android_target};

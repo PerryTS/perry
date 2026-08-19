@@ -39,13 +39,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_WRITE_BARRIERS",
     "PERRY_SHADOW_STACK",
     "PERRY_RS4GC",
-    // #8128: the post-RS4GC `optnone`+`noinline` instruction cap. A function
-    // past the threshold has the middle-end skipped, so flipping this changes
-    // emitted code for that function — it must invalidate the build-level
-    // no-op check, not merely per-object entries. #8128 said it registered
-    // this and did not; `codegen_env_vars_are_build_cache_inputs` caught it on
-    // main, where it had gone red.
-    "PERRY_LL_RS4GC_OPTNONE_INSTRS",
     "PERRY_GC_SAFEPOINT_ONLY",
     "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
@@ -95,10 +88,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_LD",
     "PERRY_LLVM_LIB",
     "PERRY_LLVM_OPT",
-    "PERRY_LL_O0_THRESHOLD_BYTES",
-    "PERRY_LL_O0_MAX_FN_BYTES",
-    "PERRY_LL_SIZE_OPT",
-    "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
     "PERRY_OUTLINE_METHOD_DISPATCH",
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",

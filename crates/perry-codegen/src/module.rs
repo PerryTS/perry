@@ -929,11 +929,11 @@ impl LlModule {
         // Balance units by estimated byte size, not function count: minified
         // bundles have a few enormous functions (a 68MB IIFE in the cli.js
         // case), so contiguous count-chunking can clump them into one outsized
-        // unit whose clang -O0 time dominates. Greedy largest-first bin-packing
+        // unit whose LLVM optimization time dominates. Greedy largest-first bin-packing
         // assigns each function to the currently-smallest unit, isolating big
         // functions and keeping the rest even. (A single function larger than
-        // total/n is irreducible here — that is the intra-function #4880
-        // problem, not something inter-function splitting can divide.)
+        // total/n is irreducible here; that requires structured outlining inside
+        // codegen, not something inter-function partitioning can divide.)
         let sizes: Vec<usize> = funcs.iter().map(|f| f.estimated_ir_bytes()).collect();
         let mut order: Vec<usize> = (0..funcs.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(sizes[i]));

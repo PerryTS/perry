@@ -17,9 +17,9 @@ use super::spec_function_length;
 ///
 /// A large bundle interns ~190K strings and registers tens of thousands of
 /// closures/classes; emitting all of it into ONE function produced a single
-/// ~32MB / ~400K-instruction basic block, and `clang -O0` (forced for oversized
-/// modules, #4880) is catastrophically superlinear on a single huge block
-/// (~36 min). Every op here is independent — each writes to its own global or a
+/// ~32MB / ~400K-instruction basic block, which is catastrophically expensive
+/// for LLVM to optimize as one function (~36 min). Every op here is independent
+/// — each writes to its own global or a
 /// runtime registry; no SSA value flows between ops — so splitting at op
 /// boundaries is safe and order-preserving (chunks run in sequence, ops in order
 /// within a chunk).
@@ -340,8 +340,8 @@ pub(super) fn emit_string_pool(
     // #5391 function splitting: a large bundle interns ~190K strings AND
     // registers tens of thousands of closures/classes/functions; emitting all of
     // that into ONE `__perry_init_strings` function produced a single ~32MB /
-    // ~400K-instruction basic block that `clang -O0` (forced for oversized
-    // modules, #4880) is catastrophically superlinear on (~36 min). Every init
+    // ~400K-instruction basic block that LLVM handles superlinearly (~36 min).
+    // Every init
     // op below is independent (each writes its own global or a runtime registry;
     // no SSA value flows between ops), so emit ALL of them — string allocation
     // and every registration loop — through `chunker`, which spills them into a
