@@ -919,13 +919,17 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             return;
         }
         if n < cur {
-            // Truncate: clear elements at indices [n..cur) to TAG_HOLE so
-            // any code that resurrects the slot via `arr[i]` reads `undefined`,
-            // not stale data. The capacity stays unchanged — JS doesn't
-            // require Perry to release the underlying buffer here, and growing
-            // back via `push` would just re-overwrite these slots anyway.
-            for i in n..cur {
-                note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
+            // ArraySetLength deletes indices from high to low. This must clear
+            // descriptor-backed indices as well as dense slots: an accessor at
+            // index 0 cannot remain observable after its getter truncates the
+            // array to zero. If a non-configurable index blocks deletion, keep
+            // that index and restore length to index + 1 per §10.4.2.4.
+            for i in (n..cur).rev() {
+                if js_array_delete(arr, i) == 0 {
+                    (*arr).length = i + 1;
+                    refresh_array_numeric_layout(arr);
+                    return;
+                }
             }
             (*arr).length = n;
             refresh_array_numeric_layout(arr);
@@ -978,7 +982,14 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
                 return 0;
             }
         }
-        note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
+        if index < (*arr).capacity {
+            note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
+        } else {
+            // Sparse indices live in the named-property side table rather than
+            // the dense element allocation; writing TAG_HOLE past capacity
+            // would corrupt the following heap object.
+            array_named_property_delete_by_name(arr, &key);
+        }
         crate::object::clear_property_attrs(arr as usize, &key);
         crate::object::clear_accessor_descriptor(arr as usize, &key);
         1

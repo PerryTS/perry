@@ -224,6 +224,15 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         if len <= 1 {
             return arr;
         }
+        // A raw slot swap is only equivalent to Reverse when every index is
+        // an ordinary dense own property. Holes can expose inherited
+        // Array.prototype indices, and accessors may delete later indices
+        // while Reverse is still observing them. Run the spec operation order
+        // for those rare shapes; ordinary arrays retain the allocation-free
+        // dense loop below.
+        if crate::array::array_iteration_is_exotic(arr) {
+            return reverse_array_spec_path(arr);
+        }
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         let mut i = 0usize;
         let mut j = len - 1;
@@ -237,6 +246,83 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         }
         rebuild_array_layout(arr);
         arr
+    }
+}
+
+/// ECMA-262 Array.prototype.reverse for an exotic real-array receiver.
+///
+/// Each pair is observed in the specified order: Has/Get lower, then Has/Get
+/// upper, followed by the corresponding Set/Delete operations. In particular,
+/// a lower getter is allowed to truncate the array before the upper presence
+/// check. The receiver and both read values stay rooted across every observable
+/// operation because an accessor can allocate and move them.
+unsafe fn reverse_array_spec_path(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let lower_value = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let upper_value = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let len = (*arr).length;
+
+    let mut lower = 0u32;
+    while lower < len / 2 {
+        let upper = len - lower - 1;
+
+        let lower_exists = arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| {
+            crate::array::array_spec_has_index(current, lower)
+        });
+        if lower_exists {
+            let (value, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                arr_handle.with_mut_ptr(|current| crate::array::array_spec_get(current, lower))
+            });
+            lower_value.set_nanbox_f64(value);
+        }
+
+        let upper_exists = arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| {
+            crate::array::array_spec_has_index(current, upper)
+        });
+        if upper_exists {
+            let (value, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                arr_handle.with_mut_ptr(|current| crate::array::array_spec_get(current, upper))
+            });
+            upper_value.set_nanbox_f64(value);
+        }
+
+        match (lower_exists, upper_exists) {
+            (true, true) => {
+                reverse_array_spec_set(&arr_handle, lower, upper_value.get_nanbox_f64());
+                reverse_array_spec_set(&arr_handle, upper, lower_value.get_nanbox_f64());
+            }
+            (false, true) => {
+                reverse_array_spec_set(&arr_handle, lower, upper_value.get_nanbox_f64());
+                reverse_array_spec_delete(&arr_handle, upper);
+            }
+            (true, false) => {
+                reverse_array_spec_delete(&arr_handle, lower);
+                reverse_array_spec_set(&arr_handle, upper, lower_value.get_nanbox_f64());
+            }
+            (false, false) => {}
+        }
+
+        lower += 1;
+    }
+
+    arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| arr)
+}
+
+fn reverse_array_spec_set(arr_handle: &crate::gc::RuntimeHandle<'_>, index: u32, value: f64) {
+    let _ = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        arr_handle.with_mut_ptr(|current| {
+            crate::array::js_array_set_f64_extend(current, index, value);
+        });
+    });
+}
+
+fn reverse_array_spec_delete(arr_handle: &crate::gc::RuntimeHandle<'_>, index: u32) {
+    let (deleted, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        arr_handle.with_mut_ptr(|current| crate::array::js_array_delete(current, index))
+    });
+    if deleted == 0 {
+        reverse_throw_type_error(b"Cannot delete property");
     }
 }
 
