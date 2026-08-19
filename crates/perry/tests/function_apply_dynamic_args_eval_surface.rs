@@ -157,7 +157,10 @@ fn function_apply_with_runtime_args_defers_to_a_located_aot_error() {
         .expect("run compiled binary --dynamic");
     assert!(
         run2.status.success(),
-        "the binary must not crash when the dynamic Function site is reached"
+        "the binary must not crash when the dynamic Function site is reached\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        run2.status,
+        String::from_utf8_lossy(&run2.stdout),
+        String::from_utf8_lossy(&run2.stderr),
     );
     let stdout2 = String::from_utf8_lossy(&run2.stdout);
     assert!(
