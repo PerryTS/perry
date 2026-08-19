@@ -1,0 +1,1 @@
+**Fixed: `Array.prototype.reverse` now observes inherited, accessor-backed, and deleted indices in specification order (#5898).** Exotic arrays retain the dense fast path only when safe, while the generic path performs live property checks and length truncation deletes sparse entries correctly.
