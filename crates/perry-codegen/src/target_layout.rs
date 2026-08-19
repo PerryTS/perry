@@ -106,10 +106,11 @@ pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u3
 ///   bits 32..63  = size       (u32)  inline_alloc_total_size_bytes
 /// ```
 ///
-/// `typed_intact` is #7834's bake: when the class's canonical layout is
-/// declarable at allocation AND its pointer mask is statically empty, the
-/// intact bit is folded into this constant and the per-instance
-/// `js_gc_declare_typed_shape_layout` call is skipped.
+/// `typed_layout` is the allocation-time bake selected by
+/// `lower_call::typed_shape_init`. Pointer-free layouts need no descriptor;
+/// pointer-bearing layouts use a module-init ShapeId whose descriptor is
+/// registered once for the process, so both can fold their final state into
+/// this constant and skip the per-instance layout call.
 ///
 /// #8122: ONE definition, shared by the allocation site
 /// (`lower_call/new_alloc.rs`) and the module-level header-image table
@@ -118,10 +119,24 @@ pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u3
 /// byte — a divergence would publish objects whose recorded size or layout
 /// state the collector cannot trust — so the arithmetic lives here and the
 /// site cross-checks the table's value against its own before using it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InlineTypedLayout {
+    None,
+    PointerFree,
+    SideMask,
+}
+
+impl InlineTypedLayout {
+    #[inline]
+    pub(crate) fn is_baked(self) -> bool {
+        self != Self::None
+    }
+}
+
 pub(crate) fn inline_alloc_gc_packed(
     target_triple: &str,
     field_count: u32,
-    typed_intact: bool,
+    typed_layout: InlineTypedLayout,
 ) -> u64 {
     const GC_TYPE_OBJECT: u64 = 2;
     const GC_FLAG_ARENA: u64 = 0x02;
@@ -129,18 +144,19 @@ pub(crate) fn inline_alloc_gc_packed(
     // field-store sites issue per-slot `js_gc_note_slot_layout` so the GC
     // sees real pointer-bearing slots regardless of this initial tag.
     const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+    const GC_LAYOUT_SIDE_MASK: u64 = 0x8000;
     /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit `class_field_inline_guard`
     /// requires before it will read or write a raw-f64 slot directly.
     /// Runtime-side name: `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
     const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
-    let typed_intact_bits = if typed_intact {
-        GC_OBJ_TYPED_LAYOUT_INTACT
-    } else {
-        0
+    let reserved = match typed_layout {
+        InlineTypedLayout::None => GC_LAYOUT_POINTER_FREE,
+        InlineTypedLayout::PointerFree => GC_LAYOUT_POINTER_FREE | GC_OBJ_TYPED_LAYOUT_INTACT,
+        InlineTypedLayout::SideMask => GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT,
     };
     GC_TYPE_OBJECT
         | (GC_FLAG_ARENA << 8)
-        | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
+        | (reserved << 16)
         | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
 }
 

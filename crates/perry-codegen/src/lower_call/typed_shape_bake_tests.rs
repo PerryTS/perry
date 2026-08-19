@@ -17,13 +17,13 @@
 //! previous tenant's per-object record — behind a `PERRY_PER_OBJECT_LAYOUTS_ANY`
 //! test whose `0` state proves every thread's tables empty.
 //!
-//! ## What the negative asserts
+//! ## Pointer-bearing layouts
 //!
-//! A pointer-BEARING shape keeps the full runtime declare. It has to: its state
-//! is `GC_LAYOUT_SIDE_MASK`, which means the collector consults a mask, and the
-//! shared `SHAPE_LAYOUTS` descriptor that mask lives in is installed by exactly
-//! that call. Baking `SIDE_MASK` into the header without it would hand the
-//! tracer a masked object with no mask.
+//! #8405 registers their immutable mask once at module init under a dedicated
+//! typed ShapeId. That makes `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT`
+//! complete before the first object is allocated, so this case now drops the
+//! per-instance declare too. The test asserts both halves: the one-time typed
+//! ShapeId call and the baked header state.
 //!
 //! ## Why the pointer-free bake needs no descriptor
 //!
@@ -44,6 +44,7 @@ use perry_hir::{
 
 /// The six-argument per-instance declare this ticket removes.
 const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
+const TYPED_SHAPE_MINT_CALL: &str = "call i32 @js_gc_typed_shape_id_for_keys(";
 /// The one-argument address-only remainder that replaces it.
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 /// The process-global emptiness proof the remainder is gated on.
@@ -67,15 +68,14 @@ const ANY_ATOMIC_LOAD: &str =
 /// and says nothing about what this test is actually for (whether
 /// `GC_OBJ_TYPED_LAYOUT_INTACT` is claimed), so derive the part that is
 /// incidental and keep asserting the part that is not.
-fn header_word(intact: bool) -> String {
+fn header_word(layout_state: u64, intact: bool) -> String {
     const GC_TYPE_OBJECT: u64 = 0x02;
     const GC_FLAG_ARENA: u64 = 0x02;
-    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
     const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
         8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
-    let reserved = GC_LAYOUT_POINTER_FREE
+    let reserved = layout_state
         | if intact {
             GC_OBJ_TYPED_LAYOUT_INTACT
         } else {
@@ -91,11 +91,16 @@ fn header_word(intact: bool) -> String {
 
 /// The packed word WITH the baked `GC_OBJ_TYPED_LAYOUT_INTACT`.
 fn baked_header_word() -> String {
-    header_word(true)
+    header_word(0x4000, true)
 }
 /// The same word WITHOUT it — what the pointer-bearing class still writes.
 fn unbaked_header_word() -> String {
-    header_word(false)
+    header_word(0x4000, false)
+}
+/// A registered pointer-bearing class starts in SIDE_MASK with an intact
+/// descriptor reachable through its dedicated typed ShapeId.
+fn side_mask_baked_header_word() -> String {
+    header_word(0x8000, true)
 }
 
 fn ir_opts() -> CompileOptions {
@@ -400,30 +405,33 @@ fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
     );
 }
 
-/// `class Link { a: number; b: Link | null }` — the control. One declared type
-/// differs; everything else about the program is identical.
+/// `class Link { a: number; b: Link | null }` — one declared type differs;
+/// everything else about the program is identical.
 #[test]
-fn a_pointer_bearing_shape_keeps_the_runtime_declare() {
+fn a_pointer_bearing_shape_registers_once_and_bakes_the_side_mask() {
     let ir = emit(&loop_new_module(
         "Link",
         Type::Union(vec![Type::Named("Link".to_string()), Type::Null]),
         Expr::Null,
     ));
     assert!(
-        ir.contains(DECLARE_CALL),
-        "a SIDE_MASK shape MUST keep the declare — it is the only thing that \
-         installs the shared `SHAPE_LAYOUTS` descriptor the tracer's mask \
-         lookup reads:\n{ir}"
+        !ir.contains(DECLARE_CALL),
+        "the per-instance declare survived for a pointer-bearing shape:\n{ir}"
     );
     assert!(
-        ir.contains(&unbaked_header_word()) && !ir.contains(&baked_header_word()),
-        "the header constant must NOT claim GC_OBJ_TYPED_LAYOUT_INTACT for a \
-         shape whose descriptor is installed at runtime:\n{ir}"
+        ir.contains(TYPED_SHAPE_MINT_CALL),
+        "the pointer mask was not registered at module init:\n{ir}"
     );
     assert!(
-        !ir.contains(FORGET_CALL),
-        "the standalone forget is only for the baked path; the declare already \
-         performs it:\n{ir}"
+        ir.contains(&side_mask_baked_header_word())
+            && !ir.contains(&unbaked_header_word())
+            && !ir.contains(&baked_header_word()),
+        "the header image does not carry SIDE_MASK | TYPED_LAYOUT_INTACT:\n{ir}"
+    );
+    assert!(
+        ir.contains(FORGET_CALL) && ir.contains(ANY_ATOMIC_LOAD),
+        "the address-dependent stale-record cleanup must survive behind its \
+         global emptiness gate:\n{ir}"
     );
 }
 

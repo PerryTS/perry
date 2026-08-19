@@ -456,15 +456,17 @@ fn emit_instance_alloc_inner(
             // (`layout_set_typed_unknown`), and a constant cannot express "it
             // depends". Computed here, before `ctx.block()` takes its mutable
             // borrow.
-            *typed_layout_baked = super::typed_shape_init::layout_pointer_free_at_allocation(
-                ctx,
-                class_name,
-                field_count,
-            );
-            let typed_intact_bits = if *typed_layout_baked {
-                GC_OBJ_TYPED_LAYOUT_INTACT
-            } else {
-                0
+            let inline_typed_layout =
+                super::typed_shape_init::layout_at_allocation(ctx, class_name, field_count);
+            *typed_layout_baked = inline_typed_layout.is_baked();
+            let (layout_bits, typed_intact_bits) = match inline_typed_layout {
+                crate::target_layout::InlineTypedLayout::None => (GC_LAYOUT_POINTER_FREE, 0),
+                crate::target_layout::InlineTypedLayout::PointerFree => {
+                    (GC_LAYOUT_POINTER_FREE, GC_OBJ_TYPED_LAYOUT_INTACT)
+                }
+                crate::target_layout::InlineTypedLayout::SideMask => {
+                    (0x8000, GC_OBJ_TYPED_LAYOUT_INTACT)
+                }
             };
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
@@ -583,13 +585,13 @@ fn emit_instance_alloc_inner(
             let gc_packed: u64 = crate::target_layout::inline_alloc_gc_packed(
                 ctx.target_triple,
                 field_count,
-                *typed_layout_baked,
+                inline_typed_layout,
             );
             debug_assert_eq!(
                 gc_packed,
                 GC_TYPE_OBJECT
                     | (GC_FLAG_ARENA << 8)
-                    | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
+                    | ((layout_bits | typed_intact_bits) << 16)
                     | ((total_size as u64) << 32),
                 "inline_alloc_gc_packed must reproduce this site's packed header word"
             );

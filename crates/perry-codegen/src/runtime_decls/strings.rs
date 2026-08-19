@@ -1044,6 +1044,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
     module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
+    module.declare_function(
+        "js_gc_typed_shape_id_for_keys",
+        I32,
+        &[I32, I64, I32, PTR, I32, PTR, I32],
+    );
     // Inline bump-allocator state accessor + slow path. The codegen
     // calls `js_inline_arena_state` once per JS function entry, caches
     // the returned pointer in a stack slot, and reads/writes the

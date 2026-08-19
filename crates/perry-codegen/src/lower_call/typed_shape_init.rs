@@ -66,9 +66,8 @@ pub(crate) fn layout_declared_at_allocation_in(
     })
 }
 
-/// #7834: is `class_name`'s at-allocation declaration expressible as a
-/// **constant** — the state `GC_LAYOUT_POINTER_FREE | GC_OBJ_TYPED_LAYOUT_INTACT`
-/// stamped straight into the inline-bump path's packed `GcHeader` store?
+/// Is `class_name`'s at-allocation declaration expressible in the packed
+/// `GcHeader` store?
 ///
 /// Three conditions, and each maps to one branch of
 /// `gc::layout::init_typed_shape_layout` that would otherwise decide it at
@@ -76,22 +75,23 @@ pub(crate) fn layout_declared_at_allocation_in(
 ///
 /// 1. [`layout_declared_at_allocation`] — the declare form is what would have
 ///    been emitted at all, so the fresh-slot proof is already discharged.
-/// 2. The pointer mask is **statically empty**, so the state is
-///    `GC_LAYOUT_POINTER_FREE` and the shape needs no `SHAPE_LAYOUTS`
-///    descriptor: with no pointer-bearing slot there is nothing for a mask to
-///    select, and `heap_payload_slot_selection` skips the payload outright.
-/// 3. `field_count == slot_count` — the runtime's one *downgrading* branch
+/// 2. `field_count == slot_count` — the runtime's one *downgrading* branch
 ///    (`layout_set_typed_unknown`), which a constant cannot express.
+/// 3. A pointer-bearing mask is paired with a dedicated typed ShapeId at
+///    module init. The runtime registers that ShapeId's exact descriptor once,
+///    before the header image is published, so `SIDE_MASK | INTACT` is just as
+///    self-contained at allocation as #7834's descriptor-free pointer-free
+///    state.
 ///
 /// What is deliberately NOT folded in is `layout_forget_object`: it depends on
 /// the recycled ADDRESS, not on the shape. The caller emits it separately,
 /// behind the `PERRY_PER_OBJECT_LAYOUTS_ANY` gate.
-pub(super) fn layout_pointer_free_at_allocation(
+pub(super) fn layout_at_allocation(
     ctx: &FnCtx<'_>,
     class_name: &str,
     field_count: u32,
-) -> bool {
-    layout_pointer_free_at_allocation_in(
+) -> crate::target_layout::InlineTypedLayout {
+    layout_at_allocation_in(
         ctx.classes,
         ctx.class_keys_globals,
         ctx.class_init_chains,
@@ -100,9 +100,9 @@ pub(super) fn layout_pointer_free_at_allocation(
     )
 }
 
-/// [`layout_pointer_free_at_allocation`] over the module-level maps (#8122; see
+/// [`layout_at_allocation`] over the module-level maps (#8122; see
 /// [`layout_declared_at_allocation_in`]).
-pub(crate) fn layout_pointer_free_at_allocation_in(
+pub(crate) fn layout_at_allocation_in(
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
     class_keys_globals: &std::collections::HashMap<String, String>,
     class_init_chains: &std::collections::HashMap<
@@ -111,16 +111,25 @@ pub(crate) fn layout_pointer_free_at_allocation_in(
     >,
     class_name: &str,
     field_count: u32,
-) -> bool {
+) -> crate::target_layout::InlineTypedLayout {
+    use crate::target_layout::InlineTypedLayout;
+
     if !layout_declared_at_allocation_in(classes, class_keys_globals, class_name) {
-        return false;
+        return InlineTypedLayout::None;
     }
     let Some(typed_layout) =
         resolve_typed_layout_in(classes, class_keys_globals, class_init_chains, class_name)
     else {
-        return false;
+        return InlineTypedLayout::None;
     };
-    typed_layout.pointer_mask_words.is_empty() && typed_layout.slot_count == field_count
+    if typed_layout.slot_count != field_count {
+        return InlineTypedLayout::None;
+    }
+    if typed_layout.pointer_mask_words.is_empty() {
+        InlineTypedLayout::PointerFree
+    } else {
+        InlineTypedLayout::SideMask
+    }
 }
 
 /// Emit the `js_gc_declare_typed_shape_layout` call that registers a **freshly

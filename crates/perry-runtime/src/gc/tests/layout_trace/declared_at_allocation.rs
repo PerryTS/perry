@@ -190,3 +190,62 @@ fn test_declaring_install_rejects_overlapping_masks() {
     clear_marks();
     clear_mark_seeds();
 }
+
+/// #8405: codegen can register a pointer-bearing class descriptor once at
+/// module init and stamp every newborn's final header state. The object must be
+/// traceable without ever calling either per-object typed-layout entry point.
+#[test]
+fn test_registered_typed_shape_traces_without_a_per_object_install() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let class_id = 17;
+    let packed = b"peer\0payload\0";
+    let keys =
+        crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32);
+    let raw_mask = [0b10u64];
+    let pointer_mask = [0b01u64];
+    let shape_id = js_gc_typed_shape_id_for_keys(
+        class_id,
+        keys as usize as u64,
+        2,
+        raw_mask.as_ptr(),
+        1,
+        pointer_mask.as_ptr(),
+        1,
+    );
+    let obj =
+        crate::object::js_object_alloc_class_inline_keys_stamped(class_id, 0, 2, keys, shape_id);
+    let child = crate::string::js_string_from_bytes(b"registered".as_ptr(), 10);
+    unsafe {
+        let header = header_from_user_ptr(obj as *const u8);
+        header_set_typed_layout_intact(header);
+        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        *fields = STRING_TAG | (child as u64 & POINTER_MASK);
+        *fields.add(1) = 1.5f64.to_bits();
+    }
+
+    assert!(layout_typed_intact_for_user(obj as usize));
+    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
+
+    let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (obj as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    unsafe {
+        assert_ne!(
+            (*child_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "the registered SIDE_MASK must lead the tracer to its pointer slot"
+        );
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}

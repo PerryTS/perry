@@ -424,7 +424,7 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
+    for (idx, (global_name, packed, field_count, raw_mask_words, pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
         chunker.roll_if_full();
@@ -482,11 +482,54 @@ pub(super) fn emit_string_pool(
         // and writes it into the receiver's shape word at birth. The keys
         // global is registered first, so the shape record and every future
         // instance refer to the rooted/rewriteable canonical array.
-        let shape_id = blk.call(
-            I32,
-            "js_object_shape_id_for_keys",
-            &[(I64, &arr), (I32, &fc_str)],
-        );
+        // #8405: a pointer-bearing layout that is provable at allocation gets
+        // its own process-global typed ShapeId. Registering the immutable mask
+        // beside that id here makes `SIDE_MASK | INTACT` a complete header
+        // image; every later construction can stamp it without calling the
+        // per-object installer. The class id plus exact masks form the stable
+        // identity, so a same-keys object with a different representation can
+        // never alias this descriptor.
+        const GC_LAYOUT_AND_INTACT_MASK: u64 = 0xD000;
+        const GC_SIDE_MASK_AND_INTACT: u64 = 0x9000;
+        let typed_side_mask =
+            class_header_image_inits
+                .get(global_name)
+                .is_some_and(|&(_, packed)| {
+                    ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
+                });
+        let shape_id = if typed_side_mask {
+            let raw_mask_ref = if raw_mask_words.is_empty() {
+                "null".to_string()
+            } else {
+                format!(
+                    "@{}",
+                    crate::typed_shape::raw_f64_mask_global_name_from_keys_global(global_name)
+                )
+            };
+            let pointer_mask_ref = format!(
+                "@{}",
+                crate::typed_shape::mask_global_name_from_keys_global(global_name)
+            );
+            blk.call(
+                I32,
+                "js_gc_typed_shape_id_for_keys",
+                &[
+                    (I32, &cid_str),
+                    (I64, &arr),
+                    (I32, &fc_str),
+                    (PTR, &raw_mask_ref),
+                    (I32, &raw_mask_words.len().to_string()),
+                    (PTR, &pointer_mask_ref),
+                    (I32, &pointer_mask_words.len().to_string()),
+                ],
+            )
+        } else {
+            blk.call(
+                I32,
+                "js_object_shape_id_for_keys",
+                &[(I64, &arr), (I32, &fc_str)],
+            )
+        };
         let shape_global = format!(
             "@{}",
             crate::typed_shape::shape_id_global_name_from_keys_global(global_name)

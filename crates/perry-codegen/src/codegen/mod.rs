@@ -1864,16 +1864,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            let typed_intact =
-                crate::lower_call::typed_shape_init::layout_pointer_free_at_allocation_in(
-                    &class_table,
-                    &class_keys_globals_map,
-                    &class_init_chains_map,
-                    class_name,
-                    field_count,
-                );
+            let typed_layout = crate::lower_call::typed_shape_init::layout_at_allocation_in(
+                &class_table,
+                &class_keys_globals_map,
+                &class_init_chains_map,
+                class_name,
+                field_count,
+            );
             let gc_packed =
-                crate::target_layout::inline_alloc_gc_packed(&triple, field_count, typed_intact);
+                crate::target_layout::inline_alloc_gc_packed(&triple, field_count, typed_layout);
             match inits.get(keys_global) {
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use

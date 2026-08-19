@@ -59,6 +59,108 @@ unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
     }
 }
 
+/// Process-global typed class layouts installed by codegen at module init.
+///
+/// Ordinary `SHAPE_LAYOUTS` entries are agent-local because they are learned
+/// from objects at runtime. These entries describe immutable code-image masks
+/// and use a dedicated ShapeId, so the descriptor is valid in every worker and
+/// can be copied into that worker's hot table on first use.
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct RegisteredTypedShapeKey {
+    class_id: u32,
+    slot_count: u32,
+    raw_f64_words: Vec<u64>,
+    pointer_words: Vec<u64>,
+}
+
+#[derive(Default)]
+struct RegisteredTypedShapes {
+    ids_by_layout: std::collections::HashMap<RegisteredTypedShapeKey, u32>,
+    layouts_by_id: std::collections::HashMap<u32, TypedLayoutDescriptor>,
+}
+
+static REGISTERED_TYPED_SHAPES: std::sync::LazyLock<std::sync::Mutex<RegisteredTypedShapes>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(RegisteredTypedShapes::default()));
+
+fn registered_typed_shapes() -> std::sync::MutexGuard<'static, RegisteredTypedShapes> {
+    REGISTERED_TYPED_SHAPES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Copy a module-init descriptor for `shape_id`, if this is one of #8405's
+/// dedicated typed class shapes. The caller installs the copy in its
+/// agent-local hot table, making the global mutex a once-per-shape/thread cold
+/// path rather than a trace/store cost.
+pub(super) fn registered_typed_shape_layout(shape_id: u32) -> Option<TypedLayoutDescriptor> {
+    registered_typed_shapes()
+        .layouts_by_id
+        .get(&shape_id)
+        .cloned()
+}
+
+/// Mint (or reuse) a ShapeId whose identity includes the exact typed layout.
+/// Called once per eligible class at module initialization, before its header
+/// image is published. Every allocation can therefore stamp
+/// `SIDE_MASK | TYPED_LAYOUT_INTACT` without a per-object runtime call.
+#[no_mangle]
+pub extern "C" fn js_gc_typed_shape_id_for_keys(
+    class_id: u32,
+    keys: u64,
+    slot_count: u32,
+    raw_f64_words: *const u64,
+    raw_f64_word_count: u32,
+    pointer_words: *const u64,
+    pointer_word_count: u32,
+) -> u32 {
+    if class_id == 0 || keys == 0 || slot_count >= 16_000_000 {
+        eprintln!("Perry internal error: invalid pre-registered typed shape");
+        std::process::abort();
+    }
+    let (raw_f64_slice, pointer_slice) = unsafe {
+        (
+            mask_words(raw_f64_words, raw_f64_word_count),
+            mask_words(pointer_words, pointer_word_count),
+        )
+    };
+    if pointer_slice.is_empty()
+        || shape_install::words_intersect(raw_f64_slice, pointer_slice, slot_count as usize)
+    {
+        eprintln!("Perry internal error: invalid pre-registered typed shape masks");
+        std::process::abort();
+    }
+    let key = RegisteredTypedShapeKey {
+        class_id,
+        slot_count,
+        raw_f64_words: raw_f64_slice.to_vec(),
+        pointer_words: pointer_slice.to_vec(),
+    };
+    let descriptor = TypedLayoutDescriptor {
+        slot_count: slot_count as usize,
+        raw_f64_mask: LayoutSlotMask::from_words(raw_f64_slice),
+        pointer_mask: LayoutSlotMask::from_words(pointer_slice),
+    };
+    let mut registered = registered_typed_shapes();
+    if let Some(&shape_id) = registered.ids_by_layout.get(&key) {
+        if !crate::object::shapes::install_registered_typed_shape_id(
+            shape_id,
+            keys as usize as *const crate::array::ArrayHeader,
+            slot_count,
+        ) {
+            eprintln!("Perry internal error: typed ShapeId structural mismatch");
+            std::process::abort();
+        }
+        return shape_id;
+    }
+    let shape_id = crate::object::shapes::mint_registered_typed_shape_id(
+        keys as usize as *const crate::array::ArrayHeader,
+        slot_count,
+    );
+    registered.ids_by_layout.insert(key, shape_id);
+    registered.layouts_by_id.insert(shape_id, descriptor);
+    shape_id
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn init_typed_shape_layout(
     user_ptr: usize,

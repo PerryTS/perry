@@ -508,6 +508,29 @@ pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 
     shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count)
 }
 
+/// Mint a process-global ShapeId for a codegen-registered typed layout and
+/// install its structural descriptor in the current agent. Unlike
+/// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
+/// keys alone: two objects with identical property names but different raw
+/// slot representations must never share a pre-baked GC descriptor.
+pub(crate) fn mint_registered_typed_shape_id(keys: *const ArrayHeader, key_count: u32) -> u32 {
+    let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
+    if !install_external_shape_id(id, keys, key_count, key_count) {
+        invalid_shape_facts_abort();
+    }
+    id
+}
+
+/// Install an already-minted process-global typed ShapeId in this agent (for
+/// another module or worker that reuses the same compiled class identity).
+pub(crate) fn install_registered_typed_shape_id(
+    id: u32,
+    keys: *const ArrayHeader,
+    key_count: u32,
+) -> bool {
+    install_external_shape_id(id, keys, key_count, key_count)
+}
+
 /// Install a process-global id into this agent's local descriptor table.
 /// Module globals are initialized once per process, while workers own distinct
 /// runtime state and moving keys pointers. Global id uniqueness makes a local

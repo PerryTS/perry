@@ -126,7 +126,9 @@ mod slot_mask;
 mod typed_shape;
 
 pub(in crate::gc) use slot_mask::LayoutSlotMask;
-pub use typed_shape::{js_gc_declare_typed_shape_layout, js_gc_init_typed_shape_layout};
+pub use typed_shape::{
+    js_gc_declare_typed_shape_layout, js_gc_init_typed_shape_layout, js_gc_typed_shape_id_for_keys,
+};
 
 /// What a single store means for the object's canonical typed descriptor.
 /// Computed while the descriptor is still borrowed, acted on after
@@ -181,7 +183,9 @@ fn shape_layout_keyed_enabled() -> bool {
     use std::sync::OnceLock;
     static E: OnceLock<bool> = OnceLock::new();
     // Default ON; `PERRY_SHAPE_LAYOUT_KEYED=0` restores the per-object maps
-    // (A/B validation).
+    // for dynamically learned layouts (A/B validation). Codegen-registered,
+    // immutable layouts remain available because their side-mask headers
+    // depend on them for correctness.
     *E.get_or_init(|| super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED"))
 }
 
@@ -195,9 +199,6 @@ unsafe fn with_shape_shared_descriptor<R>(
     user_ptr: usize,
     f: impl Fn(&TypedLayoutDescriptor) -> R,
 ) -> Option<R> {
-    if !shape_layout_keyed_enabled() {
-        return None;
-    }
     // keys_array / ShapeId only exist on genuine shaped objects
     // (`ObjectFields`). Arrays, closures, RegExps etc. also flow through
     // `layout_note_slot` / `layout_visit_pointer_slots`, and reading those
@@ -232,9 +233,6 @@ unsafe fn with_shape_shared_descriptor_from<R>(
     descriptor: Option<crate::object::shapes::ShapeDescriptor>,
     f: impl Fn(&TypedLayoutDescriptor) -> R,
 ) -> Option<R> {
-    if !shape_layout_keyed_enabled() {
-        return None;
-    }
     let object = user_ptr as *const crate::object::ObjectHeader;
     let shape_id = crate::object::shapes::object_shape_stamp(object);
     if shape_id == 0 {
@@ -246,12 +244,32 @@ unsafe fn with_shape_shared_descriptor_from<R>(
     let field_count = descriptor
         .map(|descriptor| descriptor.live_inline_slot_count as usize)
         .unwrap_or(0);
-    let map = hot_shape_layouts().borrow();
-    let desc = map.get(&shape_id)?.as_ref()?;
+    if shape_layout_keyed_enabled() {
+        let map = hot_shape_layouts().borrow();
+        if let Some(desc) = map.get(&shape_id) {
+            let desc = desc.as_ref()?;
+            if desc.slot_count != field_count {
+                return None;
+            }
+            return Some(f(desc));
+        }
+    }
+
+    // #8405: codegen-registered pointer-bearing class layouts live in a
+    // process-global immutable registry because the module header image is
+    // shared by workers. A dedicated ShapeId makes this lookup unambiguous.
+    // Cache the descriptor in the current agent's ordinary hot table on first
+    // use, so the mutex is paid once per shape/thread, never per trace/store.
+    let desc = typed_shape::registered_typed_shape_layout(shape_id)?;
     if desc.slot_count != field_count {
         return None;
     }
-    Some(f(desc))
+    if shape_layout_keyed_enabled() {
+        hot_shape_layouts()
+            .borrow_mut()
+            .insert(shape_id, Some(desc.clone()));
+    }
+    Some(f(&desc))
 }
 
 /// Answer a *query* about `user_ptr`'s current canonical typed layout, whichever
