@@ -1,0 +1,1 @@
+Eliminate repeated GC ownership classification and ShapeId descriptor-map probes in direct method guards, array pushes, and existing-field writes. The `shapes` benchmark now beats Node in the measured sweep while retiring 5.2% fewer instructions; all 19 corpus programs remain byte-exact.
