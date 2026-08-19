@@ -139,7 +139,11 @@ struct ElementShapeVersionedLoop {
     /// The native-region E1--E5 proof already establishes every element's
     /// exact class for this array's whole lifetime. When true, the preheader
     /// need not rebuild the weaker runtime invariant by scanning the array.
-    statically_proven: bool,
+    statically_class_proven: bool,
+    /// The same contained group proof also established that every requested
+    /// field remains a raw-f64 slot, so per-object residual checks are
+    /// redundant inside the call-free clone.
+    statically_layout_proven: bool,
     /// property name -> packed slot index.
     fields: std::collections::BTreeMap<String, u32>,
     /// #7771: the body's `const r = arr[counter]` binding in the two-statement
@@ -750,7 +754,7 @@ fn match_element_shape_versioned_loop(
     }
     let expected_class_id = *ctx.class_ids.get(&class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(&class_name)?.clone();
-    let statically_proven = ctx
+    let statically_class_proven = ctx
         .native_facts
         .exact_element_class(array_id)
         .is_some_and(|proven| proven == class_name);
@@ -780,6 +784,11 @@ fn match_element_shape_versioned_loop(
         }
         fields.insert(prop, field_index);
     }
+    let statically_layout_proven = statically_class_proven
+        && ctx
+            .native_facts
+            .exact_numeric_element_fields(array_id)
+            .is_some_and(|proven| fields.keys().all(|field| proven.contains(field)));
 
     Some(ElementShapeVersionedLoop {
         counter_id,
@@ -788,7 +797,8 @@ fn match_element_shape_versioned_loop(
         class_name,
         expected_class_id,
         keys_global_name,
-        statically_proven,
+        statically_class_proven,
+        statically_layout_proven,
         fields,
         element_binding,
         accumulator_id: *acc_id,
@@ -883,7 +893,7 @@ pub(super) fn lower_element_shape_versioned_for(
             &matched.keys_global_name,
             trip_count,
             &slow_pre_label,
-            matched.statically_proven,
+            matched.statically_class_proven,
         )?;
     let accumulator = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.accumulator_id))?;
     let accumulator_is_number = emit_js_value_is_number(ctx, &accumulator);
@@ -904,6 +914,7 @@ pub(super) fn lower_element_shape_versioned_for(
             elements_base,
             expected_shape_id,
             side_exit_label: slow_pre_label.clone(),
+            statically_layout_proven: matched.statically_layout_proven,
             fields: matched.fields.clone(),
             element_binding: matched.element_binding,
             numeric_accumulator: matched.accumulator_id,
@@ -972,7 +983,9 @@ pub(super) fn lower_element_shape_versioned_for(
             Some(format!(
                 "element-shape loop clone ({}): class {}, {} tracked field(s); \
                  element reads in this loop lower to offset loads behind the preheader guard",
-                if matched.statically_proven {
+                if matched.statically_layout_proven {
+                    "statically layout-proven"
+                } else if matched.statically_class_proven {
                     "statically proven"
                 } else {
                     "runtime-guarded"

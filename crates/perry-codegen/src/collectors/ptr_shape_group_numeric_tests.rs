@@ -261,6 +261,49 @@ fn promote(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, Pt
     )
 }
 
+fn promote_with_element_fields(
+    stmts: &[Stmt],
+    classes: &HashMap<String, &Class>,
+) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+    promote_with_element_fields_and_numeric_params(stmts, classes, &HashSet::new())
+}
+
+fn promote_with_element_fields_and_numeric_params(
+    stmts: &[Stmt],
+    classes: &HashMap<String, &Class>,
+    numeric_param_seeds: &HashSet<u32>,
+) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+    let facts = facts_for(classes);
+    let els = super::super::ptr_shape_elements::collect_element_shape_facts(
+        stmts,
+        &HashSet::new(),
+        &HashMap::new(),
+        classes,
+        &facts,
+    );
+    collect_shape_proven_ptr_locals_and_element_fields(
+        stmts,
+        &HashSet::new(),
+        &HashMap::new(),
+        classes,
+        &facts,
+        &HashSet::new(),
+        &els,
+        numeric_param_seeds,
+    )
+}
+
+fn read_direct_field(array_id: u32, index_id: u32, property: &str) -> Stmt {
+    Stmt::Expr(Expr::PropertyGet {
+        object: Box::new(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(array_id)),
+            index: Box::new(Expr::LocalGet(index_id)),
+        }),
+        property: property.to_string(),
+        byte_offset: 0,
+    })
+}
+
 fn names(set: &[&str]) -> HashSet<String> {
     set.iter().map(|s| s.to_string()).collect()
 }
@@ -302,6 +345,94 @@ fn inline_push_loop_counter_args_prove_numeric_fields() {
         names(&["x", "y"]),
         "loop-counter constructor args are numeric by construction"
     );
+}
+
+/// `churn` reads fields directly from `a[i]`, so no element local exists to
+/// carry the group verdict. The root-keyed result must still expose the
+/// complete numeric layout to the versioned-loop matcher.
+#[test]
+fn direct_field_only_group_exports_numeric_element_layout() {
+    let cs = [class_p()];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "P"),
+        counted_loop(
+            2,
+            Expr::Number(10.0),
+            vec![push(
+                1,
+                new_of("P", vec![Expr::LocalGet(2), counter_plus_one(2)]),
+            )],
+        ),
+        counted_loop(5, arr_len(1), vec![read_direct_field(1, 5, "x")]),
+    ];
+
+    let (promoted, fields) = promote_with_element_fields(&stmts, &classes);
+    assert!(
+        promoted.is_empty(),
+        "the direct read creates no element local"
+    );
+    assert_eq!(fields.get(&1), Some(&names(&["x", "y"])));
+}
+
+/// `churn` constructs `new Pair(base + i, i)` inside a specialized clone.
+/// Only that clone's runtime parameter guard may seed `base` as numeric; the
+/// public fallback must not trust the source annotation alone.
+#[test]
+fn guarded_numeric_parameter_proves_derived_constructor_argument() {
+    const BASE: u32 = 9;
+    let cs = [class_p()];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "P"),
+        counted_loop(
+            2,
+            Expr::Number(10.0),
+            vec![push(
+                1,
+                new_of(
+                    "P",
+                    vec![
+                        Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::LocalGet(BASE)),
+                            right: Box::new(Expr::LocalGet(2)),
+                        },
+                        Expr::LocalGet(2),
+                    ],
+                ),
+            )],
+        ),
+        counted_loop(5, arr_len(1), vec![read_direct_field(1, 5, "x")]),
+    ];
+
+    let (_, generic_fields) = promote_with_element_fields(&stmts, &classes);
+    assert_eq!(generic_fields.get(&1), Some(&names(&["y"])));
+
+    let numeric_params = HashSet::from([BASE]);
+    let (_, specialized_fields) =
+        promote_with_element_fields_and_numeric_params(&stmts, &classes, &numeric_params);
+    assert_eq!(specialized_fields.get(&1), Some(&names(&["x", "y"])));
+}
+
+#[test]
+fn non_numeric_constructor_argument_denies_that_element_field_layout() {
+    let cs = [class_p()];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "P"),
+        push(
+            1,
+            new_of(
+                "P",
+                vec![Expr::String("not a number".to_string()), Expr::Number(2.0)],
+            ),
+        ),
+        counted_loop(5, arr_len(1), vec![read_direct_field(1, 5, "x")]),
+    ];
+
+    let (_, fields) = promote_with_element_fields(&stmts, &classes);
+    assert_eq!(fields.get(&1), Some(&names(&["y"])));
 }
 
 /// A producer local with numeric args joins the meet and proves.

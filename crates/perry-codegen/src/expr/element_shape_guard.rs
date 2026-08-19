@@ -329,7 +329,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
 }
 
 /// Emit one `arr[i].field` read inside the fast clone: bare element load,
-/// residual per-element check with a single side exit, bare raw-f64 slot load.
+/// an optional residual per-element check, then a bare raw-f64 slot load.
 ///
 /// `idx_i32` must be the loop counter's canonical i32 (non-negative, and
 /// `< bound <= length` by the preheader), and `fact` must be the fact the
@@ -343,9 +343,6 @@ pub(crate) fn emit_element_shape_field_load(
     let field_index_str = field_index.to_string();
     let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
 
-    let load_idx = ctx.new_block("element_shape.load");
-    let load_label = ctx.block_label(load_idx);
-
     let elem_ptr = {
         let blk = ctx.block();
         // The element-shape invariant proved every slot in the verified prefix
@@ -358,27 +355,32 @@ pub(crate) fn emit_element_shape_field_load(
         let elem_handle = blk.and(I64, &elem_bits, crate::nanbox::POINTER_MASK_I64);
         let elem_ptr = blk.inttoptr(I64, &elem_handle);
 
-        // Residual per-OBJECT facts (see the module docs for why they cannot
-        // come from the array-level invariant).
-        let hdr_ptr = blk.gep(I8, &elem_ptr, &[(I64, "-8")]);
-        let hdr = blk.load(I32, &hdr_ptr);
-        let hdr_masked = blk.and(I32, &hdr, ELEM_HEADER_MASK);
-        let hdr_ok = blk.icmp_eq(I32, &hdr_masked, ELEM_HEADER_EXPECT);
+        if !fact.statically_layout_proven {
+            let load_idx = ctx.new_block("element_shape.load");
+            let load_label = ctx.block_label(load_idx);
+            let blk = ctx.block();
 
-        // #8113: the ShapeId moved from header offset 8 to 4.
-        let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
-        let shape_id = blk.load(I32, &sid_ptr);
-        let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
+            // Residual per-OBJECT facts (see the module docs for why they
+            // cannot come from the runtime array-level invariant).
+            let hdr_ptr = blk.gep(I8, &elem_ptr, &[(I64, "-8")]);
+            let hdr = blk.load(I32, &hdr_ptr);
+            let hdr_masked = blk.and(I32, &hdr, ELEM_HEADER_MASK);
+            let hdr_ok = blk.icmp_eq(I32, &hdr_masked, ELEM_HEADER_EXPECT);
 
-        let ok = blk.and(I1, &hdr_ok, &shape_ok);
-        // One branch per access. The side exit resumes the CURRENT iteration
-        // in the slow clone; the matcher guarantees no effect of this
-        // iteration has committed yet, so re-executing cannot double-apply.
-        blk.cond_br(&ok, &load_label, &fact.side_exit_label);
+            // #8113: the ShapeId moved from header offset 8 to 4.
+            let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
+            let shape_id = blk.load(I32, &sid_ptr);
+            let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
+
+            let ok = blk.and(I1, &hdr_ok, &shape_ok);
+            // One branch per access. The side exit resumes the CURRENT
+            // iteration in the slow clone; no effect has committed yet.
+            blk.cond_br(&ok, &load_label, &fact.side_exit_label);
+            ctx.current_block = load_idx;
+        }
         elem_ptr
     };
 
-    ctx.current_block = load_idx;
     let blk = ctx.block();
     let fields_base = blk.gep(I8, &elem_ptr, &[(I64, &header_skip)]);
     let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_index_str)]);

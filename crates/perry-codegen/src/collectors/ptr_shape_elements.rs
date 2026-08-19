@@ -210,7 +210,15 @@ impl ElementShapeFacts {
     ///
     /// Group integrity: `ptr_shape.rs` promotes all of these or none of them.
     pub(crate) fn group_members(&self) -> HashMap<u32, Vec<u32>> {
-        let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+        // Keep roots whose elements are used only through direct `A[i].field`
+        // reads. They have no element locals, but the group-wide reachable-
+        // store proof still needs to inspect their inline `new` push sites.
+        let mut out: HashMap<u32, Vec<u32>> = self
+            .arrays
+            .keys()
+            .copied()
+            .map(|root| (root, Vec::new()))
+            .collect();
         for (id, root) in self
             .pushed
             .iter()
@@ -270,6 +278,17 @@ impl ElementShapeFacts {
                     .get(root)
                     .map(|class_name| (*id, class_name.clone()))
             })
+            .collect()
+    }
+
+    /// Expand root-keyed numeric-field verdicts to every proven array alias.
+    pub(crate) fn proven_array_numeric_fields(
+        &self,
+        root_fields: &HashMap<u32, HashSet<String>>,
+    ) -> HashMap<u32, HashSet<String>> {
+        self.array_roots
+            .iter()
+            .filter_map(|(id, root)| root_fields.get(root).map(|fields| (*id, fields.clone())))
             .collect()
     }
 

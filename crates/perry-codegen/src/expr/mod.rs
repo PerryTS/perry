@@ -1721,6 +1721,10 @@ pub(crate) struct ElementShapeLoopFact {
     /// re-executes the current iteration, which is safe because the matcher
     /// admits no body that commits an effect before the read.
     pub side_exit_label: String,
+    /// E1--E5 containment plus the group-wide reachable-store proof establish
+    /// the exact ShapeId, descriptor-free state, and raw-f64 layout for every
+    /// field this clone reads. When true, no per-object residual is needed.
+    pub statically_layout_proven: bool,
     /// property name -> packed slot index, every entry a declared raw-f64
     /// candidate validated by the matcher.
     pub fields: std::collections::BTreeMap<String, u32>,

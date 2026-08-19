@@ -805,6 +805,16 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    let spec_numeric_params: HashSet<u32> = spec_param_proofs
+        .iter()
+        .filter_map(|(id, ty)| {
+            matches!(
+                ty,
+                perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+            )
+            .then_some(*id)
+        })
+        .collect();
     // `--opt-report` (#6952): attribute every representation decision the
     // collectors below make to this function. No-op when the report is off.
     //
@@ -834,6 +844,7 @@ pub(super) fn compile_function(
         &cross_module.module_dispatch,
         &spec_ta_lens,
         &spec_i32_params,
+        &spec_numeric_params,
     );
 
     if let Some(plan) = spec_entry {

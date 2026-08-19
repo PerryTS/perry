@@ -116,6 +116,9 @@ pub(crate) struct ArrayFacts {
     /// empty, receives only same-class fresh allocations, stays dense, and
     /// never escapes to an unbounded mutator.
     pub exact_element_classes: HashMap<u32, String>,
+    /// Array binding -> fields whose slots remain raw f64 for every element,
+    /// proven from the complete reachable-store set of its E1--E5 group.
+    pub exact_numeric_element_fields: HashMap<u32, HashSet<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -291,6 +294,10 @@ impl TypeFacts {
             .map(String::as_str)
     }
 
+    pub(crate) fn exact_numeric_element_fields(&self, local_id: u32) -> Option<&HashSet<String>> {
+        self.arrays.exact_numeric_element_fields.get(&local_id)
+    }
+
     pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
         &self.effect.array_length_mutation_locals
     }
@@ -440,6 +447,7 @@ pub(crate) fn collect_type_facts(
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
     spec_i32_params: &HashSet<u32>,
+    spec_numeric_params: &HashSet<u32>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -635,15 +643,18 @@ pub(crate) fn collect_type_facts(
     // Representation-selection Phase 3b: shape-proven pointer locals. Gated
     // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
     // inside the collector.
-    let shape_proven_ptr_locals = super::ptr_shape::collect_shape_proven_ptr_locals(
-        stmts,
-        boxed_vars,
-        module_globals,
-        classes,
-        module_dispatch,
-        &not_bigint_locals,
-        &element_shape_facts,
-    );
+    let (shape_proven_ptr_locals, exact_numeric_element_fields) =
+        super::ptr_shape::collect_shape_proven_ptr_locals_and_element_fields(
+            stmts,
+            boxed_vars,
+            module_globals,
+            classes,
+            module_dispatch,
+            &not_bigint_locals,
+            &element_shape_facts,
+            spec_numeric_params,
+        );
+    array_facts.exact_numeric_element_fields = exact_numeric_element_fields;
     // Representation-selection Phase 4a.3: `Ptr<NumArray>` locals. Gated on
     // `PERRY_PTR_NUMARRAY_LOCALS`, the module-wide §5.2 barrier scan, and the
     // array-specific prototype-indexed-write kill inside the collector.
@@ -742,6 +753,7 @@ pub(crate) fn collect_native_region_fact_graph(
         module_dispatch,
         &HashMap::new(),
         &HashSet::new(),
+        &HashSet::new(),
     )
 }
 
@@ -763,6 +775,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
     spec_i32_params: &HashSet<u32>,
+    spec_numeric_params: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -778,6 +791,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         module_dispatch,
         spec_ta_lens,
         spec_i32_params,
+        spec_numeric_params,
     )
 }
 
@@ -804,6 +818,7 @@ pub(crate) fn collect_hir_facts(
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
         &HashMap::new(),
+        &HashSet::new(),
         &HashSet::new(),
     )
 }
@@ -1471,6 +1486,7 @@ impl ArrayFactCollector {
                 // Filled in by `collect_type_facts` from the E1--E5 exact
                 // element-shape proof.
                 exact_element_classes: HashMap::new(),
+                exact_numeric_element_fields: HashMap::new(),
             },
             EffectFacts {
                 unknown_call_escape: self.unknown_call_escape,

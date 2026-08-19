@@ -300,6 +300,32 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     not_bigint_locals: &HashSet<u32>,
     element_facts: &ElementShapeFacts,
 ) -> HashMap<u32, PtrShapeLocal> {
+    collect_shape_proven_ptr_locals_and_element_fields(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        not_bigint_locals,
+        element_facts,
+        &HashSet::new(),
+    )
+    .0
+}
+
+/// Collect pointer-local facts plus the group-wide numeric layouts of proven
+/// element arrays. The latter includes arrays read only as `A[i].field`, which
+/// have no element local to carry a [`PtrShapeLocal`] of their own.
+pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    not_bigint_locals: &HashSet<u32>,
+    element_facts: &ElementShapeFacts,
+    numeric_param_seeds: &HashSet<u32>,
+) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
     // #7152: Perry's own `cjs_wrap` preamble, recognised once for this region.
     // One scan of the top-level statement list on anything else, then a
     // `Default` that suppresses nothing. See `cjs_scaffolding.rs`.
@@ -313,7 +339,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     };
     if let Some(denial) = bail {
         report_early_bail(stmts, boxed_vars, module_globals, &preamble, denial);
-        return HashMap::new();
+        return (HashMap::new(), HashMap::new());
     }
     // `--opt-report` (#6952): binding names and loop depths for the values
     // this pass is about to accept or deny. Both walks are skipped entirely
@@ -366,8 +392,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         candidates.insert(id, class_name.to_owned());
         callback_seeded.insert(id);
     }
-    if candidates.is_empty() {
-        return HashMap::new();
+    if candidates.is_empty() && element_facts.is_empty() {
+        return (HashMap::new(), HashMap::new());
     }
     // Class-level admission BEFORE the use walk so the walk's chain-field
     // membership tests are meaningful.
@@ -380,8 +406,8 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             }
         }
     });
-    if candidates.is_empty() {
-        return HashMap::new();
+    if candidates.is_empty() && element_facts.is_empty() {
+        return (HashMap::new(), HashMap::new());
     }
 
     // Alias pre-pass: `const alias = candidate` (the exact-receiver inliner
@@ -447,13 +473,18 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     } = walk;
     // #7770: locals whose every write is number-producing by construction —
     // they let a provenance `new C(i, i + 1)` resolve its parameters.
-    let numeric_locals = collect_numeric_by_construction_locals(
+    let mut numeric_locals = collect_numeric_by_construction_locals(
         stmts,
         boxed_vars,
         module_globals,
         not_bigint_locals,
         &const_local_inits,
     );
+    // A spec entry has validated these parameters before entering this body.
+    // Unlike a TypeScript annotation, that is runtime evidence, so derived
+    // object-literal values such as `base + i` are numeric by construction in
+    // this clone while the public fallback remains conservative.
+    numeric_locals.extend(numeric_param_seeds.iter().copied());
     // #7770: one numeric-field verdict per element group, computed from the
     // union of every member's stores and the meet over every push's `new`
     // arguments (see `ptr_shape_numeric.rs`). Consulted by the `'cand` loop
@@ -462,7 +493,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     // integrity below drops EVERY member's fact when any member fails, and a
     // dropped fact takes its claim with it.
     let groups = element_facts.group_members();
-    let group_numeric = prove_group_numeric_fields(
+    let mut group_numeric = prove_group_numeric_fields(
         classes,
         module_dispatch,
         element_facts,
@@ -675,64 +706,21 @@ pub(crate) fn collect_shape_proven_ptr_locals(
             }
         }
     }
-    out
+    // A group-wide layout claim is usable only when every reference-bearing
+    // member survived the exact-shape proof. Direct `A[i].field` groups have
+    // no members, so their all-inline provenance verdict survives vacuously.
+    group_numeric.retain(|root, _| {
+        groups
+            .get(root)
+            .is_some_and(|members| members.iter().all(|member| out.contains_key(member)))
+    });
+    let element_fields = element_facts.proven_array_numeric_fields(&group_numeric);
+    (out, element_fields)
 }
 
-/// Collect `Let { mutable: false, init: Some(LocalGet(src)) }` edges — the
-/// alias shape the exact-receiver inliner emits for compound assigns.
-pub(super) fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
-    for s in stmts {
-        match s {
-            Stmt::Let {
-                id,
-                mutable: false,
-                init: Some(Expr::LocalGet(src)),
-                ..
-            } => out.push((*id, *src)),
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                collect_alias_edges(then_branch, out);
-                if let Some(eb) = else_branch {
-                    collect_alias_edges(eb, out);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_alias_edges(body, out);
-            }
-            Stmt::For { init, body, .. } => {
-                if let Some(init) = init {
-                    collect_alias_edges(std::slice::from_ref(init.as_ref()), out);
-                }
-                collect_alias_edges(body, out);
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                collect_alias_edges(body, out);
-                if let Some(c) = catch {
-                    collect_alias_edges(&c.body, out);
-                }
-                if let Some(f) = finally {
-                    collect_alias_edges(f, out);
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for case in cases {
-                    collect_alias_edges(&case.body, out);
-                }
-            }
-            Stmt::Labeled { body, .. } => {
-                collect_alias_edges(std::slice::from_ref(body.as_ref()), out);
-            }
-            _ => {}
-        }
-    }
-}
+#[path = "ptr_shape_aliases.rs"]
+mod aliases;
+pub(super) use aliases::collect_alias_edges;
 
 // ── Class-level admission ──────────────────────────────────────────────────
 

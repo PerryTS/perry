@@ -367,8 +367,9 @@ fn assert_fast_clone_is_entered(ir: &str) {
 }
 
 /// The emitted text the fast clone owns: exactly the blocks named
-/// `for.element_shape_fast.*` and the `element_shape.load` blocks its field
-/// reads branch into.
+/// `for.element_shape_fast.*` and any `element_shape.load` blocks its
+/// runtime-guarded field reads branch into. A statically layout-proven clone
+/// keeps the field load directly in its body and owns no such side-exit block.
 ///
 /// #7480 step 3 — ANTI-VACUITY. This used to slice from the first *substring*
 /// occurrence of `for.element_shape_fast.cond`, which is the
@@ -406,8 +407,10 @@ fn fast_clone_slice(ir: &str) -> String {
         }
     }
     assert!(
-        owned.contains("for.element_shape_fast.body") && owned.contains("element_shape.load"),
-        "the fast-clone slice must contain the cloned BODY and its element \
+        owned.contains("for.element_shape_fast.body")
+            && owned.contains("getelementptr double")
+            && owned.contains("load double"),
+        "the fast-clone slice must contain the cloned BODY and a raw field \
          load, otherwise every negative assertion against it is vacuous; \
          sliced:\n{owned}"
     );
@@ -500,6 +503,15 @@ fn exact_local_array_construction_skips_the_runtime_shape_scan() {
     assert!(
         !ir.contains("call i32 @js_array_ensure_element_shape"),
         "an exact E1--E5 construction proof must not rescan the array"
+    );
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains("element_shape.load"),
+        "the group-wide numeric-layout proof must remove per-object residual branches"
+    );
+    assert!(
+        !fast.contains("402686207"),
+        "the statically layout-proven clone must not reload and mask every GC header"
     );
     assert!(
         ir.contains("for.element_shape_slow.cond"),
