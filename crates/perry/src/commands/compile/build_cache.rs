@@ -39,6 +39,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_WRITE_BARRIERS",
     "PERRY_SHADOW_STACK",
     "PERRY_RS4GC",
+    // Explicit hybrid size mode changes both the module optimization policy
+    // and which unusually large functions skip the middle-end.
+    "PERRY_LL_SIZE_OPT",
+    "PERRY_LL_PREOPT_OPTNONE_INSTRS",
     "PERRY_GC_SAFEPOINT_ONLY",
     "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",

@@ -167,7 +167,7 @@ fn compile_plan_records_effective_target_and_native_tuning() {
         false,
     );
     assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
-    // Native compilation is always speed-optimized at -O3.
+    // Native compilation defaults to speed-optimized -O3.
     assert!(plan.clang_args.contains(&"-O3".to_string()));
     assert!(plan.clang_args.contains(&"-target".to_string()));
     assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
@@ -185,7 +185,7 @@ fn compile_plan_records_effective_target_and_native_tuning() {
 }
 
 #[test]
-fn compile_plan_always_uses_o3() {
+fn compile_plan_defaults_to_o3() {
     // Module size is deliberately absent from the compile plan: Perry's
     // runtime optimization contract does not change for large generated IR.
     // Scalability is handled by codegen-unit partitioning and structured
@@ -201,6 +201,17 @@ fn compile_plan_always_uses_o3() {
     assert!(plan.clang_args.contains(&"-O3".to_string()));
     assert!(!plan.clang_args.contains(&"-Os".to_string()));
     assert!(!plan.clang_args.contains(&"-O0".to_string()));
+}
+
+#[test]
+fn size_optimization_flag_is_explicit_and_truthy() {
+    for enabled in ["1", "true", "TRUE", " on ", "yes"] {
+        assert!(size_optimization_requested(Some(enabled)), "{enabled}");
+    }
+    for disabled in ["", "0", "false", "off", "no", "anything-else"] {
+        assert!(!size_optimization_requested(Some(disabled)), "{disabled}");
+    }
+    assert!(!size_optimization_requested(None));
 }
 
 #[test]

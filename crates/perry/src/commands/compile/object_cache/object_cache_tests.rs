@@ -608,6 +608,8 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_WRITE_BARRIERS",
         "PERRY_SHADOW_STACK",
         "PERRY_RS4GC",
+        "PERRY_LL_SIZE_OPT",
+        "PERRY_LL_PREOPT_OPTNONE_INSTRS",
         "PERRY_GC_SAFEPOINT_ONLY",
         "PERRY_DISABLE_BUFFER_FAST_PATH",
         "PERRY_VERIFY_NATIVE_REGIONS",

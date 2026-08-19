@@ -8,7 +8,7 @@
 //!
 //! Decision parity by construction: this module does not re-derive optimization
 //! or CPU tuning. It interprets the *same* argv `build_clang_compile_plan`
-//! produces for clang (`-O3`, `-mcpu=native`, `-mllvm
+//! produces for clang (`-O3`/explicit `-Os`, `-mcpu=native`, `-mllvm
 //! -inlinehint-threshold=N`, `-target <triple>`), so the two backends cannot
 //! drift on a decision without drifting on the plan — which the plan's own
 //! tests pin.
@@ -21,6 +21,7 @@ use std::ffi::CString;
 use std::sync::Once;
 
 use anyhow::{anyhow, Result};
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::passes::PassBuilderOptions;
@@ -327,6 +328,91 @@ pub(crate) fn optimize_and_emit_module(
     )
 }
 
+/// Optional pre-optimization escape hatch for unusually large generated
+/// functions.
+///
+/// Dense generated bundles often contain one parser/table initializer that is
+/// large enough to make the `-O1+` middle-end super-linear, alongside hundreds
+/// of ordinary functions that benefit substantially from `-Os`. Routing the
+/// whole codegen unit to `-O0` keeps compilation bounded but also bloats every
+/// ordinary sibling. When this cap is non-zero, only functions above it are
+/// stamped `optnone`+`noinline` before the module pipeline runs. This makes
+/// `PERRY_LL_SIZE_OPT=1` a practical hybrid mode instead of an all-or-nothing
+/// gamble on the largest function in each unit.
+///
+/// Disabled by default while the threshold is calibrated across the bundle
+/// corpus. `PERRY_LL_PREOPT_OPTNONE_INSTRS=N` enables it; `0` disables it.
+const DEFAULT_PREOPT_OPTNONE_INSTRS: usize = 0;
+
+fn preopt_optnone_instr_cap() -> usize {
+    std::env::var("PERRY_LL_PREOPT_OPTNONE_INSTRS")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_PREOPT_OPTNONE_INSTRS)
+}
+
+fn stamp_function_optnone(function: inkwell::values::FunctionValue<'_>) {
+    let context = function.get_type().get_context();
+    let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+    let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
+    // `alwaysinline` and `noinline` are verifier-incompatible. Generated
+    // functions do not normally carry it, but the opt-in must remain safe for
+    // imported/generated IR that does.
+    function.remove_enum_attribute(
+        AttributeLoc::Function,
+        Attribute::get_named_enum_kind_id("alwaysinline"),
+    );
+    function.remove_enum_attribute(
+        AttributeLoc::Function,
+        Attribute::get_named_enum_kind_id("inlinehint"),
+    );
+    function.add_attribute(
+        AttributeLoc::Function,
+        context.create_enum_attribute(optnone_kind, 0),
+    );
+    function.add_attribute(
+        AttributeLoc::Function,
+        context.create_enum_attribute(noinline_kind, 0),
+    );
+}
+
+fn function_instruction_count(function: inkwell::values::FunctionValue<'_>, cap: usize) -> usize {
+    let mut instrs = 0usize;
+    'body: for bb in function.get_basic_blocks() {
+        let mut inst = bb.get_first_instruction();
+        while let Some(i) = inst {
+            instrs += 1;
+            if instrs > cap {
+                break 'body;
+            }
+            inst = i.get_next_instruction();
+        }
+    }
+    instrs
+}
+
+/// Demote large functions before the ordinary optimization pipeline while
+/// leaving every smaller sibling eligible for the unit's requested opt level.
+fn demote_preoptimization_bloated_functions(module: &inkwell::module::Module<'_>, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if function_instruction_count(f, cap) > cap {
+            stamp_function_optnone(f);
+            eprintln!(
+                "perry: `{}` exceeds {} pre-optimization instructions; compiling only this \
+                 function unoptimized (optnone) while its siblings keep the module's size \
+                 optimization. Override with PERRY_LL_PREOPT_OPTNONE_INSTRS.",
+                f.get_name().to_string_lossy(),
+                cap,
+            );
+        }
+        function = f.get_next_function();
+    }
+}
+
 fn optimize_and_emit(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -386,6 +472,12 @@ fn optimize_and_emit(
     // machine's real datalayout.
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
+
+    // Opt-in hybrid size optimization for generated bundles: protect only the
+    // pathological bodies before entering the requested module pipeline.
+    if opt != '0' {
+        demote_preoptimization_bloated_functions(module, preopt_optnone_instr_cap());
+    }
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
@@ -513,6 +605,47 @@ mod tests {
             result.is_err(),
             "an unattributed barrier must be rejected by the verifier"
         );
+    }
+
+    #[test]
+    fn preoptimization_bloated_function_is_demoted_without_demoting_its_sibling() {
+        global_init(&[]);
+        let context = Context::create();
+        let ir = "define i64 @big(i64 %a) {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 %x2 = add i64 %x1, 1\n\
+                  \x20 %x3 = add i64 %x2, 1\n\
+                  \x20 %x4 = add i64 %x3, 1\n\
+                  \x20 %x5 = add i64 %x4, 1\n\
+                  \x20 ret i64 %x5\n\
+                  }\n\
+                  define i64 @small(i64 %a) {\n\
+                  entry:\n\
+                  \x20 %x1 = add i64 %a, 1\n\
+                  \x20 ret i64 %x1\n\
+                  }\n";
+        let module =
+            parse_ir_text(&context, ir, "preopt_optnone_demotion").expect("fixture parses");
+        demote_preoptimization_bloated_functions(&module, 4);
+
+        let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
+        let big = module.get_function("big").expect("big exists");
+        let small = module.get_function("small").expect("small exists");
+        assert!(
+            big.get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_some(),
+            "a function past the pre-optimization cap must be stamped optnone"
+        );
+        assert!(
+            small
+                .get_enum_attribute(AttributeLoc::Function, optnone_kind)
+                .is_none(),
+            "an ordinary sibling must keep the module optimization pipeline"
+        );
+        module
+            .verify()
+            .expect("optnone+noinline must remain verifier-valid");
     }
 
     fn constant_fold_order_fixture(folded: bool) -> String {

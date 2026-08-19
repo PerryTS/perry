@@ -307,6 +307,13 @@ fn cpu_tuning_arg_for(
     }
 }
 
+fn size_optimization_requested(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "on" | "yes"))
+}
+
 fn build_clang_compile_plan(
     clang: PathBuf,
     ll_path: PathBuf,
@@ -323,11 +330,15 @@ fn build_clang_compile_plan(
         cpu_tuning_arg_for(requested_cpu.as_deref(), target_triple, &effective_target);
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
-    // Perry promises speed-optimized native output. Large modules/functions
-    // stay at -O3 too; compile-time scalability belongs in codegen-unit
-    // partitioning and structured function outlining, not in a silent change
-    // to the runtime optimization policy.
-    let opt_flag = "-O3";
+    // Perry defaults to speed-optimized native output. Generated-bundle users
+    // can explicitly trade runtime speed for artifact size with
+    // PERRY_LL_SIZE_OPT; there is no module-size-driven policy change.
+    let size_opt = env::var("PERRY_LL_SIZE_OPT").ok();
+    let opt_flag = if size_optimization_requested(size_opt.as_deref()) {
+        "-Os"
+    } else {
+        "-O3"
+    };
 
     // Compacting the stack map means going through assembly, because that is
     // where LLVM prints the map's function addresses as symbol *names* — the
@@ -372,7 +383,7 @@ fn build_clang_compile_plan(
     clang_args.push("-target".to_string());
     clang_args.push(effective_target.clone());
 
-    let mut analysis_clang_args = vec!["-O3".to_string(), "-fno-math-errno".to_string()];
+    let mut analysis_clang_args = vec![opt_flag.to_string(), "-fno-math-errno".to_string()];
     if let Some(arg) = &native_tuning_arg {
         analysis_clang_args.push(arg.clone());
     }
