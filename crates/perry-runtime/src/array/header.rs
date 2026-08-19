@@ -68,6 +68,25 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
     }
 }
 
+/// Read the flag word of an array that [`clean_arr_ptr`] already resolved.
+///
+/// Hot operations such as `push` need the frozen, descriptor, numeric-layout,
+/// and extensibility bits together. Re-entering [`array_object_flags`] for each
+/// question repeats allocator ownership classification even though the first
+/// clean already proved the receiver is a live, non-forwarded GC array.
+///
+/// # Safety
+///
+/// `arr` must be the non-null result of [`clean_arr_ptr`] or
+/// [`clean_arr_ptr_mut`] with no intervening allocation or safepoint.
+#[inline(always)]
+pub(crate) unsafe fn array_object_flags_resolved(arr: *const ArrayHeader) -> u16 {
+    debug_assert!(!arr.is_null());
+    let gc_header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    debug_assert_eq!((*gc_header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    (*gc_header)._reserved
+}
+
 /// The `obj_type` and flag word of the `GcHeader` that precedes `arr`, read
 /// once, for a receiver [`clean_arr_ptr`] has already resolved. `(0, 0)` when
 /// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
@@ -1015,6 +1034,20 @@ pub(crate) unsafe fn canonicalize_array_numeric_store_value(
     value: f64,
 ) -> f64 {
     f64::from_bits(canonicalize_array_numeric_store_bits(arr, value.to_bits()))
+}
+
+/// Canonicalize a store using the flag word read from an already-resolved
+/// array. This is the no-second-classification twin of
+/// [`canonicalize_array_numeric_store_value`].
+#[inline(always)]
+pub(crate) fn canonicalize_array_numeric_store_value_from_flags(flags: u16, value: f64) -> f64 {
+    let raw_layout = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    if flags & raw_layout != 0 {
+        if let Some(number) = value_bits_to_number(value.to_bits()) {
+            return number;
+        }
+    }
+    value
 }
 
 #[inline]

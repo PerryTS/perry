@@ -38,7 +38,6 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
-        || !crate::object::object_is_regular(obj)
         || (*obj).class_id == NATIVE_MODULE_CLASS_ID
         || crate::array::object_prototype_addr_matches(obj_addr)
         // URL's visible fields are live views over one backing URL. An own
@@ -48,6 +47,18 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     {
         return false;
     }
+    // The header probe above already established a live, non-forwarded
+    // `GC_TYPE_OBJECT`. Resolve its immutable descriptor once for both the
+    // ordinary-object discriminator and the live-slot bound used below.
+    // `object_is_regular` followed by `object_live_slot_count` repeated both
+    // the allocator classification and this ShapeId table lookup.
+    let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+        return false;
+    };
+    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        return false;
+    }
+    let live_slots = shape.live_inline_slot_count;
 
     let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key_addr) else {
         return false;
@@ -99,8 +110,6 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         vbits
     };
     super::mark_object_dynamic_shape_unknown(obj);
-    // #8113: one bound probe, reused. It is a shape-table lookup now.
-    let live_slots = crate::object::object_live_slot_count(obj);
     let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     if (idx as usize) < alloc_limit {
         if idx >= live_slots {

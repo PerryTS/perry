@@ -1917,6 +1917,73 @@ fn typed_feedback_method_direct_guard_passes_for_exact_registered_method() {
 }
 
 #[test]
+fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
+    // The guard deliberately fails closed once any test in the process has
+    // installed a descriptor or changed a class prototype. Exercise its
+    // pristine fast-path state in a one-test child process instead of
+    // resetting those safety latches underneath unrelated tests.
+    const CHILD_ENV: &str = "PERRY_TEST_METHOD_DIRECT_SHAPE_PAIR_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("current runtime test binary"),
+        )
+        .arg("typed_feedback::tests::method_direct_shape_guard_requires_the_exact_compiler_pair")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .output()
+        .expect("launch the pristine method-shape guard witness");
+        assert!(
+            output.status.success(),
+            "method-shape guard witness failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+
+    let class_id = 0x7EED_1061;
+    let (obj, _, _, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+        },
+        1
+    );
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id.wrapping_add(1),
+                expected_shape_id,
+            )
+        },
+        0
+    );
+
+    // The classifier returns an untrusted header token; only the exact
+    // compiler-published pair licenses the direct call. A divergent stamp must
+    // miss even when it remains in the process-global ShapeId range.
+    unsafe {
+        (*obj).parent_class_id = expected_shape_id.wrapping_add(1);
+    }
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+        },
+        0
+    );
+    unsafe {
+        (*obj).parent_class_id = expected_shape_id;
+    }
+}
+
+#[test]
 fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();

@@ -1019,10 +1019,11 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 ///
 /// Returns the receiver's `class_id` when every precondition the guard checks
 /// *other than* the class-id / shape comparison holds, and writes the
-/// receiver's ShapeId through `out_shape_id`. Returns 0 — never a
-/// valid user class id — when any precondition fails, and then leaves
-/// output at 0 so a caller that skips the return check still cannot match a
-/// real ShapeId.
+/// receiver's ShapeId through `out_shape_id`. The pair is an untrusted token:
+/// callers must compare it to a compiler-published `(class_id, ShapeId)` pair
+/// before using it as a layout proof. Returns 0 — never a valid user class id
+/// — when any precondition fails, and then leaves output at 0 so a caller that
+/// skips the return check still cannot match a real ShapeId.
 ///
 /// This exists because the single-pair guard speculates the receiver's dynamic
 /// class is exactly the *declared* class of the expression. For a receiver
@@ -1055,21 +1056,17 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
         return 0;
     }
     let obj = object_addr as *const ObjectHeader;
-    // #8122: ONE shape-table probe. `object_is_regular` re-derived the GcHeader
-    // this function has already validated (kind + not forwarded) and probed
-    // for the kind; `object_shape_id` then probed again to prove the stamp
-    // resolves. One descriptor read answers both, and the header stamp is the
-    // id once it has resolved.
-    let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
-        return 0;
-    };
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
-        return 0;
-    }
     let class_id = (*obj).class_id;
     if class_id == 0 {
         return 0;
     }
+    // The emitted caller immediately compares BOTH words against one of its
+    // compiler-published class-shape pairs. That exact ShapeId identity is the
+    // descriptor proof: ids are process-unique, immutable and never reused.
+    // Resolving the id through the thread-local descriptor HashMap here merely
+    // repeated the proof before every virtual call. A class object cannot
+    // alias an ordinary instance's expected id: the class-kind transition
+    // mints its own semantic successor ShapeId.
     let shape_id = crate::object::shapes::object_shape_stamp(obj);
     if shape_id == 0 {
         return 0;
