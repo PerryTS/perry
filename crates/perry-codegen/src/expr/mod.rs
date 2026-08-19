@@ -2706,46 +2706,11 @@ fn lower_numeric_binary_value(
         return Ok(None);
     }
 
-    // Hand this proven shape to `binary::lower`, which owns the existing
-    // integer remainder and negative-zero repair. This must run before operand
-    // lowering so returning `None` emits no dead loads or duplicate records.
-    if matches!(op, BinaryOp::Mod)
-        && matches!(
-            left,
-            Expr::LocalGet(id)
-                if ctx.i32_counter_slots.contains_key(id)
-                    && !ctx.unsigned_i32_locals.contains(id)
-        )
-        && matches!(
-            right,
-            Expr::Integer(value)
-                if i32::try_from(*value).is_ok_and(|divisor| divisor > 0)
-        )
-    {
-        return Ok(None);
-    }
-
-    // #7404: the same hand-off for a remainder whose operands the integer
-    // fast path can prove, but whose dividend has no i32 counter slot — the
-    // `bench_bitwise` shape (`let a = 12345678; … a = a + 1; a % 1000`).
-    //
-    // The condition above only recognises an `i32_counter_slots` dividend, so
-    // an i64-range integer local fell through to the `frem double` below,
-    // which on AArch64 is a `bl _fmod` libm call.
-    //
-    // The DIVISOR is restricted to a non-zero integer literal, exactly like the
-    // hand-off above. That is not incidental tidiness: `binary::lower`'s own
-    // Mod gate accepts any `integer_locals` divisor, and `srem(x, 0)` is UB in
-    // LLVM while JS requires NaN. A decrementing counter that walks through
-    // zero (`for (let d = 10; d >= 0; d--) … x % d`) IS in `integer_locals`,
-    // so widening the hand-off to non-literal divisors would newly route it
-    // into `srem` — main keeps it on `frem` only because this hand-off never
-    // fires for it. Literal divisors cannot be zero here, so the dividend is
-    // the only side this widens.
-    if matches!(op, BinaryOp::Mod)
-        && matches!(right, Expr::Integer(divisor) if *divisor != 0)
-        && crate::type_analysis::is_integer_valued_expr(ctx, left)
-    {
+    // `binary::lower` owns both remainder specializations: the static integer
+    // proof and the runtime-checked i32 path with an `frem` fallback. Keep all
+    // numeric `%` expressions on that one path so native-value lowering cannot
+    // bypass the guard and retain an unconditional libm call.
+    if matches!(op, BinaryOp::Mod) {
         return Ok(None);
     }
 

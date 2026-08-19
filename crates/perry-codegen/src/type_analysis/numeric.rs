@@ -755,26 +755,6 @@ pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     integer_magnitude_bits_inner(ctx, e, true).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
 }
 
-/// The same judgment for the **divisor** of `%`, with the i64-range local set
-/// deliberately withheld.
-///
-/// `srem(x, 0)` is UB in LLVM while JS requires `NaN`, and the caller's
-/// `right_is_known_zero` guard only recognises a literal `0` — a *local* that
-/// happens to hold `0` slips past it. The i64-range set admits exactly the
-/// counters that walk through zero (`for (let d = 10; d >= 0; d--) … x % d`),
-/// so letting it widen the divisor would introduce a UB window that
-/// `integer_locals` alone does not open. The dividend has no such constraint.
-pub(crate) fn is_integer_valued_divisor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    if matches!(
-        e,
-        Expr::LocalGet(id) | Expr::Update { id, .. }
-            if ctx.int_valued_i64_locals.contains_key(id)
-    ) {
-        return false;
-    }
-    integer_magnitude_bits_inner(ctx, e, false).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
-}
-
 /// Largest magnitude (as `log2`) an expression may have and still convert
 /// exactly and in-range through `fptosi double -> i64`. `i64::MAX` is
 /// `2^63 - 1`, so `2^62` leaves a full bit of headroom.

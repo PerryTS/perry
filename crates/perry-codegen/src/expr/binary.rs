@@ -52,6 +52,82 @@ fn lower_rooted_dynamic_binary(
     })
 }
 
+/// Emit JS numeric remainder with an inline fast path for i32-valued operands.
+///
+/// LLVM lowers `frem double` to a libm `fmod` call on AArch64. Most application
+/// remainders use small whole numbers (loop indices, lengths, parsed integer
+/// configuration), so prove that common case at runtime and use integer
+/// remainder instead. The ordered range checks are deliberately in a separate
+/// predecessor from `fptosi`: converting NaN, infinity, or an out-of-range
+/// double is poison in LLVM even when a later select would discard it.
+fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> String {
+    let convert_idx = ctx.new_block("mod.i32.convert");
+    let integer_idx = ctx.new_block("mod.i32.integer");
+    let fallback_idx = ctx.new_block("mod.f64.fallback");
+    let merge_idx = ctx.new_block("mod.merge");
+    let convert_label = ctx.block_label(convert_idx);
+    let integer_label = ctx.block_label(integer_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let min = crate::nanbox::double_literal(f64::from(i32::MIN));
+    let max = crate::nanbox::double_literal(f64::from(i32::MAX));
+    let l_ge_min = ctx.block().fcmp("oge", left, &min);
+    let l_le_max = ctx.block().fcmp("ole", left, &max);
+    let r_ge_min = ctx.block().fcmp("oge", right, &min);
+    let r_le_max = ctx.block().fcmp("ole", right, &max);
+    let l_in_range = ctx.block().and(I1, &l_ge_min, &l_le_max);
+    let r_in_range = ctx.block().and(I1, &r_ge_min, &r_le_max);
+    let both_in_range = ctx.block().and(I1, &l_in_range, &r_in_range);
+    ctx.block()
+        .cond_br(&both_in_range, &convert_label, &fallback_label);
+
+    ctx.current_block = convert_idx;
+    let li = ctx.block().fptosi(DOUBLE, left, I32);
+    let ri = ctx.block().fptosi(DOUBLE, right, I32);
+    let l_roundtrip = ctx.block().sitofp(I32, &li, DOUBLE);
+    let r_roundtrip = ctx.block().sitofp(I32, &ri, DOUBLE);
+    let l_is_integer = ctx.block().fcmp("oeq", &l_roundtrip, left);
+    let r_is_integer = ctx.block().fcmp("oeq", &r_roundtrip, right);
+    let r_is_nonzero = ctx.block().icmp_ne(I32, &ri, "0");
+    let both_integer = ctx.block().and(I1, &l_is_integer, &r_is_integer);
+    let can_use_integer = ctx.block().and(I1, &both_integer, &r_is_nonzero);
+    ctx.block()
+        .cond_br(&can_use_integer, &integer_label, &fallback_label);
+
+    ctx.current_block = integer_idx;
+    let remainder = ctx.block().srem(I32, &li, &ri);
+    let result = ctx.block().sitofp(I32, &remainder, DOUBLE);
+
+    // Integer remainder loses the sign of a zero result. Test the dividend's
+    // IEEE-754 sign bit rather than `left < 0`, because -0 must also produce
+    // -0. Nonzero results already have the dividend's sign via signed `srem`.
+    let remainder_is_zero = ctx.block().icmp_eq(I32, &remainder, "0");
+    let left_bits = ctx.block().bitcast_double_to_i64(left);
+    let dividend_has_sign = ctx.block().icmp_slt(I64, &left_bits, "0");
+    let needs_negative_zero = ctx.block().and(I1, &remainder_is_zero, &dividend_has_sign);
+    let negative_result = ctx.block().fneg(&result);
+    let integer_value =
+        ctx.block()
+            .select(I1, &needs_negative_zero, DOUBLE, &negative_result, &result);
+    let integer_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    let fallback_value = ctx.block().frem(left, right);
+    let fallback_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (&integer_value, &integer_end),
+            (&fallback_value, &fallback_end),
+        ],
+    )
+}
+
 /// `+` where both operands are statically numeric but at least one of them is
 /// numeric only because a DECLARED type said so (#7773, #7776).
 ///
@@ -869,16 +945,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // fptosi, producing the wrong result. `is_integer_valued_expr`
             // only returns true when we can prove the value is a whole
             // number (integer literals, integer loop counters, or nested
-            // integer arithmetic). A zero RHS falls through to `frem`
-            // because srem(x,0) is UB in LLVM (on ARM the CPU silently
-            // gives 0, but JS requires NaN for any x % 0). For everything
-            // else we fall through to the `frem` path.
-            let right_is_known_zero = matches!(**right, Expr::Integer(0))
-                || matches!(**right, Expr::Number(v) if v == 0.0);
+            // integer arithmetic). A zero RHS cannot use this unconditional
+            // path because srem(x,0) is UB in LLVM (on ARM the CPU silently
+            // gives 0, but JS requires NaN for any x % 0). Everything not
+            // proven here reaches the guarded i32 path and its `frem`
+            // fallback below.
             if matches!(op, BinaryOp::Mod)
                 && crate::type_analysis::is_integer_valued_expr(ctx, left)
-                && crate::type_analysis::is_integer_valued_divisor(ctx, right)
-                && !right_is_known_zero
+                && matches!(right.as_ref(), Expr::Integer(divisor) if *divisor != 0)
             {
                 let l_raw = lower_expr(ctx, left)?;
                 let r_raw = lower_expr(ctx, right)?;
@@ -935,10 +1009,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     blk.fdiv(&l, &r)
                 }
-                BinaryOp::Mod => {
-                    let blk = ctx.block();
-                    blk.frem(&l, &r)
-                }
+                BinaryOp::Mod => lower_checked_i32_modulo(ctx, &l, &r),
                 BinaryOp::Pow => {
                     ctx.block()
                         .call(DOUBLE, "js_math_pow", &[(DOUBLE, &l), (DOUBLE, &r)])

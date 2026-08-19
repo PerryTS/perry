@@ -45,14 +45,20 @@ fn assert_integer_modulo_with_negative_zero_repair(ir: &str) {
     );
 }
 
-fn assert_floating_modulo(ir: &str) {
+fn assert_checked_modulo(ir: &str) {
     assert!(
         ir.contains("frem double"),
-        "ineligible modulo shape must remain on floating remainder:\n{ir}"
+        "runtime-checked modulo must retain the floating fallback:\n{ir}"
     );
     assert!(
-        !ir.contains("srem i64") && !ir.contains("srem i32"),
-        "ineligible modulo shape must not emit integer remainder:\n{ir}"
+        ir.contains("mod.i32.convert")
+            && ir.contains("srem i32")
+            && ir.contains("fptosi double")
+            && ir.contains("sitofp i32")
+            && ir.contains("icmp ne i32")
+            && ir.contains("bitcast double")
+            && ir.contains("icmp slt i64"),
+        "runtime-checked modulo must guard conversion and preserve negative zero:\n{ir}"
     );
 }
 
@@ -61,7 +67,7 @@ fn i32_counter_mod_positive_literal_reaches_integer_fast_path() {
     assert_integer_modulo_with_negative_zero_repair(&factorial_shaped_ir(int(1000)));
 }
 
-/// #7494 (was `i32_counter_mod_unsafe_or_nonliteral_divisors_keep_frem`):
+/// #7494 (originally `i32_counter_mod_unsafe_or_nonliteral_divisors_keep_frem`):
 /// `negative` and `out_of_i32` used to belong to this "must stay on frem"
 /// bucket. #7404/#7416 (`expr/mod.rs::lower_numeric_binary_value`) added a
 /// SECOND hand-off for a dividend the integer fast path can prove even
@@ -99,29 +105,21 @@ fn i32_counter_mod_any_nonzero_integer_literal_divisor_reaches_integer_fast_path
 }
 
 #[test]
-fn i32_counter_mod_unsafe_or_nonliteral_divisors_keep_frem() {
-    let cases = [
+fn i32_counter_mod_unsafe_or_nonliteral_divisors_use_checked_path() {
+    let divisors = [
         // Not `Expr::Integer` at all — an integral-VALUED `Expr::Number` is
-        // still a float literal syntactically, so neither Mod hand-off in
-        // `lower_numeric_binary_value` (both pattern-match `Expr::Integer`
-        // specifically) fires for it.
-        ("integral_number", number(1000.0)),
-        // `srem(x, 0)` is UB in LLVM; JS `x % 0` is NaN. Excluded by both
-        // hand-offs' explicit non-zero-divisor guard.
-        ("zero", int(0)),
+        // still a float literal syntactically, so the static proof does not
+        // fire and the checked path handles it at runtime.
+        number(1000.0),
+        // `srem(x, 0)` is UB in LLVM; JS `x % 0` is NaN. The static path
+        // excludes it, and the checked path branches to `frem` at runtime.
+        int(0),
         // Fractional — `Expr::Number`, same as `integral_number` above.
-        ("fractional", number(2.5)),
+        number(2.5),
     ];
-    for (case, divisor) in cases {
+    for divisor in divisors {
         let ir = factorial_shaped_ir(divisor);
-        assert!(
-            ir.contains("frem double"),
-            "{case} divisor must remain on floating remainder:\n{ir}"
-        );
-        assert!(
-            !ir.contains("srem i64") && !ir.contains("srem i32"),
-            "{case} divisor must not emit integer remainder:\n{ir}"
-        );
+        assert_checked_modulo(&ir);
     }
 
     let dynamic_ir = compile_ir(
@@ -141,11 +139,11 @@ fn i32_counter_mod_unsafe_or_nonliteral_divisors_keep_frem() {
             Stmt::Return(Some(local(1))),
         ],
     );
-    assert_floating_modulo(&dynamic_ir);
+    assert_checked_modulo(&dynamic_ir);
 }
 
 #[test]
-fn non_i32_left_operands_keep_frem() {
+fn non_i32_left_operands_use_checked_path_with_frem_fallback() {
     let f64_ir = compile_ir(
         "value_first_f64_modulo.ts",
         vec![
@@ -153,7 +151,7 @@ fn non_i32_left_operands_keep_frem() {
             Stmt::Return(Some(modulo(local(1), int(2)))),
         ],
     );
-    assert_floating_modulo(&f64_ir);
+    assert_checked_modulo(&f64_ir);
 
     // A `>>> 0` initializer plus only `>>> 0` writes is the harness's existing
     // way to obtain an unsigned i32 shadow slot. The specialization must not
@@ -182,5 +180,5 @@ fn non_i32_left_operands_keep_frem() {
             Stmt::Return(Some(local(1))),
         ],
     );
-    assert_floating_modulo(&u32_ir);
+    assert_checked_modulo(&u32_ir);
 }
