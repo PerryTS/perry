@@ -984,12 +984,11 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         }
         if index < (*arr).capacity {
             note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
-        } else {
-            // Sparse indices live in the named-property side table rather than
-            // the dense element allocation; writing TAG_HOLE past capacity
-            // would corrupt the following heap object.
-            array_named_property_delete_by_name(arr, &key);
         }
+        // Sparse indices live in the named-property side table rather than the
+        // dense allocation. Always clear that representation too: a later
+        // growth can make a formerly sparse index fall below capacity.
+        array_named_property_delete_by_name(arr, &key);
         crate::object::clear_property_attrs(arr as usize, &key);
         crate::object::clear_accessor_descriptor(arr as usize, &key);
         1

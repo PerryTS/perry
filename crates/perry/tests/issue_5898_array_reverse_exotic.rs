@@ -17,6 +17,8 @@ fn reverse_observes_inherited_indices_and_live_presence() {
     std::fs::write(
         &entry,
         r#"
+declare function gc(): void;
+
 (Array.prototype as any)[1] = 1;
 const inherited = [0];
 inherited.length = 2;
@@ -36,9 +38,26 @@ live.reverse();
 console.log("live", 0 in live, 1 in live, live[1]);
 
 const sparse: any[] = [];
-sparse[10_000_000] = "far";
+const sparseIndex = 1_001_025;
+sparse[sparseIndex] = "far";
 sparse.length = 0;
-console.log("sparse", sparse.length, 10_000_000 in sparse);
+console.log("sparse", sparse.length, sparseIndex in sparse);
+
+// A sparse named-property entry can become covered by dense capacity after a
+// push grows the backing store. Force a collection so the side-table owner is
+// rekeyed from the growth forwarding stub, then make sure deletion clears both
+// storage representations.
+const regrown: any[] = [];
+const farIndex = sparseIndex;
+regrown[farIndex] = "far";
+regrown.push("tail");
+gc();
+delete regrown[farIndex];
+console.log(
+  "regrown",
+  Object.prototype.hasOwnProperty.call(regrown, farIndex),
+  farIndex in regrown
+);
 "#,
     )
     .expect("write entry");
@@ -71,6 +90,6 @@ console.log("sparse", sparse.length, 10_000_000 in sparse);
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "inherited 1 0\nlive false true first\nsparse 0 false\n"
+        "inherited 1 0\nlive false true first\nsparse 0 false\nregrown false false\n"
     );
 }

@@ -289,16 +289,16 @@ unsafe fn reverse_array_spec_path(arr: *mut ArrayHeader) -> *mut ArrayHeader {
 
         match (lower_exists, upper_exists) {
             (true, true) => {
-                reverse_array_spec_set(&arr_handle, lower, upper_value.get_nanbox_f64());
-                reverse_array_spec_set(&arr_handle, upper, lower_value.get_nanbox_f64());
+                reverse_array_spec_set(&arr_handle, lower, &upper_value);
+                reverse_array_spec_set(&arr_handle, upper, &lower_value);
             }
             (false, true) => {
-                reverse_array_spec_set(&arr_handle, lower, upper_value.get_nanbox_f64());
+                reverse_array_spec_set(&arr_handle, lower, &upper_value);
                 reverse_array_spec_delete(&arr_handle, upper);
             }
             (true, false) => {
                 reverse_array_spec_delete(&arr_handle, lower);
-                reverse_array_spec_set(&arr_handle, upper, lower_value.get_nanbox_f64());
+                reverse_array_spec_set(&arr_handle, upper, &lower_value);
             }
             (false, false) => {}
         }
@@ -309,8 +309,16 @@ unsafe fn reverse_array_spec_path(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| arr)
 }
 
-fn reverse_array_spec_set(arr_handle: &crate::gc::RuntimeHandle<'_>, index: u32, value: f64) {
+fn reverse_array_spec_set(
+    arr_handle: &crate::gc::RuntimeHandle<'_>,
+    index: u32,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+) {
     let _ = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        // Reload after entering the potentially collecting operation. A raw
+        // f64 copied out before this point would not be rewritten if it held a
+        // pointer to an object moved while resolving Array.prototype.
+        let value = value_handle.get_nanbox_f64();
         arr_handle.with_mut_ptr(|current| {
             crate::array::js_array_set_f64_extend(current, index, value);
         });
