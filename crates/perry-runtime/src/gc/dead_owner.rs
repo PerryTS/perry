@@ -353,6 +353,11 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Closure,
         prune: crate::closure::prune_dead_closure_side_table_owners,
     },
+    DeadKeyPrune {
+        table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
+        owner: DeadKeyOwner::Closure,
+        prune: crate::object::prune_dead_builtin_closure_metadata_owners,
+    },
     // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
     // value's closure address, and is REKEYED (not re-derived) when that
     // closure moves — so a dead key does not merely leak, the rekey walk

@@ -26,6 +26,8 @@ mod namespace_builders;
 mod web_locks;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
+#[cfg(test)]
+pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 pub(crate) use callable_exports::{
     bound_native_callable_export_value, bound_native_callable_module_and_method,
     bound_native_callable_value_arity, buffer_constructor_value,
@@ -34,11 +36,13 @@ pub(crate) use callable_exports::{
     is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
     module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
     module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
-    native_string_value, scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
-    set_builtin_closure_length, set_builtin_closure_non_constructable,
-    sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
-    timers_promises_parent_namespace, tls_constructor_prototype_is_instance_of,
-    util_inspect_default_options_value, zlib_codes_object,
+    native_string_value, prune_dead_builtin_closure_metadata_owners,
+    scan_builtin_closure_metadata_roots_mut, scan_tls_derived_prototype_roots_mut,
+    set_bound_native_closure_name, set_builtin_closure_length,
+    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
+    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
+    tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
+    zlib_codes_object,
 };
 pub(crate) use constants::get_native_module_constant;
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};

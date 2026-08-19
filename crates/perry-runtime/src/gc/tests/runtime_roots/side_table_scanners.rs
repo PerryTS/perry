@@ -539,3 +539,63 @@ fn test_runtime_root_visitor_rewrites_metadata_without_marking() {
     RuntimeRootVisitor::for_rewrite(&valid_ptrs).visit_metadata_usize_slot(&mut metadata);
     assert_eq!(metadata, old_user as usize);
 }
+
+#[test]
+fn test_builtin_closure_metadata_follows_forwarded_owner() {
+    let _guard = GcTestIsolationGuard::new();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_marks();
+    clear_mark_seeds();
+
+    let nursery_owner = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    let valid_ptrs = build_valid_pointer_set();
+    let relocated_owner = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+
+    crate::object::set_builtin_closure_length(nursery_owner, 3);
+    crate::object::set_builtin_closure_non_constructable(nursery_owner);
+
+    // These tables classify closures owned by the heap graph; their keys must
+    // not turn into an independent root during a mark phase.
+    crate::object::scan_builtin_closure_metadata_roots_mut(&mut RuntimeRootVisitor::for_mark(
+        &valid_ptrs,
+    ));
+    assert_unmarked_user_ptr(nursery_owner, "built-in closure metadata owner");
+
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(nursery_owner as *const u8) as *mut GcHeader,
+            relocated_owner as *mut u8,
+        );
+    }
+    crate::object::scan_builtin_closure_metadata_roots_mut(&mut RuntimeRootVisitor::for_rewrite(
+        &valid_ptrs,
+    ));
+
+    assert_eq!(crate::object::builtin_closure_length(nursery_owner), None);
+    assert_eq!(
+        crate::object::builtin_closure_length(relocated_owner),
+        Some(3)
+    );
+    assert!(!crate::object::builtin_closure_is_non_constructable(
+        nursery_owner
+    ));
+    assert!(crate::object::builtin_closure_is_non_constructable(
+        relocated_owner
+    ));
+
+    crate::object::prune_dead_builtin_closure_metadata_owners(&|owner| owner == relocated_owner);
+    assert_eq!(crate::object::builtin_closure_length(relocated_owner), None);
+    assert!(!crate::object::builtin_closure_is_non_constructable(
+        relocated_owner
+    ));
+    clear_marks();
+    clear_mark_seeds();
+}

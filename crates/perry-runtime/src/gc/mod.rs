@@ -992,6 +992,11 @@ pub fn gc_init() {
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
+    // #8393: built-in prototype methods carry per-closure identity metadata
+    // keyed by their raw heap address. Copying minor GC moves those closures;
+    // keep the weak metadata keys aligned with the forwarded addresses so
+    // value-called methods still reach the prototype dispatch tower.
+    reg_scanner!(crate::object::scan_builtin_closure_metadata_roots_mut);
     reg_scanner!(crate::buffer::scan_buffer_own_props_roots_mut);
     // Generic per-handle expando properties (`blob.colors = [...]` and other
     // arbitrary own props on native HANDLE values). Keys are stable small handle

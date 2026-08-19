@@ -1,0 +1,1 @@
+Keep per-instance built-in closure metadata synchronized when copying GC relocates a closure. Value-called prototype methods such as `Array.prototype.valueOf` now keep dispatching after a minor collection, so relational comparisons involving arrays no longer switch from correct string comparison to a permanent `NaN` result.

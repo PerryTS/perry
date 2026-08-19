@@ -98,6 +98,12 @@
       "why": "#8192: registered prune drops the whole cache entry when either weak half (prev_keys keys-array, key_ptr interned string) is dead; next_keys is a strong root and cannot be."
     },
     {
+      "site": "crates/perry-runtime/src/object/native_module/callable_exports.rs::scan_builtin_closure_metadata_roots_mut",
+      "table": "BUILTIN_CLOSURE_LENGTH / BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
+      "death": "dead_owner:prune_dead_builtin_closure_metadata_owners",
+      "why": "#8393: both tables are retained on the GC_TYPE_CLOSURE-narrowed predicate over their closure-address keys."
+    },
+    {
       "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_table_rekey_mut",
       "table": "state().shapes.inner (descriptors + indices)",
       "death": "dead_owner:prune_dead_shape_keys",

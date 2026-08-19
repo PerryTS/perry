@@ -1425,6 +1425,61 @@ pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&closure))
 }
 
+/// Rekey per-instance built-in closure metadata after a moving collection.
+///
+/// The keys are identities, not roots: prototype/global objects keep live
+/// built-in closures reachable, while dead closures must remain collectable.
+/// `visit_metadata_usize_slot` therefore only follows forwarding records.
+pub(crate) fn scan_builtin_closure_metadata_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
+        let mut lengths = lengths.borrow_mut();
+        let mut moved = Vec::new();
+        for old_owner in lengths.keys().copied() {
+            let mut new_owner = old_owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner {
+                moved.push((old_owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            if let Some(length) = lengths.remove(&old_owner) {
+                lengths.insert(new_owner, length);
+            }
+        }
+    });
+
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|non_constructable| {
+        let mut non_constructable = non_constructable.borrow_mut();
+        let mut moved = Vec::new();
+        for old_owner in non_constructable.iter().copied() {
+            let mut new_owner = old_owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner {
+                moved.push((old_owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            non_constructable.remove(&old_owner);
+            non_constructable.insert(new_owner);
+        }
+    });
+}
+
+/// Drop metadata for closures proved dead by the collector before their arena
+/// addresses can be recycled for unrelated objects.
+pub(crate) fn prune_dead_builtin_closure_metadata_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
+        lengths
+            .borrow_mut()
+            .retain(|owner, _| !is_dead_owner(*owner));
+    });
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|non_constructable| {
+        non_constructable
+            .borrow_mut()
+            .retain(|owner| !is_dead_owner(*owner));
+    });
+}
+
 pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
