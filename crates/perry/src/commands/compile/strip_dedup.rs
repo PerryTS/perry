@@ -164,7 +164,7 @@ fn object_is_elf(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn find_path_tool(name: &str) -> Option<PathBuf> {
+pub(super) fn find_path_tool(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
         .map(|dir| dir.join(name))
@@ -200,7 +200,7 @@ fn find_llvm_tool_or_beside_lld(tool: &str) -> Option<PathBuf> {
 /// `perry compile` as a systemd subprocess whose environment carries only
 /// `PATH`), so the rustup home is also derived from the `rustup`/`cargo` binary
 /// on `PATH` and from well-known absolute locations.
-fn find_nightly_llvm_tool(tool: &str) -> Option<PathBuf> {
+pub(super) fn find_nightly_llvm_tool(tool: &str) -> Option<PathBuf> {
     let exe_suffix = std::env::consts::EXE_SUFFIX;
     let mut rustup_homes: Vec<PathBuf> = Vec::new();
     if let Some(rustup_home) = std::env::var_os("RUSTUP_HOME") {

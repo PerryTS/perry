@@ -43,6 +43,7 @@ use super::{
     windows_subsystem_needs_ui, windows_target_arch, CompilationContext, WindowsTargetArch,
 };
 
+mod archive_cache;
 mod build_and_run;
 mod link_cache;
 mod linux_ui_libs;
@@ -51,6 +52,7 @@ mod pkg_config;
 mod platform_cmd;
 mod windows_link;
 
+use archive_cache::{prepare_well_known_archives, PreparedArchiveInputs};
 pub(super) use build_and_run::build_and_run_link;
 use link_cache::prepare_link_cache_status;
 pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};

@@ -330,8 +330,12 @@ pub(crate) fn build_and_run_link(
     let skip_runtime = (is_android || is_watchos || is_visionos)
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
-    let mut well_known_libs: Vec<PathBuf> = if prefer_well_known_before_stdlib {
-        well_known_libs
+    let mut source_well_known_libs = well_known_libs.to_vec();
+    let mut seen_well_known = std::collections::HashSet::new();
+    source_well_known_libs.retain(|path| seen_well_known.insert(path.clone()));
+    let prepare_well_known = || {
+        let cacheable = std::cell::Cell::new(true);
+        let paths = source_well_known_libs
             .iter()
             .map(|wk| {
                 // Wrappers precede stdlib here, so a wrapper's bundled
@@ -346,6 +350,7 @@ pub(crate) fn build_and_run_link(
                 let wk = match stdlib_lib {
                     Some(stdlib) => strip_bundled_runtime_from_well_known_lib(wk, stdlib)
                         .unwrap_or_else(|e| {
+                            cacheable.set(false);
                             eprintln!(
                                 "[strip-dedup] bundled-runtime drop skipped for {} (non-fatal): {e}",
                                 wk.display()
@@ -375,6 +380,7 @@ pub(crate) fn build_and_run_link(
                 let wk = match stdlib_lib {
                     Some(stdlib) => strip_bundled_shared_deps_from_well_known_lib(&wk, stdlib)
                         .unwrap_or_else(|e| {
+                            cacheable.set(false);
                             eprintln!(
                                 "[strip-dedup] shared-deps drop skipped for {} (non-fatal): {e}",
                                 wk.display()
@@ -383,17 +389,34 @@ pub(crate) fn build_and_run_link(
                         }),
                     None => wk.clone(),
                 };
-                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or(wk)
+                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or_else(|_| {
+                    cacheable.set(false);
+                    wk
+                })
             })
-            .collect()
-    } else {
-        well_known_libs.to_vec()
+            .collect();
+        (paths, cacheable.get())
     };
+    let well_known_libs: Vec<PathBuf> =
+        if prefer_well_known_before_stdlib && !source_well_known_libs.is_empty() {
+            prepare_well_known_archives(
+                PreparedArchiveInputs {
+                    cache_dir: &ctx.cache_dir,
+                    target,
+                    target_triple: rust_target_triple(target),
+                    compiled_features,
+                    runtime_lib,
+                    stdlib_lib: stdlib_lib.as_deref(),
+                    well_known_libs: &source_well_known_libs,
+                },
+                prepare_well_known,
+            )
+        } else {
+            source_well_known_libs
+        };
     // Multiple specifiers can route to the same native archive (`http` and
-    // `https` both select perry_ext_http). Repeating it adds no symbols and on
-    // COFF can make lld-link choose a different duplicate COMDAT provider.
-    let mut seen_well_known = std::collections::HashSet::new();
-    well_known_libs.retain(|path| seen_well_known.insert(path.clone()));
+    // `https` both select perry_ext_http). They were de-duplicated before the
+    // archive-preparation pass so the expensive transform also runs once.
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
