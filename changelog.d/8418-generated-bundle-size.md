@@ -8,4 +8,6 @@
 - Added opt-in hybrid size optimization with
   `PERRY_LL_PREOPT_OPTNONE_INSTRS`: generated functions above the configured
   instruction cap skip the LLVM middle-end while ordinary siblings in the same
-  codegen unit remain eligible for `-Os`.
+  codegen unit remain eligible for `-Os`. With an 8,192-instruction cap, the
+  same OpenCode executable shrank further to 801.5 MiB (52.4% below baseline);
+  module codegen took 92.0 minutes versus the 73.2-minute baseline.
