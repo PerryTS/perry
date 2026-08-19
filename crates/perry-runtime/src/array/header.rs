@@ -537,6 +537,13 @@ pub(crate) unsafe fn array_named_property_delete(
     let Some(name) = string_header_as_str(key) else {
         return false;
     };
+    array_named_property_delete_by_name(arr, name)
+}
+
+pub(crate) unsafe fn array_named_property_delete_by_name(
+    arr: *const ArrayHeader,
+    name: &str,
+) -> bool {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return false;
