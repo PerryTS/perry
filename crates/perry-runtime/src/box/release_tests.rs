@@ -13,24 +13,6 @@ fn install_test_activation(activation: *mut AsyncBoxActivation) -> crate::promis
     })
 }
 
-/// `BOX_ALLOC_COUNT` / `BOX_POOL_REUSE_COUNT` / `BOX_RELEASE_COUNT` are
-/// process-global atomics, while the registries, quarantines and free
-/// lists they describe are THREAD-LOCAL. Any test that asserts on a
-/// counter *delta* is therefore not isolated by `test_clear_box_registry`
-/// alone — a sibling test allocating on another harness thread lands in
-/// the same atomics and moves the delta under it. Observed exactly that:
-/// these tests pass under `--test-threads=1` and fail in parallel.
-///
-/// Serialise the counter-asserting tests against each other. Tests that
-/// only assert on addresses and registry membership are thread-local and
-/// need no lock.
-fn counter_guard() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    // A panicking test poisons the lock; the data is `()`, so recovering
-    // is right — otherwise one failure cascades into spurious ones.
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 /// A released cell must be INERT: de-registered (reads `undefined`,
 /// writes dropped), evicted from the positive cache, and parked exactly
 /// once no matter how many times the terminal arm re-runs (#7933
@@ -463,7 +445,6 @@ fn typed_control_cells_park_terminal_values() {
 /// carries its own fresh value rather than a leftover link.
 #[test]
 fn the_intrusive_free_list_round_trips_a_whole_cohort() {
-    let _guard = counter_guard();
     super::test_clear_box_registry();
     const N: usize = 512;
     let first: Vec<*mut Box> = (0..N)
@@ -477,19 +458,9 @@ fn the_intrusive_free_list_round_trips_a_whole_cohort() {
     }
     flush_released_boxes();
 
-    let (a0, r0, _) = box_release_stats();
     let second: Vec<*mut Box> = (0..N)
         .map(|i| js_box_alloc_bits((1000.0 + i as f64).to_bits() as i64))
         .collect();
-    let (a1, r1, _) = box_release_stats();
-    assert_eq!(a1 - a0, N as u64, "second cohort allocates N cells");
-    assert_eq!(
-        r1 - r0,
-        N as u64,
-        "ALL N must come from the free list; {} fell through to std::alloc",
-        N as u64 - (r1 - r0)
-    );
-
     let reused: std::collections::HashSet<usize> = second.iter().map(|p| *p as usize).collect();
     assert_eq!(reused.len(), N, "an address was handed out twice");
     assert_eq!(
@@ -504,13 +475,13 @@ fn the_intrusive_free_list_round_trips_a_whole_cohort() {
             "cell {i} kept a stale free-list link instead of its value"
         );
     }
-    // Drained: the next allocation has to mint.
-    let before = box_release_stats().1;
-    let _fresh = js_box_alloc_bits(0);
-    assert_eq!(
-        box_release_stats().1,
-        before,
-        "the list was drained, so this must be a fresh std::alloc"
+    // The whole cohort is live again, so a drained list must mint a cell
+    // outside it. Unlike the process-global telemetry counters, this address
+    // check is isolated to the current thread's free list.
+    let fresh = js_box_alloc_bits(0);
+    assert!(
+        !minted.contains(&(fresh as usize)),
+        "the list was drained, so the next cell must be freshly minted"
     );
 }
 
@@ -540,7 +511,6 @@ fn foreign_pointer_release_is_a_total_noop() {
 /// asyncpipe_big).
 #[test]
 fn completed_activation_residue_is_bounded_not_linear() {
-    let _guard = counter_guard();
     super::test_clear_box_registry();
     const TURNS: usize = 100;
     const ACTIVATIONS_PER_TURN: usize = 20;
