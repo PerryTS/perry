@@ -33,6 +33,7 @@ mod dynamic_glob;
 mod eval_worker;
 mod feature_detect;
 mod import_helpers;
+mod json_module;
 mod native_addon;
 mod parse_error;
 mod script_string;
@@ -51,6 +52,7 @@ pub(super) use import_helpers::known_node_submodule_key;
 use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
 };
+use json_module::synthesize_json_module;
 pub(super) use native_addon::package_has_unsupported_node_addon;
 use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
 use parse_error::annotate_parse_error;
@@ -346,24 +348,9 @@ fn collect_module_one(
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };
     // JSON module import: turn the data file into a native ESM module whose
-    // default export is the parsed value. JSON is a syntactic subset of a JS
-    // expression, so `export default <json>;` parses and lowers like any other
-    // module. Validate as JSON first so a malformed file yields a clear error
-    // rather than a confusing TS parse failure on the synthesized source.
+    // default export is the parsed value.
     let raw_source = if is_json {
-        if let Err(e) = serde_json::from_str::<serde_json::Value>(&raw_source) {
-            return Err(anyhow!(
-                "Failed to parse JSON module {}: {}",
-                canonical.display(),
-                e
-            ));
-        }
-        let json_value = "__perry_json_default";
-        format!(
-            "function __perry_json_factory() {{ return {}; }}\nconst {json_value} = __perry_json_factory();\nconst __perry_json_module = {{ __perry_cjs_record: true, __perry_cjs_factory: __perry_json_factory, exports: {json_value}, loaded: false }};\n__perry_register_path_module({:?}, __perry_json_module);\nexport default {json_value};\n",
-            raw_source.trim(),
-            canonical.to_string_lossy(),
-        )
+        synthesize_json_module(&raw_source, &canonical)?
     } else if is_text_asset {
         // #5223: text-asset import. The file's contents are exposed verbatim as
         // the module's default export (a JS string). We never TS-parse the raw

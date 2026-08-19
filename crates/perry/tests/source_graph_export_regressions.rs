@@ -134,6 +134,63 @@ fn whole_type_only_import_does_not_wrap_same_named_runtime_builtin() {
 }
 
 #[test]
+fn type_only_interface_dispatch_uses_runtime_class_registry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "driver.ts",
+        "export interface Driver { greet(name: string): string; }\n",
+    );
+    write(
+        dir.path(),
+        "consumer.ts",
+        "import type { Driver } from './driver';\n\
+         export function consume(driver: Driver) {\n\
+           const greet = driver.greet;\n\
+           return driver.greet('world') + '|' + typeof greet + '|' + greet('friend');\n\
+         }\n",
+    );
+    write(
+        dir.path(),
+        "implementation.ts",
+        "export class Hello { greet(name: string) { return 'hello ' + name; } }\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { consume } from './consumer';\n\
+         import { Hello } from './implementation';\n\
+         console.log(consume(new Hello()));\n",
+    );
+
+    assert_eq!(
+        compile_and_run(dir.path(), "main.ts"),
+        "hello world|function|hello friend\n"
+    );
+}
+
+#[test]
+fn json_module_parses_embedded_serialized_data() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "data.json",
+        r#"{"name":"Perry","items":[1,true,null],"nested":{"message":"Grüße"}}"#,
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import data from './data.json';\n\
+         console.log(data.name, data.items.length, data.items[1], data.nested.message);\n",
+    );
+
+    assert_eq!(
+        compile_and_run(dir.path(), "main.ts"),
+        "Perry 3 true Grüße\n"
+    );
+}
+
+#[test]
 fn renamed_export_exposes_raw_local_getter_spelling() {
     let dir = tempfile::tempdir().expect("tempdir");
     write(
