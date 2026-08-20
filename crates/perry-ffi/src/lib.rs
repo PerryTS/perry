@@ -56,7 +56,7 @@ pub use async_runtime::{
 mod types;
 pub use types::{
     ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, NativeAsyncCompletion, ObjectHeader,
-    Promise, StringHeader, BIGINT_LIMBS, OBJECT_HEADER_ABI_REVISION,
+    Promise, StringHeader, BIGINT_LIMBS, OBJECT_HEADER_ABI_REVISION, STRING_HEADER_ABI_REVISION,
 };
 
 mod handle;
@@ -192,10 +192,10 @@ pub fn alloc_string(s: &str) -> JsString {
 
 /// Read a `JsString` as a borrowed `&str`.
 ///
-/// Returns `None` on a null handle or invalid UTF-8. The borrow lives
-/// as long as the runtime guarantees the string remains alive — for
-/// the simple call-and-copy pattern in most FFI functions, that's the
-/// duration of the function call.
+/// Returns `None` on a null handle or invalid UTF-8. Because Perry's GC can
+/// move strings, the borrow is valid only until the next allocation through
+/// the Perry runtime. Copy the contents before calling any runtime function
+/// that may allocate.
 ///
 /// ```ignore
 /// #[no_mangle]
@@ -219,9 +219,9 @@ pub fn read_string(handle: JsString) -> Option<&'static str> {
 /// ops, …) that store arbitrary bytes inside a `StringHeader` but
 /// can't go through [`read_string`]'s UTF-8 validation.
 ///
-/// Returns `None` on a null handle. The borrow lives as long as
-/// the runtime guarantees the string remains alive — same lifetime
-/// rules as [`read_string`].
+/// Returns `None` on a null handle. Because Perry's GC can move strings, the
+/// borrow is valid only until the next allocation through the Perry runtime.
+/// Copy the contents before calling any runtime function that may allocate.
 pub fn read_bytes(handle: JsString) -> Option<&'static [u8]> {
     if handle.is_null() {
         return None;

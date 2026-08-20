@@ -341,6 +341,22 @@ const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
 };
 const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
 
+/// Revision of the [`StringHeader`] ABI, paired with
+/// `perry_ffi::STRING_HEADER_ABI_REVISION`.
+///
+/// `perry-ffi` is published to crates.io, and a wrapper compiled against an old
+/// mirror linked against a new runtime could otherwise read the wrong payload
+/// with no diagnostic. Bump this and the perry-ffi constant together on ANY
+/// change to the header's size, field set, field offsets, representation, or
+/// the meaning of the payload exposed by `perry_ffi::read_bytes`.
+///
+/// * 1 — `{utf16_len, byte_len, capacity, refcount, flags}`, 20 bytes; the
+///   byte payload begins immediately after the header.
+#[no_mangle]
+pub extern "C" fn perry_string_header_abi_revision() -> u32 {
+    1
+}
+
 // ── UTF-8 ↔ UTF-16 conversion helpers ──────────────────────────────────
 
 /// Count UTF-16 code units for a UTF-8 byte slice. Returns 0 for empty/null.

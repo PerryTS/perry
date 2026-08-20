@@ -29,6 +29,26 @@ pub const BIGINT_LIMBS: usize = 16;
 /// * 3 — `{class_id, parent_class_id, meta}`, 16 bytes on LP64/ILP32 (#8047).
 pub const OBJECT_HEADER_ABI_REVISION: u32 = 3;
 
+/// Revision of the [`StringHeader`] ABI this crate mirrors.
+///
+/// Bump on ANY change to `StringHeader`'s size, field set, field offsets, or
+/// representation, and on any change to the meaning of the payload returned by
+/// `read_bytes`. Bump `perry_runtime::perry_string_header_abi_revision()` in the
+/// same commit — `string_header_abi_revision_matches_the_pinned_layout` fails
+/// otherwise.
+///
+/// It exists because `perry-ffi` is **published to crates.io**: a wrapper built
+/// against an older mirror and linked by `perry compile` against a newer
+/// runtime could otherwise read the wrong payload bytes with no diagnostic. An
+/// out-of-tree wrapper should assert
+/// `perry_ffi::STRING_HEADER_ABI_REVISION == perry_string_header_abi_revision()`
+/// (declared `extern "C" fn() -> u32`) once at startup and refuse to run on a
+/// mismatch.
+///
+/// * 1 — `{utf16_len, byte_len, capacity, refcount, flags}`, 20 bytes; the
+///   payload returned by `read_bytes` begins immediately after the header.
+pub const STRING_HEADER_ABI_REVISION: u32 = 1;
+
 /// Header for a runtime-allocated JS string.
 #[repr(C)]
 pub struct StringHeader {
@@ -43,6 +63,8 @@ pub struct StringHeader {
     /// Runtime string flags.
     pub flags: u32,
 }
+
+const _: () = assert!(std::mem::size_of::<StringHeader>() == 20);
 
 /// Header for a runtime-allocated JS array.
 #[repr(C)]
@@ -167,6 +189,27 @@ mod layout_tests {
             offset_of!(StringHeader, flags),
             offset_of!(perry_runtime::StringHeader, flags)
         );
+    }
+
+    /// Pin both copies of the revision and the absolute published layout. The
+    /// mirror test above catches one-sided struct drift; these assertions also
+    /// catch both structs changing without the required revision bump.
+    #[test]
+    fn string_header_abi_revision_matches_the_pinned_layout() {
+        assert_eq!(STRING_HEADER_ABI_REVISION, 1);
+        assert_eq!(
+            STRING_HEADER_ABI_REVISION,
+            perry_runtime::perry_string_header_abi_revision(),
+            "the runtime and the published mirror disagree about the string header ABI \
+             revision — bump BOTH, in the same commit, and say so in the \
+             changelog: perry-ffi is published to crates.io"
+        );
+        assert_eq!(size_of::<StringHeader>(), 20);
+        assert_eq!(offset_of!(StringHeader, utf16_len), 0);
+        assert_eq!(offset_of!(StringHeader, byte_len), 4);
+        assert_eq!(offset_of!(StringHeader, capacity), 8);
+        assert_eq!(offset_of!(StringHeader, refcount), 12);
+        assert_eq!(offset_of!(StringHeader, flags), 16);
     }
 
     #[test]
