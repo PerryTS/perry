@@ -307,11 +307,24 @@ fn cpu_tuning_arg_for(
     }
 }
 
+/// Size optimization is **on by default**. Measured on the quiet bench mini
+/// under the sweep's bench lock, `-Os` costs no measurable runtime speed: across
+/// `churn`, `cycles`, `fib40`, `interp`, `iso_miss` and `tree_wide` every delta
+/// was within 0.8% and none was disjoint from the `-O3` arm's samples. What it
+/// buys on a dense generated bundle is large — #8418 measured a further
+/// 346.7 MiB off a 4,743-module executable beyond the structural wins.
+///
+/// So the trade is compile time (about +21% on that bundle) against shipped
+/// binary size, with runtime speed unaffected. Smaller artifacts for every user
+/// are worth a developer-side build cost, so unset means enabled.
+///
+/// `PERRY_LL_SIZE_OPT=0` (or `off`/`false`/`no`) restores `-O3` for bisection or
+/// for a build that would rather have the compile time back.
 fn size_optimization_requested(value: Option<&str>) -> bool {
-    value
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "on" | "yes"))
+    match value.map(str::trim).map(str::to_ascii_lowercase) {
+        None => true,
+        Some(value) => !matches!(value.as_str(), "0" | "false" | "off" | "no"),
+    }
 }
 
 fn build_clang_compile_plan(
@@ -330,9 +343,10 @@ fn build_clang_compile_plan(
         cpu_tuning_arg_for(requested_cpu.as_deref(), target_triple, &effective_target);
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
-    // Perry defaults to speed-optimized native output. Generated-bundle users
-    // can explicitly trade runtime speed for artifact size with
-    // PERRY_LL_SIZE_OPT; there is no module-size-driven policy change.
+    // Perry defaults to SIZE-optimized native output: `-Os` measured no runtime
+    // cost on the benchmark corpus (see `size_optimization_requested`), and it
+    // materially shrinks dense generated bundles. `PERRY_LL_SIZE_OPT=0` restores
+    // `-O3`. There is no module-size-driven policy change.
     let size_opt = env::var("PERRY_LL_SIZE_OPT").ok();
     let opt_flag = if size_optimization_requested(size_opt.as_deref()) {
         "-Os"

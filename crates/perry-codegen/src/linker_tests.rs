@@ -167,8 +167,9 @@ fn compile_plan_records_effective_target_and_native_tuning() {
         false,
     );
     assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
-    // Native compilation defaults to speed-optimized -O3.
-    assert!(plan.clang_args.contains(&"-O3".to_string()));
+    // Native compilation defaults to size-optimized -Os (see
+    // `size_optimization_requested`); `PERRY_LL_SIZE_OPT=0` restores -O3.
+    assert!(plan.clang_args.contains(&"-Os".to_string()));
     assert!(plan.clang_args.contains(&"-target".to_string()));
     assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
     // Apple aarch64 pins `apple-m1` rather than `native`: the decision to emit
@@ -185,11 +186,15 @@ fn compile_plan_records_effective_target_and_native_tuning() {
 }
 
 #[test]
-fn compile_plan_defaults_to_o3() {
+fn compile_plan_defaults_to_os() {
     // Module size is deliberately absent from the compile plan: Perry's
     // runtime optimization contract does not change for large generated IR.
     // Scalability is handled by codegen-unit partitioning and structured
     // outlining before LLVM sees the function bodies.
+    //
+    // The default optimization level is `-Os`: measured on the quiet bench mini,
+    // `-Os` costs no runtime speed on the benchmark corpus while materially
+    // shrinking dense generated bundles. `PERRY_LL_SIZE_OPT=0` restores `-O3`.
     let plan = build_clang_compile_plan(
         PathBuf::from("clang"),
         PathBuf::from("/tmp/input.ll"),
@@ -198,20 +203,24 @@ fn compile_plan_defaults_to_o3() {
         false,
         false,
     );
-    assert!(plan.clang_args.contains(&"-O3".to_string()));
-    assert!(!plan.clang_args.contains(&"-Os".to_string()));
+    assert!(plan.clang_args.contains(&"-Os".to_string()));
+    assert!(!plan.clang_args.contains(&"-O3".to_string()));
     assert!(!plan.clang_args.contains(&"-O0".to_string()));
 }
 
 #[test]
-fn size_optimization_flag_is_explicit_and_truthy() {
-    for enabled in ["1", "true", "TRUE", " on ", "yes"] {
+fn size_optimization_is_on_unless_explicitly_disabled() {
+    // Unset means enabled — the default flipped once `-Os` was measured to cost
+    // no runtime speed on the benchmark corpus.
+    assert!(size_optimization_requested(None));
+    for enabled in ["1", "true", "TRUE", " on ", "yes", "", "anything-else"] {
         assert!(size_optimization_requested(Some(enabled)), "{enabled}");
     }
-    for disabled in ["", "0", "false", "off", "no", "anything-else"] {
+    // Only an explicit negative restores `-O3`, for bisection or to buy back
+    // compile time.
+    for disabled in ["0", "false", "off", "no", "OFF", " 0 "] {
         assert!(!size_optimization_requested(Some(disabled)), "{disabled}");
     }
-    assert!(!size_optimization_requested(None));
 }
 
 #[test]
