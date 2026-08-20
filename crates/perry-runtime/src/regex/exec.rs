@@ -33,22 +33,47 @@ pub extern "C" fn js_regexp_exec(
         return ptr::null_mut();
     }
 
+    // Spec RegExpBuiltinExec step 4 is `ToLength(Get(R, "lastIndex"))`, and it
+    // runs before anything else. The ToNumber half of that coercion executes
+    // USER JS whenever `lastIndex` is coercible (`re.lastIndex = { valueOf() {
+    // … } }` — test262 prototype/exec/{success,failure}-lastindex-access covers
+    // exactly this), and user JS reaches back-edge safepoint polls, so a moving
+    // minor can relocate BOTH arguments inside the window.
+    //
+    // Do the coercion FIRST, with `re` and `s` rooted, and take the subject's
+    // payload borrow only afterwards. `string_as_str` hands out a `&str` into
+    // the inline WTF-8 bytes; rooting rewrites *slots*, never an already
+    // materialized borrow, so a borrow taken ahead of this call reads from-space
+    // for the entire match (#8428, the `HeapKeyBytes` doc states the rule).
+    //
+    // Audited in the same pass: `set_last_index_throwing` does NOT reopen the
+    // window. It reads the property attributes and stores a number; its only
+    // allocation is on the non-writable arm, which throws and therefore never
+    // returns to the borrow.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let re_handle = scope.root_raw_mut_ptr(re);
+    let s_handle = scope.root_string_ptr(s);
+    let ((last_index_read, re), s) = s_handle.across_const::<StringHeader, _>(|| {
+        re_handle
+            .across_mut::<RegExpHeader, _>(|| re_handle.with_const_ptr(regex_last_index_offset))
+    });
     let str_data = string_as_str(s);
 
     unsafe {
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
         let sticky = (*re).sticky;
+        let has_indices = (*re).has_indices;
         // Per spec RegExpBuiltinExec, `lastIndex` drives the search start for
         // BOTH global and sticky regexes (and lastIndex is reset/updated for
         // either). A sticky match must additionally *anchor* at lastIndex.
         let use_last_index = global || sticky;
-        // Spec RegExpBuiltinExec step 4 reads `lastIndex` (Get → ToLength) once,
-        // up front and *before* the global/sticky branch (step 8). So the read
-        // — and any `valueOf`/`toString` side effect of a coercible lastIndex —
-        // is observed exactly once even for a non-global/non-sticky regex
-        // (test262 prototype/exec/{success,failure}-lastindex-access).
-        let last_index_read = regex_last_index_offset(re);
+        // `last_index_read` was taken at the top of the function, before the
+        // borrow: spec step 4 reads `lastIndex` (Get → ToLength) once, up front
+        // and *before* the global/sticky branch (step 8), so the read — and any
+        // `valueOf`/`toString` side effect of a coercible lastIndex — is observed
+        // exactly once even for a non-global/non-sticky regex (test262
+        // prototype/exec/{success,failure}-lastindex-access).
         // Step 8: a non-global/non-sticky search always starts at 0; the value
         // read above only drives the search start for a stateful regex.
         let last_index = if use_last_index { last_index_read } else { 0 };
@@ -92,6 +117,16 @@ pub extern "C" fn js_regexp_exec(
                     let match_byte_offset = full.start() + search_start_byte;
                     let match_char_offset =
                         super::exec_array::byte_index_to_utf16_index(str_data, match_byte_offset);
+                    // Spec order (step 15 precedes the ArrayCreate of step 16),
+                    // and it keeps `re` out of the window opened by the capture
+                    // allocations below — the standard arm already does this.
+                    if use_last_index {
+                        let match_end_byte = full.end() + search_start_byte;
+                        set_last_index_throwing(
+                            re,
+                            super::exec_array::byte_index_to_utf16_index(str_data, match_end_byte),
+                        );
+                    }
                     let arr = crate::array::js_array_alloc(caps.len() as u32);
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let arr_handle = scope.root_raw_mut_ptr(arr);
@@ -109,13 +144,6 @@ pub extern "C" fn js_regexp_exec(
                             crate::array::store_array_slot(arr, i, undefined.to_bits());
                         }
                     }
-                    if use_last_index {
-                        let match_end_byte = full.end() + search_start_byte;
-                        set_last_index_throwing(
-                            re,
-                            super::exec_array::byte_index_to_utf16_index(str_data, match_end_byte),
-                        );
-                    }
                     set_exec_array_metadata(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                         str_data,
@@ -129,7 +157,7 @@ pub extern "C" fn js_regexp_exec(
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
                     set_exec_array_groups(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_obj);
                     // Build indices array if `d` flag (hasIndices) is set
-                    if (*re).has_indices {
+                    if has_indices {
                         set_exec_array_indices_fancy(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                             str_data,
@@ -243,24 +271,34 @@ pub extern "C" fn js_regexp_exec(
                         *g.borrow_mut() =
                             groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
                     });
-                    super::exec_array::set_exec_array_metadata_groups_fresh(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        s,
-                        match_char_offset as f64,
-                        groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-                    );
+                    // `.input` re-boxes the subject, so it must be the CURRENT
+                    // address: the capture/groups allocations above can have
+                    // moved it since `s` was refreshed. The helper itself
+                    // performs no GC allocation, which is what makes the scoped
+                    // `with_const_ptr` argument shape sound here.
+                    s_handle.with_const_ptr::<StringHeader, _>(|s_now| {
+                        super::exec_array::set_exec_array_metadata_groups_fresh(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            s_now,
+                            match_char_offset as f64,
+                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+                        )
+                    });
                 } else {
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                    super::exec_array::set_exec_array_metadata_groups_fresh(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        s,
-                        match_char_offset as f64,
-                        ptr::null_mut(),
-                    );
+                    // Current subject address — see the named-groups arm above.
+                    s_handle.with_const_ptr::<StringHeader, _>(|s_now| {
+                        super::exec_array::set_exec_array_metadata_groups_fresh(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            s_now,
+                            match_char_offset as f64,
+                            ptr::null_mut(),
+                        )
+                    });
                 }
 
                 // Build indices array if `d` flag (hasIndices) is set
-                if (*re).has_indices {
+                if has_indices {
                     set_exec_array_indices(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                         str_data,

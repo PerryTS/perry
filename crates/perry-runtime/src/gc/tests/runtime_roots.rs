@@ -13,6 +13,7 @@ mod json_shape_template;
 mod native_module_name;
 mod old_defrag_contract;
 mod prototype_addr_cache;
+mod regexp_last_index;
 mod side_table_scanners;
 mod string_slice;
 mod symbol_description;

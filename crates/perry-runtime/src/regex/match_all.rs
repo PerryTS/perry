@@ -236,18 +236,24 @@ pub extern "C" fn js_string_match_all_value(
     } else {
         0
     };
-    let (re, start_index) = if raw != 0 && is_valid_regex_ptr(raw as *const RegExpHeader) {
+    let (start_index, re) = if raw != 0 && is_valid_regex_ptr(raw as *const RegExpHeader) {
         let re = raw as *const RegExpHeader;
         unsafe {
             if !(*re).global {
                 throw_match_all_non_global_regex();
             }
-            (re, crate::regex::regex_last_index_offset(re))
+            // The ToLength coercion inside `regex_last_index_offset` runs user
+            // `valueOf`/`toString`, so it can move the regex header too — not
+            // just the subject `s_handle` already covers (#8428).
+            let re_handle = scope.root_raw_const_ptr(re);
+            re_handle.across_const::<RegExpHeader, _>(|| {
+                re_handle.with_const_ptr(crate::regex::regex_last_index_offset)
+            })
         }
     } else {
         (
-            match_all_pattern_to_regex(pattern_value) as *const RegExpHeader,
             0,
+            match_all_pattern_to_regex(pattern_value) as *const RegExpHeader,
         )
     };
 
@@ -275,8 +281,21 @@ pub extern "C" fn js_string_match_all(
         if !(*re).global {
             throw_match_all_non_global_regex();
         }
-        let matches =
-            materialize_match_all_results(s, re, crate::regex::regex_last_index_offset(re));
+        // `regex_last_index_offset` ToLength-coerces `lastIndex`, which runs
+        // user `valueOf`/`toString` and can therefore move both arguments
+        // (#8428). Rust evaluates call arguments left to right, so the previous
+        // shape passed the PRE-coercion `s` — a from-space subject that
+        // `materialize_match_all_results` then rooted and snapshotted. Root
+        // first, coerce, then hand over the refreshed addresses.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s_handle = scope.root_string_ptr(s);
+        let re_handle = scope.root_raw_const_ptr(re);
+        let ((start_index, re), s) = s_handle.across_const::<StringHeader, _>(|| {
+            re_handle.across_const::<RegExpHeader, _>(|| {
+                re_handle.with_const_ptr(crate::regex::regex_last_index_offset)
+            })
+        });
+        let matches = materialize_match_all_results(s, re, start_index);
         alloc_regexp_string_iterator(matches)
     }
 }
