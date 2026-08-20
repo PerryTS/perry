@@ -60,6 +60,74 @@ pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
     receiver
 }
 
+unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
+    // them. Check the symbol registry before the pointer guard.
+    let is_symbol = crate::symbol::js_is_symbol(receiver) != 0;
+    if !jsval.is_pointer() || is_symbol {
+        // `Invoke(receiver, "toString")` resolves the method on a primitive's
+        // prototype chain and calls it with the original primitive as `this`.
+        // A user-patched prototype method (including an accessor result) must
+        // therefore win over the native fallback.
+        let builtin_name: &[u8] = if jsval.is_bool() {
+            b"Boolean"
+        } else if jsval.is_number() {
+            b"Number"
+        } else if jsval.is_bigint() {
+            b"BigInt"
+        } else if jsval.is_any_string() {
+            b"String"
+        } else if is_symbol {
+            b"Symbol"
+        } else {
+            b""
+        };
+        if !builtin_name.is_empty() {
+            if let Some(patched) =
+                super::builtin_proto_user_value(builtin_name, "toString", receiver)
+            {
+                if let Some(result) =
+                    call_primitive_closure_value(receiver, patched, std::ptr::null(), 0)
+                {
+                    return result;
+                }
+                // `Invoke` must call the value returned by `GetV`. A present
+                // non-callable property throws rather than silently selecting
+                // the native fallback (#5901).
+                throw_object_to_string_not_function();
+            }
+        }
+        return js_native_call_method(
+            receiver,
+            b"toString".as_ptr() as *const i8,
+            "toString".len(),
+            std::ptr::null(),
+            0,
+        );
+    }
+    if let Some(result) = call_object_to_string_method(receiver) {
+        return result;
+    }
+    crate::object::js_object_to_string(receiver)
+}
+
+/// The body of `%Object.prototype.toLocaleString%`.
+///
+/// Keep this separate from [`js_object_default_to_locale_string`], which is
+/// the source-level `value.toLocaleString()` dispatcher. Redispatching that
+/// method from inside its own built-in thunk finds the same own property on
+/// `Object.prototype` (or on an object that aliases the built-in) and recurses
+/// until the native stack overflows. ECMA-262 requires only an invocation of
+/// the receiver's `toString` here.
+pub(crate) unsafe fn js_object_prototype_to_locale_string(receiver: f64) -> f64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        throw_object_to_locale_string_nullish_receiver();
+    }
+    invoke_receiver_to_string(receiver)
+}
+
 pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     let jsval = JSValue::from_bits(receiver.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
@@ -115,54 +183,10 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         let s = crate::intl::bigint_to_locale_string(receiver, undef, undef);
         return f64::from_bits(JSValue::string_ptr(s).bits());
     }
-    // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
-    // them — check before the pointer guard so the branch is reachable.
-    let is_symbol = unsafe { crate::symbol::js_is_symbol(receiver) } != 0;
-    if !jsval.is_pointer() || is_symbol {
-        // Spec 20.1.3.6 Object.prototype.toLocaleString: step 1 is "Let O be
-        // the this value" (NOT ToObject), step 2 is "Return ? Invoke(O,
-        // 'toString')". Invoke resolves the method on the primitive's prototype
-        // chain and calls it with the original primitive as `this`. A
-        // user-patched Boolean/Number/BigInt/String prototype toString must be
-        // honoured, and a strict callee must receive the raw primitive (not a
-        // boxed wrapper) — call_primitive_closure_value handles both.
-        let builtin_name: &[u8] = if jsval.is_bool() {
-            b"Boolean"
-        } else if jsval.is_bigint() {
-            b"BigInt"
-        } else if jsval.is_any_string() {
-            b"String"
-        } else if is_symbol {
-            b"Symbol"
-        } else {
-            b""
-        };
-        if !builtin_name.is_empty() {
-            if let Some(patched) =
-                unsafe { super::builtin_proto_user_value(builtin_name, "toString", receiver) }
-            {
-                if let Some(result) =
-                    unsafe { call_primitive_closure_value(receiver, patched, std::ptr::null(), 0) }
-                {
-                    return result;
-                }
-                // `Invoke(O, "toString")` must call the value returned by
-                // `GetV`. A present data property such as
-                // `String.prototype.toString = 42`, or an accessor returning
-                // a non-callable, throws rather than silently selecting the
-                // native fallback (#5901).
-                throw_object_to_string_not_function();
-            }
-        }
-        return unsafe {
-            js_native_call_method(
-                receiver,
-                b"toString".as_ptr() as *const i8,
-                "toString".len(),
-                std::ptr::null(),
-                0,
-            )
-        };
+    // Primitive receivers (including pointer-tagged Symbols) inherit the
+    // Object method but resolve `toString` on their own prototype chain.
+    if !jsval.is_pointer() || crate::symbol::js_is_symbol(receiver) != 0 {
+        return invoke_receiver_to_string(receiver);
     }
     // #8139: an ARRAY, TYPED ARRAY or BUFFER receiver.
     //
@@ -249,10 +273,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             return result;
         }
     }
-    if let Some(result) = call_object_to_string_method(receiver) {
-        return result;
-    }
-    crate::object::js_object_to_string(receiver)
+    invoke_receiver_to_string(receiver)
 }
 
 /// #4546: codegen entry point for `value.toLocaleString()` when the

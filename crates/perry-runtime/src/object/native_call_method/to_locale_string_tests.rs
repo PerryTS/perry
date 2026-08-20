@@ -154,3 +154,27 @@ fn an_array_buffer_and_data_view_keep_the_object_tag() {
     crate::buffer::mark_as_data_view(dv);
     assert_ne!(locale_string(boxed(dv)), "hi");
 }
+
+#[test]
+fn object_prototype_builtin_invokes_to_string_without_self_redispatch() {
+    // test262 built-ins/Object/prototype/toLocaleString/S15.2.4.3_A1.js calls
+    // the built-in directly on Object.prototype. The thunk used to re-enter
+    // the source-level `toLocaleString` dispatcher, which found the same own
+    // thunk again and overflowed the native stack before reaching `toString`.
+    let receiver = crate::object::builtin_prototype_value("Object");
+    let previous = crate::object::js_implicit_this_set(receiver);
+    let result =
+        crate::object::global_this::object_prototype_to_locale_string_thunk(std::ptr::null());
+    crate::object::js_implicit_this_set(previous);
+
+    let ptr = crate::value::js_get_string_pointer_unified(result) as *const crate::StringHeader;
+    assert!(!ptr.is_null());
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        assert_eq!(
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, len)),
+            "[object Object]"
+        );
+    }
+}

@@ -31,7 +31,8 @@ use disposal::{
 };
 pub use object_proto::js_value_to_locale_string;
 pub(crate) use object_proto::{
-    js_object_default_to_locale_string, js_object_default_value_of, js_object_is_prototype_of_value,
+    js_object_default_value_of, js_object_is_prototype_of_value,
+    js_object_prototype_to_locale_string,
 };
 pub(crate) use proto_dispatch::{
     try_dispatch_instance_method_value, try_dispatch_value_called_proto_method,
