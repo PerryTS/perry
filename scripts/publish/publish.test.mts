@@ -9,6 +9,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { renderPerryFormula } from './brew/formula.mts'
 import { summarizePolicyAlerts, normalizeFullScanArtifacts } from './scan.mts'
@@ -17,6 +20,8 @@ import { publishAuthPreflight } from './auth-posture.mts'
 import { compareSemver, extractFirstJson } from './shared.mts'
 import { parseStageListJson } from './npm/shared.mts'
 import { NPM_MIN_VERSION } from './constants.mts'
+
+const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
 
 test('renderPerryFormula: macos arm64/x86_64 binaries + linux source build', () => {
   const f = renderPerryFormula({
@@ -211,6 +216,82 @@ test('compareSemver: major/minor/patch ordering', () => {
   assert.ok(compareSemver('11.5.1', '11.17.0') < 0)
   assert.ok(compareSemver('12.0.0', '11.99.99') > 0)
   assert.ok(compareSemver('11.15.0', '11.17.0') < 0)
+})
+
+// Regression coverage for the incident class this repo has already been
+// bitten by once: a bare `import` of an entry-point module firing a REAL
+// side-effecting command (a real `cargo publish` fired from an import-test
+// with no isMainModule guard). Static, not a live import — asserting this by
+// actually importing these modules would itself risk running `main()` again
+// if a future edit ever breaks the guard, which is exactly the bug this test
+// exists to catch before it can do that.
+const MAIN_GUARDED_ENTRYPOINTS = [
+  'pipeline.mts',
+  'auth-posture.mts',
+  'brew/tap-publish.mts',
+  'cargo/ffi-publish.mts',
+] as const
+
+function assertMainGuardIsTrailing(relPath: string): void {
+  const src = readFileSync(path.join(PUBLISH_DIR, relPath), 'utf8')
+  const guardRe = /if\s*\(\s*(?:isMainModule|process\.argv\[1\]\s*===\s*fileURLToPath\(new URL\(import\.meta\.url\)\))\s*\)\s*\{/
+  const m = guardRe.exec(src)
+  assert.ok(m, `${relPath}: missing the isMainModule guard around its entry call`)
+  // Walk brace depth from the guard's opening `{` to find its matching close,
+  // then require everything after that close to be blank/whitespace — i.e.
+  // the guard is the LAST top-level statement, so nothing side-effecting can
+  // be reintroduced below it.
+  let depth = 0
+  let i = m.index + m[0].length - 1
+  for (; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1
+    else if (src[i] === '}') {
+      depth -= 1
+      if (depth === 0) break
+    }
+  }
+  assert.ok(i < src.length, `${relPath}: unbalanced braces while scanning the guard block`)
+  const trailing = src.slice(i + 1)
+  assert.equal(
+    trailing.trim(),
+    '',
+    `${relPath}: code follows the isMainModule guard — a bare import would run it as a side effect`,
+  )
+}
+
+for (const entry of MAIN_GUARDED_ENTRYPOINTS) {
+  test(`${entry}: main() only runs behind the isMainModule guard, which is the last statement`, () => {
+    assertMainGuardIsTrailing(entry)
+  })
+}
+
+test('pipeline.mts: no mode flag is a usage error, not a default action', () => {
+  const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
+  // The zero-flag footgun this guards against: running the script with no
+  // arguments used to silently dispatch a REAL staged publish (flags.size
+  // === 0 fell into the --stage-only branch). There must be no code path
+  // that treats an empty/absent mode as --stage-only.
+  assert.doesNotMatch(
+    src,
+    /flags\.size\s*===\s*0/,
+    'pipeline.mts must not special-case zero flags into a default mode',
+  )
+  assert.match(
+    src,
+    /No mode flag given/,
+    'pipeline.mts must refuse to run without an explicit mode flag',
+  )
+})
+
+test('pipeline.mts / approve.mts: the socket scan gate has no skip flag', () => {
+  for (const rel of ['pipeline.mts', 'npm/approve.mts']) {
+    const src = readFileSync(path.join(PUBLISH_DIR, rel), 'utf8')
+    assert.doesNotMatch(
+      src,
+      /no-scan|noScan/,
+      `${rel}: the Socket scan gate must not have a skip flag/option — it is mandatory`,
+    )
+  }
 })
 
 test('NPM_MIN_VERSION floor covers staged publishing + min-release-age', () => {

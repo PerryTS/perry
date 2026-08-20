@@ -22,6 +22,12 @@ name: npm stage publish
 # as a trusted publisher on npmjs.com (same one-time setup npm/README.md
 # describes for release-packages.yml). The auth-posture gate in
 # scripts/publish/auth-posture.mts refuses any long-lived token present here.
+#
+# Guardrails: dispatches for the same dist-tag are serialized (concurrency:
+# below); a caller-supplied build-run-id is verified (workflow identity,
+# success, exact commit) before its artifacts are trusted; and the stage
+# step is idempotent — it skips packages a prior partial run already staged
+# instead of re-attempting all 9.
 
 on:
   workflow_dispatch:
@@ -41,6 +47,14 @@ on:
 
 permissions:
   contents: read
+
+# Serialize staged publishes for the same dist-tag — two concurrent dispatches
+# could otherwise both pass resolve-build's run-matching and both attempt
+# `npm stage publish` for the same version. `cancel-in-progress: false` so a
+# real staged publish already in flight is never cancelled out from under it.
+concurrency:
+  group: npm-stage-publish-${{ inputs.dist-tag }}
+  cancel-in-progress: false
 
 jobs:
   # Resolve the build run to stage from: either a caller-supplied build-run-id
@@ -66,7 +80,30 @@ jobs:
           set -euo pipefail
           if [ -n "$EXISTING" ]; then
             RUN_ID="$EXISTING"
-            echo "Reusing build run $RUN_ID."
+            # Validate the reused run before trusting its artifacts: it must
+            # actually be a release-packages.yml run, it must have succeeded,
+            # and it must have built the commit we're dispatching from — a
+            # stale or wrong-workflow run-id would otherwise stage old/wrong
+            # binaries under today's version and dist-tag with no error.
+            CUR_SHA=$(git rev-parse HEAD)
+            RUN_JSON=$(gh run view "$RUN_ID" -R "$REPO" --json workflowName,conclusion,status,headSha)
+            RUN_WORKFLOW=$(echo "$RUN_JSON" | jq -r '.workflowName')
+            RUN_STATUS=$(echo "$RUN_JSON" | jq -r '.status')
+            RUN_CONCLUSION=$(echo "$RUN_JSON" | jq -r '.conclusion')
+            RUN_SHA=$(echo "$RUN_JSON" | jq -r '.headSha')
+            if [ "$RUN_WORKFLOW" != "Release Packages" ]; then
+              echo "::error::build-run-id $RUN_ID is a '$RUN_WORKFLOW' run, not Release Packages — refusing to stage its artifacts." >&2
+              exit 1
+            fi
+            if [ "$RUN_STATUS" != "completed" ] || [ "$RUN_CONCLUSION" != "success" ]; then
+              echo "::error::build-run-id $RUN_ID is status=$RUN_STATUS conclusion=$RUN_CONCLUSION, not a successful completed run." >&2
+              exit 1
+            fi
+            if [ "$RUN_SHA" != "$CUR_SHA" ]; then
+              echo "::error::build-run-id $RUN_ID built $RUN_SHA, but this dispatch is at $CUR_SHA — refusing to stage a build of a different commit." >&2
+              exit 1
+            fi
+            echo "Reusing build run $RUN_ID (verified: Release Packages, success, sha $RUN_SHA)."
           else
             # Dispatch release-packages.yml in stage mode. Stage mode is the
             # DEFAULT workflow_dispatch (no inputs = build-only smoke run; the
@@ -191,10 +228,30 @@ jobs:
               exit 1
             fi
           done
+          # Snapshot what's already staged ONCE so a re-run after a partial
+          # failure skips the packages that made it through last time instead
+          # of re-attempting all 9 (npm rejects a re-stage of an already-staged
+          # version, which used to surface as "N failures" for a single
+          # genuine failure).
+          already_staged() {
+            node -e '
+              const raw = require("fs").readFileSync(0, "utf8")
+              let list
+              try { list = JSON.parse(raw) } catch { list = [] }
+              const arr = Array.isArray(list) ? list : Object.values(list || {})
+              const [n, v] = process.argv.slice(1)
+              process.exit(arr.some(e => (e.name || e.packageName) === n && e.version === v) ? 0 : 1)
+            ' "$1" "$2" <<<"$STAGED_JSON"
+          }
+          STAGED_JSON=$(npm stage list --json 2>/dev/null || echo '[]')
           failed=""
           for pkg in ./npm/perry-*; do
             name=$(node -p "require('$pkg/package.json').name")
             ver=$(node -p "require('$pkg/package.json').version")
+            if already_staged "$name" "$ver"; then
+              echo "=== $name@$ver already staged — skipping ==="
+              continue
+            fi
             echo "=== staging $name@$ver ==="
             if ! npm stage publish "$pkg" --access public --tag "$DIST_TAG" --ignore-scripts --provenance; then
               echo "::error::npm stage publish failed for $name@$ver — continuing" >&2
@@ -204,10 +261,14 @@ jobs:
           # Wrapper LAST (optionalDependencies must be staged first).
           name=$(node -p "require('./npm/perry/package.json').name")
           ver=$(node -p "require('./npm/perry/package.json').version")
-          echo "=== staging $name@$ver (wrapper, last) ==="
-          if ! npm stage publish ./npm/perry --access public --tag "$DIST_TAG" --ignore-scripts --provenance; then
-            echo "::error::npm stage publish failed for $name@$ver" >&2
-            failed="$failed $name@$ver"
+          if already_staged "$name" "$ver"; then
+            echo "=== $name@$ver (wrapper) already staged — skipping ==="
+          else
+            echo "=== staging $name@$ver (wrapper, last) ==="
+            if ! npm stage publish ./npm/perry --access public --tag "$DIST_TAG" --ignore-scripts --provenance; then
+              echo "::error::npm stage publish failed for $name@$ver" >&2
+              failed="$failed $name@$ver"
+            fi
           fi
           if [ -n "$failed" ]; then
             echo "::error::staging failures:$failed" >&2

@@ -27,6 +27,17 @@ permissions:
   # push event, so those must be fired explicitly.
   actions: write
 
+# Serialize runs that target the same tag/version, so two dispatches can't
+# race npm-publish's `npm view` idempotency check (a TOCTOU otherwise: both
+# can pass the check before either publishes) or create-release's tag
+# creation. A plain stage-mode dispatch (build-only, no publish) has no tag
+# to key on and falls back to its own run id, so unrelated stage builds are
+# never blocked. `cancel-in-progress: false` — never cancel a release/publish
+# leg that's already running.
+concurrency:
+  group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || (inputs.cut_release && 'cut-release-in-flight') || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   # ---------------------------------------------------------------------------
   # Resolve the run mode + release tag ONCE, up front. Every downstream job
@@ -53,8 +64,17 @@ jobs:
       mode: ${{ steps.resolve.outputs.mode }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
+      # Pinned commit every downstream job must check out. Empty for
+      # release/cut-release/stage (the triggering ref is already correct —
+      # cut-release in particular has NO tag yet to pin to); set to the tag
+      # for republish, so a `main` that has drifted since the tag was cut
+      # cannot silently republish a different version under the old tag's
+      # label (#confirmed republish version-drift finding).
+      checkout-ref: ${{ steps.resolve.outputs.checkout-ref }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # republish mode needs `git show <tag>:Cargo.toml` below
 
       - name: Resolve run mode + tag
         id: resolve
@@ -67,6 +87,7 @@ jobs:
           EXISTING_TAG: ${{ inputs.existing_tag }}
         run: |
           set -euo pipefail
+          CHECKOUT_REF=""
           if [ "$EVENT" = "release" ]; then
             MODE=release
             TAG="$RELEASE_TAG"
@@ -99,6 +120,19 @@ jobs:
               echo "::error::existing_tag=$TAG has no published GitHub release."
               exit 1
             fi
+            git fetch --quiet --force origin "refs/tags/$TAG:refs/tags/$TAG"
+            TAG_CARGO_VERSION=$(git show "$TAG:Cargo.toml" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ "$TAG_CARGO_VERSION" != "${TAG#v}" ]; then
+              echo "::error::Cargo.toml at $TAG reads version $TAG_CARGO_VERSION, but the tag name implies ${TAG#v} — refusing to republish a mistagged version." >&2
+              exit 1
+            fi
+            # Pin every downstream checkout to the tag's exact commit. Without
+            # this, every job checks out whatever ref the dispatch ran on —
+            # if `main` has advanced past the tag, the rebuild silently
+            # compiles a DIFFERENT Cargo.toml version than the tag/release
+            # label says, and npm (which reads the version from Cargo.toml on
+            # disk) publishes that drifted version attributed to this tag.
+            CHECKOUT_REF="$TAG"
           else
             MODE=stage
             TAG=""
@@ -108,8 +142,9 @@ jobs:
             echo "mode=$MODE"
             echo "tag=$TAG"
             echo "version=$VERSION"
+            echo "checkout-ref=$CHECKOUT_REF"
           } >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}"
+          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}  checkout-ref=${CHECKOUT_REF:-<default>}"
 
   # ---------------------------------------------------------------------------
   # Gate: wait for Tests + Simulator Tests to pass on this commit before we
@@ -355,6 +390,8 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.checkout-ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -1102,7 +1139,7 @@ jobs:
   # this workflow.
   # ---------------------------------------------------------------------------
   build-cross:
-    needs: await-tests
+    needs: [preflight, await-tests]
     strategy:
       # Each leg is independent; let one Tier-3 failure not cancel the
       # other targets so we still ship the bundles that did build.
@@ -1210,6 +1247,8 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.checkout-ref }}
 
       - name: Install Rust stable + cross target
         uses: dtolnay/rust-toolchain@stable
@@ -2156,6 +2195,12 @@ jobs:
       id-token: write          # REQUIRED for OIDC + npm --provenance
     steps:
       - uses: actions/checkout@v7
+        with:
+          # republish mode pins this to the tag's exact commit (see
+          # preflight's checkout-ref) — without it, npm publishes whatever
+          # Cargo.toml reads on the dispatch ref, which can have drifted past
+          # the tag being republished.
+          ref: ${{ needs.preflight.outputs.checkout-ref }}
 
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
       # *publishing* toolchain (npm registry auth), not a test oracle — it never

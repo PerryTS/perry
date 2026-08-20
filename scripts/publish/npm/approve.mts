@@ -8,7 +8,7 @@
  *   Gate order (every slow gate BEFORE the OTP prompt, because TOTP is ~30s):
  *     1. list staged entries, filter to @perryts/*
  *     2. verify each (sha1 vs staged shasum) — refuse on any mismatch
- *     3. Socket full-scan each (unless --no-scan) — failed/blocked entries drop
+ *     3. Socket full-scan each (mandatory — no flag skips this) — failed/blocked entries drop
  *     4. OTP resolution: --otp <code> | --yes (browser web-OTP) | prompt
  *     5. npm stage approve <stageId> per entry (PTY-wrapped for web-OTP)
  *     6. registry liveness: npm view <name>@<version> before minting a receipt
@@ -27,8 +27,6 @@ import { fetchPublishedVersion, listStagedEntries, type StagedEntry } from './sh
 import { verifyStagedEntry } from './staged.mts'
 
 export interface ApproveOptions {
-  /** Skip the in-approve socket scan gate (recorded as deferred in receipt). */
-  noScan?: boolean
   /** TOTP code (CI / scripted). */
   otp?: string
   /** Approve without prompting; browser web-OTP drives 2FA. */
@@ -132,41 +130,46 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
     }
   }
 
-  // 2. Socket scan gate (unless --no-scan).
+  // 2. Socket scan gate — mandatory. There is no flag or option that skips
+  // this: an approve that promotes unscanned bytes to the public registry is
+  // exactly the failure mode this gate exists to prevent. A missing/invalid
+  // SOCKET_API_TOKEN fails closed (refuses to approve) rather than proceeding
+  // without a scan.
   const scanResults: ScanResult[] = []
-  if (!opts.noScan) {
-    const ctx = await preflightSocketScanAuth()
-    if (!ctx) {
-      logger.fail('Socket scan auth failed — refusing to approve unscanned bytes.')
-      return { approved: [], failed: verified.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults: [] }
-    }
-    const passed: StagedEntry[] = []
-    for (const entry of verified) {
-      const res = await scanTarball(ctx, entry.name, entry.version, entry.shasum)
-      scanResults.push(res)
-      if (res.status === 'passed') passed.push(entry)
-      else logger.fail(`scan ${res.status}: ${entry.name}@${entry.version} dropped from approve`)
-    }
-    if (passed.length === 0) {
-      logger.fail('No staged entries passed the scan gate — not approving.')
-      return { approved: [], failed: verified.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults }
-    }
-    if (passed.length !== verified.length) {
-      const dropped = verified.filter(e => !passed.includes(e))
-      logger.fail(
-        `Partial scan — refusing to approve. ${dropped.length} of ${verified.length} entries did not pass the scan gate: ` +
-          `${dropped.map(e => `${e.name}@${e.version}`).join(', ')}.`,
-      )
-      return {
-        approved: [],
-        failed: verified.map(e => `${e.name}@${e.version}`),
-        registryLive: false,
-        scanResults,
-      }
-    }
-    verified.length = 0
-    verified.push(...passed)
+  const ctx = await preflightSocketScanAuth()
+  if (!ctx) {
+    logger.fail(
+      'Socket scan auth failed — refusing to approve unscanned bytes.\n' +
+        '  Fix: set SOCKET_API_TOKEN (ask a maintainer if it is not already provisioned) and re-run.',
+    )
+    return { approved: [], failed: verified.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults: [] }
   }
+  const passed: StagedEntry[] = []
+  for (const entry of verified) {
+    const res = await scanTarball(ctx, entry.name, entry.version, entry.shasum)
+    scanResults.push(res)
+    if (res.status === 'passed') passed.push(entry)
+    else logger.fail(`scan ${res.status}: ${entry.name}@${entry.version} dropped from approve`)
+  }
+  if (passed.length === 0) {
+    logger.fail('No staged entries passed the scan gate — not approving.')
+    return { approved: [], failed: verified.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults }
+  }
+  if (passed.length !== verified.length) {
+    const dropped = verified.filter(e => !passed.includes(e))
+    logger.fail(
+      `Partial scan — refusing to approve. ${dropped.length} of ${verified.length} entries did not pass the scan gate: ` +
+        `${dropped.map(e => `${e.name}@${e.version}`).join(', ')}.`,
+    )
+    return {
+      approved: [],
+      failed: verified.map(e => `${e.name}@${e.version}`),
+      registryLive: false,
+      scanResults,
+    }
+  }
+  verified.length = 0
+  verified.push(...passed)
 
   // 3. OTP resolution (last, after every slow gate).
   if (!opts.otp && !opts.yes && !process.stdin.isTTY) {

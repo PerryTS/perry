@@ -45,6 +45,8 @@ export interface PipelineState {
   staged: string[]
   verified: string[]
   scanResults: ScanResult[]
+  /** True when the scan gate could not run at all (e.g. bad/missing SOCKET_API_TOKEN) — distinct from "ran and found nothing". */
+  scanBlocked?: boolean
   approved?: string[]
   registryLive?: boolean
   released?: boolean
@@ -133,32 +135,45 @@ async function dispatchStageWorkflow(
 async function verifyAndScan(
   version: string,
   state: PipelineState,
-  config: { noScan?: boolean },
 ): Promise<PipelineState> {
   const staged = (await listStagedEntries(rootPath)).filter(e =>
     ALL_PACKAGES.includes(e.name as (typeof ALL_PACKAGES)[number]),
   )
   state.staged = staged.map(e => `${e.name}@${e.version}`)
+  // Surface a partial staged set immediately, not only when publish:approve
+  // later refuses it — the @perryts/* packages are a fixed release set and a
+  // partial stage ships a broken install if promoted.
+  const stagedNames = new Set(staged.map(e => e.name))
+  const missing = ALL_PACKAGES.filter(n => !stagedNames.has(n))
+  if (missing.length > 0) {
+    logger.fail(`Partial staged set — missing: ${missing.join(', ')}. Not all 9 @perryts/* packages are staged.`)
+  }
   const verified: StagedEntry[] = []
   for (const entry of staged) {
     if (await verifyStagedEntry(entry)) verified.push(entry)
   }
   state.verified = verified.map(e => `${e.name}@${e.version}`)
-  if (!config.noScan) {
-    const ctx = await preflightSocketScanAuth()
-    if (ctx) {
-      const results: ScanResult[] = []
-      for (const entry of verified) {
-        results.push(await scanTarball(ctx, entry.name, entry.version, entry.shasum))
-      }
-      state.scanResults = results
-      const failed = results.filter(r => r.status !== 'passed')
-      if (failed.length > 0) {
-        logger.fail(`scan gate: ${failed.length} entry/entries did not pass — fix before approve.`)
-      }
-    } else {
-      logger.fail('Socket scan auth failed — scan skipped. Re-run with SOCKET_API_TOKEN set.')
+  // The scan gate is mandatory — there is no flag to skip it. A missing/invalid
+  // SOCKET_API_TOKEN fails closed (state.scanResults stays empty and the
+  // pipeline refuses to report a clean scan) rather than silently proceeding.
+  const ctx = await preflightSocketScanAuth()
+  if (ctx) {
+    const results: ScanResult[] = []
+    for (const entry of verified) {
+      results.push(await scanTarball(ctx, entry.name, entry.version, entry.shasum))
     }
+    state.scanResults = results
+    state.scanBlocked = false
+    const failed = results.filter(r => r.status !== 'passed')
+    if (failed.length > 0) {
+      logger.fail(`scan gate: ${failed.length} entry/entries did not pass — fix before approve.`)
+    }
+  } else {
+    state.scanBlocked = true
+    logger.fail(
+      'Socket scan auth failed — the scan did not run and cannot be skipped.\n' +
+        '  Fix: set SOCKET_API_TOKEN (ask a maintainer if it is not already provisioned) and re-run.',
+    )
   }
   state.updatedAt = new Date().toISOString()
   writeState(state)
@@ -169,7 +184,11 @@ function printStatus(state: PipelineState): void {
   logger.log(`=== publish pipeline: v${state.version} ===`)
   logger.log(`  staged:    ${state.staged.length ? state.staged.join(', ') : '(none)'}`)
   logger.log(`  verified:  ${state.verified.length ? state.verified.join(', ') : '(none)'}`)
-  logger.log(`  scan:      ${state.scanResults.length} scanned, ${state.scanResults.filter(r => r.status !== 'passed').length} not-passed`)
+  logger.log(
+    state.scanBlocked
+      ? '  scan:      BLOCKED — did not run (SOCKET_API_TOKEN missing/invalid); re-run publish:scan once it is set'
+      : `  scan:      ${state.scanResults.length} scanned, ${state.scanResults.filter(r => r.status !== 'passed').length} not-passed`,
+  )
   logger.log(`  approved:  ${state.approved?.length ? state.approved.join(', ') : '(not approved)'}`)
   logger.log(`  registry:  ${state.registryLive ? 'live' : 'not live'}`)
   logger.log(`  released:  ${state.released ? 'yes' : 'no'}`)
@@ -181,6 +200,11 @@ async function main(): Promise<void> {
   // that happens to equal a flag name (e.g. `--tag --approve`) can't mis-route
   // either, because `--approve` is consumed as `--tag`'s value here.
   const VALUE_OPTIONS = new Set(['--tag', '--otp'])
+  // A mode flag is required — there is no implicit default mode. Running the
+  // script with zero (or only --dry-run) arguments used to silently dispatch a
+  // REAL staged publish; now it falls through to the usage error below instead.
+  const MODE_FLAGS = new Set(['--stage-only', '--scan-only', '--approve', '--release-only', '--status'])
+  const MODIFIER_FLAGS = new Set(['--dry-run', '--yes'])
   const flags = new Set<string>()
   let tag = 'latest'
   let otp: string | undefined
@@ -198,7 +222,20 @@ async function main(): Promise<void> {
     }
   }
   const dryRun = flags.has('--dry-run')
-  const noScan = flags.has('--no-scan')
+  const mode = [...flags].find(f => MODE_FLAGS.has(f))
+  const unknown = [...flags].filter(f => !MODE_FLAGS.has(f) && !MODIFIER_FLAGS.has(f))
+
+  if (!mode || unknown.length > 0) {
+    logger.fail(
+      (!mode
+        ? 'No mode flag given — refusing to guess. '
+        : `Unknown flag(s): ${unknown.join(', ')}. `) +
+        'Usage: publish:pipeline <--stage-only | --scan-only | --approve | --release-only | --status> ' +
+        '[--dry-run] [--yes] [--otp <code>] [--tag <tag>]',
+    )
+    process.exitCode = 1
+    return
+  }
 
   // Resolve the version from the gate.
   const gate = await checkVersionGate(rootPath)
@@ -228,26 +265,25 @@ async function main(): Promise<void> {
     return
   }
 
-  if (flags.has('--stage-only') || flags.size === 0 || (flags.size === 1 && dryRun)) {
+  if (mode === '--stage-only') {
     if (!(await dispatchStageWorkflow(gate.version, { dryRun, tag }))) {
       process.exitCode = 1
       return
     }
-    state = await verifyAndScan(gate.version, state, { noScan })
+    state = await verifyAndScan(gate.version, state)
     printStatus(state)
     logger.log(formatApproveGate({ version: gate.version, repoPath: rootPath }))
     return
   }
 
-  if (flags.has('--scan-only')) {
-    state = await verifyAndScan(gate.version, state, { noScan })
+  if (mode === '--scan-only') {
+    state = await verifyAndScan(gate.version, state)
     printStatus(state)
     return
   }
 
-  if (flags.has('--approve')) {
+  if (mode === '--approve') {
     const receipt = await runApprove({
-      noScan,
       yes: flags.has('--yes'),
       otp,
     })
@@ -280,7 +316,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (flags.has('--release-only')) {
+  if (mode === '--release-only') {
     if (!state.registryLive) {
       logger.fail(`No approved+live receipt for v${gate.version} — run publish:approve first.`)
       process.exitCode = 1
@@ -293,11 +329,6 @@ async function main(): Promise<void> {
     if (!released) process.exitCode = 1
     return
   }
-
-  logger.fail(
-    'Unknown flags. Usage: publish:pipeline [--stage-only | --scan-only | --approve | --release-only | --status] [--dry-run] [--no-scan] [--yes] [--otp <code>] [--tag <tag>]',
-  )
-  process.exitCode = 1
 }
 
 // Only run when invoked directly (node scripts/publish/pipeline.mts …), not
