@@ -18,7 +18,16 @@ use super::*;
 // landing pad. Keep this value-call bridge unwind-capable just like
 // `js_native_call_method`; otherwise debug/static runtime builds install an
 // abort-on-unwind guard here and Linux aborts before the landing pad is reached.
-pub unsafe extern "C-unwind" fn js_native_call_value(
+// #8479: NOT `C-unwind`. The runtime is built `panic=abort` and JS throws
+// travel as a raw Itanium `_Unwind_Exception` that must step THROUGH these
+// frames untouched (see `crate::eh` and the panic=abort rationale in the
+// workspace Cargo.toml). Marking a frame `extern "C-unwind"` in a
+// panic=abort crate does not enable that — it makes rustc wrap the call in
+// an abort-on-unwind landing pad, which is exactly the RFC-2945 guard a JS
+// throw trips ("panic in a function that cannot unwind"). #8416 introduced
+// the first two such guards here; #8464 added ~40 more and measurably
+// regressed main (+20 gap crashes, gc-stress) before being reverted.
+pub unsafe extern "C" fn js_native_call_value(
     func_value: f64,
     args_ptr: *const f64,
     args_len: usize,

@@ -4,7 +4,7 @@
 //! (`LIBS` / `SYMS`); a symbol's JS call stub is a runtime closure whose
 //! single capture is its `SYMS` index, so the shared per-arity thunks
 //! (`sym_thunk_0..=16`) stay signature-compatible with the closure call
-//! ABI (`extern "C-unwind" fn(*const ClosureHeader, f64 × arity) -> f64`,
+//! ABI (`extern "C" fn(*const ClosureHeader, f64 × arity) -> f64`,
 //! arity-padded by `closure/dispatch` via `js_register_closure_arity`).
 //!
 //! `close()` calls `dlclose` and poisons the library's symbols: later
@@ -173,15 +173,7 @@ unsafe fn invoke_from_closure(closure: *const ClosureHeader, js_args: &[f64]) ->
 
 macro_rules! sym_thunk {
     ($name:ident $(, $a:ident)*) => {
-        // #8478: `C-unwind`, NOT `C`. `invoke_from_closure` throws a JS
-        // error for a symbol called after `close()` (and for an unknown
-        // stub). Under plain `extern "C"` that unwind hits Rust's
-        // abort-on-unwind shim inside the thunk itself — "panic in a
-        // function that cannot unwind" — so the documented use-after-close
-        // behaviour aborted the process on Linux instead of throwing.
-        // #8464 made the closure-dispatch CALLERS unwind-capable; these
-        // thunks are the CALLEES it could not see.
-        extern "C-unwind" fn $name(closure: *const ClosureHeader $(, $a: f64)*) -> f64 {
+        extern "C" fn $name(closure: *const ClosureHeader $(, $a: f64)*) -> f64 {
             let args = [$($a),*];
             unsafe { invoke_from_closure(closure, &args) }
         }
@@ -308,10 +300,7 @@ fn sym_thunk_for(arity: usize) -> *const u8 {
     }
 }
 
-// #8478: `C-unwind` for the same reason as the symbol thunks — this body
-// takes a `Mutex` whose `unwrap()` panics on poison, and a panic crossing a
-// plain `extern "C"` frame aborts rather than propagating.
-extern "C-unwind" fn close_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn close_thunk(closure: *const ClosureHeader) -> f64 {
     let lib_index = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
     let mut libs = LIBS.lock().unwrap();
     if let Some(rec) = libs.get_mut(lib_index) {
