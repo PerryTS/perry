@@ -89,7 +89,7 @@ macro_rules! define_direct_call_site {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy)]
-        pub struct $site(Option<extern "C-unwind" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64>);
+        pub struct $site(Option<extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64>);
 
         impl $site {
             /// Resolve `closure` once, before the loop.
@@ -98,7 +98,7 @@ macro_rules! define_direct_call_site {
                 $site(resolve_direct_func_ptr(closure, $arity).map(|func_ptr| unsafe {
                     std::mem::transmute::<
                         *const u8,
-                        extern "C-unwind" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
+                        extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
                     >(func_ptr)
                 }))
             }
@@ -174,11 +174,11 @@ mod tests {
 
     // A capture-less body behind a real `ClosureHeader`, the same way
     // `array/tests.rs` and `array/typed_array_receiver_tests.rs` build theirs.
-    extern "C-unwind" fn add3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn add3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
         a * 100.0 + b * 10.0 + c
     }
 
-    extern "C-unwind" fn sum2(_c: *const ClosureHeader, a: f64, b: f64) -> f64 {
+    extern "C" fn sum2(_c: *const ClosureHeader, a: f64, b: f64) -> f64 {
         a + b
     }
 

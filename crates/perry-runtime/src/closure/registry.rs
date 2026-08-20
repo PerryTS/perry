@@ -954,15 +954,14 @@ pub unsafe fn dispatch_with_arity(
     macro_rules! arm {
         (@ty $i:tt) => { f64 };
         ($($i:tt),* $(,)?) => {{
-            let f: extern "C-unwind" fn(*const ClosureHeader $(, arm!(@ty $i))*) -> f64 =
+            let f: extern "C" fn(*const ClosureHeader $(, arm!(@ty $i))*) -> f64 =
                 std::mem::transmute(func_ptr);
             f(closure $(, a!($i))*)
         }};
     }
     match k {
         0 => {
-            let f: extern "C-unwind" fn(*const ClosureHeader) -> f64 =
-                std::mem::transmute(func_ptr);
+            let f: extern "C" fn(*const ClosureHeader) -> f64 = std::mem::transmute(func_ptr);
             f(closure)
         }
         1 => arm!(0),

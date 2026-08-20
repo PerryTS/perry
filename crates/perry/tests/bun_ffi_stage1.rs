@@ -1,15 +1,13 @@
-// #8463 / #8478: these fixtures exercise JS exceptions unwinding out of the
-// FFI call path. Two layers must BOTH be `extern "C-unwind"`:
-//   * the closure dispatch family (`js_closure_call*`, `dispatch_with_arity`)
-//     — the callers, converted in #8464;
-//   * `bun_ffi::dlopen`'s `sym_thunk_*` / `close_thunk` — the callees, which
-//     are where `tier1_every_ffi_type_against_test_dylib`'s use-after-close
-//     throw actually originates (#8478).
-// A single plain `extern "C"` edge anywhere on that path turns the throw into
-// `panic in a function that cannot unwind` and aborts the binary on Linux.
-// macOS does not reproduce it, so the Linux `e2e-scoped` run of this suite is
-// the only real verdict — naming this file in a runtime diff is what opts the
-// suite into that job. Do not merge a fix here before it has reported.
+// #8479: `tier1_every_ffi_type_against_test_dylib` aborts on Linux with
+// "panic in a function that cannot unwind" at the use-after-close throw
+// (`lib.close()` then calling a symbol). The frame carrying the nounwind
+// guard is STILL UNIDENTIFIED: converting the closure dispatch family
+// (#8464) did not fix it and measurably regressed main, and converting
+// `bun_ffi::dlopen`'s thunks (#8480) did not fix it either. macOS does not
+// reproduce it at all, so the Linux `e2e-scoped` run of this suite is the
+// only verdict that counts — naming this file in a runtime diff is what
+// opts the suite into that job, and a candidate fix must not be merged
+// before that job has reported green.
 //! bun:ffi stages 1-2 (#6562) — e2e: compile TS that dlopens real C-ABI
 //! dylibs and drive them through the typed call stubs.
 //!
