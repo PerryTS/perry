@@ -51,6 +51,12 @@ fn compile_and_run(dir: &Path, entry: &Path, envs: &[(&str, &str)]) -> (bool, St
         String::from_utf8_lossy(&compile.stderr)
     );
     let mut run = Command::new(&output);
+    // #8479 diagnostic: the use-after-close abort reproduces only on Linux
+    // and the panic message alone does not name the frame carrying the
+    // nounwind guard — two candidate fixes (#8464, #8480) both left it
+    // aborting. Ask the child for a backtrace so CI names the frame instead
+    // of us guessing a third time.
+    run.env("RUST_BACKTRACE", "full");
     for (k, v) in envs {
         run.env(k, v);
     }
