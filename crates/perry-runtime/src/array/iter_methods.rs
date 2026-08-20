@@ -1118,8 +1118,13 @@ pub extern "C" fn js_array_join(
             std::str::from_utf8_unchecked(std::slice::from_raw_parts(sep_data, sep_len))
         };
 
-        // Build result string
-        let mut result = String::new();
+        // Separators are an exact lower bound for the result. Reserving them
+        // up front avoids the zero-capacity growth ladder without speculatively
+        // coercing elements (which could run user code or mutate the array).
+        let separator_bytes = sep_str
+            .len()
+            .saturating_mul(length.saturating_sub(1) as usize);
+        let mut result = String::with_capacity(separator_bytes);
         for i in 0..length as usize {
             if i > 0 {
                 result.push_str(sep_str);
