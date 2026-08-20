@@ -3148,7 +3148,15 @@ jobs:
             # Proper fix: hoist well-known-binding lookup out of
             # build_optimized_libs into link.rs so it runs even when
             # auto-optimize is skipped. Tracked separately.
-            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts"
+            # #8475: the three fastify-importing snippets cannot run under the
+            # harness's PERRY_NO_AUTO_OPTIMIZE=1 speed flag — `perry compile`
+            # hard-errors on `import 'fastify'` there, because the prebuilt
+            # stdlib is not built with `external-fastify-pump` and the request
+            # loop would hang. Excluded on the same terms as the HTTP aggregate
+            # above until the harness can run this class in a second,
+            # auto-optimizing pass. COVERAGE GAP, tracked in #8475 — not a
+            # statement that these snippets work.
+            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts"
             cmd_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts"
             # Repeat `--xcompile-only-target=…` per target rather than a
             # single comma-delimited value because PowerShell splits even
@@ -3191,7 +3199,9 @@ jobs:
             shell: pwsh
             # The well-known HTTP aggregate remains excluded on every host
             # while its no-auto ext-archive routing issue is tracked.
-            cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts"
+            # #8475: same fastify / PERRY_NO_AUTO_OPTIMIZE exclusion as the
+            # macOS entry above. COVERAGE GAP, tracked there.
+            cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts"
             cmd_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts"
             cmd_xcompile_blocking: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm"
             cmd_xcompile_advisory: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only"
