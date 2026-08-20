@@ -1,0 +1,37 @@
+# Open-coded StringHeader payload-access baseline (#8429).
+# Format: rule | crate | count
+# Regenerate: python3 scripts/string_payload_access_inventory.py --write-baseline
+# Counts may only decrease; a new crate starts at zero.
+
+inline-offset | perry-audio-miniaudio | 1
+inline-offset | perry-container-compose | 2
+inline-offset | perry-ext-ethers | 2
+inline-offset | perry-ext-fastify | 5
+inline-offset | perry-ext-http | 3
+inline-offset | perry-ext-mysql2 | 2
+inline-offset | perry-ext-net | 2
+inline-offset | perry-ext-nodemailer | 1
+inline-offset | perry-ext-pg | 2
+inline-offset | perry-ext-zlib | 3
+inline-offset | perry-ffi | 2
+inline-offset | perry-runtime | 370
+inline-offset | perry-stdlib | 85
+inline-offset | perry-ui-android | 6
+inline-offset | perry-ui-gtk4 | 32
+inline-offset | perry-ui-ios | 44
+inline-offset | perry-ui-macos | 49
+inline-offset | perry-ui-tvos | 29
+inline-offset | perry-ui-visionos | 39
+inline-offset | perry-ui-watchos | 6
+inline-offset | perry-ui-windows | 37
+inline-offset | perry-updater | 5
+reader-helper | perry-ext-ethers | 1
+reader-helper | perry-runtime | 13
+reader-helper | perry-ui-android | 5
+reader-helper | perry-ui-gtk4 | 32
+reader-helper | perry-ui-ios | 42
+reader-helper | perry-ui-macos | 45
+reader-helper | perry-ui-tvos | 27
+reader-helper | perry-ui-visionos | 37
+reader-helper | perry-ui-watchos | 5
+reader-helper | perry-ui-windows | 35

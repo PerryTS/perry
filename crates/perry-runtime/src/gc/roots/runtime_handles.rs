@@ -225,6 +225,39 @@ impl<'scope> RuntimeHandle<'scope> {
         f(self.get_raw_const_ptr::<T>())
     }
 
+    /// Re-read a rooted string's current payload and pass it to a
+    /// non-allocating callback.
+    ///
+    /// Call this again after every operation that may allocate or poll the
+    /// collector. A copying collection refreshes this handle's slot, and this
+    /// method derives the slice from that refreshed address on every call. Do
+    /// not retain the slice or allocate inside `f`; use
+    /// [`crate::string::OwnedStringBytes::copy_from_header`] when the bytes must
+    /// cross a collection point. `string_copy_range` and the byte-range loop in
+    /// `string/split.rs` are the reference patterns: keep offsets, perform the
+    /// allocating operation, then re-read the rooted source before touching
+    /// its payload.
+    ///
+    /// # Safety
+    ///
+    /// This handle must have been created by
+    /// [`RuntimeHandleScope::root_string_ptr`] from a live, initialized,
+    /// non-null [`crate::StringHeader`]. `f` must not invoke an operation that
+    /// can move or free the string while its payload slice is borrowed.
+    #[inline]
+    pub unsafe fn with_string_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let ptr = self.with_slot(|slot| match slot {
+            RuntimeHandleSlot::RawTagged { addr, tag } if tag == STRING_TAG => {
+                addr as *const crate::StringHeader
+            }
+            _ => handle_kind_mismatch("rooted string pointer"),
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
+        };
+        f(bytes)
+    }
+
     /// Run `f` — which may allocate, and therefore may MOVE the object this
     /// handle roots — and return its result together with the object's
     /// **post-collection** address.

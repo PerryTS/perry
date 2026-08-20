@@ -334,6 +334,16 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # String payloads live directly after StringHeader in the moving GC heap.
+      # Keep new consumers on the owned-copy or rooted-reread APIs instead of
+      # adding more layout arithmetic and caller-chosen `&'static str` helpers.
+      # Existing sites are tracked per crate and may only decrease.
+      - name: String payload-access inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/string_payload_access_inventory.py --self-test
+          python3 scripts/string_payload_access_inventory.py
+
       # Two reserved class ids sharing a value is silent and destructive: every
       # dispatch tower matches them in a fixed order, so the later arm becomes
       # unreachable and its whole method surface dies (#7576 killed the entire

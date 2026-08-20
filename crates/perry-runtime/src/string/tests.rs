@@ -30,6 +30,29 @@ fn test_string_create() {
 }
 
 #[test]
+fn owned_string_bytes_copies_inline_and_spilled_payloads() {
+    let short: &[u8] = b"short payload";
+    let long = vec![b'x'; OwnedStringBytes::INLINE_CAPACITY + 1];
+    for bytes in [short, long.as_slice()] {
+        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let owned = unsafe { OwnedStringBytes::copy_from_header(header) };
+        assert_eq!(owned.as_bytes(), bytes);
+    }
+}
+
+#[test]
+fn rooted_string_bytes_rereads_the_handle_slot() {
+    let first = js_string_from_bytes(b"before".as_ptr(), 6);
+    let second = js_string_from_bytes(b"after".as_ptr(), 5);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_string_ptr(first);
+
+    assert!(unsafe { handle.with_string_bytes(|bytes| bytes == b"before") });
+    handle.set_raw_const_ptr(second);
+    assert!(unsafe { handle.with_string_bytes(|bytes| bytes == b"after") });
+}
+
+#[test]
 fn test_string_concat() {
     let a = js_string_from_bytes(b"hello".as_ptr(), 5);
     let b = js_string_from_bytes(b" world".as_ptr(), 6);

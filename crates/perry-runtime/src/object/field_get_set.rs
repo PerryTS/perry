@@ -8,67 +8,10 @@
 
 use super::*;
 
-/// An owned copy of a property key's bytes (#7498).
-///
-/// **A `&[u8]` sliced out of a `StringHeader`'s payload is a borrow of the GC
-/// heap, and the collector cannot see it.** Rooting the key in a
-/// `RuntimeHandleScope` keeps the object alive and rewrites the *slot* — it
-/// does nothing for a `&[u8]`/`&str` already pointing at the pre-move address.
-/// The property-lookup tower is full of that shape: a key is sliced once at the
-/// top of an arm and compared, hashed and forwarded for hundreds of lines, and
-/// most of the probes in between (`resolve_inherited_field`,
-/// `fetch_subclass_handle_id`, `temporal_subclass_cell`,
-/// `array_prototype_property_value`, …) intern a key string of their own, which
-/// allocates.
-///
-/// The only sound shape is to stop borrowing. Copy the bytes out once, before
-/// the arm's first allocation, and use the copy everywhere below. Property names
-/// are short, so the common case is a stack buffer and no allocator traffic at
-/// all; the spill keeps that total rather than "usually".
-pub(crate) struct HeapKeyBytes {
-    inline: [u8; Self::INLINE],
-    len: usize,
-    spill: Vec<u8>,
-}
-
-impl HeapKeyBytes {
-    /// Every property name this tower sees in practice (`length`,
-    /// `constructor`, `@@iterator`, `__perry_temporal_cell__`, a numeric index)
-    /// fits. Longer keys spill rather than falling back to the borrow.
-    pub(crate) const INLINE: usize = 64;
-
-    pub(crate) fn copy_of(src: &[u8]) -> Self {
-        let mut inline = [0u8; Self::INLINE];
-        let mut spill = Vec::new();
-        if src.len() <= Self::INLINE {
-            inline[..src.len()].copy_from_slice(src);
-        } else {
-            spill = src.to_vec();
-        }
-        Self {
-            inline,
-            len: src.len(),
-            spill,
-        }
-    }
-
-    /// Copy a heap key's payload. `key` must be a live, non-null
-    /// `StringHeader`; callers check that before reaching here.
-    pub(crate) unsafe fn copy_of_key(key: *const crate::StringHeader) -> Self {
-        Self::copy_of(std::slice::from_raw_parts(
-            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*key).byte_len as usize,
-        ))
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        if self.len <= Self::INLINE {
-            &self.inline[..self.len]
-        } else {
-            &self.spill
-        }
-    }
-}
+/// Property-key spelling retained while call sites migrate to the sanctioned
+/// string-payload API. See [`crate::string::OwnedStringBytes`] for the GC
+/// safety contract shared by all string consumers.
+pub(crate) type HeapKeyBytes = crate::string::OwnedStringBytes;
 
 /// Hidden own-field name under which a `class X extends Request/Response`
 /// instance stashes the id of its underlying native Web-Fetch handle. Written

@@ -12,6 +12,88 @@ use std::ptr;
 use std::slice;
 use std::str;
 
+/// An owned snapshot of a `StringHeader` payload.
+///
+/// A slice derived from a `StringHeader` points into the moving GC heap. A
+/// `RuntimeHandleScope` keeps the string alive and refreshes its root slot, but
+/// it cannot refresh a slice that was created before a collection. Use this
+/// type when the bytes are needed across any call that may allocate or poll the
+/// collector. Payloads up to [`Self::INLINE_CAPACITY`] stay inline; longer
+/// payloads spill to a `Vec` rather than falling back to a heap borrow.
+///
+/// For long payloads that should not be copied, root the header with
+/// [`crate::gc::RuntimeHandleScope::root_string_ptr`] and call
+/// [`crate::gc::RuntimeHandle::with_string_bytes`] again after every possible
+/// collection point.
+pub struct OwnedStringBytes {
+    inline: [u8; Self::INLINE_CAPACITY],
+    len: usize,
+    spill: Vec<u8>,
+}
+
+impl OwnedStringBytes {
+    /// Payloads at or below this length do not allocate while being copied.
+    pub const INLINE_CAPACITY: usize = 64;
+
+    /// Copy bytes from a non-GC source.
+    pub fn copy_from_slice(src: &[u8]) -> Self {
+        let mut inline = [0u8; Self::INLINE_CAPACITY];
+        let mut spill = Vec::new();
+        if src.len() <= Self::INLINE_CAPACITY {
+            inline[..src.len()].copy_from_slice(src);
+        } else {
+            spill = src.to_vec();
+        }
+        Self {
+            inline,
+            len: src.len(),
+            spill,
+        }
+    }
+
+    /// Copy the current payload of a heap string.
+    ///
+    /// The copy is complete before this function returns, so the resulting
+    /// bytes remain valid across allocations and collections.
+    ///
+    /// # Safety
+    ///
+    /// `header` must be non-null and point to a live, initialized
+    /// [`StringHeader`] for the duration of this call. Call this before the
+    /// first operation that may collect, or re-read `header` from a
+    /// `RuntimeHandle` immediately before calling it.
+    pub unsafe fn copy_from_header(header: *const StringHeader) -> Self {
+        let bytes =
+            unsafe { slice::from_raw_parts(string_data(header), (*header).byte_len as usize) };
+        Self::copy_from_slice(bytes)
+    }
+
+    /// Compatibility name used by the property-key lookup tower.
+    pub(crate) fn copy_of(src: &[u8]) -> Self {
+        Self::copy_from_slice(src)
+    }
+
+    /// Compatibility name used by the property-key lookup tower.
+    pub(crate) unsafe fn copy_of_key(header: *const StringHeader) -> Self {
+        unsafe { Self::copy_from_header(header) }
+    }
+
+    /// Borrow the owned payload.
+    pub fn as_bytes(&self) -> &[u8] {
+        if self.len <= Self::INLINE_CAPACITY {
+            &self.inline[..self.len]
+        } else {
+            &self.spill
+        }
+    }
+}
+
+impl AsRef<[u8]> for OwnedStringBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 // ── Submodules (topical split of the original `string.rs`) ─────────────
 //
 // Each sibling uses `use super::*;` and re-imports the shared helpers
@@ -803,7 +885,15 @@ pub(crate) fn string_data(s: *const StringHeader) -> *const u8 {
     unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) }
 }
 
-/// Get string as a Rust &str (for internal use)
+/// Get string as a Rust `&str` for immediate, non-allocating internal use.
+///
+/// The returned lifetime is caller-chosen and is not tied to a GC root. The
+/// borrow must not span any call that may allocate or otherwise poll the
+/// collector: a copying collection can move the payload while leaving this
+/// slice pointed at from-space. Prefer [`OwnedStringBytes::copy_from_header`]
+/// when the contents must survive such a call. For long scans, root the header
+/// and use [`crate::gc::RuntimeHandle::with_string_bytes`] to re-read the
+/// payload after each possible collection point.
 pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
     unsafe {
         let blen = (*s).byte_len as usize;
