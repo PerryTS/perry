@@ -56,25 +56,15 @@ impl PerryButtonTarget {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an NSButton with a label and closure callback.
 /// `label_ptr` is a StringHeader pointer, `on_press` is a NaN-boxed closure pointer.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
 
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-    let ns_string = NSString::from_str(label);
+    let ns_string = NSString::from_str(&label);
 
     unsafe {
         let button = NSButton::buttonWithTitle_target_action(&ns_string, None, None, mtm);
@@ -177,11 +167,11 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
 /// Set an SF Symbol image on a button with a large point size.
 pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
             let btn: &NSButton = &*(Retained::as_ptr(&view) as *const NSButton);
-            let ns_name = NSString::from_str(name);
+            let ns_name = NSString::from_str(&name);
             // NSImage.imageWithSystemSymbolName:accessibilityDescription:
             let img_cls = AnyClass::get(c"NSImage").unwrap();
             let img: *mut AnyObject = msg_send![
@@ -246,9 +236,9 @@ pub fn set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
 /// Set the title text of a button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         unsafe {
             let btn: &NSButton = &*(Retained::as_ptr(&view) as *const NSButton);
             btn.setTitle(&ns_title);

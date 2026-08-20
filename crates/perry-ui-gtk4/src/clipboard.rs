@@ -15,17 +15,7 @@ thread_local! {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Read the current text from the system clipboard.
 /// Returns a NaN-boxed string (f64) or TAG_UNDEFINED if empty.
@@ -60,8 +50,8 @@ pub fn read() -> f64 {
 
 /// Write text to the system clipboard.
 pub fn write(text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     let display = gdk::Display::default().expect("No default display");
     let clipboard = display.clipboard();
-    clipboard.set_text(text);
+    clipboard.set_text(&text);
 }

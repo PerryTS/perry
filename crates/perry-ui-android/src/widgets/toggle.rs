@@ -35,7 +35,7 @@ pub fn set_state(handle: i64, on: i64) {
 /// Create a Switch with a label and onChange callback.
 /// Returns a widget handle for a LinearLayout(HORIZONTAL) containing the label and switch.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 

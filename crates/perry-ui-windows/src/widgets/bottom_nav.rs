@@ -65,17 +65,7 @@ thread_local! {
     static ITEM_LOOKUP: RefCell<HashMap<u16, (i64, i64)>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -147,8 +137,8 @@ pub fn create(on_select: f64) -> i64 {
 }
 
 pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
-    let icon = str_from_header(icon_ptr);
-    let label = str_from_header(label_ptr);
+    let icon = unsafe { str_from_header(icon_ptr) };
+    let label = unsafe { str_from_header(label_ptr) };
 
     #[cfg(target_os = "windows")]
     {
@@ -246,7 +236,7 @@ fn layout_buttons(handle: i64) {
 }
 
 pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
-    let badge = str_from_header(badge_ptr);
+    let badge = unsafe { str_from_header(badge_ptr) };
     NAVS.with(|n| {
         if let Some(entry) = n.borrow_mut().get_mut(&handle) {
             if let Some(item) = entry.items.get_mut(index as usize) {

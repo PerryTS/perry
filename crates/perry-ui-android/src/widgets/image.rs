@@ -3,15 +3,13 @@
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an image from a file path.
 /// For relative paths, tries the Android assets directory first (bundled in APK),
 /// then falls back to BitmapFactory.decodeFile for absolute paths.
 pub fn create_file(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     crate::log_debug(&format!("image create_file: path={}", path));
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
@@ -64,7 +62,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
         ) {
             if let Ok(mgr) = asset_mgr.l() {
                 if !mgr.is_null() {
-                    let jpath = env.new_string(path).expect("asset path string");
+                    let jpath = env.new_string(&path).expect("asset path string");
                     // AssetManager.open(path) -> InputStream
                     let stream = env.call_method(
                         &mgr,
@@ -147,7 +145,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
 /// Create an image from a named system icon (SF Symbol name → Material Icon).
 /// Uses the same SF Symbol → Material Icons mapping as button.rs.
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -164,7 +162,7 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
         .expect("Failed to create TextView for symbol");
 
     // Map SF Symbol name to emoji/Unicode character
-    let icon_str = if let Some(emoji) = super::button::sf_symbol_to_emoji(name) {
+    let icon_str = if let Some(emoji) = super::button::sf_symbol_to_emoji(&name) {
         emoji.to_string()
     } else {
         name.chars().take(3).collect()

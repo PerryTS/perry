@@ -44,6 +44,8 @@ pub struct StringHeader {
     pub flags: u32,
 }
 
+const _: () = assert!(std::mem::size_of::<StringHeader>() == 20);
+
 /// Header for a runtime-allocated JS array.
 #[repr(C)]
 pub struct ArrayHeader {

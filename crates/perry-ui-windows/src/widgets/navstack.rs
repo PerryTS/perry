@@ -14,17 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{register_widget_with_layout, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -83,7 +73,7 @@ thread_local! {
 /// Create a NavStack with an initial page. Returns widget handle.
 /// title_ptr = title for the initial page, body_handle = widget handle of the initial page body.
 pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
 
     #[cfg(target_os = "windows")]
     {
@@ -151,7 +141,7 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
 
 /// Push a new page onto the NavStack. Hides the current page and shows the new one.
 pub fn push(handle: i64, title_ptr: *const u8, body_handle: i64) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
 
     // Hide the current top page
     NAV_STACKS.with(|stacks| {

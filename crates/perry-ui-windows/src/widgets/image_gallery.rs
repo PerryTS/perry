@@ -16,17 +16,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-#[cfg(target_os = "windows")]
-use windows::Win32::System::SystemServices::SS_CENTER;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-
-use super::{alloc_control_id, register_widget, WidgetKind};
-
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -49,17 +38,7 @@ thread_local! {
     static GALLERIES: RefCell<HashMap<i64, GalleryEntry>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -143,8 +122,8 @@ fn refresh_image(handle: i64) {
 }
 
 pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
+    let alt = unsafe { str_from_header(alt_ptr) };
     GALLERIES.with(|g| {
         if let Some(gal) = g.borrow_mut().get_mut(&handle) {
             gal.images.push(ImageEntry { url, alt });

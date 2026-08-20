@@ -124,17 +124,7 @@ thread_local! {
 // String helpers
 // ---------------------------------------------------------------------------
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn nsstring(s: &str) -> Retained<objc2_foundation::NSString> {
     objc2_foundation::NSString::from_str(s)
@@ -170,7 +160,7 @@ unsafe fn ensure_audio_session_active() {
 }
 
 pub fn create_player(url_ptr: *const u8) -> i64 {
-    let url_str = str_from_header(url_ptr);
+    let url_str = unsafe { str_from_header(url_ptr) };
     if url_str.is_empty() {
         return 0;
     }
@@ -183,7 +173,7 @@ pub fn create_player(url_ptr: *const u8) -> i64 {
             Some(c) => c,
             None => return 0,
         };
-        let url_ns = nsstring(url_str);
+        let url_ns = nsstring(&url_str);
         let url: *mut AnyObject = msg_send![nsurl_cls, URLWithString: &*url_ns];
         if url.is_null() {
             return 0;
@@ -429,10 +419,10 @@ pub fn set_now_playing(
     album_ptr: *const u8,
     artwork_ptr: *const u8,
 ) {
-    let title = str_from_header(title_ptr);
-    let artist = str_from_header(artist_ptr);
-    let album = str_from_header(album_ptr);
-    let artwork = str_from_header(artwork_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let artist = unsafe { str_from_header(artist_ptr) };
+    let album = unsafe { str_from_header(album_ptr) };
+    let artwork = unsafe { str_from_header(artwork_ptr) };
     // The handle is currently advisory — MPNowPlayingInfoCenter is a
     // process-wide singleton, so the most recent setNowPlaying wins.
     // Holding the handle in the API keeps room for multi-player apps to
@@ -456,19 +446,19 @@ pub fn set_now_playing(
         if !title.is_empty() {
             // MPMediaItemPropertyTitle = "title"
             let _: () =
-                msg_send![&*dict, setObject: &*nsstring(title), forKey: &*nsstring("title")];
+                msg_send![&*dict, setObject: &*nsstring(&title), forKey: &*nsstring("title")];
         }
         if !artist.is_empty() {
             let _: () =
-                msg_send![&*dict, setObject: &*nsstring(artist), forKey: &*nsstring("artist")];
+                msg_send![&*dict, setObject: &*nsstring(&artist), forKey: &*nsstring("artist")];
         }
         if !album.is_empty() {
             let _: () =
-                msg_send![&*dict, setObject: &*nsstring(album), forKey: &*nsstring("albumTitle")];
+                msg_send![&*dict, setObject: &*nsstring(&album), forKey: &*nsstring("albumTitle")];
         }
 
         if !artwork.is_empty() {
-            if let Some(image) = load_artwork(artwork) {
+            if let Some(image) = load_artwork(&artwork) {
                 if let Some(art) = make_artwork(&image) {
                     let _: () = msg_send![&*dict, setObject: &*art, forKey: &*nsstring("artwork")];
                 }

@@ -5,25 +5,15 @@ use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
 /// Extract a &str from a *const StringHeader pointer.
-pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an NSImageView displaying an SF Symbol by name. Returns widget handle.
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
-        let ns_name = NSString::from_str(name);
+        let ns_name = NSString::from_str(&name);
         let image: Option<Retained<NSImage>> = msg_send![
             objc2::runtime::AnyClass::get(c"NSImage").unwrap(),
             imageWithSystemSymbolName: &*ns_name,
@@ -48,7 +38,7 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
 
 /// Create an NSImageView displaying an image loaded from a file path. Returns widget handle.
 pub fn create_file(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     // Resolve relative paths against the .app bundle.
@@ -66,7 +56,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
                     unsafe { msg_send![bundle, resourcePath] };
                 if let Some(rp) = res_path {
                     let rp_str = rp.to_string();
-                    let candidate = std::path::PathBuf::from(&rp_str).join(path);
+                    let candidate = std::path::PathBuf::from(&rp_str).join(&path);
                     if candidate.exists() {
                         found = Some(candidate.to_string_lossy().to_string());
                     }
@@ -77,7 +67,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
         if found.is_none() {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(exe_dir) = exe.parent() {
-                    let candidate = exe_dir.join(path);
+                    let candidate = exe_dir.join(&path);
                     if candidate.exists() {
                         found = Some(candidate.to_string_lossy().to_string());
                     }
@@ -130,8 +120,8 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
 /// Returns the widget handle immediately; the image appears once the
 /// fetch resolves.
 pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
-    let url = str_from_header(url_ptr).to_string();
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) }.to_string();
+    let alt = unsafe { str_from_header(alt_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
@@ -147,7 +137,7 @@ pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
         let _: () = msg_send![&*image_view, setImageScaling: 0i64];
 
         if !alt.is_empty() {
-            let ns_alt = NSString::from_str(alt);
+            let ns_alt = NSString::from_str(&alt);
             let _: () = msg_send![&*image_view, setAccessibilityLabel: &*ns_alt];
         }
 

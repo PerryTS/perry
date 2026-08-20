@@ -19,17 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -181,7 +171,7 @@ pub fn append(
     b: f64,
     a: f64,
 ) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if text.is_empty() {
         return;
     }
@@ -192,7 +182,7 @@ pub fn append(
             return;
         };
         let start = LENGTHS.with(|l| l.borrow().get(&handle).copied().unwrap_or(0));
-        let wide = to_wide(text);
+        let wide = to_wide(&text);
         let added = (wide.len() - 1) as i32; // exclude trailing NUL
 
         unsafe {

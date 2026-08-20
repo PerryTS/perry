@@ -14,23 +14,13 @@ extern "C" {
     fn dispatch_get_global_queue(identifier: i64, flags: u64) -> *const std::ffi::c_void;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
-        let ns_name = NSString::from_str(name);
+        let ns_name = NSString::from_str(&name);
         let image_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
         let image: *mut objc2::runtime::AnyObject =
             msg_send![image_cls, systemImageNamed: &*ns_name];
@@ -43,7 +33,7 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
 }
 
 pub fn create_file(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
         // Resolve relative paths against the app bundle's resource directory
@@ -99,8 +89,8 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
 /// is the existing precedent for async image fetch in this crate). Local
 /// file paths are not handled here — use `ImageFile(path)` for those.
 pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
-    let url = str_from_header(url_ptr).to_string();
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) }.to_string();
+    let alt = unsafe { str_from_header(alt_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
         let iv_cls = objc2::runtime::AnyClass::get(c"UIImageView").unwrap();
@@ -112,7 +102,7 @@ pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
         let _: () = msg_send![obj, setContentMode: 2i64];
         let _: () = msg_send![obj, setClipsToBounds: true];
         if !alt.is_empty() {
-            let ns_alt = NSString::from_str(alt);
+            let ns_alt = NSString::from_str(&alt);
             let _: () = msg_send![obj, setAccessibilityLabel: &*ns_alt];
         }
         let image_view: Retained<UIView> = Retained::retain(obj as *mut UIView).unwrap();

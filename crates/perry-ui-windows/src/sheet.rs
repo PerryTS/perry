@@ -44,9 +44,9 @@ pub fn create(_body_handle: i64, width: f64, height: f64) -> i64 {
     {
         use windows::core::PCWSTR;
         use windows::Win32::Foundation::*;
-        use windows::Win32::Graphics::Gdi::{UpdateWindow, COLOR_WINDOW, HBRUSH};
+        use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-        use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         unsafe {

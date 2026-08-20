@@ -12,17 +12,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct ToolbarEntry {
     toolbar: Retained<AnyObject>,
@@ -103,8 +93,8 @@ pub fn create() -> i64 {
 
 /// Add an item to a toolbar.
 pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, callback: f64) {
-    let label = str_from_header(label_ptr).to_string();
-    let icon = str_from_header(icon_ptr).to_string();
+    let label = unsafe { str_from_header(label_ptr) }.to_string();
+    let icon = unsafe { str_from_header(icon_ptr) }.to_string();
     let identifier = format!("perry_toolbar_item_{}", label.replace(' ', "_"));
 
     TOOLBARS.with(|t| {

@@ -9,7 +9,7 @@
 
 use std::ffi::c_void;
 
-use crate::string_header::StringHeader;
+use perry_ffi::StringHeader;
 
 // ---------------------------------------------------------------------------
 // perry-runtime symbols

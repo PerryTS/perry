@@ -156,17 +156,7 @@ thread_local! {
 // Helpers
 // =============================================================================
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Push into the first empty slot or extend; return the slot index.
 fn slot_insert<T>(vec: &mut Vec<Option<T>>, entry: T) -> usize {
@@ -253,14 +243,14 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
     }
     let is_streaming = stream != 0.0;
 
-    let filename = str_from_header(path_ptr as *const u8);
+    let filename = unsafe { str_from_header(path_ptr as *const u8) };
     if filename.is_empty() {
         return 0;
     }
     let (name, ext) = if let Some(dot) = filename.rfind('.') {
         (&filename[..dot], &filename[dot + 1..])
     } else {
-        (filename, "m4a")
+        (filename.as_str(), "m4a")
     };
 
     unsafe {
@@ -290,7 +280,7 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
                 Some(c) => c,
                 None => return 0,
             };
-            let ns_path = objc2_foundation::NSString::from_str(filename);
+            let ns_path = objc2_foundation::NSString::from_str(&filename);
             url = msg_send![url_cls, fileURLWithPath: &*ns_path];
         }
         if url.is_null() {
@@ -1026,7 +1016,7 @@ pub extern "C" fn perry_audio_create_bus(name_ptr: i64, parent: f64) -> i64 {
     if !ensure_engine() {
         return 0;
     }
-    let name = str_from_header(name_ptr as *const u8).to_string();
+    let name = unsafe { str_from_header(name_ptr as *const u8) }.to_string();
     // Validate parent
     match classify(parent) {
         HandleKind::Master | HandleKind::Bus(_) => {}

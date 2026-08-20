@@ -78,7 +78,7 @@ unsafe extern "C" fn play_trampoline(ctx: *mut std::ffi::c_void) {
 /// for a haptic).
 #[no_mangle]
 pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
-    let kind = wk_haptic_type(crate::str_from_header(type_ptr as *const u8));
+    let kind = wk_haptic_type(unsafe { &crate::str_from_header(type_ptr as *const u8) });
     unsafe {
         if pthread_main_np() != 0 {
             play(kind);

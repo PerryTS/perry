@@ -50,9 +50,8 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    CreateFontW, CreateRoundRectRgn, CreateSolidBrush, FillRect, GradientFill, InvalidateRect,
-    SetWindowRgn, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBRUSH, HDC,
-    TRIVERTEX,
+    CreateFontW, CreateRoundRectRgn, CreateSolidBrush, GradientFill, InvalidateRect, SetWindowRgn,
+    GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBRUSH, HDC, TRIVERTEX,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -1000,7 +999,7 @@ pub fn handle_notify(_lparam: isize) {}
 
 /// Handle WM_HSCROLL/WM_VSCROLL — dispatch to slider or scrollview.
 #[cfg(target_os = "windows")]
-pub fn handle_scroll(wparam: WPARAM, lparam: LPARAM) {
+pub fn handle_scroll(_wparam: WPARAM, lparam: LPARAM) {
     let child_hwnd = HWND(lparam.0 as *mut _);
     let handle = find_handle_by_hwnd(child_hwnd);
     if handle > 0 {
@@ -2077,7 +2076,7 @@ pub fn set_background_gradient(
 }
 
 /// Set an on-hover callback for a widget.
-pub fn set_on_hover(handle: i64, callback: f64) {
+pub fn set_on_hover(handle: i64, _callback: f64) {
     // Win32 hover requires SetWindowSubclass + TrackMouseEvent + WM_MOUSEHOVER/LEAVE.
     // Best-effort no-op.
     let _ = handle;
@@ -2099,7 +2098,7 @@ pub fn set_on_hover(handle: i64, callback: f64) {
 }
 
 /// Set a double-click callback for a widget.
-pub fn set_on_double_click(handle: i64, callback: f64) {
+pub fn set_on_double_click(handle: i64, _callback: f64) {
     // Win32 double-click requires CS_DBLCLKS style + WM_LBUTTONDBLCLK handling.
     // Best-effort no-op.
     let _ = handle;

@@ -42,9 +42,7 @@ fn with_response<T>(handle: i64, f: impl FnOnce(&FetchResponse) -> T) -> Option<
         .map(f)
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Perform synchronous HTTP request via Java HttpURLConnection.
 fn do_fetch(
@@ -131,21 +129,21 @@ pub unsafe extern "C" fn js_fetch_with_options(
     body_ptr: i64,
     headers_ptr: i64,
 ) -> i64 {
-    let url = str_from_header(url_ptr as *const u8);
+    let url = unsafe { str_from_header(url_ptr as *const u8) };
     let method = if method_ptr == 0 {
         "GET"
     } else {
-        str_from_header(method_ptr as *const u8)
+        unsafe { &str_from_header(method_ptr as *const u8) }
     };
     let body = if body_ptr == 0 {
         ""
     } else {
-        str_from_header(body_ptr as *const u8)
+        unsafe { &str_from_header(body_ptr as *const u8) }
     };
     let headers = if headers_ptr == 0 {
         "{}"
     } else {
-        str_from_header(headers_ptr as *const u8)
+        unsafe { &str_from_header(headers_ptr as *const u8) }
     };
 
     let method_c = format!("{}\0", method);
@@ -158,7 +156,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
         url_c.as_ptr(),
     );
 
-    match do_fetch(url, method, body, headers) {
+    match do_fetch(&url, method, body, headers) {
         Ok(resp) => {
             let id = store_response(resp);
             __android_log_print(

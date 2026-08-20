@@ -32,7 +32,7 @@ pub fn create() -> i64 {
 
 /// Add an item to a context menu.
 pub fn add_item(menu_handle: i64, title_ptr: *const u8, cb: f64) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     let cb_key = callback::register(cb);
 
     MENUS.with(|m| {

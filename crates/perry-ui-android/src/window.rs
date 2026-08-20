@@ -5,9 +5,7 @@ use jni::objects::{GlobalRef, JValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct WindowState {
     title: String,
@@ -23,7 +21,7 @@ thread_local! {
 }
 
 pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     let id = NEXT_WINDOW_ID.with(|n| {
         let mut n = n.borrow_mut();
         let id = *n;

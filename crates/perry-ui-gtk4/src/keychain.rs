@@ -7,17 +7,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn keychain_path() -> PathBuf {
     let config = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
@@ -70,8 +60,8 @@ fn save_keychain() {
 /// Save a value to the keychain.
 pub fn save(key_ptr: *const u8, value_ptr: *const u8) {
     ensure_loaded();
-    let key = str_from_header(key_ptr);
-    let value = str_from_header(value_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
+    let value = unsafe { str_from_header(value_ptr) };
     KEYCHAIN.with(|k| {
         k.borrow_mut().insert(key.to_string(), value.to_string());
     });
@@ -81,10 +71,10 @@ pub fn save(key_ptr: *const u8, value_ptr: *const u8) {
 /// Get a value from the keychain. Returns NaN-boxed string or TAG_UNDEFINED.
 pub fn get(key_ptr: *const u8) -> f64 {
     ensure_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     KEYCHAIN.with(|k| {
         let kc = k.borrow();
-        if let Some(val) = kc.get(key) {
+        if let Some(val) = kc.get(&key) {
             let bytes = val.as_bytes();
             let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
             unsafe { js_nanbox_string(str_ptr as i64) }
@@ -97,9 +87,9 @@ pub fn get(key_ptr: *const u8) -> f64 {
 /// Delete a value from the keychain.
 pub fn delete(key_ptr: *const u8) {
     ensure_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     KEYCHAIN.with(|k| {
-        k.borrow_mut().remove(key);
+        k.borrow_mut().remove(&key);
     });
     save_keychain();
 }

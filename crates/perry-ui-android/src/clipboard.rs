@@ -39,7 +39,7 @@ pub fn read() -> f64 {
 
 /// Write text to the system clipboard.
 pub fn write(text_ptr: *const u8) {
-    let text = crate::app::str_from_header(text_ptr);
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
     let mut env = jni_bridge::get_env();
 
     let jstr = env.new_string(text).expect("Failed to create JNI string");

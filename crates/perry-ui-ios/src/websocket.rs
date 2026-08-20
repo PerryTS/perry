@@ -4,7 +4,7 @@
 //! native networking stack instead.
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_foundation::{NSObject, NSString};
 use std::cell::RefCell;
@@ -15,17 +15,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Per-connection state — stores raw pointers to avoid objc2 Retained issues
 struct WsConn {
@@ -192,7 +182,7 @@ fn schedule_receive_raw(conn_id: u32, task_ptr: *const AnyObject) {
 
 /// Connect to a WebSocket URL. Returns a connection handle (f64).
 pub fn connect(url_ptr: *const u8) -> f64 {
-    let url_str = str_from_header(url_ptr);
+    let url_str = unsafe { str_from_header(url_ptr) };
     crate::ws_log!("[WS-iOS] connect called, url={}", url_str);
     if url_str.is_empty() {
         crate::ws_log!("[WS-iOS] empty URL, returning 0");
@@ -207,7 +197,7 @@ pub fn connect(url_ptr: *const u8) -> f64 {
     crate::ws_log!("[WS-iOS] conn_id={}", conn_id);
 
     unsafe {
-        let ns_url_str = NSString::from_str(url_str);
+        let ns_url_str = NSString::from_str(&url_str);
         let url_cls = AnyClass::get(c"NSURL").unwrap();
         let url: *const AnyObject = msg_send![url_cls, URLWithString: &*ns_url_str];
         if url.is_null() {
@@ -308,7 +298,7 @@ pub fn receive(handle: f64) -> f64 {
 /// Send a string message.
 pub fn send(handle: f64, msg_ptr: *const u8) {
     let conn_id = handle as u32;
-    let msg_str = str_from_header(msg_ptr);
+    let msg_str = unsafe { str_from_header(msg_ptr) };
     if msg_str.is_empty() {
         return;
     }
@@ -316,7 +306,7 @@ pub fn send(handle: f64, msg_ptr: *const u8) {
         if let Some(conn) = conns.borrow().get(&conn_id) {
             if conn.is_open && !conn.task.is_null() {
                 unsafe {
-                    let ns_string = NSString::from_str(msg_str);
+                    let ns_string = NSString::from_str(&msg_str);
                     let msg_cls = AnyClass::get(c"NSURLSessionWebSocketMessage").unwrap();
                     let ws_msg: *const AnyObject = msg_send![msg_cls, alloc];
                     let ws_msg: *const AnyObject = msg_send![ws_msg, initWithString: &*ns_string];

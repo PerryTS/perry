@@ -12,23 +12,13 @@ enum ImageKind {
     Symbol(gtk4::Image),
 }
 
-pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an image from a file path.
 pub fn create_file(path_ptr: *const u8) -> i64 {
     crate::app::ensure_gtk_init();
-    let raw = str_from_header(path_ptr);
-    let path = raw.split('\0').next().unwrap_or(raw);
+    let raw = unsafe { str_from_header(path_ptr) };
+    let path = raw.split('\0').next().unwrap_or(&raw);
     // Resolve path relative to executable directory (handles bundled assets)
     let resolved = crate::ffi::layout::resolve_asset_path(path);
     let picture = gtk4::Picture::for_filename(&resolved);
@@ -46,8 +36,8 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
 /// Create an image from a named icon (freedesktop icon theme).
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
     crate::app::ensure_gtk_init();
-    let name = str_from_header(name_ptr);
-    let image = gtk4::Image::from_icon_name(name);
+    let name = unsafe { str_from_header(name_ptr) };
+    let image = gtk4::Image::from_icon_name(&name);
     let handle = super::register_widget(image.clone().upcast());
     IMAGE_WIDGETS.with(|w| w.borrow_mut().insert(handle, ImageKind::Symbol(image)));
     handle

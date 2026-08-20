@@ -11,9 +11,7 @@
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Banner dimensions in dp per size key (matches Google Mobile Ads'
 /// standard `AdSize` constants).
@@ -29,9 +27,9 @@ fn banner_size_dp(size_key: &str) -> (f32, f32) {
 
 /// Create the banner placeholder view sized per `size_ptr`.
 pub fn create(unit_id_ptr: *const u8, size_ptr: *const u8) -> i64 {
-    let _unit_id = str_from_header(unit_id_ptr);
-    let size_key = str_from_header(size_ptr);
-    let (w_dp, h_dp) = banner_size_dp(size_key);
+    let _unit_id = unsafe { str_from_header(unit_id_ptr) };
+    let size_key = unsafe { str_from_header(size_ptr) };
+    let (w_dp, h_dp) = banner_size_dp(&size_key);
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);

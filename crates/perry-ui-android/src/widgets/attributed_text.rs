@@ -23,17 +23,7 @@ thread_local! {
     static BUFFERS: RefCell<HashMap<i64, Buffer>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an empty `TextView` ready to receive `append` runs.
 pub fn create() -> i64 {
@@ -85,7 +75,7 @@ pub fn append(
     b: f64,
     a: f64,
 ) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if text.is_empty() {
         return;
     }
@@ -109,7 +99,7 @@ pub fn append(
 
     // Append the raw text to the SSB; the returned object is the SSB
     // itself but we don't need the return value.
-    let java_text = match env.new_string(text) {
+    let java_text = match env.new_string(&text) {
         Ok(s) => s,
         Err(_) => {
             unsafe {
@@ -261,7 +251,7 @@ fn rgba_to_argb(r: f64, g: f64, b: f64, a: f64) -> i32 {
 /// JNI `GlobalRef` is not `Clone`, but `as_obj` returns the underlying
 /// `JObject<'static>` we can re-wrap as a new global via JNIEnv.
 fn env_clone_global(g: &GlobalRef) -> GlobalRef {
-    let mut env = jni_bridge::get_env();
+    let env = jni_bridge::get_env();
     env.new_global_ref(g.as_obj())
         .expect("clone SSB global ref")
 }

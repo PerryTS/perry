@@ -7,7 +7,6 @@ use objc2::encode::{Encode, Encoding};
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::AnyThread;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIView;
 
@@ -95,16 +94,8 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
     let Some(view) = super::get_widget(handle) else {
         return;
     };
-    let title = if title_ptr.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let header = title_ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = title_ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-        }
-    };
+    // SAFETY: the FFI contract supplies a runtime string or null.
+    let title = unsafe { perry_ffi::copy_string_from_raw(title_ptr) };
     unsafe {
         let Some(cls) = AnyClass::get(c"MKPointAnnotation") else {
             return;

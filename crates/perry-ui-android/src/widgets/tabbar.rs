@@ -131,7 +131,7 @@ pub fn create(on_select: f64) -> i64 {
 
 /// Add a tab to the tab bar.
 pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
-    let label = crate::app::str_from_header(label_ptr);
+    let label = unsafe { crate::app::str_from_header(label_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
     let activity = super::get_activity(&mut env);

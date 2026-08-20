@@ -10,17 +10,7 @@ extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> *const u8;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Safe wrapper for other modules.
 pub fn js_get_string_pointer_unified_safe(value: f64) -> *const u8 {
@@ -112,7 +102,7 @@ fn save_keychain() {
 
 /// Open a URL in the default browser.
 pub fn open_url(url_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
     #[cfg(target_os = "windows")]
     {
         use windows::core::PCWSTR;
@@ -190,10 +180,10 @@ pub fn is_dark_mode() -> i64 {
 /// Set a preference value.
 pub fn preferences_set(key_ptr: *const u8, value: f64) {
     ensure_prefs_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     let str_ptr = unsafe { js_get_string_pointer_unified(value) };
     let val_str = if !str_ptr.is_null() {
-        str_from_header(str_ptr).to_string()
+        unsafe { str_from_header(str_ptr) }.to_string()
     } else {
         format!("{}", value)
     };
@@ -206,10 +196,10 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
 /// Get a preference value.
 pub fn preferences_get(key_ptr: *const u8) -> f64 {
     ensure_prefs_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     PREFS.with(|p| {
         let prefs = p.borrow();
-        if let Some(val) = prefs.get(key) {
+        if let Some(val) = prefs.get(&key) {
             if let Ok(n) = val.parse::<f64>() {
                 n
             } else {
@@ -226,8 +216,8 @@ pub fn preferences_get(key_ptr: *const u8) -> f64 {
 /// Save to keychain.
 pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
     ensure_keychain_loaded();
-    let key = str_from_header(key_ptr);
-    let value = str_from_header(value_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
+    let value = unsafe { str_from_header(value_ptr) };
     KEYCHAIN.with(|k| {
         k.borrow_mut().insert(key.to_string(), value.to_string());
     });
@@ -237,10 +227,10 @@ pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
 /// Get from keychain.
 pub fn keychain_get(key_ptr: *const u8) -> f64 {
     ensure_keychain_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     KEYCHAIN.with(|k| {
         let kc = k.borrow();
-        if let Some(val) = kc.get(key) {
+        if let Some(val) = kc.get(&key) {
             let bytes = val.as_bytes();
             let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
             unsafe { js_nanbox_string(str_ptr as i64) }
@@ -253,9 +243,9 @@ pub fn keychain_get(key_ptr: *const u8) -> f64 {
 /// Delete from keychain.
 pub fn keychain_delete(key_ptr: *const u8) {
     ensure_keychain_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     KEYCHAIN.with(|k| {
-        k.borrow_mut().remove(key);
+        k.borrow_mut().remove(&key);
     });
     save_keychain();
 }
@@ -271,12 +261,12 @@ pub fn keychain_delete(key_ptr: *const u8) {
 /// (`UNUserNotificationCenter`) behavior. The blocking `MessageBox` survives
 /// only as a last-resort fallback if the toast can't be created.
 pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     #[cfg(target_os = "windows")]
     unsafe {
-        if win_notify::show_toast(title, body) {
+        if win_notify::show_toast(&title, &body) {
             return;
         }
         // Fallback: the toast could not be created (e.g. window/class

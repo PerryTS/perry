@@ -8,7 +8,7 @@
 //! UIScrollView with delegate-driven viewForZooming).
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
@@ -28,17 +28,7 @@ extern "C" {
     fn dispatch_get_global_queue(identifier: i64, flags: u64) -> *const std::ffi::c_void;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct GalleryState {
     image_views: Vec<*mut AnyObject>,
@@ -146,8 +136,8 @@ pub fn create(on_index_change: f64) -> i64 {
 }
 
 pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
+    let alt = unsafe { str_from_header(alt_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let (page_width, page_height, count) = STATES.with(|s| {
@@ -168,16 +158,16 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         // UIViewContentModeScaleAspectFit = 1
         let _: () = msg_send![iv, setContentMode: 1i64];
         if !alt.is_empty() {
-            let ns_alt = NSString::from_str(alt);
+            let ns_alt = NSString::from_str(&alt);
             let _: () = msg_send![iv, setAccessibilityLabel: &*ns_alt];
         }
 
         if !url.is_empty() {
             if url.starts_with("http://") || url.starts_with("https://") {
-                load_remote(url, iv);
+                load_remote(&url, iv);
             } else {
                 let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
-                let ns_path = NSString::from_str(url);
+                let ns_path = NSString::from_str(&url);
                 let image: *mut AnyObject = msg_send![img_cls, imageWithContentsOfFile: &*ns_path];
                 if !image.is_null() {
                     let _: () = msg_send![iv, setImage: image];

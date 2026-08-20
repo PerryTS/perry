@@ -68,21 +68,11 @@ impl PerryButtonTarget {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a UIButton with a label and closure callback.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
 
     unsafe {
         // UIButton.buttonWithType: 0 = UIButtonTypeCustom, 1 = UIButtonTypeSystem
@@ -91,7 +81,7 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
             buttonWithType: 1i64  // UIButtonTypeSystem
         ];
 
-        let ns_string = NSString::from_str(label);
+        let ns_string = NSString::from_str(&label);
         let _: () = msg_send![&*button, setTitle: &*ns_string, forState: 0u64]; // UIControlStateNormal = 0
 
         let _: () = msg_send![&*button, setTranslatesAutoresizingMaskIntoConstraints: false];
@@ -167,9 +157,9 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
 /// Set the title text of a button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         unsafe {
             let _: () = msg_send![&*view, setTitle: &*ns_title, forState: 0u64];
         }
@@ -178,10 +168,10 @@ pub fn set_title(handle: i64, title_ptr: *const u8) {
 
 /// Set an SF Symbol image on a UIButton.
 pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
-            let ns_name = NSString::from_str(name);
+            let ns_name = NSString::from_str(&name);
             // UIImage.systemImageNamed:
             let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
             let img: *mut AnyObject = msg_send![img_cls, systemImageNamed: &*ns_name];

@@ -36,17 +36,7 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a new context menu. Returns menu handle (1-based).
 pub fn create() -> i64 {
@@ -59,7 +49,7 @@ pub fn create() -> i64 {
 
 /// Add an item to a menu with a title and callback.
 pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     MENUS.with(|m| {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
@@ -80,8 +70,8 @@ pub fn add_item_with_shortcut(
     callback: f64,
     shortcut_ptr: *const u8,
 ) {
-    let title = str_from_header(title_ptr).to_string();
-    let shortcut = str_from_header(shortcut_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
+    let shortcut = unsafe { str_from_header(shortcut_ptr) }.to_string();
     MENUS.with(|m| {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
@@ -119,7 +109,7 @@ pub fn add_separator(menu_handle: i64) {
 
 /// Add a submenu to a menu.
 pub fn add_submenu(menu_handle: i64, title_ptr: *const u8, submenu_handle: i64) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     MENUS.with(|m| {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
@@ -143,7 +133,7 @@ pub fn menubar_create() -> i64 {
 
 /// Add a menu to the menu bar with a title.
 pub fn menubar_add_menu(bar_handle: i64, title_ptr: *const u8, menu_handle: i64) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     MENUBARS.with(|m| {
         let mut bars = m.borrow_mut();
         let idx = (bar_handle - 1) as usize;

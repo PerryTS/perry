@@ -66,7 +66,7 @@ pub extern "C" fn perry_ui_widget_animate_position(
 pub extern "C" fn perry_ui_navstack_create() -> i64 {
     // Dispatch (perry-dispatch::PERRY_UI_TABLE) emits this call with 0 args
     // because the TS-side API is `NavStack(): Widget`. The previous 2-arg
-    // signature read uninitialized RCX/RDX on Win64 — `str_from_header(garbage)`
+    // signature read uninitialized RCX/RDX on Win64 — `unsafe { str_from_header(garbage) }`
     // dereffed wild memory and crashed with ACCESS_VIOLATION. SysV (macOS/Linux)
     // happened to land 0 in those registers most of the time, masking the bug.
     widgets::navstack::create(std::ptr::null(), 0)

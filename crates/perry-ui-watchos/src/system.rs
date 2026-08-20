@@ -30,18 +30,18 @@ extern "C" {
 /// Set a preference value (UserDefaults).
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     let bits = value.to_bits();
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         if (bits >> 48) == 0x7FFF {
             // NaN-boxed string payload
             let str_ptr = js_nanbox_get_pointer(value) as usize as *const u8;
-            let s = str_from_header(str_ptr);
-            let ns_str = objc2_foundation::NSString::from_str(s);
+            let s = unsafe { str_from_header(str_ptr) };
+            let ns_str = objc2_foundation::NSString::from_str(&s);
             let _: () = objc2::msg_send![defaults, setObject: &*ns_str, forKey: &*ns_key];
         } else {
             let ns_num: objc2::rc::Retained<objc2::runtime::AnyObject> = objc2::msg_send![
@@ -55,12 +55,12 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
 /// Get a preference value (UserDefaults). Returns NaN-boxed value or TAG_UNDEFINED.
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let obj: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, objectForKey: &*ns_key];
         if obj.is_null() {
@@ -149,17 +149,17 @@ unsafe fn keychain_make_query(key: &str) -> objc2::rc::Retained<objc2::runtime::
 
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {
-    let key = str_from_header(key_ptr as *const u8);
-    let value = str_from_header(value_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
+    let value = unsafe { str_from_header(value_ptr as *const u8) };
     unsafe {
         let value_data: objc2::rc::Retained<objc2::runtime::AnyObject> = {
-            let ns_str = objc2_foundation::NSString::from_str(value);
+            let ns_str = objc2_foundation::NSString::from_str(&value);
             // 4 = NSUTF8StringEncoding; NSStringEncoding is NSUInteger
             // (32-bit on arm64_32), so pass usize, not u64.
             objc2::msg_send![&*ns_str, dataUsingEncoding: 4usize]
         };
         // Try update first
-        let query = keychain_make_query(key);
+        let query = keychain_make_query(&key);
         let dict_cls = objc2::runtime::AnyClass::get(c"NSMutableDictionary").unwrap();
         let update: objc2::rc::Retained<objc2::runtime::AnyObject> =
             objc2::msg_send![dict_cls, new];
@@ -170,7 +170,7 @@ pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {
         );
         if status == -25300 {
             // errSecItemNotFound
-            let add = keychain_make_query(key);
+            let add = keychain_make_query(&key);
             let _: () = objc2::msg_send![&*add, setObject: &*value_data, forKey: kSecValueData as *const objc2::runtime::AnyObject];
             SecItemAdd(
                 &*add as *const _ as *const std::ffi::c_void,
@@ -182,9 +182,9 @@ pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {
 
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_get(key_ptr: i64) -> f64 {
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     unsafe {
-        let dict = keychain_make_query(key);
+        let dict = keychain_make_query(&key);
         let cf_true: *const objc2::runtime::AnyObject = objc2::msg_send![
             objc2::runtime::AnyClass::get(c"NSNumber").unwrap(), numberWithBool: true
         ];
@@ -213,9 +213,9 @@ pub extern "C" fn perry_system_keychain_get(key_ptr: i64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_delete(key_ptr: i64) {
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     unsafe {
-        let query = keychain_make_query(key);
+        let query = keychain_make_query(&key);
         SecItemDelete(&*query as *const _ as *const std::ffi::c_void);
     }
 }

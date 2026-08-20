@@ -11,7 +11,6 @@
 //! via `+[NSImage imageWithContentsOfFile:]`; remote URLs spin up a
 //! detached NSURLSession data task.
 
-use crate::string_header::StringHeader;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -27,17 +26,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct GalleryState {
     scroll_view: Retained<NSView>,
@@ -167,8 +156,8 @@ pub fn create(on_index_change: f64) -> i64 {
 /// Add an image to the gallery. `url_ptr` may be a local path or http(s) URL;
 /// `alt_ptr` is currently used as the accessibilityLabel.
 pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
+    let alt = unsafe { str_from_header(alt_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
@@ -179,7 +168,7 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         let _: () = msg_send![&*image_view, setImageScaling: 0i64];
 
         if !alt.is_empty() {
-            let ns_alt = NSString::from_str(alt);
+            let ns_alt = NSString::from_str(&alt);
             let _: () = msg_send![&*image_view, setAccessibilityLabel: &*ns_alt];
         }
 
@@ -188,10 +177,10 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         // synchronous-on-the-main-thread loader simple).
         if !url.is_empty() {
             if url.starts_with("http://") || url.starts_with("https://") {
-                load_remote(url, image_view.clone());
+                load_remote(&url, image_view.clone());
             } else {
                 let img_cls = AnyClass::get(c"NSImage").unwrap();
-                let ns_path = NSString::from_str(url);
+                let ns_path = NSString::from_str(&url);
                 let image: *mut AnyObject = msg_send![img_cls, alloc];
                 let image: *mut AnyObject = msg_send![image, initWithContentsOfFile: &*ns_path];
                 if !image.is_null() {

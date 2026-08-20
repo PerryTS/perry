@@ -100,7 +100,7 @@ pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64)
 
 pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
     if let Some(view) = super::get_widget(handle) {
-        let title = str_from_header(title_ptr);
+        let title = unsafe { str_from_header(title_ptr) };
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(4);
         let jstr = match env.new_string(title) {

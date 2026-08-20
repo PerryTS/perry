@@ -3,9 +3,7 @@
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 extern "C" {
     fn js_string_from_bytes(ptr: *const u8, len: usize) -> *const u8;
@@ -14,7 +12,7 @@ extern "C" {
 
 /// Open a URL in the default browser via Intent.ACTION_VIEW.
 pub fn open_url(url_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -104,7 +102,7 @@ pub fn is_dark_mode() -> i64 {
 
 /// Set a preference value using SharedPreferences.
 pub fn preferences_set(key_ptr: *const u8, value: f64) {
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
@@ -140,7 +138,7 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
     if tag == 0x7FFF {
         // String value — extract and store as string
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-        let s = str_from_header(ptr);
+        let s = unsafe { str_from_header(ptr) };
         let jval = env.new_string(s).expect("value string");
         let _ = env.call_method(
             &editor,
@@ -174,7 +172,7 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
 /// half the UI vanishes). Always read via `getAll` and branch on type, and
 /// clear any leftover exception before returning.
 pub fn preferences_get(key_ptr: *const u8) -> f64 {
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(24);
 
@@ -297,8 +295,8 @@ pub fn preferences_get(key_ptr: *const u8) -> f64 {
 
 /// Save a value to the keychain (SharedPreferences with private mode).
 pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
-    let key = str_from_header(key_ptr);
-    let value = str_from_header(value_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
+    let value = unsafe { str_from_header(value_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
@@ -343,7 +341,7 @@ pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
 
 /// Get a value from the keychain.
 pub fn keychain_get(key_ptr: *const u8) -> f64 {
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
@@ -392,7 +390,7 @@ pub fn keychain_get(key_ptr: *const u8) -> f64 {
 
 /// Delete a value from the keychain.
 pub fn keychain_delete(key_ptr: *const u8) {
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
@@ -439,12 +437,12 @@ pub fn keychain_delete(key_ptr: *const u8) {
 /// (declared in the app template's AndroidManifest.xml — a normal
 /// permission, no runtime prompt).
 pub fn haptic_play(type_ptr: *const u8) {
-    let name = str_from_header(type_ptr);
+    let name = unsafe { str_from_header(type_ptr) };
 
     // VibrationEffect.createPredefined effect ids (public constants,
     // API 29+): EFFECT_CLICK=0, EFFECT_DOUBLE_CLICK=1, EFFECT_TICK=2,
     // EFFECT_HEAVY_CLICK=5.
-    let effect_id: i32 = match name {
+    let effect_id: i32 = match name.as_str() {
         "success" | "medium" | "start" | "stop" => 0, // EFFECT_CLICK
         "error" | "warning" => 1,                     // EFFECT_DOUBLE_CLICK (double buzz)
         "heavy" => 5,                                 // EFFECT_HEAVY_CLICK
@@ -453,7 +451,7 @@ pub fn haptic_play(type_ptr: *const u8) {
         _ => 2, // EFFECT_TICK
     };
     // Duration (ms) for the pre-API-29 `vibrate(long)` fallback.
-    let fallback_ms: i64 = match name {
+    let fallback_ms: i64 = match name.as_str() {
         "error" | "warning" => 80,
         "heavy" => 60,
         "success" | "medium" | "start" | "stop" => 40,
@@ -764,9 +762,9 @@ pub fn notification_schedule_interval(
         fn js_is_truthy(value: f64) -> i32;
     }
     let repeats_bool = unsafe { js_is_truthy(repeats) != 0 };
-    let id = str_from_header(id_ptr);
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
@@ -802,9 +800,9 @@ pub fn notification_schedule_calendar(
     body_ptr: *const u8,
     timestamp_ms: f64,
 ) {
-    let id = str_from_header(id_ptr);
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
@@ -859,7 +857,7 @@ pub fn notification_schedule_location(
 
 /// Cancel a scheduled or already-displayed notification by id (#96).
 pub fn notification_cancel(id_ptr: *const u8) {
-    let id = str_from_header(id_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
@@ -881,8 +879,8 @@ pub fn notification_cancel(id_ptr: *const u8) {
 
 /// Send a notification via PerryBridge.
 pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 

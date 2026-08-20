@@ -31,17 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -83,7 +73,7 @@ fn generate_matrix(text: &str) -> Option<QrMatrix> {
 
 /// Create a QR code widget. Returns a widget handle.
 pub fn create(data_ptr: *const u8, size: f64) -> i64 {
-    let data = str_from_header(data_ptr);
+    let data = unsafe { str_from_header(data_ptr) };
     let display = if size > 0.0 { size as i32 } else { 200 };
     let control_id = alloc_control_id();
 
@@ -111,7 +101,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
             let handle = register_widget(hwnd, WidgetKind::Image, control_id);
             if !data.is_empty() {
-                if let Some(matrix) = generate_matrix(data) {
+                if let Some(matrix) = generate_matrix(&data) {
                     QR_MATRIX.with(|m| {
                         m.borrow_mut().insert(handle, matrix);
                     });
@@ -132,11 +122,11 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
 /// Replace the QR code content of an existing widget.
 pub fn set_data(handle: i64, data_ptr: *const u8) {
-    let data = str_from_header(data_ptr);
+    let data = unsafe { str_from_header(data_ptr) };
 
     #[cfg(target_os = "windows")]
     {
-        let matrix = generate_matrix(data);
+        let matrix = generate_matrix(&data);
         QR_MATRIX.with(|m| {
             let mut map = m.borrow_mut();
             match matrix {

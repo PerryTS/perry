@@ -4,9 +4,7 @@ use crate::callback;
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 extern "C" {
     fn js_closure_call1(closure: f64, arg: f64) -> f64;
@@ -34,8 +32,8 @@ pub fn save_file_dialog(
 
 /// Show an alert dialog with title, message, buttons and callback.
 pub fn alert(title_ptr: *const u8, message_ptr: *const u8, _buttons_ptr: *const u8, callback: f64) {
-    let title = str_from_header(title_ptr);
-    let message = str_from_header(message_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let message = unsafe { str_from_header(message_ptr) };
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);

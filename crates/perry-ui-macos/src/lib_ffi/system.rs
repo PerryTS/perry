@@ -12,23 +12,13 @@ use crate::*;
 /// with iOS/Android. Both args are Perry string pointers.
 #[no_mangle]
 pub extern "C" fn perry_system_share_text(text_ptr: i64, _title_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let text = str_from_header(text_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let text = unsafe { str_from_header(text_ptr as *const u8) };
     if text.is_empty() {
         return;
     }
     unsafe {
-        let ns_text = objc2_foundation::NSString::from_str(text);
+        let ns_text = objc2_foundation::NSString::from_str(&text);
         let arr_cls = objc2::runtime::AnyClass::get(c"NSArray").unwrap();
         let items: *mut objc2::runtime::AnyObject =
             objc2::msg_send![arr_cls, arrayWithObject: &*ns_text];
@@ -41,23 +31,13 @@ pub extern "C" fn perry_system_share_text(text_ptr: i64, _title_ptr: i64) {
 /// Safari / Reading List / Add to Bookmarks alongside Messages / Mail.
 #[no_mangle]
 pub extern "C" fn perry_system_share_url(url_ptr: i64, _title_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let url_str = str_from_header(url_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let url_str = unsafe { str_from_header(url_ptr as *const u8) };
     if url_str.is_empty() {
         return;
     }
     unsafe {
-        let ns_str = objc2_foundation::NSString::from_str(url_str);
+        let ns_str = objc2_foundation::NSString::from_str(&url_str);
         let url_cls = objc2::runtime::AnyClass::get(c"NSURL").unwrap();
         let url: *mut objc2::runtime::AnyObject =
             objc2::msg_send![url_cls, URLWithString: &*ns_str];
@@ -120,8 +100,7 @@ unsafe fn present_sharing_picker(items: *mut objc2::runtime::AnyObject) {
 //      inside the shared App Group container.
 
 fn app_group_suite() -> objc2::rc::Retained<objc2_foundation::NSString> {
-    // perry-ui-macos intentionally avoids a Cargo dep on perry-runtime
-    // (see `string_header.rs`'s comment). Reach for the suite name via
+    // Avoid depending on perry-runtime for the suite name; reach it through
     // the C-ABI shim instead.
     extern "C" {
         fn perry_app_group_suite_name(out_len: *mut i32) -> *const u8;
@@ -151,23 +130,11 @@ unsafe fn app_group_defaults() -> *mut objc2::runtime::AnyObject {
     defaults
 }
 
-fn appgroup_str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
-
 /// #675 — set a key in the App Group's `NSUserDefaults` suite.
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
-    let key = appgroup_str_from_header(key_ptr as *const u8);
-    let value = appgroup_str_from_header(value_ptr as *const u8);
+    let key = unsafe { perry_ffi::copy_string_from_raw(key_ptr as *const u8) };
+    let value = unsafe { perry_ffi::copy_string_from_raw(value_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -176,8 +143,8 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
         if defaults.is_null() {
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
-        let ns_value = objc2_foundation::NSString::from_str(value);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
+        let ns_value = objc2_foundation::NSString::from_str(&value);
         let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -189,7 +156,7 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
     let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) as i64 };
-    let key = appgroup_str_from_header(key_ptr as *const u8);
+    let key = unsafe { perry_ffi::copy_string_from_raw(key_ptr as *const u8) };
     if key.is_empty() {
         return empty();
     }
@@ -198,7 +165,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
         if defaults.is_null() {
             return empty();
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let value: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, stringForKey: &*ns_key];
         if value.is_null() {
@@ -220,7 +187,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
 /// #675 — remove a key from the App Group suite.
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
-    let key = appgroup_str_from_header(key_ptr as *const u8);
+    let key = unsafe { perry_ffi::copy_string_from_raw(key_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -229,7 +196,7 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
         if defaults.is_null() {
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -238,20 +205,10 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let url_str = str_from_header(url_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let url_str = unsafe { str_from_header(url_ptr as *const u8) };
     unsafe {
-        let ns_url_str = objc2_foundation::NSString::from_str(url_str);
+        let ns_url_str = objc2_foundation::NSString::from_str(&url_str);
         let url_cls = objc2::runtime::AnyClass::get(c"NSURL").unwrap();
         let url: *mut objc2::runtime::AnyObject =
             objc2::msg_send![url_cls, URLWithString: &*ns_url_str];
@@ -304,32 +261,22 @@ pub extern "C" fn perry_system_is_dark_mode() -> i64 {
 /// Set a preference value (UserDefaults). Supports strings and numbers.
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
+    use perry_ffi::copy_string_from_raw as str_from_header;
     extern "C" {
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     let bits = value.to_bits();
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         if (bits >> 48) == 0x7FFF {
             // NaN-boxed string — extract string pointer
             let str_ptr = js_nanbox_get_pointer(value) as *const u8;
-            let s = str_from_header(str_ptr);
-            let ns_str = objc2_foundation::NSString::from_str(s);
+            let s = unsafe { str_from_header(str_ptr) };
+            let ns_str = objc2_foundation::NSString::from_str(&s);
             let _: () = objc2::msg_send![defaults, setObject: &*ns_str, forKey: &*ns_key];
         } else {
             let ns_num: objc2::rc::Retained<objc2::runtime::AnyObject> = objc2::msg_send![
@@ -343,26 +290,16 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
 /// Get a preference value (UserDefaults). Returns NaN-boxed string, number, or TAG_UNDEFINED.
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
+    use perry_ffi::copy_string_from_raw as str_from_header;
     extern "C" {
         fn js_nanbox_string(ptr: i64) -> f64;
     }
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let obj: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, objectForKey: &*ns_key];
         if obj.is_null() {
@@ -402,21 +339,11 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
 /// PerformanceTime: Default=0, Now=1, DrawCompleted=2.
 #[no_mangle]
 pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let name = str_from_header(type_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let name = unsafe { str_from_header(type_ptr as *const u8) };
     // Semantic notification types get the stronger LevelChange pattern;
     // everything else (impacts, ticks, directions) maps to Generic.
-    let pattern: i64 = match name {
+    let pattern: i64 = match name.as_str() {
         "success" | "warning" | "error" => 2, // NSHapticFeedbackPatternLevelChange
         _ => 0,                               // NSHapticFeedbackPatternGeneric
     };
@@ -439,18 +366,8 @@ pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
 /// Set the font family on a Text widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let family = str_from_header(family_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let family = unsafe { str_from_header(family_ptr as *const u8) };
     if let Some(view) = widgets::get_widget(handle) {
         unsafe {
             let tf: &objc2_app_kit::NSTextField =
@@ -467,7 +384,7 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
                         weight: 0.0 as objc2_core_foundation::CGFloat
                     ]
                 } else {
-                    let ns_name = objc2_foundation::NSString::from_str(family);
+                    let ns_name = objc2_foundation::NSString::from_str(&family);
                     let result: *mut objc2_app_kit::NSFont = objc2::msg_send![
                         objc2::runtime::AnyClass::get(c"NSFont").unwrap(),
                         fontWithName: &*ns_name,

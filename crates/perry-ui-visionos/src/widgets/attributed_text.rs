@@ -7,7 +7,6 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::NSString;
 use objc2_ui_kit::{UILabel, UIView};
-use perry_runtime::string::StringHeader;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -17,17 +16,7 @@ thread_local! {
     static BUFFERS: RefCell<HashMap<i64, Retained<AnyObject>>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create() -> i64 {
     unsafe {
@@ -62,7 +51,7 @@ pub fn append(
     b: f64,
     a: f64,
 ) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if text.is_empty() {
         return;
     }
@@ -148,7 +137,7 @@ pub fn append(
             let _: () = msg_send![&*attrs, setObject: &*color, forKey: &*color_key];
         }
 
-        let ns_text = NSString::from_str(text);
+        let ns_text = NSString::from_str(&text);
         let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
         let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
         let piece: Retained<AnyObject> = Retained::retain(msg_send![

@@ -59,26 +59,16 @@ impl PerryTextFieldTarget {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a UITextField with placeholder and onChange callback.
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
 
     unsafe {
         let text_field: Retained<UITextField> =
             msg_send![objc2::runtime::AnyClass::get(c"UITextField").unwrap(), new];
-        let ns_placeholder = NSString::from_str(placeholder);
+        let ns_placeholder = NSString::from_str(&placeholder);
         let _: () = msg_send![&*text_field, setPlaceholder: &*ns_placeholder];
         let _: () = msg_send![&*text_field, setAccessibilityLabel: &*ns_placeholder];
         let _: () = msg_send![&*text_field, setBorderStyle: 3i64]; // UITextBorderStyleRoundedRect = 3
@@ -125,9 +115,9 @@ pub fn focus(handle: i64) {
 
 /// Set the text of a UITextField from a StringHeader pointer.
 pub fn set_string_value(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_string = NSString::from_str(text);
+        let ns_string = NSString::from_str(&text);
         unsafe {
             let _: () = msg_send![&*view, setText: &*ns_string];
         }

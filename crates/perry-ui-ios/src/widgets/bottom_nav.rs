@@ -6,7 +6,7 @@
 //! and an onSelect callback. Both can coexist.
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
+use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use objc2_ui_kit::UIView;
@@ -24,17 +24,7 @@ extern "C" {
     );
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct BottomNavState {
     items: Vec<*mut AnyObject>,
@@ -133,8 +123,8 @@ pub fn create(on_select: f64) -> i64 {
 
 /// Add an item with an SF Symbol icon and a label.
 pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
-    let icon = str_from_header(icon_ptr);
-    let label = str_from_header(label_ptr);
+    let icon = unsafe { str_from_header(icon_ptr) };
+    let label = unsafe { str_from_header(label_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let tab_index = STATES.with(|s| {
@@ -146,12 +136,12 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 
     unsafe {
         let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
-        let ns_icon = NSString::from_str(icon);
+        let ns_icon = NSString::from_str(&icon);
         let image: *mut AnyObject = msg_send![img_cls, systemImageNamed: &*ns_icon];
 
         let item_cls = objc2::runtime::AnyClass::get(c"UITabBarItem").unwrap();
         let item: *mut AnyObject = msg_send![item_cls, alloc];
-        let ns_title = NSString::from_str(label);
+        let ns_title = NSString::from_str(&label);
         let item: *mut AnyObject = msg_send![
             item,
             initWithTitle: &*ns_title,
@@ -178,7 +168,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 
 /// Set or clear the badge string on an item. Empty string clears.
 pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
-    let badge = str_from_header(badge_ptr);
+    let badge = unsafe { str_from_header(badge_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     STATES.with(|s| {
         let state_ref = s.borrow();
@@ -192,7 +182,7 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
             let badge_value: *const AnyObject = if badge.is_empty() {
                 std::ptr::null()
             } else {
-                let ns_badge = NSString::from_str(badge);
+                let ns_badge = NSString::from_str(&badge);
                 Retained::into_raw(ns_badge) as *const AnyObject
             };
             let _: () = msg_send![item, setBadgeValue: badge_value];

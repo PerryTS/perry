@@ -77,17 +77,7 @@ extern "C" {
 /// Read a Rust `String` from a runtime `StringHeader` pointer (same layout as
 /// `clipboard.rs` / `dialog.rs`).
 #[cfg(target_os = "windows")]
-fn str_from_header(ptr: *const perry_runtime::string::StringHeader) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data =
-            (ptr as *const u8).add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// NaN-box a Rust `&str` as a JS string value.
 #[cfg(target_os = "windows")]
@@ -116,7 +106,7 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
     if sh.is_null() {
         None
     } else {
-        Some(str_from_header(sh))
+        Some(unsafe { str_from_header(sh) })
     }
 }
 

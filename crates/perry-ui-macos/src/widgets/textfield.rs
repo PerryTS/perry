@@ -160,25 +160,15 @@ impl PerryTextFieldSubmitObserver {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an editable NSTextField with a placeholder string and onChange callback.
 /// `placeholder_ptr` is a StringHeader pointer, `on_change` is a NaN-boxed closure.
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
 
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-    let ns_placeholder = NSString::from_str(placeholder);
+    let ns_placeholder = NSString::from_str(&placeholder);
 
     unsafe {
         let text_field = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
@@ -242,9 +232,9 @@ pub fn focus(handle: i64) {
 
 /// Set the text of an editable text field from a StringHeader pointer.
 pub fn set_string_value(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_string = NSString::from_str(text);
+        let ns_string = NSString::from_str(&text);
         unsafe {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             tf.setStringValue(&ns_string);

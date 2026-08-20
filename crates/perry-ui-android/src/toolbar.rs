@@ -6,9 +6,7 @@ use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct ToolbarState {
     widget_handle: i64,
@@ -82,7 +80,7 @@ pub fn create() -> i64 {
 }
 
 pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, _icon_ptr: *const u8, on_press: f64) {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
 
     let widget_handle = TOOLBARS.with(|t| t.borrow().get(&toolbar_handle).map(|s| s.widget_handle));
 

@@ -63,17 +63,7 @@ thread_local! {
     static ON_CHANGE_CALLBACKS: RefCell<HashMap<i64, Vec<f64>>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn is_nanboxed_string(value: f64) -> bool {
     let bits = value.to_bits();
@@ -82,7 +72,7 @@ fn is_nanboxed_string(value: f64) -> bool {
 
 fn extract_nanboxed_string(value: f64) -> String {
     let ptr = unsafe { js_nanbox_get_pointer(value) } as *const u8;
-    str_from_header(ptr).to_string()
+    unsafe { str_from_header(ptr) }.to_string()
 }
 
 fn format_value(value: f64) -> String {
@@ -262,8 +252,8 @@ pub fn bind_text_numeric(
     prefix_ptr: *const u8,
     suffix_ptr: *const u8,
 ) {
-    let prefix = str_from_header(prefix_ptr).to_string();
-    let suffix = str_from_header(suffix_ptr).to_string();
+    let prefix = unsafe { str_from_header(prefix_ptr) }.to_string();
+    let suffix = unsafe { str_from_header(suffix_ptr) }.to_string();
     TEXT_BINDINGS.with(|b| {
         b.borrow_mut()
             .entry(state_handle)
@@ -308,7 +298,7 @@ pub fn bind_text_template(
         let part_value = unsafe { *values_ptr.add(i) };
 
         if part_type == 0 {
-            let s = str_from_header(part_value as *const u8).to_string();
+            let s = unsafe { str_from_header(part_value as *const u8) }.to_string();
             parts.push(TextPart::Literal(s));
         } else {
             state_handles.push(part_value);

@@ -4,7 +4,7 @@ use jni::objects::{JObject, JValue};
 
 /// Create a TextView. Returns widget handle.
 pub fn create(text_ptr: *const u8) -> i64 {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -55,8 +55,8 @@ pub fn set_text_str(handle: i64, text: &str) {
 
 /// Update the text of an existing TextView from a StringHeader pointer.
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
-    set_text_str(handle, text);
+    let text = unsafe { str_from_header(text_ptr) };
+    set_text_str(handle, &text);
 }
 
 /// Set the text color of a TextView (RGBA 0.0-1.0).
@@ -135,16 +135,16 @@ pub fn set_font_weight(handle: i64, _size: f64, weight: f64) {
 
 /// Set the font family of a TextView.
 pub fn set_font_family(handle: i64, family_ptr: *const u8) {
-    let family = str_from_header(family_ptr);
+    let family = unsafe { str_from_header(family_ptr) };
     if let Some(view_ref) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(16);
 
-        let family_name = match family {
+        let family_name = match family.as_str() {
             "monospace" | "monospaced" => "monospace",
             "system" | "default" => "sans-serif",
             "serif" => "serif",
-            other => other,
+            other => &other,
         };
 
         let jfamily = env.new_string(family_name).expect("family string");

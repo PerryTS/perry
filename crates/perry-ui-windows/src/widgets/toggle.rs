@@ -19,17 +19,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -42,13 +32,13 @@ thread_local! {
 
 /// Create a Toggle (checkbox). Returns widget handle.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     let callback_ptr = unsafe { js_nanbox_get_pointer(on_change) } as *const u8;
     let control_id = alloc_control_id();
 
     #[cfg(target_os = "windows")]
     {
-        let wide = to_wide(label);
+        let wide = to_wide(&label);
         let class_name = to_wide("BUTTON");
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();

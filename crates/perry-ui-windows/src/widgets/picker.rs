@@ -17,17 +17,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -51,7 +41,7 @@ thread_local! {
 /// on_change is a NaN-boxed closure called with the selected index on CBN_SELCHANGE.
 /// style is reserved for future use (e.g., CBS_DROPDOWN vs CBS_DROPDOWNLIST).
 pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
-    let _label = str_from_header(label_ptr);
+    let _label = unsafe { str_from_header(label_ptr) };
     let callback_ptr = unsafe { js_nanbox_get_pointer(on_change) } as *const u8;
     let control_id = alloc_control_id();
 
@@ -141,12 +131,12 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
 /// Add an item to the picker's dropdown list.
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
 
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let wide = to_wide(title);
+            let wide = to_wide(&title);
             unsafe {
                 SendMessageW(
                     hwnd,

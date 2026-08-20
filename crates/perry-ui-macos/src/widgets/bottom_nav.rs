@@ -10,7 +10,6 @@
 //! On iOS the equivalent widget uses UITabBar / UITabBarItem natively
 //! (see crates/perry-ui-ios/src/widgets/bottom_nav.rs).
 
-use crate::string_header::StringHeader;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -25,17 +24,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct ItemViews {
     container: Retained<NSView>,
@@ -158,8 +147,8 @@ pub fn create(on_select: f64) -> i64 {
 
 /// Add a tab item (icon + label) to a BottomNavigation bar.
 pub fn add_item(bar_handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
-    let icon = str_from_header(icon_ptr);
-    let label = str_from_header(label_ptr);
+    let icon = unsafe { str_from_header(icon_ptr) };
+    let label = unsafe { str_from_header(label_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
@@ -200,7 +189,7 @@ pub fn add_item(bar_handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
         let _: () = msg_send![&*icon_view, setTranslatesAutoresizingMaskIntoConstraints: false];
         if !icon.is_empty() {
             let img_cls = AnyClass::get(c"NSImage").unwrap();
-            let ns_icon = NSString::from_str(icon);
+            let ns_icon = NSString::from_str(&icon);
             let nil: *const AnyObject = std::ptr::null();
             let image: *mut AnyObject = msg_send![
                 img_cls,
@@ -214,7 +203,7 @@ pub fn add_item(bar_handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 
         // Label: small NSTextField with .controlTextColor.
         let tf_cls = AnyClass::get(c"NSTextField").unwrap();
-        let ns_label = NSString::from_str(label);
+        let ns_label = NSString::from_str(&label);
         let label_view: Retained<AnyObject> = msg_send![tf_cls, labelWithString: &*ns_label];
         let _: () = msg_send![&*label_view, setTranslatesAutoresizingMaskIntoConstraints: false];
         let _: () = msg_send![&*label_view, setAlignment: 2i64]; // NSTextAlignmentCenter
@@ -282,7 +271,7 @@ pub fn add_item(bar_handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 
 /// Set or clear the badge text on a tab item. Empty string clears the badge.
 pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
-    let badge_str = str_from_header(badge_ptr);
+    let badge_str = unsafe { str_from_header(badge_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     BOTTOM_NAVS.with(|s| {
         let mut nav = s.borrow_mut();
@@ -302,7 +291,7 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
             }
 
             let tf_cls = AnyClass::get(c"NSTextField").unwrap();
-            let ns_badge = NSString::from_str(badge_str);
+            let ns_badge = NSString::from_str(&badge_str);
             let badge: Retained<AnyObject> = msg_send![tf_cls, labelWithString: &*ns_badge];
             let _: () = msg_send![&*badge, setTranslatesAutoresizingMaskIntoConstraints: false];
             let _: () = msg_send![&*badge, setAlignment: 2i64]; // center

@@ -53,7 +53,7 @@ pub fn create(kind: i64, width: f64, height: f64) -> i64 {
 }
 
 pub fn add_data_point(handle: i64, label_ptr: *const u8, value: f64) {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     if let Some(view) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
@@ -97,7 +97,7 @@ pub fn clear_data(handle: i64) {
 }
 
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);

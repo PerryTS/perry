@@ -15,23 +15,13 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a GtkButton with a label and closure callback.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     crate::app::ensure_gtk_init();
-    let label = str_from_header(label_ptr);
-    let button = Button::with_label(label);
+    let label = unsafe { str_from_header(label_ptr) };
+    let button = Button::with_label(&label);
 
     let callback_id = NEXT_BUTTON_ID.with(|id| {
         let mut id = id.borrow_mut();
@@ -82,10 +72,10 @@ pub fn set_bordered(handle: i64, bordered: bool) {
 
 /// Set the title text of a button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(widget) = super::get_widget(handle) {
         if let Some(button) = widget.downcast_ref::<Button>() {
-            button.set_label(title);
+            button.set_label(&title);
         }
     }
 }
@@ -119,13 +109,13 @@ pub fn set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 /// renders the icon to the button's child position; a label with `set_title`
 /// remains alongside via the default GtkButton icon-and-label layout.
 pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     if name.is_empty() {
         return;
     }
     if let Some(widget) = super::get_widget(handle) {
         if let Some(button) = widget.downcast_ref::<Button>() {
-            button.set_icon_name(name);
+            button.set_icon_name(&name);
         }
     }
 }

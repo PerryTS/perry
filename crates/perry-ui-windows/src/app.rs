@@ -137,17 +137,7 @@ pub(crate) fn ensure_dpi_initialized() {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Convert Perry's closest timer deadline into the bounded wait used by the
 /// Win32 pump. Fractional milliseconds round up so an early wake never fires a
@@ -452,7 +442,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 /// Create an app window. Returns app handle (1-based).
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     let w = if width > 0.0 { width } else { 800.0 };
     let h = if height > 0.0 { height } else { 600.0 };
 
@@ -492,7 +482,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             };
             RegisterClassExW(&wc);
 
-            let title_wide = to_wide(title);
+            let title_wide = to_wide(&title);
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 windows::core::PCWSTR(class_name.as_ptr()),
@@ -952,7 +942,7 @@ fn try_handle_shortcut(vk: u16) -> bool {
 
 /// Add a keyboard shortcut (buffered until app_run).
 pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) {
-    let key = str_from_header(key_ptr).to_string();
+    let key = unsafe { str_from_header(key_ptr) }.to_string();
     PENDING_SHORTCUTS.with(|pending| {
         pending.borrow_mut().push(PendingShortcut {
             key,
@@ -990,8 +980,8 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
 /// `value_ptr` is a perry-runtime StringHeader pointer to one of
 /// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
 pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
-    let state_str = str_from_header(value_ptr);
-    let state = match state_str {
+    let state_str = unsafe { str_from_header(value_ptr) };
+    let state = match state_str.as_str() {
         "maximized" => Some(WindowState::Maximized),
         "fullscreen" => Some(WindowState::Fullscreen),
         // "normal" or anything else => default behavior (SW_SHOW).
@@ -1081,7 +1071,7 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
 
 /// Set window level: "floating", "statusBar", "modal", or "normal".
 pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
-    let level_str = str_from_header(value_ptr);
+    let level_str = unsafe { str_from_header(value_ptr) };
     if level_str.is_empty() {
         return;
     }
@@ -1093,7 +1083,7 @@ pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
             if idx < apps.len() {
                 let hwnd = apps[idx].hwnd;
                 unsafe {
-                    let insert_after = match level_str {
+                    let insert_after = match level_str.as_str() {
                         "floating" | "statusBar" => HWND_TOPMOST,
                         "modal" => HWND_TOPMOST,
                         _ => HWND_NOTOPMOST,
@@ -1151,7 +1141,7 @@ pub fn app_set_transparent(app_handle: i64, value: f64) {
 /// Set vibrancy/backdrop material.
 /// On Windows 11+: uses DwmSetWindowAttribute with DWMWA_SYSTEMBACKDROP_TYPE.
 pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
-    let material_str = str_from_header(value_ptr);
+    let material_str = unsafe { str_from_header(value_ptr) };
     if material_str.is_empty() {
         return;
     }
@@ -1165,7 +1155,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
                 unsafe {
                     // DWMWA_SYSTEMBACKDROP_TYPE = 38 (Windows 11 22H2+)
                     // Values: 0=Auto, 1=None, 2=Mica, 3=Acrylic, 4=MicaAlt
-                    let backdrop_type: i32 = match material_str {
+                    let backdrop_type: i32 = match material_str.as_str() {
                         "sidebar" | "underWindowBackground" | "behindWindow" => 2, // Mica
                         "menu" | "popover" | "tooltip" | "hudWindow" => 3,         // Acrylic
                         "titlebar" | "headerView" => 4,                            // Mica Alt
@@ -1202,7 +1192,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
 /// Set activation policy: "regular", "accessory", or "background".
 /// On Windows: "accessory" uses WS_EX_TOOLWINDOW (no taskbar entry).
 pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
-    let policy_str = str_from_header(value_ptr);
+    let policy_str = unsafe { str_from_header(value_ptr) };
     if policy_str.is_empty() {
         return;
     }
@@ -1727,7 +1717,7 @@ mod dpi_tests {
 /// `modifiers` is a bitfield: 1=Cmd(->Ctrl), 2=Shift, 4=Option(->Alt), 8=Control(->Ctrl).
 /// `callback` is a NaN-boxed closure pointer.
 pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64) {
-    let key_str = str_from_header(key_ptr);
+    let key_str = unsafe { str_from_header(key_ptr) };
     if key_str.is_empty() {
         return;
     }
@@ -1746,7 +1736,7 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
     } // MOD_ALT
     win_mods |= 0x4000; // MOD_NOREPEAT
 
-    let vk = key_to_vk(key_str);
+    let vk = key_to_vk(&key_str);
     let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
 
     let id = NEXT_HOTKEY_ID.with(|c| {

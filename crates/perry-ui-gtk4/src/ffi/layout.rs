@@ -106,13 +106,13 @@ pub extern "C" fn perry_ui_stack_set_detaches_hidden(handle: i64, flag: i64) {
 /// Set the application icon.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_icon(path_ptr: i64) {
-    let path = crate::widgets::image::str_from_header(path_ptr as *const u8);
+    let path = unsafe { crate::widgets::image::str_from_header(path_ptr as *const u8) };
     if path.is_empty() {
         return;
     }
 
     // Resolve path: try relative to executable, then relative to cwd
-    let resolved = resolve_asset_path(path);
+    let resolved = resolve_asset_path(&path);
     if !resolved.exists() {
         return;
     }

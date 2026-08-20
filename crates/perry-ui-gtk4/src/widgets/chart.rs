@@ -31,17 +31,7 @@ thread_local! {
     static CHARTS: RefCell<HashMap<i64, ChartEntry>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 const PADDING: f64 = 24.0;
 const PALETTE: &[(f64, f64, f64)] = &[
@@ -224,7 +214,7 @@ fn draw_title_centered(cr: &Context, title: &str, total_w: f64, top_y: f64, font
 }
 
 pub fn add_data_point(handle: i64, label_ptr: *const u8, value: f64) {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     CHARTS.with(|c| {
         if let Some(entry) = c.borrow_mut().get_mut(&handle) {
             entry.data.push((label, value));
@@ -243,7 +233,7 @@ pub fn clear_data(handle: i64) {
 }
 
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     CHARTS.with(|c| {
         if let Some(entry) = c.borrow_mut().get_mut(&handle) {
             entry.title = title;

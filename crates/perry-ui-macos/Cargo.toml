@@ -16,6 +16,7 @@ plugins = []
 geisterhand = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
+perry-ffi.workspace = true
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 base64.workspace = true

@@ -26,17 +26,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -55,13 +45,13 @@ thread_local! {
 }
 
 pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
-    let initial = str_from_header(initial_ptr);
+    let initial = unsafe { str_from_header(initial_ptr) };
     let control_id = alloc_control_id();
 
     #[cfg(target_os = "windows")]
     {
         let class_name = to_wide("COMBOBOX");
-        let initial_w = to_wide(initial);
+        let initial_w = to_wide(&initial);
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
             // CBS_DROPDOWN = 0x0002 (editable text + dropdown list).
@@ -115,13 +105,13 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
 }
 
 pub fn add_item(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     #[cfg(target_os = "windows")]
     {
         let Some(hwnd) = super::get_hwnd(handle) else {
             return;
         };
-        let wide = to_wide(value);
+        let wide = to_wide(&value);
         unsafe {
             SendMessageW(
                 hwnd,
@@ -138,13 +128,13 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
 }
 
 pub fn set_value(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     #[cfg(target_os = "windows")]
     {
         let Some(hwnd) = super::get_hwnd(handle) else {
             return;
         };
-        let wide = to_wide(value);
+        let wide = to_wide(&value);
         unsafe {
             SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
         }

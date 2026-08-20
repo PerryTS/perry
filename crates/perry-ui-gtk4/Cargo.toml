@@ -15,7 +15,7 @@ perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime" }
-perry-ffi = { path = "../perry-ffi" }
+perry-ffi.workspace = true
 base64.workspace = true
 libc.workspace = true
 gtk4 = { version = "0.9", features = ["v4_6"] }

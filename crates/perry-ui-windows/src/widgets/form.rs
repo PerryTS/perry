@@ -11,17 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget_with_layout, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -105,12 +95,12 @@ pub fn create() -> i64 {
 /// Create a Section (BS_GROUPBOX frame with title + inner VStack).
 /// Returns widget handle of the groupbox container.
 pub fn section_create(title_ptr: *const u8) -> i64 {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
 
     #[cfg(target_os = "windows")]
     {
         let control_id = alloc_control_id();
-        let wide_title = to_wide(title);
+        let wide_title = to_wide(&title);
         let class_name = to_wide("BUTTON");
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();

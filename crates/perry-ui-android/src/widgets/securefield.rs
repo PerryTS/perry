@@ -4,12 +4,10 @@ use crate::callback;
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 

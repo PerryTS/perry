@@ -65,7 +65,7 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
         height - inset_top - inset_bottom
     };
 
-    let detaches_hidden = info.detaches_hidden;
+    let _detaches_hidden = info.detaches_hidden;
 
     let distribution = info.distribution;
 

@@ -40,17 +40,7 @@ thread_local! {
     static COMBOBOX_DELEGATES: RefCell<HashMap<i64, Retained<PerryComboboxDelegate>>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn fire_callback(handle: i64, value: &str) {
     let cb = COMBOBOX_CALLBACKS.with(|m| m.borrow().get(&handle).copied());
@@ -176,9 +166,9 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
         let _: () = msg_send![&*text_field, setBorderStyle: 3i64]; // RoundedRect
         let _: () = msg_send![&*text_field, setTranslatesAutoresizingMaskIntoConstraints: false];
 
-        let initial = str_from_header(initial_ptr);
+        let initial = unsafe { str_from_header(initial_ptr) };
         if !initial.is_empty() {
-            let ns = NSString::from_str(initial);
+            let ns = NSString::from_str(&initial);
             let _: () = msg_send![&*text_field, setText: &*ns];
         }
 
@@ -233,7 +223,7 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
 /// Append a suggestion to the dropdown. Triggers a picker reload so the
 /// new row appears immediately if the wheel is currently visible.
 pub fn add_item(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr).to_string();
+    let value = unsafe { str_from_header(value_ptr) }.to_string();
     COMBOBOX_ITEMS.with(|m| {
         if let Some(list) = m.borrow_mut().get_mut(&handle) {
             list.push(value);
@@ -254,9 +244,9 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
 /// Replace the editable text content of the combobox. Does not fire
 /// `on_change` — matches macOS `setStringValue:` semantics.
 pub fn set_value(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns = NSString::from_str(value);
+        let ns = NSString::from_str(&value);
         unsafe {
             let _: () = msg_send![&*view, setText: &*ns];
         }

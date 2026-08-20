@@ -16,17 +16,7 @@ use objc2::runtime::{AnyClass, AnyObject};
 use objc2_app_kit::NSView;
 use objc2_foundation::NSString;
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a `PDFView` of the requested size. Returns 0 if PDFKit
 /// isn't available at runtime.
@@ -56,7 +46,7 @@ pub fn create(width: f64, height: f64) -> i64 {
 
 /// Load a PDF from a filesystem path. Returns true on success.
 pub fn load_file(handle: i64, path_ptr: *const u8) -> bool {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     if path.is_empty() {
         return false;
     }

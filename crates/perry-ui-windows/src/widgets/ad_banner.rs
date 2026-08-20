@@ -22,21 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        // Checked parse, not from_utf8_unchecked: runtime strings are WTF-8
-        // and may contain lone surrogates, which would be UB to expose as
-        // &str. An invalid size key falls back to "" → the default 320×50
-        // banner slot.
-        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -62,9 +48,9 @@ fn banner_size(size_key: &str) -> (f64, f64) {
 /// handle. The slot dimensions are pinned via fixed width/height so the
 /// stack layout reserves them exactly (matching the macOS NSView frame).
 pub fn create(unit_id_ptr: *const u8, size_ptr: *const u8) -> i64 {
-    let _unit_id = str_from_header(unit_id_ptr);
-    let size_key = str_from_header(size_ptr);
-    let (w, h) = banner_size(size_key);
+    let _unit_id = unsafe { str_from_header(unit_id_ptr) };
+    let size_key = unsafe { str_from_header(size_ptr) };
+    let (w, h) = banner_size(&size_key);
     let scale = crate::app::get_dpi_scale();
     let w = (w * scale).round() as i32;
     let h = (h * scale).round() as i32;

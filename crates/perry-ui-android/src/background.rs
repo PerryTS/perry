@@ -12,17 +12,7 @@ use crate::callback;
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -40,7 +30,7 @@ fn boolean_truthy(v: f64) -> bool {
 }
 
 pub fn register_task(identifier_ptr: *const u8, handler: f64) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }
@@ -70,11 +60,11 @@ pub fn schedule(
     requires_network: f64,
     requires_charging: f64,
 ) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }
-    let kind = str_from_header(kind_ptr);
+    let kind = unsafe { str_from_header(kind_ptr) };
     let kind = if kind.is_empty() {
         "appRefresh".to_string()
     } else {
@@ -108,7 +98,7 @@ pub fn schedule(
 }
 
 pub fn cancel(identifier_ptr: *const u8) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }

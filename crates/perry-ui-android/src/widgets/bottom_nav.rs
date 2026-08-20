@@ -148,8 +148,8 @@ pub fn create(on_select: f64) -> i64 {
 
 /// Add a tab item (icon drawable name + label).
 pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
-    let icon = crate::app::str_from_header(icon_ptr);
-    let label = crate::app::str_from_header(label_ptr);
+    let icon = unsafe { crate::app::str_from_header(icon_ptr) };
+    let label = unsafe { crate::app::str_from_header(label_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
     let activity = super::get_activity(&mut env);
@@ -370,7 +370,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 
 /// Set or clear the badge string on a tab. Empty clears the badge.
 pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
-    let badge = crate::app::str_from_header(badge_ptr);
+    let badge = unsafe { crate::app::str_from_header(badge_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 

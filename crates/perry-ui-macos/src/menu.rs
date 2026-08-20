@@ -61,17 +61,7 @@ impl PerryMenuItemTarget {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a new context menu. Returns menu handle (1-based).
 pub fn create() -> i64 {
@@ -102,10 +92,10 @@ fn get_menu(handle: i64) -> Option<Retained<NSMenu>> {
 
 /// Add an item to a menu with a title and callback.
 pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(menu) = get_menu(menu_handle) {
         let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let empty_key = NSString::from_str("");
         unsafe {
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -146,13 +136,13 @@ pub fn add_item_with_shortcut(
     callback: f64,
     shortcut_ptr: *const u8,
 ) {
-    let title = str_from_header(title_ptr);
-    let shortcut_str = str_from_header(shortcut_ptr);
-    let (key, flags) = parse_shortcut(shortcut_str);
+    let title = unsafe { str_from_header(title_ptr) };
+    let shortcut_str = unsafe { str_from_header(shortcut_ptr) };
+    let (key, flags) = parse_shortcut(&shortcut_str);
 
     if let Some(menu) = get_menu(menu_handle) {
         let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let ns_key = NSString::from_str(&key);
         unsafe {
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -222,10 +212,10 @@ pub fn add_separator(menu_handle: i64) {
 
 /// Add a submenu to a menu.
 pub fn add_submenu(menu_handle: i64, title_ptr: *const u8, submenu_handle: i64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let (Some(menu), Some(submenu)) = (get_menu(menu_handle), get_menu(submenu_handle)) {
         let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let empty_key = NSString::from_str("");
         unsafe {
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -264,10 +254,10 @@ fn get_menubar(handle: i64) -> Option<Retained<NSMenu>> {
 
 /// Add a menu to the menu bar with a title.
 pub fn menubar_add_menu(bar_handle: i64, title_ptr: *const u8, menu_handle: i64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let (Some(bar), Some(menu)) = (get_menubar(bar_handle), get_menu(menu_handle)) {
         let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let empty_key = NSString::from_str("");
         unsafe {
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -303,14 +293,14 @@ pub fn add_standard_action(
     selector_ptr: *const u8,
     shortcut_ptr: *const u8,
 ) {
-    let title = str_from_header(title_ptr);
-    let selector_name = str_from_header(selector_ptr);
-    let shortcut_str = str_from_header(shortcut_ptr);
-    let (key, flags) = parse_shortcut(shortcut_str);
+    let title = unsafe { str_from_header(title_ptr) };
+    let selector_name = unsafe { str_from_header(selector_ptr) };
+    let shortcut_str = unsafe { str_from_header(shortcut_ptr) };
+    let (key, flags) = parse_shortcut(&shortcut_str);
 
     if let Some(menu) = get_menu(menu_handle) {
         let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let ns_key = NSString::from_str(&key);
         // Create a CString for the selector name
         let sel_cstr = std::ffi::CString::new(selector_name).expect("invalid selector");

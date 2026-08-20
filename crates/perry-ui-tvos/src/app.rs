@@ -6,7 +6,6 @@ use objc2_ui_kit::{UIView, UIViewController, UIWindow};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::CStr;
 
 use crate::menu;
 use crate::widgets;
@@ -30,17 +29,7 @@ pub(crate) struct AppEntry {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app. Stores config in thread-local for deferred creation.
 /// Returns app handle (i64).
@@ -48,7 +37,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     let title = if title_ptr.is_null() {
         "Perry App".to_string()
     } else {
-        str_from_header(title_ptr).to_string()
+        unsafe { str_from_header(title_ptr) }.to_string()
     };
 
     let w = if width > 0.0 { width } else { 400.0 };
@@ -113,7 +102,7 @@ unsafe extern "C" fn scene_will_connect(
     _session: *mut AnyObject,
     _options: *mut AnyObject,
 ) {
-    let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     // Create UIWindow attached to the scene (UIWindowScene)
     let window_cls = AnyClass::get(c"UIWindow").unwrap();

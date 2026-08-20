@@ -5,7 +5,7 @@ use jni::objects::JValue;
 
 /// Create an EditText with placeholder and onChange callback. Returns widget handle.
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -83,8 +83,8 @@ pub fn focus(handle: i64) {
 
 /// Set the text of an EditText from a StringHeader pointer.
 pub fn set_string_value(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
-    set_string_str(handle, text);
+    let text = unsafe { str_from_header(text_ptr) };
+    set_string_str(handle, &text);
 }
 
 pub fn set_string_str(handle: i64, text: &str) {

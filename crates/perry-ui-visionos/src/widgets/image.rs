@@ -4,23 +4,13 @@ use objc2::runtime::AnyObject;
 use objc2_foundation::{MainThreadMarker, NSString};
 use objc2_ui_kit::UIView;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
-        let ns_name = NSString::from_str(name);
+        let ns_name = NSString::from_str(&name);
         let image_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
         let image: *mut objc2::runtime::AnyObject =
             msg_send![image_cls, systemImageNamed: &*ns_name];
@@ -33,7 +23,7 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
 }
 
 pub fn create_file(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
         // Resolve relative paths against the app bundle's resource directory

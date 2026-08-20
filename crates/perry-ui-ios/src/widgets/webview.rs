@@ -37,17 +37,7 @@ thread_local! {
     static HANDLE_TO_KEY: RefCell<HashMap<i64, usize>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn nanbox_str(s: &str) -> f64 {
     let bytes = s.as_bytes();
@@ -272,7 +262,7 @@ impl PerryWebViewDelegate {
 }
 
 pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) -> i64 {
-    let url = str_from_header(url_ptr).to_string();
+    let url = unsafe { str_from_header(url_ptr) }.to_string();
     unsafe {
         let frame = objc2_core_foundation::CGRect::new(
             objc2_core_foundation::CGPoint::new(0.0, 0.0),
@@ -331,7 +321,7 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
 }
 
 pub fn load_url(handle: i64, url_ptr: *const u8) {
-    let url = str_from_header(url_ptr).to_string();
+    let url = unsafe { str_from_header(url_ptr) }.to_string();
     if url.is_empty() {
         return;
     }
@@ -390,7 +380,7 @@ pub fn can_go_back(handle: i64) -> i64 {
 }
 
 pub fn evaluate_js(handle: i64, js_ptr: *const u8, callback: f64) {
-    let js = str_from_header(js_ptr).to_string();
+    let js = unsafe { str_from_header(js_ptr) }.to_string();
     let wv = match webview_for_handle(handle) {
         Some(w) => w,
         None => return,
@@ -453,7 +443,7 @@ pub fn clear_cookies(handle: i64) {
 }
 
 pub fn set_user_agent(handle: i64, ua_ptr: *const u8) {
-    let ua = str_from_header(ua_ptr).to_string();
+    let ua = unsafe { str_from_header(ua_ptr) }.to_string();
     if let Some(wv) = webview_for_handle(handle) {
         unsafe {
             let ns = NSString::from_str(&ua);
@@ -475,7 +465,7 @@ pub fn set_allowed_domains(handle: i64, domains_arr_handle: i64) {
             let elem = js_array_get_element_f64(domains_arr_handle, i);
             let str_ptr = js_get_string_pointer_unified(elem);
             if !str_ptr.is_null() {
-                domains.push(str_from_header(str_ptr).to_string());
+                domains.push(unsafe { str_from_header(str_ptr) }.to_string());
             }
         }
     }

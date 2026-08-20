@@ -22,33 +22,7 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::sync::Mutex;
 
-// =============================================================================
-// String header — mirrors perry_runtime::string::StringHeader. Kept inline
-// (don't depend on perry-runtime — that would create a dep cycle through
-// the UI crates that re-export us).
-// =============================================================================
-
-#[repr(C)]
-struct StringHeader {
-    pub utf16_len: u32,
-    pub byte_len: u32,
-    pub capacity: u32,
-    pub refcount: u32,
-    pub flags: u32,
-}
-
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(slice).unwrap_or("").to_owned()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 // =============================================================================
 // miniaudio FFI — only the slice we actually need.
@@ -419,7 +393,7 @@ pub extern "C" fn perry_audio_load_sound(path_ptr: i64, bus: f64, stream: f64) -
         return 0;
     }
     let is_streaming = stream != 0.0;
-    let filename = str_from_header(path_ptr as *const u8);
+    let filename = unsafe { str_from_header(path_ptr as *const u8) };
     if filename.is_empty() {
         return 0;
     }
@@ -944,7 +918,7 @@ pub extern "C" fn perry_audio_create_bus(name_ptr: i64, parent: f64) -> i64 {
     if !ensure_engine() {
         return 0;
     }
-    let name = str_from_header(name_ptr as *const u8);
+    let name = unsafe { str_from_header(name_ptr as *const u8) };
     let parent_ptr = match resolve_bus_group(parent) {
         Some(p) => p,
         None => {

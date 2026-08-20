@@ -62,17 +62,7 @@ impl PerryToggleTarget {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Set the on/off state of an existing toggle widget.
 pub fn set_state(handle: i64, on: i64) {
@@ -89,11 +79,11 @@ pub fn set_state(handle: i64, on: i64) {
 /// Create a UISwitch with a label and onChange callback.
 /// Returns a widget handle for an HStack containing the label and switch.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
 
     unsafe {
         // Create label
-        let ns_label = NSString::from_str(label);
+        let ns_label = NSString::from_str(&label);
         let text_label: Retained<UILabel> =
             msg_send![objc2::runtime::AnyClass::get(c"UILabel").unwrap(), new];
         let _: () = msg_send![&*text_label, setText: &*ns_label];

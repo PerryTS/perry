@@ -83,17 +83,7 @@ thread_local! {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Check if a f64 value is a NaN-boxed string. Accepts heap
 /// `STRING_TAG` (0x7FFF) and inline SSO `SHORT_STRING_TAG` (0x7FF9).
@@ -109,7 +99,7 @@ fn is_nanboxed_string(value: f64) -> bool {
 /// `js_nanbox_get_pointer`).
 fn extract_nanboxed_string(value: f64) -> String {
     let ptr = unsafe { js_get_string_pointer_unified(value) };
-    str_from_header(ptr).to_string()
+    unsafe { str_from_header(ptr) }.to_string()
 }
 
 fn format_value(value: f64) -> String {
@@ -267,7 +257,7 @@ pub fn state_set(handle: i64, value: f64) {
                 let text = {
                     let str_ptr = crate::system::js_get_string_pointer_unified_safe(value);
                     if !str_ptr.is_null() {
-                        str_from_header(str_ptr).to_string()
+                        unsafe { str_from_header(str_ptr) }.to_string()
                     } else {
                         format_value(value)
                     }
@@ -333,8 +323,8 @@ pub fn bind_text_numeric(
     prefix_ptr: *const u8,
     suffix_ptr: *const u8,
 ) {
-    let prefix = str_from_header(prefix_ptr).to_string();
-    let suffix = str_from_header(suffix_ptr).to_string();
+    let prefix = unsafe { str_from_header(prefix_ptr) }.to_string();
+    let suffix = unsafe { str_from_header(suffix_ptr) }.to_string();
     TEXT_BINDINGS.with(|b| {
         b.borrow_mut()
             .entry(state_handle)
@@ -382,7 +372,7 @@ pub fn bind_text_template(
         let part_value = unsafe { *values_ptr.add(i) };
 
         if part_type == 0 {
-            let s = str_from_header(part_value as *const u8).to_string();
+            let s = unsafe { str_from_header(part_value as *const u8) }.to_string();
             parts.push(TextPart::Literal(s));
         } else {
             state_handles.push(part_value);
@@ -492,7 +482,7 @@ pub fn bind_textfield(state_handle: i64, textfield_handle: i64) {
     let text = {
         let str_ptr = unsafe { js_get_string_pointer_unified(value) };
         if !str_ptr.is_null() {
-            str_from_header(str_ptr).to_string()
+            unsafe { str_from_header(str_ptr) }.to_string()
         } else {
             format_value(value)
         }

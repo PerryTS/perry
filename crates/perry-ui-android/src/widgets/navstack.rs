@@ -5,9 +5,7 @@ use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct NavState {
     pages: Vec<i64>, // widget handles for each page
@@ -18,7 +16,7 @@ thread_local! {
 }
 
 pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
-    let _title = str_from_header(title_ptr);
+    let _title = unsafe { str_from_header(title_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -55,7 +53,7 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
 }
 
 pub fn push(handle: i64, title_ptr: *const u8, body_handle: i64) {
-    let _title = str_from_header(title_ptr);
+    let _title = unsafe { str_from_header(title_ptr) };
 
     // Hide current top page
     NAV_STATES.with(|s| {

@@ -22,7 +22,7 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
-use objc2::{class, define_class, msg_send, AnyThread, DefinedClass};
+use objc2::{class, define_class, msg_send, AnyThread};
 use objc2_foundation::{NSArray, NSString};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -53,17 +53,7 @@ thread_local! {
     static DRAG_URL: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 unsafe fn nanbox_str(s: &str) -> f64 {
     let bytes = s.as_bytes();
@@ -85,7 +75,7 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
     if sh.is_null() {
         None
     } else {
-        Some(str_from_header(sh))
+        Some(unsafe { str_from_header(sh) })
     }
 }
 

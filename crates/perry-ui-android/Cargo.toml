@@ -15,6 +15,7 @@ crate-type = ["rlib", "staticlib"]
 geisterhand = []
 
 [target.'cfg(target_os = "android")'.dependencies]
+perry-ffi.workspace = true
 perry-ui = { path = "../perry-ui" }
 perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false }

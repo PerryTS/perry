@@ -9,9 +9,7 @@ thread_local! {
     static ITEMS: RefCell<HashMap<i64, Vec<String>>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(on_change: f64) -> i64 {
     let mut env = jni_bridge::get_env();
@@ -52,7 +50,7 @@ pub fn create(on_change: f64) -> i64 {
 }
 
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     let items = ITEMS.with(|m| {
         let mut all = m.borrow_mut();
         let Some(items) = all.get_mut(&handle) else {

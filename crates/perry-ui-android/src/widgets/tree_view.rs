@@ -50,8 +50,8 @@ thread_local! {
 /// map and only become a widget when `tree_view_create(root_node, ...)`
 /// realizes them as a ListView.
 pub fn node_create(id_ptr: *const u8, label_ptr: *const u8) -> i64 {
-    let id = str_from_header(id_ptr).to_string();
-    let label = str_from_header(label_ptr).to_string();
+    let id = unsafe { str_from_header(id_ptr) }.to_string();
+    let label = unsafe { str_from_header(label_ptr) }.to_string();
     NEXT_NODE_ID.with(|n| {
         let mut counter = n.borrow_mut();
         let handle = *counter;

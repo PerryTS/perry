@@ -352,7 +352,7 @@ pub fn set_enabled(handle: i64, enabled: bool) {
 
 /// Set tooltip (API 26+).
 pub fn set_tooltip(handle: i64, text_ptr: *const u8) {
-    let text = crate::app::str_from_header(text_ptr);
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
     if let Some(view_ref) = get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);

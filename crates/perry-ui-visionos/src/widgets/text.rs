@@ -3,31 +3,20 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyClass;
 use objc2_foundation::NSString;
 use objc2_ui_kit::{UILabel, UIView};
-use perry_runtime::string::StringHeader;
 
 use super::register_widget;
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a UILabel.
 pub fn create(text_ptr: *const u8) -> i64 {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
 
     unsafe {
         let label: Retained<UILabel> =
             msg_send![objc2::runtime::AnyClass::get(c"UILabel").unwrap(), new];
-        let ns_string = NSString::from_str(text);
+        let ns_string = NSString::from_str(&text);
         let _: () = msg_send![&*label, setText: &*ns_string];
         let _: () = msg_send![&*label, setAccessibilityLabel: &*ns_string];
         // translatesAutoresizingMaskIntoConstraints = false for Auto Layout
@@ -50,8 +39,8 @@ pub fn set_text_str(handle: i64, text: &str) {
 
 /// Update the text of an existing UILabel from a StringHeader pointer.
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
-    set_text_str(handle, text);
+    let text = unsafe { str_from_header(text_ptr) };
+    set_text_str(handle, &text);
 }
 
 /// Set the text color (RGBA 0.0-1.0). Routes by widget kind:

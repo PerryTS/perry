@@ -60,31 +60,21 @@ pub extern "C" fn perry_system_haptic_play(_type_ptr: i64) {}
 /// Set a preference value (UserDefaults).
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
+    use perry_ffi::copy_string_from_raw as str_from_header;
     extern "C" {
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     let bits = value.to_bits();
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         if (bits >> 48) == 0x7FFF {
             let str_ptr = js_nanbox_get_pointer(value) as *const u8;
-            let s = str_from_header(str_ptr);
-            let ns_str = objc2_foundation::NSString::from_str(s);
+            let s = unsafe { str_from_header(str_ptr) };
+            let ns_str = objc2_foundation::NSString::from_str(&s);
             let _: () = objc2::msg_send![defaults, setObject: &*ns_str, forKey: &*ns_key];
         } else {
             let ns_num: objc2::rc::Retained<objc2::runtime::AnyObject> = objc2::msg_send![
@@ -98,27 +88,17 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
 /// Get a preference value (UserDefaults). Returns NaN-boxed value or TAG_UNDEFINED.
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
+    use perry_ffi::copy_string_from_raw as str_from_header;
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
         fn js_nanbox_string(ptr: i64) -> f64;
     }
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
         let defaults: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults_cls, standardUserDefaults];
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let obj: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, objectForKey: &*ns_key];
         if obj.is_null() {
@@ -257,18 +237,8 @@ pub extern "C" fn perry_ui_widget_set_opacity(handle: i64, alpha: f64) {
 /// Set the font family on a Text widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let family = str_from_header(family_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let family = unsafe { str_from_header(family_ptr as *const u8) };
     if let Some(view) = widgets::get_widget(handle) {
         unsafe {
             let size: f64 = objc2::msg_send![&*view, font];
@@ -281,7 +251,7 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
                         weight: 0.0f64
                     ]
                 } else {
-                    let ns_name = objc2_foundation::NSString::from_str(family);
+                    let ns_name = objc2_foundation::NSString::from_str(&family);
                     let raw_font: *mut objc2::runtime::AnyObject = objc2::msg_send![
                         objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
                         fontWithName: &*ns_name,

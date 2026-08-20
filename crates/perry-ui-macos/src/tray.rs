@@ -27,17 +27,7 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer. Mirrors menu.rs.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub struct PerryTrayClickTargetIvars {
     callback_key: std::cell::Cell<usize>,
@@ -88,7 +78,7 @@ fn get_tray(handle: i64) -> Option<Retained<NSStatusItem>> {
 /// Create a tray icon. `icon_path_ptr` is a UTF-8 path to a PNG / icns;
 /// pass empty string to leave the button label-only (a "●" placeholder).
 pub fn create(icon_path_ptr: *const u8) -> i64 {
-    let path = str_from_header(icon_path_ptr);
+    let path = unsafe { str_from_header(icon_path_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
@@ -96,7 +86,7 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
 
         if let Some(button) = item.button(mtm) {
             if !path.is_empty() {
-                let ns_path = NSString::from_str(path);
+                let ns_path = NSString::from_str(&path);
                 let image: Option<Retained<NSImage>> = msg_send![
                     NSImage::alloc(), initWithContentsOfFile: &*ns_path
                 ];
@@ -124,7 +114,7 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
 }
 
 pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
-    let path = str_from_header(icon_path_ptr);
+    let path = unsafe { str_from_header(icon_path_ptr) };
     if path.is_empty() {
         return;
     }
@@ -132,7 +122,7 @@ pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
     if let Some(item) = get_tray(handle) {
         unsafe {
             if let Some(button) = item.button(mtm) {
-                let ns_path = NSString::from_str(path);
+                let ns_path = NSString::from_str(&path);
                 let image: Option<Retained<NSImage>> = msg_send![
                     NSImage::alloc(), initWithContentsOfFile: &*ns_path
                 ];
@@ -146,10 +136,10 @@ pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
 }
 
 pub fn set_tooltip(handle: i64, tooltip_ptr: *const u8) {
-    let tooltip = str_from_header(tooltip_ptr);
+    let tooltip = unsafe { str_from_header(tooltip_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     if let Some(item) = get_tray(handle) {
-        let ns_tooltip = NSString::from_str(tooltip);
+        let ns_tooltip = NSString::from_str(&tooltip);
         // NSStatusItem.setToolTip is deprecated since 10.10; the modern
         // surface routes through the button's toolTip property.
         if let Some(button) = item.button(mtm) {

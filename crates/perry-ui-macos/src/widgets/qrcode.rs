@@ -6,23 +6,13 @@ use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an NSImageView displaying a QR code for the given data string.
 /// `size` is the display width/height in points (QR codes are square).
 /// Returns widget handle, or 0 on failure.
 pub fn create(data_ptr: *const u8, size: f64) -> i64 {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let display_size = if size > 0.0 { size } else { 200.0 };
 
@@ -38,7 +28,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
         let _: () = msg_send![&*image_view, setImageScaling: 3_isize];
 
         if !data_str.is_empty() {
-            if let Some(ns_image) = generate_qr_image(data_str, display_size) {
+            if let Some(ns_image) = generate_qr_image(&data_str, display_size) {
                 let _: () = msg_send![&*image_view, setImage: &*ns_image];
             }
         }
@@ -50,7 +40,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
 /// Update the QR code content of an existing widget.
 pub fn set_data(handle: i64, data_ptr: *const u8) {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
             let frame: objc2_core_foundation::CGRect = msg_send![&*view, frame];
@@ -59,7 +49,7 @@ pub fn set_data(handle: i64, data_ptr: *const u8) {
             } else {
                 200.0
             };
-            if let Some(ns_image) = generate_qr_image(data_str, size) {
+            if let Some(ns_image) = generate_qr_image(&data_str, size) {
                 let _: () = msg_send![&*view, setImage: &*ns_image];
             }
         }

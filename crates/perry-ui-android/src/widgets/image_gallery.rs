@@ -104,8 +104,8 @@ pub fn create(on_index_change: f64) -> i64 {
 }
 
 pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
-    let url = crate::app::str_from_header(url_ptr);
-    let alt = crate::app::str_from_header(alt_ptr);
+    let url = unsafe { crate::app::str_from_header(url_ptr) };
+    let alt = unsafe { crate::app::str_from_header(alt_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
     let activity = super::get_activity(&mut env);

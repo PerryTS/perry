@@ -26,17 +26,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn simple_map_for(handle: i64) -> Option<libshumate::SimpleMap> {
     super::get_widget(handle).and_then(|w| w.downcast::<libshumate::SimpleMap>().ok())
@@ -87,7 +77,7 @@ pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64)
 
 pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
     if let Some(map) = simple_map_for(handle) {
-        let title = str_from_header(title_ptr);
+        let title = unsafe { str_from_header(title_ptr) };
         let layer = ensure_marker_layer(handle, &map);
         let marker = libshumate::Marker::new();
         marker.set_location(lat, lon);
@@ -95,7 +85,7 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
             // libshumate's Marker is just a positioned container; the
             // visible "pin" is whatever child widget we set. A GtkLabel
             // with the title text is the smallest acceptable thing.
-            let label = gtk4::Label::new(Some(title));
+            let label = gtk4::Label::new(Some(&title));
             marker.set_child(Some(&label));
         }
         layer.add_marker(&marker);

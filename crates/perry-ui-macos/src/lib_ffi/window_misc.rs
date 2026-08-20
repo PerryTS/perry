@@ -382,13 +382,9 @@ pub extern "C" fn perry_ui_show_toast(_msg_ptr: i64) {}
 pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
     let handle = perry_ui_text_create(text_ptr);
     if id_ptr != 0 {
-        unsafe {
-            let p = id_ptr as *const u8;
-            let header = p as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = p.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            widgets::text_registry::register_text_id_handler(handle, data, len);
-        }
+        // SAFETY: the FFI contract supplies a runtime string.
+        let id = unsafe { perry_ffi::copy_string_from_raw(id_ptr as *const u8) };
+        widgets::text_registry::register_text_id_handler(handle, id.as_ptr(), id.len());
     }
     handle
 }
@@ -405,21 +401,15 @@ pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
     if id_ptr == 0 {
         return;
     }
+    // SAFETY: non-null FFI arguments point to runtime strings.
+    let id = unsafe { perry_ffi::copy_string_from_raw(id_ptr as *const u8) };
+    let value = (value_ptr != 0)
+        .then(|| unsafe { perry_ffi::copy_string_from_raw(value_ptr as *const u8) });
+    let (value_data, value_len) = value
+        .as_ref()
+        .map_or((std::ptr::null(), 0), |value| (value.as_ptr(), value.len()));
     unsafe {
-        let ip = id_ptr as *const u8;
-        let id_header = ip as *const crate::string_header::StringHeader;
-        let id_len = (*id_header).byte_len as usize;
-        let id_data = ip.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        let (val_data, val_len) = if value_ptr == 0 {
-            (std::ptr::null::<u8>(), 0usize)
-        } else {
-            let vp = value_ptr as *const u8;
-            let v_header = vp as *const crate::string_header::StringHeader;
-            let v_len = (*v_header).byte_len as usize;
-            let v_data = vp.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            (v_data, v_len)
-        };
-        widgets::text_registry::set_text_handler(id_data, id_len, val_data, val_len);
+        widgets::text_registry::set_text_handler(id.as_ptr(), id.len(), value_data, value_len);
     }
 }
 

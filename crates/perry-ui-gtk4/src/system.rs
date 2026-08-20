@@ -14,17 +14,7 @@ pub fn js_get_string_pointer_unified_safe(value: f64) -> *const u8 {
     unsafe { js_get_string_pointer_unified(value) }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn prefs_path() -> PathBuf {
     let config = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
@@ -78,9 +68,9 @@ fn save_prefs() {
 
 /// Open a URL using the default browser.
 pub fn open_url(url_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
     // Try gio first, fall back to xdg-open
-    if gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>)
+    if gtk4::gio::AppInfo::launch_default_for_uri(&url, None::<&gtk4::gio::AppLaunchContext>)
         .is_err()
     {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
@@ -107,12 +97,12 @@ pub fn is_dark_mode() -> i64 {
 /// Set a preference value. value is either a f64 number or a NaN-boxed string.
 pub fn preferences_set(key_ptr: *const u8, value: f64) {
     ensure_prefs_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
 
     // Check if value is a NaN-boxed string
     let str_ptr = unsafe { js_get_string_pointer_unified(value) };
     let val_str = if !str_ptr.is_null() {
-        str_from_header(str_ptr).to_string()
+        unsafe { str_from_header(str_ptr) }.to_string()
     } else {
         format!("{}", value)
     };
@@ -126,11 +116,11 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
 /// Get a preference value. Returns NaN-boxed string or the numeric value.
 pub fn preferences_get(key_ptr: *const u8) -> f64 {
     ensure_prefs_loaded();
-    let key = str_from_header(key_ptr);
+    let key = unsafe { str_from_header(key_ptr) };
 
     PREFS.with(|p| {
         let prefs = p.borrow();
-        if let Some(val) = prefs.get(key) {
+        if let Some(val) = prefs.get(&key) {
             // Try to parse as f64 first
             if let Ok(n) = val.parse::<f64>() {
                 n
@@ -148,13 +138,13 @@ pub fn preferences_get(key_ptr: *const u8) -> f64 {
 
 /// Send a desktop notification.
 pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     crate::app::GTK_APP.with(|ga| {
         if let Some(app) = ga.borrow().as_ref() {
-            let notif = gtk4::gio::Notification::new(title);
-            notif.set_body(Some(body));
+            let notif = gtk4::gio::Notification::new(&title);
+            notif.set_body(Some(&body));
             app.send_notification(None, &notif);
         } else {
             // Fallback: try notify-send

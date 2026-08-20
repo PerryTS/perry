@@ -461,8 +461,8 @@ pub fn fill_gradient(
 
 pub fn load_image(path_ptr: *const u8) -> i64 {
     crate::app::ensure_gtk_init();
-    let raw = crate::widgets::image::str_from_header(path_ptr);
-    let path = raw.split('\0').next().unwrap_or(raw);
+    let raw = unsafe { crate::widgets::image::str_from_header(path_ptr) };
+    let path = raw.split('\0').next().unwrap_or(&raw);
     let resolved = crate::ffi::layout::resolve_asset_path(path);
     let key = resolved.to_string_lossy().to_string();
     if let Some(handle) = IMAGE_CACHE.with(|c| c.borrow().get(&key).copied()) {

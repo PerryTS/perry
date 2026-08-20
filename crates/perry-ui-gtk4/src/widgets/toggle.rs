@@ -21,17 +21,7 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Set the on/off state of an existing toggle widget.
 pub fn set_state(handle: i64, on: i64) {
@@ -46,10 +36,10 @@ pub fn set_state(handle: i64, on: i64) {
 /// Returns a widget handle for an HStack containing the label and checkbox.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     crate::app::ensure_gtk_init();
-    let label_text = str_from_header(label_ptr);
+    let label_text = unsafe { str_from_header(label_ptr) };
 
     let check = CheckButton::new();
-    let label = Label::new(Some(label_text));
+    let label = Label::new(Some(&label_text));
 
     let callback_id = NEXT_TOGGLE_ID.with(|id| {
         let mut id = id.borrow_mut();

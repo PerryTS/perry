@@ -16,3 +16,4 @@ cc = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))'.dependencies]
 libc.workspace = true
+perry-ffi.workspace = true

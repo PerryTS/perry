@@ -34,9 +34,9 @@ fn banner_size(size_key: &str) -> (f64, f64) {
 /// Create the banner placeholder view sized per `size_ptr`. Returns the
 /// widget handle.
 pub fn create(unit_id_ptr: *const u8, size_ptr: *const u8) -> i64 {
-    let _unit_id = str_from_header(unit_id_ptr);
-    let size_key = str_from_header(size_ptr);
-    let (w, h) = banner_size(size_key);
+    let _unit_id = unsafe { str_from_header(unit_id_ptr) };
+    let size_key = unsafe { str_from_header(size_ptr) };
+    let (w, h) = banner_size(&size_key);
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {

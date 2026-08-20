@@ -50,17 +50,7 @@ thread_local! {
     static ITEMS: RefCell<HashMap<i64, Retained<PerryTreeItem>>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 // ===========================================================================
 // PerryTreeItem — stable opaque NSObject identity for each tree node.
@@ -271,8 +261,8 @@ impl PerryTreeDelegate {
 
 /// Register a tree node with `id` and `label`. Returns 1-based handle.
 pub fn node_create(id_ptr: *const u8, label_ptr: *const u8) -> i64 {
-    let id = str_from_header(id_ptr).to_string();
-    let label = str_from_header(label_ptr).to_string();
+    let id = unsafe { str_from_header(id_ptr) }.to_string();
+    let label = unsafe { str_from_header(label_ptr) }.to_string();
     NODES.with(|n| {
         let mut nodes = n.borrow_mut();
         nodes.push(TreeNode {

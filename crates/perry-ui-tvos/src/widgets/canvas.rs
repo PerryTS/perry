@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{MainThreadMarker, NSObject};
+use objc2_foundation::MainThreadMarker;
 use objc2_ui_kit::UIView;
 
 use std::cell::RefCell;
@@ -586,17 +586,7 @@ fn redraw(handle: i64) {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let len = *(ptr as *const u32) as usize;
-        let data = ptr.add(4);
-        let slice = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8_unchecked(slice)
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn resolve_asset_path(path: &str) -> String {
     if std::path::Path::new(path).is_absolute() {
@@ -630,8 +620,8 @@ fn resolve_asset_path(path: &str) -> String {
 }
 
 pub fn load_image(path: *const u8) -> i64 {
-    let raw = str_from_header(path);
-    let resolved = resolve_asset_path(raw);
+    let raw = unsafe { str_from_header(path) };
+    let resolved = resolve_asset_path(&raw);
     if let Some(handle) = IMAGE_CACHE.with(|c| c.borrow().get(&resolved).copied()) {
         if let Some((width, height)) = CANVAS_IMAGES.with(|images| {
             images

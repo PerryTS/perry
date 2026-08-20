@@ -51,17 +51,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -139,7 +129,7 @@ fn render_cell(handle: i64, row: i64, col: i64) -> CellContent {
     if top16 == 0x7FFF {
         // STRING_TAG — pointer is the lower 48 bits.
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-        return CellContent::Text(str_from_header(ptr).to_string());
+        return CellContent::Text(unsafe { str_from_header(ptr) }.to_string());
     }
     let widget_handle = decode_widget_handle(result);
     if widget_handle <= 0 {
@@ -505,8 +495,8 @@ pub fn set_column_header(handle: i64, col: i64, title_ptr: *const u8) {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let title = str_from_header(title_ptr);
-            let wide = to_wide(title);
+            let title = unsafe { str_from_header(title_ptr) };
+            let wide = to_wide(&title);
             let mut lvc = LVCOLUMNW {
                 mask: LVCF_TEXT,
                 pszText: windows::core::PWSTR(wide.as_ptr() as *mut u16),
@@ -696,7 +686,7 @@ pub fn get_selected_row_at(handle: i64, n: i64) -> i64 {
 /// Store a passive filter string. Mirrors the macOS contract: the user's
 /// TS code reads this and reduces `row_count` accordingly.
 pub fn set_filter_text(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     TABLES.with(|t| {
         if let Some(entry) = t.borrow_mut().get_mut(&handle) {
             entry.filter_text = text.to_string();

@@ -71,28 +71,19 @@ pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}
 // #599): decode the StringHeaders and forward to the shared registry
 // handlers that `register_cross_platform_text_handlers` also wires up.
 
-/// Decode a raw `*const StringHeader` (passed as i64) into (data, len).
-/// Returns (null, 0) for a null pointer — the registry handlers treat
-/// that as an empty string.
-unsafe fn string_parts(ptr_val: i64) -> (*const u8, usize) {
+/// Copy a raw `*const StringHeader` (passed as i64) into owned storage.
+unsafe fn copy_string(ptr_val: i64) -> Option<String> {
     if ptr_val == 0 {
-        return (std::ptr::null(), 0);
+        return None;
     }
-    let p = ptr_val as *const u8;
-    let header = p as *const perry_runtime::string::StringHeader;
-    let len = (*header).byte_len as usize;
-    (
-        p.add(std::mem::size_of::<perry_runtime::string::StringHeader>()),
-        len,
-    )
+    Some(unsafe { perry_ffi::copy_string_from_raw(ptr_val as *const u8) })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_show_toast(msg_ptr: i64) {
     unsafe {
-        let (msg_data, msg_len) = string_parts(msg_ptr);
-        if !msg_data.is_null() {
-            crate::widgets::toast::show_toast_handler(msg_data, msg_len);
+        if let Some(message) = copy_string(msg_ptr) {
+            crate::widgets::toast::show_toast_handler(message.as_ptr(), message.len());
         }
     }
 }
@@ -101,9 +92,8 @@ pub extern "C" fn perry_ui_show_toast(msg_ptr: i64) {
 pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
     let handle = crate::ffi::widget_create::perry_ui_text_create(text_ptr);
     unsafe {
-        let (id_data, id_len) = string_parts(id_ptr);
-        if !id_data.is_null() && id_len > 0 {
-            crate::widgets::text_registry::register_text_id_handler(handle, id_data, id_len);
+        if let Some(id) = copy_string(id_ptr).filter(|id| !id.is_empty()) {
+            crate::widgets::text_registry::register_text_id_handler(handle, id.as_ptr(), id.len());
         }
     }
     handle
@@ -115,8 +105,16 @@ pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
         return;
     }
     unsafe {
-        let (id_data, id_len) = string_parts(id_ptr);
-        let (val_data, val_len) = string_parts(value_ptr);
-        crate::widgets::text_registry::set_text_handler(id_data, id_len, val_data, val_len);
+        let id = copy_string(id_ptr).expect("id_ptr was checked for null");
+        let value = copy_string(value_ptr);
+        let (value_data, value_len) = value
+            .as_ref()
+            .map_or((std::ptr::null(), 0), |value| (value.as_ptr(), value.len()));
+        crate::widgets::text_registry::set_text_handler(
+            id.as_ptr(),
+            id.len(),
+            value_data,
+            value_len,
+        );
     }
 }

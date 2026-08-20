@@ -21,7 +21,6 @@ pub mod network;
 pub mod notifications;
 pub mod pointer;
 pub mod state;
-pub mod string_header;
 pub mod tray;
 pub mod widgets;
 

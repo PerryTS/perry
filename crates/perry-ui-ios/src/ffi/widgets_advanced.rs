@@ -207,7 +207,6 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
 // Issue #478 — Rich text editor — real iOS impl via UITextView.
-#[no_mangle]
 pub extern "C" fn perry_ui_rich_text_create(w: f64, h: f64, cb: f64) -> i64 {
     widgets::rich_text::create(w, h, cb)
 }
@@ -548,18 +547,8 @@ pub extern "C" fn perry_ui_widget_set_rich_tooltip(
 /// Set a tooltip on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_tooltip(handle: i64, text_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    widgets::set_tooltip(handle, str_from_header(text_ptr as *const u8));
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    widgets::set_tooltip(handle, unsafe { &str_from_header(text_ptr as *const u8) });
 }
 
 /// Set the control size of a widget. 0=regular, 1=small, 2=mini, 3=large.

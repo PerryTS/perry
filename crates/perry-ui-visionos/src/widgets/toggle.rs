@@ -9,17 +9,7 @@ thread_local! {
     static TOGGLE_LABELS: RefCell<HashMap<i64, String>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Set the on/off state of an existing toggle widget.
 pub fn set_state(handle: i64, on: i64) {
@@ -47,7 +37,7 @@ pub fn set_state(handle: i64, on: i64) {
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     // TODO(visionos): replace UILabel stub with UISwitch once sim-side
     // construction stops throwing Objective-C exceptions. See PR #127.
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     let _ = on_change;
 
     unsafe {

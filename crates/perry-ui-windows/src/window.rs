@@ -36,17 +36,7 @@ pub fn is_perry_window_hwnd(hwnd_val: isize) -> bool {
     HWND_TO_WINDOW.with(|m| m.borrow().contains_key(&hwnd_val))
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -172,7 +162,7 @@ unsafe extern "system" fn window_default_wnd_proc(
 
 /// Create a new window.
 pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     let id = NEXT_WINDOW_ID.with(|id| {
         let mut id = id.borrow_mut();
         let current = *id;
@@ -184,7 +174,7 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     {
         use windows::core::PCWSTR;
         use windows::Win32::Foundation::*;
-        use windows::Win32::Graphics::Gdi::{UpdateWindow, COLOR_WINDOW, HBRUSH};
+        use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -203,7 +193,7 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             };
             RegisterClassExW(&wc);
 
-            let title_wide = to_wide(title);
+            let title_wide = to_wide(&title);
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 PCWSTR(class_name.as_ptr()),

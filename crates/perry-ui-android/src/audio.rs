@@ -5,7 +5,6 @@
 //! Results are stored in atomics, read lock-free by the main/UI thread.
 
 use jni::objects::{JObject, JValue};
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

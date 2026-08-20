@@ -57,17 +57,7 @@ impl PerryPickerTarget {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an NSPopUpButton (dropdown picker) with an onChange callback.
 /// `_label_ptr` is a StringHeader pointer (unused for NSPopUpButton title).
@@ -119,9 +109,9 @@ pub fn create(_label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
 /// Add an item to the popup button's menu.
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         unsafe {
             let _: () = msg_send![&*view, addItemWithTitle: &*ns_title];
         }

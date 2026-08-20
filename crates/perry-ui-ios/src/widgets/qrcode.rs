@@ -5,23 +5,13 @@ use objc2_foundation::NSString;
 use objc2_ui_kit::UIView;
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a UIImageView displaying a QR code for the given data string.
 /// `size` is the display width/height in points (QR codes are square).
 /// Returns widget handle, or 0 on failure.
 pub fn create(data_ptr: *const u8, size: f64) -> i64 {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     let display_size = if size > 0.0 { size } else { 200.0 };
 
     unsafe {
@@ -53,7 +43,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
         let _: () = msg_send![&*hc, setActive: true];
 
         if !data_str.is_empty() {
-            if let Some(ui_image) = generate_qr_image(data_str, display_size) {
+            if let Some(ui_image) = generate_qr_image(&data_str, display_size) {
                 let _: () = msg_send![&*image_view, setImage: &*ui_image];
             }
         }
@@ -64,7 +54,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
 /// Update the QR code content of an existing widget.
 pub fn set_data(handle: i64, data_ptr: *const u8) {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
             let frame: objc2_core_foundation::CGRect = msg_send![&*view, frame];
@@ -73,7 +63,7 @@ pub fn set_data(handle: i64, data_ptr: *const u8) {
             } else {
                 200.0
             };
-            if let Some(ui_image) = generate_qr_image(data_str, size) {
+            if let Some(ui_image) = generate_qr_image(&data_str, size) {
                 let _: () = msg_send![&*view, setImage: &*ui_image];
             }
         }

@@ -6,9 +6,7 @@ use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct PickerState {
     items: Vec<String>,
@@ -20,7 +18,7 @@ thread_local! {
 }
 
 pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
-    let _label = str_from_header(label_ptr);
+    let _label = unsafe { str_from_header(label_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 
@@ -69,7 +67,7 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 }
 
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
     PICKER_STATES.with(|s| {
         let mut states = s.borrow_mut();
         if let Some(state) = states.get_mut(&handle) {

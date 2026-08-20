@@ -5,15 +5,13 @@
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a QR code widget displaying the given data string.
 /// `size` is the display width/height in dp (QR codes are square).
 /// Returns widget handle.
 pub fn create(data_ptr: *const u8, size: f64) -> i64 {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     let display_size = if size > 0.0 { size } else { 200.0 };
 
     let mut env = jni_bridge::get_env();
@@ -31,7 +29,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
         .expect("Failed to create TextView for QR code");
 
     // Set the data text
-    let display_text = if data_str.is_empty() { "QR" } else { data_str };
+    let display_text = if data_str.is_empty() { "QR" } else { &data_str };
     let jstr = env.new_string(display_text).expect("QR text string");
     let _ = env.call_method(
         &text_view,
@@ -150,7 +148,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
 /// Update the QR code content of an existing widget.
 pub fn set_data(handle: i64, data_ptr: *const u8) {
-    let data_str = str_from_header(data_ptr);
+    let data_str = unsafe { str_from_header(data_ptr) };
     if let Some(view_ref) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);

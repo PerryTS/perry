@@ -60,24 +60,14 @@ pub(crate) enum WindowState {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app with title, width, height.
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     let title = if title_ptr.is_null() {
-        "Perry App"
+        "Perry App".to_owned()
     } else {
-        str_from_header(title_ptr)
+        unsafe { str_from_header(title_ptr) }
     };
 
     let w = if width > 0.0 { width } else { 400.0 };
@@ -101,7 +91,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             false,
         );
 
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         window.setTitle(&ns_title);
 
         // Match window appearance to the system setting so native controls
@@ -711,8 +701,8 @@ pub fn set_max_size(app_handle: i64, w: f64, h: f64) {
 /// `value_ptr` is a StringHeader pointer to one of
 /// "normal" | "maximized" | "fullscreen". Anything else is silently ignored.
 pub fn set_window_state(app_handle: i64, value_ptr: *const u8) {
-    let state_str = str_from_header(value_ptr);
-    let state = match state_str {
+    let state_str = unsafe { str_from_header(value_ptr) };
+    let state = match state_str.as_str() {
         "maximized" => Some(WindowState::Maximized),
         "fullscreen" => Some(WindowState::Fullscreen),
         _ => None,
@@ -796,7 +786,7 @@ impl PerryShortcutTarget {
 /// Set the application dock icon from a file path.
 /// Stores the path; the icon is applied in app_run after activation policy is set.
 pub fn app_set_icon(path_ptr: *const u8) {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     if !path.is_empty() {
         PENDING_ICON_PATH.with(|p| {
             *p.borrow_mut() = Some(path.to_string());
@@ -883,7 +873,7 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
 
 /// Set window level: "floating", "statusBar", "modal", or "normal".
 pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
-    let level_str = str_from_header(value_ptr);
+    let level_str = unsafe { str_from_header(value_ptr) };
     if level_str.is_empty() {
         return;
     }
@@ -895,7 +885,7 @@ pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
             unsafe {
                 // NSWindowLevel values:
                 // normal = 0, floating = 3, statusBar = 25, modalPanel = 8
-                let level: isize = match level_str {
+                let level: isize = match level_str.as_str() {
                     "floating" => 3,   // NSFloatingWindowLevel
                     "statusBar" => 25, // NSStatusWindowLevel
                     "modal" => 8,      // NSModalPanelWindowLevel
@@ -937,7 +927,7 @@ pub fn app_set_transparent(app_handle: i64, value: f64) {
 /// Called BEFORE app_set_body: sets an NSVisualEffectView as the window's
 /// content view. app_set_body then adds the body widget as a subview of it.
 pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
-    let material_str = str_from_header(value_ptr);
+    let material_str = unsafe { str_from_header(value_ptr) };
     if material_str.is_empty() {
         return;
     }
@@ -948,7 +938,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
             let window = &apps[idx].window;
             unsafe {
                 // NSVisualEffectMaterial values
-                let material: isize = match material_str {
+                let material: isize = match material_str.as_str() {
                     "titlebar" => 3,
                     "selection" => 4,
                     "menu" => 5,
@@ -1002,7 +992,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
 /// Set the activation policy: "regular", "accessory", or "background".
 /// Stored and applied in app_run() since NSApp policy must be set before the event loop starts.
 pub fn app_set_activation_policy(_app_handle: i64, value_ptr: *const u8) {
-    let policy_str = str_from_header(value_ptr);
+    let policy_str = unsafe { str_from_header(value_ptr) };
     if !policy_str.is_empty() {
         PENDING_ACTIVATION_POLICY.with(|p| {
             *p.borrow_mut() = Some(policy_str.to_string());
@@ -1016,7 +1006,7 @@ pub fn app_set_activation_policy(_app_handle: i64, value_ptr: *const u8) {
 /// `modifiers` is a bitfield: 1=Cmd, 2=Shift, 4=Option, 8=Control.
 /// `callback` is a NaN-boxed closure pointer.
 pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64) {
-    let key_str = str_from_header(key_ptr);
+    let key_str = unsafe { str_from_header(key_ptr) };
     if key_str.is_empty() {
         return;
     }
@@ -1144,7 +1134,7 @@ fn install_keyboard_shortcut(
     callback: f64,
     mtm: MainThreadMarker,
 ) {
-    let key_str = str_from_header(key_ptr);
+    let key_str = unsafe { str_from_header(key_ptr) };
     let app = NSApplication::sharedApplication(mtm);
 
     unsafe {
@@ -1156,7 +1146,7 @@ fn install_keyboard_shortcut(
             cbs.borrow_mut().insert(target_addr, callback);
         });
 
-        let ns_key = NSString::from_str(key_str);
+        let ns_key = NSString::from_str(&key_str);
         let title = NSString::from_str(&format!("Shortcut {}", key_str));
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
@@ -1584,9 +1574,9 @@ pub fn register_on_activate(callback: f64) {
 /// Create a new window. Returns 1-based handle.
 pub fn window_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     let title = if title_ptr.is_null() {
-        "Window"
+        "Window".to_owned()
     } else {
-        str_from_header(title_ptr)
+        unsafe { str_from_header(title_ptr) }
     };
     let w = if width > 0.0 { width } else { 400.0 };
     let h = if height > 0.0 { height } else { 300.0 };
@@ -1609,7 +1599,7 @@ pub fn window_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             false,
         );
 
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         window.setTitle(&ns_title);
 
         WINDOWS.with(|w| {
@@ -1759,7 +1749,7 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
 /// Safe to call during UI callbacks — wrapped in an autorelease pool and retains all
 /// intermediate objects to prevent use-after-free during AppKit event dispatch.
 pub fn get_app_icon(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     if path.is_empty() {
         return 0;
     }
@@ -1768,7 +1758,7 @@ pub fn get_app_icon(path_ptr: *const u8) -> i64 {
     // AppKit may not have an active pool (e.g. TextField onChange).
     objc2::rc::autoreleasepool(|_pool| {
         unsafe {
-            let ns_path = NSString::from_str(path);
+            let ns_path = NSString::from_str(&path);
 
             // NSWorkspace.sharedWorkspace is a singleton — always valid on the main thread.
             let workspace: *const AnyObject =

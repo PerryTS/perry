@@ -22,17 +22,7 @@ thread_local! {
     static BUFFERS: RefCell<HashMap<i64, Buffer>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create() -> i64 {
     crate::app::ensure_gtk_init();
@@ -66,7 +56,7 @@ pub fn append(
     b: f64,
     a: f64,
 ) {
-    let chunk = str_from_header(text_ptr);
+    let chunk = unsafe { str_from_header(text_ptr) };
     if chunk.is_empty() {
         return;
     }
@@ -89,7 +79,7 @@ pub fn append(
         // codepoint-based — `text.len()` is exactly the offset of the new
         // chunk's first byte.
         let start = buf.text.len() as u32;
-        buf.text.push_str(chunk);
+        buf.text.push_str(&chunk);
         let end = buf.text.len() as u32;
 
         let mut push = |mut attr: pango::Attribute| {

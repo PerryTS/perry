@@ -103,9 +103,9 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
         let _: () = msg_send![&*combobox, setEditable: true];
         let _: () = msg_send![&*combobox, setNumberOfVisibleItems: 8i64];
 
-        let initial_str = str_from_header(initial_ptr);
+        let initial_str = unsafe { str_from_header(initial_ptr) };
         if !initial_str.is_empty() {
-            let ns_initial = NSString::from_str(initial_str);
+            let ns_initial = NSString::from_str(&initial_str);
             let _: () = msg_send![&*combobox, setStringValue: &*ns_initial];
         }
 
@@ -149,9 +149,9 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
 
 /// Append a suggestion item to the combobox dropdown.
 pub fn add_item(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_val = NSString::from_str(value);
+        let ns_val = NSString::from_str(&value);
         unsafe {
             let _: () = msg_send![&*view, addItemWithObjectValue: &*ns_val];
         }
@@ -160,9 +160,9 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
 
 /// Replace the editable text content of the combobox.
 pub fn set_value(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(view) = super::get_widget(handle) {
-        let ns_val = NSString::from_str(value);
+        let ns_val = NSString::from_str(&value);
         unsafe {
             let _: () = msg_send![&*view, setStringValue: &*ns_val];
         }
@@ -183,14 +183,4 @@ pub fn get_value(handle: i64) -> f64 {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;

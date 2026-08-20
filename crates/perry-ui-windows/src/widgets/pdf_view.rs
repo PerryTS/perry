@@ -45,17 +45,7 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(width: f64, height: f64) -> i64 {
     let control_id = alloc_control_id();
@@ -167,7 +157,7 @@ fn refresh_label(handle: i64) {
 /// `pdf_view.getPageCount()` for index / nav UI. Doesn't render the
 /// actual page bitmap (deferred to a follow-up).
 pub fn load_file(handle: i64, path_ptr: *const u8) -> i64 {
-    let path_str = str_from_header(path_ptr);
+    let path_str = unsafe { str_from_header(path_ptr) };
     let path = PathBuf::from(&path_str);
     let exists = path.exists();
     let page_count = if exists {

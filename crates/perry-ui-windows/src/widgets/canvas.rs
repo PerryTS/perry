@@ -506,8 +506,8 @@ fn resolve_asset_path(path: &str) -> String {
 pub fn load_image(path_ptr: *const u8) -> i64 {
     #[cfg(target_os = "windows")]
     {
-        let path = crate::widgets::image::str_from_header(path_ptr);
-        let resolved = resolve_asset_path(path);
+        let path = unsafe { crate::widgets::image::str_from_header(path_ptr) };
+        let resolved = resolve_asset_path(&path);
         if let Some(handle) = CANVAS_IMAGE_CACHE.with(|c| c.borrow().get(&resolved).copied()) {
             let (width, height) = CANVAS_IMAGE_SIZES
                 .with(|sizes| sizes.borrow().get(&handle).copied())

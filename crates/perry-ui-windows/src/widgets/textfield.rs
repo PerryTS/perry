@@ -26,17 +26,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -57,7 +47,7 @@ thread_local! {
 
 /// Create a TextField. Returns widget handle.
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
     let callback_ptr = unsafe { js_nanbox_get_pointer(on_change) } as *const u8;
     let control_id = alloc_control_id();
 
@@ -92,7 +82,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
             // Set placeholder text (cue banner)
             if !placeholder.is_empty() {
-                let wide = to_wide(placeholder);
+                let wide = to_wide(&placeholder);
                 SendMessageW(
                     hwnd,
                     EM_SETCUEBANNER,
@@ -352,13 +342,13 @@ pub fn get_string(handle: i64) -> i64 {
 
 /// Set the text value of a TextField programmatically.
 pub fn set_string_value(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
 
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             SUPPRESS_CHANGE.with(|s| *s.borrow_mut() = true);
-            let wide = to_wide(text);
+            let wide = to_wide(&text);
             unsafe {
                 let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
             }

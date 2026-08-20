@@ -12,9 +12,8 @@ pub fn open_dialog(callback: f64) {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::core::PWSTR;
         use windows::Win32::System::Com::*;
-        use windows::Win32::UI::Shell::Common::*;
+
         use windows::Win32::UI::Shell::*;
 
         unsafe {

@@ -1,7 +1,5 @@
 //! LazyVStack — ScrollView + LinearLayout, render-all approach
 
-use crate::jni_bridge;
-use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 

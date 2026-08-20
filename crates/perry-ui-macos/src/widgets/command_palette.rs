@@ -41,17 +41,7 @@ thread_local! {
     static TABLE_VIEW: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn refresh_filter() {
     let q = QUERY.with(|s| s.borrow().to_lowercase());
@@ -197,9 +187,9 @@ unsafe fn invoke_row(row: i64) {
 // ===========================================================================
 
 pub fn register(id_ptr: *const u8, label_ptr: *const u8, subtitle_ptr: *const u8, on_run: f64) {
-    let id = str_from_header(id_ptr);
-    let label = str_from_header(label_ptr);
-    let subtitle = str_from_header(subtitle_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
+    let label = unsafe { str_from_header(label_ptr) };
+    let subtitle = unsafe { str_from_header(subtitle_ptr) };
     COMMANDS.with(|c| {
         let mut cmds = c.borrow_mut();
         if let Some(existing) = cmds.iter_mut().find(|x| x.id == id) {
@@ -219,7 +209,7 @@ pub fn register(id_ptr: *const u8, label_ptr: *const u8, subtitle_ptr: *const u8
 }
 
 pub fn unregister(id_ptr: *const u8) {
-    let id = str_from_header(id_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
     COMMANDS.with(|c| c.borrow_mut().retain(|cmd| cmd.id != id));
     refresh_filter();
 }

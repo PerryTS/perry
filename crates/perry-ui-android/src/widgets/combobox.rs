@@ -22,7 +22,7 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 /// Create an AutoCompleteTextView with an initial value and on_change callback.
 pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
-    let initial = str_from_header(initial_ptr);
+    let initial = unsafe { str_from_header(initial_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
@@ -67,7 +67,7 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
 
 /// Append one suggestion item to the combobox.
 pub fn add_item(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(view) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
@@ -89,7 +89,7 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
 
 /// Programmatically set the currently displayed value.
 pub fn set_value(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(view) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);

@@ -39,17 +39,7 @@ extern "C" {
 pub const WM_PERRY_TRAY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 200;
 
 /// Extract a &str from a *const StringHeader pointer. Mirrors menu.rs.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct TrayEntry {
     /// Notification-area icon ID (the `uID` field of `NOTIFYICONDATAW`).
@@ -129,7 +119,7 @@ fn load_tray_icon(path: &str) -> HICON {
 /// Create a tray icon. Returns 1-based handle, or 0 on failure
 /// (no main app HWND yet — `trayCreate` must be called after `appCreate`).
 pub fn create(icon_path_ptr: *const u8) -> i64 {
-    let path = str_from_header(icon_path_ptr);
+    let path = unsafe { str_from_header(icon_path_ptr) };
 
     #[cfg(target_os = "windows")]
     {
@@ -150,7 +140,7 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
             v
         });
 
-        let hicon = load_tray_icon(path);
+        let hicon = load_tray_icon(&path);
 
         unsafe {
             let mut data = NOTIFYICONDATAW {
@@ -208,7 +198,7 @@ pub fn create(icon_path_ptr: *const u8) -> i64 {
 }
 
 pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
-    let path = str_from_header(icon_path_ptr);
+    let path = unsafe { str_from_header(icon_path_ptr) };
 
     #[cfg(target_os = "windows")]
     {
@@ -220,7 +210,7 @@ pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
                 _ => return,
             };
 
-            let new_icon = load_tray_icon(path);
+            let new_icon = load_tray_icon(&path);
             let old_icon = entry.hicon;
 
             unsafe {
@@ -250,7 +240,7 @@ pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
 }
 
 pub fn set_tooltip(handle: i64, tooltip_ptr: *const u8) {
-    let tooltip = str_from_header(tooltip_ptr);
+    let tooltip = unsafe { str_from_header(tooltip_ptr) };
 
     #[cfg(target_os = "windows")]
     {

@@ -3,7 +3,6 @@
 use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::NSString;
-use perry_runtime::string::StringHeader;
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -19,17 +18,7 @@ extern "C" {
     );
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 unsafe extern "C" fn alert_callback_trampoline(ctx: *mut std::ffi::c_void) {
     let _ = std::panic::catch_unwind(|| {
@@ -117,8 +106,8 @@ unsafe fn topmost_view_controller() -> *mut AnyObject {
 /// `arr_ptr` is the raw (already-unboxed) pointer to a JS array of strings.
 /// `callback` is a NaN-boxed closure receiving the 0-based button index.
 pub fn show(title_ptr: *const u8, message_ptr: *const u8, arr_ptr: i64, callback: f64) {
-    let title = str_from_header(title_ptr).to_string();
-    let message = str_from_header(message_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
+    let message = unsafe { str_from_header(message_ptr) }.to_string();
 
     // Collect labels up-front so the dispatch closure owns them.
     let mut labels: Vec<String> = Vec::new();
@@ -127,7 +116,7 @@ pub fn show(title_ptr: *const u8, message_ptr: *const u8, arr_ptr: i64, callback
         for i in 0..len {
             let elem = unsafe { js_array_get_element(arr_ptr, i) };
             let str_ptr = unsafe { js_get_string_pointer_unified(elem) } as *const u8;
-            labels.push(str_from_header(str_ptr).to_string());
+            labels.push(unsafe { str_from_header(str_ptr) }.to_string());
         }
     }
     if labels.is_empty() {

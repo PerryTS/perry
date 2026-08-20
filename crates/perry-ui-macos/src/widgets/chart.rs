@@ -60,17 +60,7 @@ fn find_idx(handle: i64) -> Option<usize> {
     CHARTS.with(|c| c.borrow().iter().position(|e| e.handle == handle))
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 // ===========================================================================
 // PerryChartView — custom NSView with drawRect: override.
@@ -379,7 +369,7 @@ pub fn create(kind: i64, width: f64, height: f64) -> i64 {
 }
 
 pub fn add_data_point(handle: i64, label_ptr: *const u8, value: f64) {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     if let Some(idx) = find_idx(handle) {
         CHARTS.with(|c| {
             if let Some(entry) = c.borrow_mut().get_mut(idx) {
@@ -402,7 +392,7 @@ pub fn clear_data(handle: i64) {
 }
 
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(idx) = find_idx(handle) {
         CHARTS.with(|c| {
             if let Some(entry) = c.borrow_mut().get_mut(idx) {

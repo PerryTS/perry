@@ -16,17 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{alloc_control_id, register_widget, WidgetKind};
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -55,12 +45,12 @@ thread_local! {
 
 /// Create a Text label. Returns widget handle.
 pub fn create(text_ptr: *const u8) -> i64 {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     let control_id = alloc_control_id();
 
     #[cfg(target_os = "windows")]
     {
-        let wide = to_wide(text);
+        let wide = to_wide(&text);
         let class_name = to_wide("STATIC");
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
@@ -99,8 +89,8 @@ pub fn create(text_ptr: *const u8) -> i64 {
 
 /// Set the text string of a Text widget from a raw string pointer.
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
-    set_text_str(handle, text);
+    let text = unsafe { str_from_header(text_ptr) };
+    set_text_str(handle, &text);
 }
 
 /// Issue #707 — cap visible lines on a STATIC control.
@@ -353,12 +343,12 @@ pub fn set_font_weight(handle: i64, size: f64, weight: f64) {
 
 /// Set the font family of a Text widget.
 pub fn set_font_family(handle: i64, family_ptr: *const u8) {
-    let family = str_from_header(family_ptr);
+    let family = unsafe { str_from_header(family_ptr) };
 
     #[cfg(target_os = "windows")]
     {
         // Map common names to Windows font names
-        let win_family = match family {
+        let win_family = match family.as_str() {
             "monospace" | "monospaced" | ".AppleSystemUIFontMonospaced" => "Consolas",
             "system" | ".AppleSystemUIFont" => "Segoe UI",
             "serif" => "Times New Roman",

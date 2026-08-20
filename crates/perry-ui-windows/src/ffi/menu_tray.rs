@@ -29,7 +29,7 @@ pub extern "C" fn perry_ui_menu_add_item_with_shortcut(
     // Why: on Win64 ABI int and float positional slots share register indices —
     // `(i64, i64, f64, i64)` vs caller's `(i64, i64, i64, f64)` would put `callback`
     // in XMM2 (uninitialized) and `shortcut_ptr` in R9 (also uninitialized), causing
-    // a deref-garbage ACCESS_VIOLATION inside `str_from_header(shortcut_ptr)`.
+    // a deref-garbage ACCESS_VIOLATION inside `unsafe { str_from_header(shortcut_ptr) }`.
     menu::add_item_with_shortcut(
         menu_handle,
         title_ptr as *const u8,

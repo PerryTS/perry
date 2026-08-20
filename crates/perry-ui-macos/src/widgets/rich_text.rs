@@ -40,17 +40,7 @@ thread_local! {
     static CHANGE_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn ns_string_to_rust(ns: *mut AnyObject) -> String {
     if ns.is_null() {
@@ -163,7 +153,7 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
 }
 
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let s = str_from_header(text_ptr);
+    let s = unsafe { str_from_header(text_ptr) };
     let tv = TEXT_VIEWS.with(|m| m.borrow().get(&handle).cloned());
     let Some(tv) = tv else { return };
     unsafe {
@@ -184,7 +174,7 @@ pub fn get_string(handle: i64) -> f64 {
 /// Replace contents with rendered HTML (NSAttributedString HTML
 /// importer). Returns 1 on success, 0 on failure.
 pub fn set_html(handle: i64, html_ptr: *const u8) -> i64 {
-    let html = str_from_header(html_ptr);
+    let html = unsafe { str_from_header(html_ptr) };
     let tv = TEXT_VIEWS.with(|m| m.borrow().get(&handle).cloned());
     let Some(tv) = tv else { return 0 };
     unsafe {

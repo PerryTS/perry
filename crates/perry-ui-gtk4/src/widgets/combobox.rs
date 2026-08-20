@@ -37,24 +37,14 @@ fn fire_change(callback: f64, text: &str) {
     }
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
     crate::app::ensure_gtk_init();
     let entry = gtk4::Entry::new();
-    let initial = str_from_header(initial_ptr);
+    let initial = unsafe { str_from_header(initial_ptr) };
     if !initial.is_empty() {
-        entry.set_text(initial);
+        entry.set_text(&initial);
     }
 
     // Single-column list store of strings — column 0 is the suggestion text.
@@ -93,7 +83,7 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
 }
 
 pub fn add_item(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     MODELS.with(|m| {
         if let Some(model) = m.borrow().get(&handle) {
             let iter = model.append();
@@ -103,10 +93,10 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
 }
 
 pub fn set_value(handle: i64, value_ptr: *const u8) {
-    let value = str_from_header(value_ptr);
+    let value = unsafe { str_from_header(value_ptr) };
     if let Some(widget) = super::get_widget(handle) {
         if let Some(entry) = widget.downcast_ref::<gtk4::Entry>() {
-            entry.set_text(value);
+            entry.set_text(&value);
             entry.set_position(-1);
         }
     }

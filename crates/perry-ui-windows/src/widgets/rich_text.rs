@@ -29,17 +29,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -167,13 +157,13 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
 }
 
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let s = str_from_header(text_ptr);
+    let s = unsafe { str_from_header(text_ptr) };
     #[cfg(target_os = "windows")]
     {
         let Some(hwnd) = super::get_hwnd(handle) else {
             return;
         };
-        let wide = to_wide(s);
+        let wide = to_wide(&s);
         unsafe {
             SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
         }
@@ -213,11 +203,11 @@ pub fn get_string(handle: i64) -> f64 {
 /// native serialised format is RTF; HTML round-trip would need an
 /// RTF↔HTML converter (tracked as a #478 follow-up).
 pub fn set_html(handle: i64, html_ptr: *const u8) -> i64 {
-    let html = str_from_header(html_ptr);
+    let html = unsafe { str_from_header(html_ptr) };
     if html.is_empty() {
         return 0;
     }
-    let plain = strip_html_tags(html);
+    let plain = strip_html_tags(&html);
     set_string(handle, plain_as_header(&plain));
     if plain.is_empty() {
         0

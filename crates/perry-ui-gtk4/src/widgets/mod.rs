@@ -274,9 +274,9 @@ pub fn set_border_width(handle: i64, width: f64) {
 
 /// Set tooltip text on a widget.
 pub fn set_tooltip(handle: i64, text_ptr: *const u8) {
-    let text = crate::app::str_from_header(text_ptr);
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
     if let Some(widget) = get_widget(handle) {
-        widget.set_tooltip_text(Some(text));
+        widget.set_tooltip_text(Some(&text));
     }
 }
 

@@ -14,17 +14,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a toolbar (HeaderBar).
 pub fn create() -> i64 {
@@ -44,15 +34,15 @@ pub fn create() -> i64 {
 
 /// Add a button item to the toolbar. icon_ptr is a named icon (or empty).
 pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, callback: f64) {
-    let label = str_from_header(label_ptr);
-    let icon = str_from_header(icon_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
+    let icon = unsafe { str_from_header(icon_ptr) };
 
     TOOLBARS.with(|t| {
         if let Some(header) = t.borrow().get(&toolbar_handle) {
             let button = if !icon.is_empty() {
-                gtk4::Button::from_icon_name(icon)
+                gtk4::Button::from_icon_name(&icon)
             } else {
-                gtk4::Button::with_label(label)
+                gtk4::Button::with_label(&label)
             };
 
             let cb_id = NEXT_TB_CB_ID.with(|id| {

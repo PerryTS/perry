@@ -65,17 +65,7 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
 // stub-warn diagnostic naming the missing `[ios] app_group` key so
 // developers see why the widget can't see the value, rather than a
 // silent in-process HashMap that lies about cross-process behavior.
-fn app_group_str_from_header_ios(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as app_group_str_from_header_ios;
 
 /// Resolve the configured App Group suite, warning once per process
 /// when no `[ios] app_group` was baked in. Returns `None` so the
@@ -121,8 +111,8 @@ unsafe fn app_group_defaults_ios() -> *mut objc2::runtime::AnyObject {
 
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
-    let key = app_group_str_from_header_ios(key_ptr as *const u8);
-    let value = app_group_str_from_header_ios(value_ptr as *const u8);
+    let key = unsafe { app_group_str_from_header_ios(key_ptr as *const u8) };
+    let value = unsafe { app_group_str_from_header_ios(value_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -132,8 +122,8 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
             warn_app_group_not_configured(c"perry_system_app_group_set");
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
-        let ns_value = objc2_foundation::NSString::from_str(value);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
+        let ns_value = objc2_foundation::NSString::from_str(&value);
         let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -144,7 +134,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     }
     let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
-    let key = app_group_str_from_header_ios(key_ptr as *const u8);
+    let key = unsafe { app_group_str_from_header_ios(key_ptr as *const u8) };
     if key.is_empty() {
         return empty();
     }
@@ -154,7 +144,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
             warn_app_group_not_configured(c"perry_system_app_group_get");
             return empty();
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let value: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, stringForKey: &*ns_key];
         if value.is_null() {
@@ -174,7 +164,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
-    let key = app_group_str_from_header_ios(key_ptr as *const u8);
+    let key = unsafe { app_group_str_from_header_ios(key_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -184,7 +174,7 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
             warn_app_group_not_configured(c"perry_system_app_group_delete");
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -193,20 +183,10 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let url_str = str_from_header(url_ptr as *const u8);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let url_str = unsafe { str_from_header(url_ptr as *const u8) };
     unsafe {
-        let ns_url_str = objc2_foundation::NSString::from_str(url_str);
+        let ns_url_str = objc2_foundation::NSString::from_str(&url_str);
         let url_cls = objc2::runtime::AnyClass::get(c"NSURL").unwrap();
         let url: *mut objc2::runtime::AnyObject =
             objc2::msg_send![url_cls, URLWithString: &*ns_url_str];
@@ -325,18 +305,8 @@ pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
             work: unsafe extern "C" fn(*mut std::ffi::c_void),
         );
     }
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let haptic = parse_haptic(str_from_header(type_ptr as *const u8));
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let haptic = parse_haptic(unsafe { &str_from_header(type_ptr as *const u8) });
     unsafe {
         if pthread_main_np() != 0 {
             haptic_fire(haptic);
@@ -538,19 +508,9 @@ pub extern "C" fn perry_system_get_os_version() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_set_output_filename(filename_ptr: i64) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
-    let filename = str_from_header(filename_ptr as *const u8);
-    audio::set_output_filename(filename);
+    use perry_ffi::copy_string_from_raw as str_from_header;
+    let filename = unsafe { str_from_header(filename_ptr as *const u8) };
+    audio::set_output_filename(&filename);
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_start_recording() {

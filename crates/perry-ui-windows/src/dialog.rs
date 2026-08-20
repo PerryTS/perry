@@ -10,17 +10,7 @@ extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> *const u8;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -29,7 +19,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 /// Open a save file dialog. Calls callback with selected path or undefined.
 pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_ptr: *const u8) {
-    let _default_name = str_from_header(default_name_ptr);
+    let _default_name = unsafe { str_from_header(default_name_ptr) };
     let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
 
     #[cfg(target_os = "windows")]
@@ -44,7 +34,7 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
                 CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL);
             if let Ok(dialog) = dialog {
                 if !_default_name.is_empty() {
-                    let wide = to_wide(_default_name);
+                    let wide = to_wide(&_default_name);
                     let _ = dialog.SetFileName(PCWSTR(wide.as_ptr()));
                 }
                 if dialog.Show(None).is_ok() {
@@ -78,15 +68,15 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
 
 /// Show a simple alert (OK-only). Called from `alert(title, message)`.
 pub fn alert_simple(title_ptr: *const u8, message_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
-    let message = str_from_header(message_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let message = unsafe { str_from_header(message_ptr) };
 
     #[cfg(target_os = "windows")]
     {
         use windows::core::PCWSTR;
         use windows::Win32::UI::WindowsAndMessaging::*;
-        let title_wide = to_wide(title);
-        let message_wide = to_wide(message);
+        let title_wide = to_wide(&title);
+        let message_wide = to_wide(&message);
         unsafe {
             MessageBoxW(
                 None,
@@ -105,8 +95,8 @@ pub fn alert_simple(title_ptr: *const u8, message_ptr: *const u8) {
 
 /// Show an alert dialog with title, message, and buttons array.
 pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u8, callback: f64) {
-    let title = str_from_header(title_ptr);
-    let message = str_from_header(message_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let message = unsafe { str_from_header(message_ptr) };
     let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
 
     #[cfg(target_os = "windows")]
@@ -114,8 +104,8 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
         use windows::core::PCWSTR;
         use windows::Win32::UI::WindowsAndMessaging::*;
 
-        let title_wide = to_wide(title);
-        let message_wide = to_wide(message);
+        let title_wide = to_wide(&title);
+        let message_wide = to_wide(&message);
 
         // Parse button labels
         let button_labels = parse_button_labels(buttons_ptr);
@@ -174,7 +164,7 @@ fn parse_button_labels(ptr: *const u8) -> Vec<String> {
         let elem = unsafe { js_array_get_element_f64(arr, i) };
         let str_ptr = unsafe { js_get_string_pointer_unified(elem) };
         if !str_ptr.is_null() {
-            labels.push(str_from_header(str_ptr).to_string());
+            labels.push(unsafe { str_from_header(str_ptr) }.to_string());
         }
     }
     labels

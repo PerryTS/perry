@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 
-use crate::tree::{self, NodeData, NodeKind};
+use crate::tree::{self};
 
 thread_local! {
     static PENDING_BODY: RefCell<Option<i64>> = RefCell::new(None);

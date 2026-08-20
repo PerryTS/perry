@@ -682,7 +682,7 @@ fn argb(a: f64, r: f64, g: f64, b: f64) -> i32 {
 }
 
 pub fn load_image(path_ptr: *const u8) -> i64 {
-    let path = crate::app::str_from_header(path_ptr).to_string();
+    let path = unsafe { crate::app::str_from_header(path_ptr) }.to_string();
     if let Some(handle) = IMAGE_CACHE.lock().unwrap().get(&path).copied() {
         if let Some((width, height)) = CANVAS_IMAGE_SIZES.lock().unwrap().get(&handle).copied() {
             return resolved_image_promise(handle, width, height);

@@ -4,7 +4,7 @@
 // AVCaptureVideoDataOutput for frame capture, and CVPixelBuffer for color sampling.
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, Encode, Encoding, RefEncode};
 use objc2_core_foundation::CGRect;
 use objc2_ui_kit::UIView;
@@ -198,7 +198,7 @@ fn register_tap_handler_class() -> *const c_void {
             assert!(!cls.is_null());
 
             extern "C" fn handle_tap(
-                this: *mut AnyObject,
+                _this: *mut AnyObject,
                 _cmd: *const c_void,
                 recognizer: *mut AnyObject,
             ) {

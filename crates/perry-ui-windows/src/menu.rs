@@ -12,17 +12,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct MenuItem {
     id: u16,
@@ -91,7 +81,7 @@ pub fn create() -> i64 {
 
 /// Add an item to a context menu with title and callback.
 pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
 
     let id = NEXT_MENU_ITEM_ID.with(|id| {
@@ -150,8 +140,8 @@ pub fn add_item_with_shortcut(
     callback: f64,
     shortcut_ptr: *const u8,
 ) {
-    let title = str_from_header(title_ptr);
-    let shortcut = str_from_header(shortcut_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let shortcut = unsafe { str_from_header(shortcut_ptr) };
     // Convert "Cmd+N" to "Ctrl+N" for Windows display
     let display_shortcut = shortcut.replace("Cmd", "Ctrl").replace("Option", "Alt");
     let display_title = format!("{}\t{}", title, display_shortcut);
@@ -211,7 +201,7 @@ pub fn add_item_with_shortcut(
 /// Add a separator to a menu.
 pub fn add_separator(menu_handle: i64) {
     MENUS.with(|menus| {
-        let mut menus = menus.borrow_mut();
+        let menus = menus.borrow_mut();
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
             #[cfg(target_os = "windows")]
@@ -231,7 +221,7 @@ pub fn add_separator(menu_handle: i64) {
 
 /// Add a submenu to a menu.
 pub fn add_submenu(menu_handle: i64, title_ptr: *const u8, submenu_handle: i64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     MENUS.with(|menus| {
         let menus = menus.borrow();
         let idx = (menu_handle - 1) as usize;
@@ -277,7 +267,7 @@ pub fn menubar_create() -> i64 {
 
 /// Add a menu to the menu bar with a title.
 pub fn menubar_add_menu(bar_handle: i64, title_ptr: *const u8, menu_handle: i64) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     MENUBARS.with(|bars| {
         let bars = bars.borrow();
         let bar_idx = (bar_handle - 1) as usize;

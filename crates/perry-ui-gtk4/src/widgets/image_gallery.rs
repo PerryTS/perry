@@ -12,17 +12,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 const PAGE_PX: i32 = 320;
 
@@ -96,8 +86,8 @@ pub fn create(on_index_change: f64) -> i64 {
 }
 
 pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
-    let url = str_from_header(url_ptr);
-    let alt = str_from_header(alt_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
+    let alt = unsafe { str_from_header(alt_ptr) };
     STATES.with(|s| {
         let mut states = s.borrow_mut();
         let Some(state) = states.get_mut(&handle) else {
@@ -114,7 +104,7 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         // glibc build working — release-packages.yml uses libgtk-4-dev 4.6.9.
 
         if !alt.is_empty() {
-            pic.set_tooltip_text(Some(alt));
+            pic.set_tooltip_text(Some(&alt));
         }
 
         if !url.is_empty() {
@@ -123,7 +113,7 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
                 // for the GTK4 path we skip remote URLs and document the
                 // gap. Local paths cover the production case.
             } else {
-                let path = std::path::Path::new(url);
+                let path = std::path::Path::new(&url);
                 if path.exists() {
                     pic.set_filename(Some(url));
                 }

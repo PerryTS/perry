@@ -9,7 +9,7 @@ extern "C" {
 
 /// Create a Button with a label and closure callback. Returns widget handle.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     unsafe {
         __android_log_print(
             3,
@@ -183,7 +183,7 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
 /// Set the title text of a button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view_ref) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
@@ -270,12 +270,12 @@ pub fn sf_symbol_to_emoji(name: &str) -> Option<&'static str> {
 /// Set an icon on a button (equivalent of SF Symbols on iOS).
 /// On Android, uses Unicode emoji which are universally supported.
 pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
+    let name = unsafe { str_from_header(name_ptr) };
     if let Some(view_ref) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(16);
 
-        let icon_str = if let Some(emoji) = sf_symbol_to_emoji(name) {
+        let icon_str = if let Some(emoji) = sf_symbol_to_emoji(&name) {
             emoji.to_string()
         } else {
             // Fallback: use the symbol name itself (truncated)

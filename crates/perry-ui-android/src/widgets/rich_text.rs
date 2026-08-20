@@ -86,7 +86,7 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
 
 /// Replace the entire content with a plain string.
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr);
+    let text = unsafe { str_from_header(text_ptr) };
     if let Some(view) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
@@ -150,7 +150,7 @@ pub fn get_string(handle: i64) -> f64 {
 /// Parse HTML via `Html.fromHtml(s, FROM_HTML_MODE_COMPACT)` and set it as
 /// the EditText content. Returns 1 on success, 0 on invalid handle.
 pub fn set_html(handle: i64, html_ptr: *const u8) -> i64 {
-    let html = str_from_header(html_ptr);
+    let html = unsafe { str_from_header(html_ptr) };
     let Some(view) = super::get_widget(handle) else {
         return 0;
     };

@@ -1,5 +1,5 @@
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
+use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use objc2_ui_kit::UIView;
@@ -17,17 +17,7 @@ extern "C" {
     );
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Pick an SF Symbol name based on the tab label.
 fn icon_for_label(label: &str) -> &'static str {
@@ -173,7 +163,7 @@ pub fn create(on_change: f64) -> i64 {
 
 /// Add a tab item with a title and auto-detected SF Symbol icon.
 pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let tab_index = TABBAR_STATE.with(|s| {
@@ -185,7 +175,7 @@ pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
 
     unsafe {
         // Create SF Symbol image
-        let icon_name = icon_for_label(label);
+        let icon_name = icon_for_label(&label);
         let ns_icon = NSString::from_str(icon_name);
         let image: *mut AnyObject = msg_send![
             objc2::runtime::AnyClass::get(c"UIImage").unwrap(),
@@ -193,7 +183,7 @@ pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
         ];
 
         // Create UITabBarItem
-        let ns_title = NSString::from_str(label);
+        let ns_title = NSString::from_str(&label);
         let item_cls = objc2::runtime::AnyClass::get(c"UITabBarItem").unwrap();
         let item: *mut AnyObject = msg_send![item_cls, alloc];
         let item: *mut AnyObject = msg_send![

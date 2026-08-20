@@ -17,17 +17,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a Picker (dropdown). label_ptr is unused in GTK4 (DropDown has no label).
 /// style is ignored (GTK4 always uses dropdown style).
@@ -66,10 +56,10 @@ pub fn create(_label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
 /// Add an item to a picker.
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     PICKER_MODELS.with(|m| {
         if let Some(model) = m.borrow().get(&handle) {
-            model.append(title);
+            model.append(&title);
         }
     });
 }

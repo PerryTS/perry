@@ -11,17 +11,7 @@ thread_local! {
     static PICKER_SELECTED: RefCell<HashMap<i64, i64>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(_label_ptr: *const u8, _on_change: f64, _style: i64) -> i64 {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
@@ -30,10 +20,10 @@ pub fn create(_label_ptr: *const u8, _on_change: f64, _style: i64) -> i64 {
         // segmented-control-backed path is stable in the simulator. See PR #127.
         // TODO(visionos): wire `style` through once this migrates off the
         // UILabel fallback and back onto a native picker implementation.
-        let label = str_from_header(_label_ptr);
+        let label = unsafe { str_from_header(_label_ptr) };
         let label_cls = objc2::runtime::AnyClass::get(c"UILabel").unwrap();
         let obj: *mut AnyObject = msg_send![label_cls, new];
-        let text = NSString::from_str(label);
+        let text = NSString::from_str(&label);
         let _: () = msg_send![obj, setText: &*text];
         let view: Retained<UIView> = Retained::retain(obj as *mut UIView).unwrap();
         let handle = super::register_widget(view);
@@ -51,7 +41,7 @@ pub fn create(_label_ptr: *const u8, _on_change: f64, _style: i64) -> i64 {
 }
 
 pub fn add_item(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(view) = super::get_widget(handle) {
         PICKER_ITEMS.with(|pi| {
             let mut items = pi.borrow_mut();
@@ -59,7 +49,7 @@ pub fn add_item(handle: i64, title_ptr: *const u8) {
                 let index = list.len();
                 list.push(title.to_string());
                 if index == 0 {
-                    let ns_title = NSString::from_str(title);
+                    let ns_title = NSString::from_str(&title);
                     unsafe {
                         let _: () = msg_send![&*view, setText: &*ns_title];
                     }

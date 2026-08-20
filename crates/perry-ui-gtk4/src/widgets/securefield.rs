@@ -15,25 +15,15 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a password entry field.
 pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     crate::app::ensure_gtk_init();
-    let placeholder = str_from_header(placeholder_ptr);
+    let placeholder = unsafe { str_from_header(placeholder_ptr) };
     let entry = PasswordEntry::new();
     entry.set_show_peek_icon(true);
-    entry.set_placeholder_text(Some(placeholder));
+    entry.set_placeholder_text(Some(&placeholder));
 
     let callback_id = NEXT_SECUREFIELD_ID.with(|id| {
         let mut id = id.borrow_mut();

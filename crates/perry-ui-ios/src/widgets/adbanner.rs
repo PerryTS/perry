@@ -20,17 +20,7 @@ use objc2_foundation::MainThreadMarker;
 use objc2_ui_kit::UIView;
 
 /// Extract a &str from a `*const StringHeader` pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Banner dimensions in points per size key (matches Google Mobile Ads'
 /// standard `GADAdSize` constants).
@@ -46,9 +36,9 @@ fn banner_size(size_key: &str) -> (f64, f64) {
 
 /// Create the banner placeholder view sized per `size_ptr`.
 pub fn create(unit_id_ptr: *const u8, size_ptr: *const u8) -> i64 {
-    let _unit_id = str_from_header(unit_id_ptr);
-    let size_key = str_from_header(size_ptr);
-    let (w, h) = banner_size(size_key);
+    let _unit_id = unsafe { str_from_header(unit_id_ptr) };
+    let size_key = unsafe { str_from_header(size_ptr) };
+    let (w, h) = banner_size(&size_key);
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {

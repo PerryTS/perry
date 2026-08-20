@@ -84,17 +84,7 @@ pub fn open_folder_dialog(callback: f64) {
 
 /// Save file dialog. Calls callback with selected path (NaN-boxed string) or TAG_UNDEFINED.
 pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_ptr: *const u8) {
-    fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() {
-            return "";
-        }
-        unsafe {
-            let header = ptr as *const crate::string_header::StringHeader;
-            let len = (*header).byte_len as usize;
-            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-        }
-    }
+    use perry_ffi::copy_string_from_raw as str_from_header;
 
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
@@ -103,9 +93,9 @@ pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_pt
 
         // Set default filename if provided
         if !default_name_ptr.is_null() {
-            let name = str_from_header(default_name_ptr);
+            let name = unsafe { str_from_header(default_name_ptr) };
             if !name.is_empty() {
-                let ns_name = NSString::from_str(name);
+                let ns_name = NSString::from_str(&name);
                 let _: () = msg_send![&*panel, setNameFieldStringValue: &*ns_name];
             }
         }

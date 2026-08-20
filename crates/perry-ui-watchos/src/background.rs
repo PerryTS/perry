@@ -39,17 +39,7 @@ thread_local! {
     static HANDLERS: RefCell<HashMap<String, f64>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 unsafe fn invoke_handler(handler: f64) {
     if handler.to_bits() == TAG_UNDEFINED {
@@ -64,7 +54,7 @@ unsafe fn invoke_handler(handler: f64) {
 }
 
 pub fn register_task(identifier_ptr: *const u8, handler: f64) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }
@@ -80,7 +70,7 @@ pub fn schedule(
     _requires_network: f64,
     _requires_charging: f64,
 ) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }
@@ -130,7 +120,7 @@ pub fn schedule(
 }
 
 pub fn cancel(identifier_ptr: *const u8) {
-    let id = str_from_header(identifier_ptr);
+    let id = unsafe { str_from_header(identifier_ptr) };
     if id.is_empty() {
         return;
     }

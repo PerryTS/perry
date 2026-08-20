@@ -289,7 +289,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
 /// thread, so it pumps microtasks afterwards.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDragProvider<'local>(
-    mut env: jni::JNIEnv<'local>,
+    env: jni::JNIEnv<'local>,
     _class: jni::objects::JClass<'local>,
     key: jni::sys::jlong,
 ) -> jni::objects::JString<'local> {
@@ -316,7 +316,7 @@ fn drag_provider_payload(key: i64) -> Option<String> {
         if sh.is_null() {
             None
         } else {
-            Some(str_from_header(sh).to_string())
+            Some(unsafe { str_from_header(sh) }.to_string())
         }
     }
 }

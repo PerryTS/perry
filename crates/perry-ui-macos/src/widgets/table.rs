@@ -40,17 +40,7 @@ fn find_entry_idx(handle: i64) -> Option<usize> {
     TABLES.with(|t| t.borrow().iter().position(|e| e.handle == handle))
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const crate::string_header::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 // =============================================================================
 // Delegate
@@ -312,7 +302,7 @@ pub fn create(row_count: i64, col_count: i64, render_closure: f64) -> i64 {
 /// Set the header title of a column.
 /// title_ptr is a StringHeader pointer (length-prefixed UTF-8 bytes).
 pub fn set_column_header(handle: i64, col: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     if let Some(idx) = find_entry_idx(handle) {
         let tv_ptr = TABLES.with(|t| {
             t.borrow()
@@ -330,7 +320,7 @@ pub fn set_column_header(handle: i64, col: i64, title_ptr: *const u8) {
             if (col as usize) < count {
                 let tc: *mut AnyObject = msg_send![&*columns, objectAtIndex: col as usize];
                 let header_cell: *mut AnyObject = msg_send![tc, headerCell];
-                let ns_title = NSString::from_str(title);
+                let ns_title = NSString::from_str(&title);
                 let _: () = msg_send![header_cell, setStringValue: &*ns_title];
             }
             // Redraw header
@@ -541,7 +531,7 @@ pub fn get_selected_row_at(handle: i64, n: i64) -> i64 {
 /// accordingly. (Active row hiding stays the user's responsibility so
 /// they can drive it from any reactive store.)
 pub fn set_filter_text(handle: i64, text_ptr: *const u8) {
-    let text = str_from_header(text_ptr).to_string();
+    let text = unsafe { str_from_header(text_ptr) }.to_string();
     if let Some(idx) = find_entry_idx(handle) {
         TABLES.with(|t| {
             if let Some(entry) = t.borrow_mut().get_mut(idx) {

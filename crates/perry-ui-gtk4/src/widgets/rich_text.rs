@@ -32,17 +32,7 @@ thread_local! {
     static EDITORS: RefCell<HashMap<i64, RichTextEntry>> = RefCell::new(HashMap::new());
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
     crate::app::ensure_gtk_init();
@@ -112,10 +102,10 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
 }
 
 pub fn set_string(handle: i64, text_ptr: *const u8) {
-    let s = str_from_header(text_ptr);
+    let s = unsafe { str_from_header(text_ptr) };
     EDITORS.with(|m| {
         if let Some(entry) = m.borrow().get(&handle) {
-            entry.buffer.set_text(s);
+            entry.buffer.set_text(&s);
         }
     });
 }
@@ -140,11 +130,11 @@ pub fn get_string(handle: i64) -> f64 {
 /// the textual content as plain text. Returns 1 if any text landed,
 /// 0 otherwise. Proper HTML → Pango Markup conversion is a follow-up.
 pub fn set_html(handle: i64, html_ptr: *const u8) -> i64 {
-    let html = str_from_header(html_ptr);
+    let html = unsafe { str_from_header(html_ptr) };
     if html.is_empty() {
         return 0;
     }
-    let plain = strip_html_tags(html);
+    let plain = strip_html_tags(&html);
     EDITORS.with(|m| {
         if let Some(entry) = m.borrow().get(&handle) {
             entry.buffer.set_text(&plain);
@@ -212,7 +202,7 @@ fn apply_or_remove_tag(handle: i64, tag_kind: TagKind) {
             TagKind::Underline => &entry.underline_tag,
         };
         // Toggle: if start already has the tag, remove it; else apply.
-        let mut probe = start.clone();
+        let probe = start.clone();
         let already_on = probe.has_tag(tag);
         if already_on {
             entry.buffer.remove_tag(tag, &start, &end);

@@ -3,9 +3,7 @@
 use crate::jni_bridge;
 use jni::objects::JValue;
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    crate::app::str_from_header(ptr)
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a Form — vertical LinearLayout with padding.
 pub fn create() -> i64 {
@@ -50,7 +48,7 @@ pub fn create() -> i64 {
 
 /// Create a Section — vertical LinearLayout with a title label.
 pub fn section_create(title_ptr: *const u8) -> i64 {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
 

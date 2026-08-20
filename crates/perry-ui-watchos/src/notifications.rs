@@ -183,17 +183,7 @@ unsafe fn submit_request(identifier: &str, content: &AnyObject, trigger: &AnyObj
     ];
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Ask the user for alert + badge + sound permission (options bitmask = 7).
 /// Called once from the app-create path (`app::app_create`, which runs during
@@ -227,9 +217,9 @@ pub fn schedule_interval(
     seconds: f64,
     repeats: f64,
 ) {
-    let id = str_from_header(id_ptr);
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
     let repeats_bool = unsafe { js_is_truthy(repeats) != 0 };
     // UNTimeIntervalNotificationTrigger throws NSInternalInconsistencyException
     // for a non-positive interval, and for < 60s when repeating. Clamp into the
@@ -243,7 +233,7 @@ pub fn schedule_interval(
     };
 
     unsafe {
-        let Some(content) = build_content(title, body) else {
+        let Some(content) = build_content(&title, &body) else {
             return;
         };
         let Some(trigger_cls) = AnyClass::get(c"UNTimeIntervalNotificationTrigger") else {
@@ -254,7 +244,7 @@ pub fn schedule_interval(
             triggerWithTimeInterval: interval,
             repeats: repeats_bool
         ];
-        submit_request(id, &*content, &*trigger);
+        submit_request(&id, &*content, &*trigger);
     }
 }
 
@@ -270,12 +260,12 @@ pub fn schedule_calendar(
     body_ptr: *const u8,
     timestamp_ms: f64,
 ) {
-    let id = str_from_header(id_ptr);
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     unsafe {
-        let Some(content) = build_content(title, body) else {
+        let Some(content) = build_content(&title, &body) else {
             return;
         };
         let Some(date_cls) = AnyClass::get(c"NSDate") else {
@@ -305,7 +295,7 @@ pub fn schedule_calendar(
             triggerWithDateMatchingComponents: &*comps,
             repeats: false
         ];
-        submit_request(id, &*content, &*trigger);
+        submit_request(&id, &*content, &*trigger);
     }
 }
 
@@ -340,13 +330,13 @@ pub fn set_on_tap(callback: f64) {
 
 /// Cancel a previously scheduled notification by id (#96).
 pub fn cancel(id_ptr: *const u8) {
-    let id = str_from_header(id_ptr);
+    let id = unsafe { str_from_header(id_ptr) };
     unsafe {
         let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else {
             return;
         };
         let center: Retained<AnyObject> = msg_send![center_cls, currentNotificationCenter];
-        let ident = NSString::from_str(id);
+        let ident = NSString::from_str(&id);
         let Some(arr_cls) = AnyClass::get(c"NSArray") else {
             return;
         };
@@ -364,8 +354,8 @@ pub fn cancel(id_ptr: *const u8) {
 /// Send a local notification immediately. Relies on authorization already
 /// having been granted via `request_authorization()` at app bootstrap.
 pub fn send(title_ptr: *const u8, body_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
-    let body = str_from_header(body_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
+    let body = unsafe { str_from_header(body_ptr) };
 
     unsafe {
         let Some(content_cls) = AnyClass::get(c"UNMutableNotificationContent") else {
@@ -373,10 +363,10 @@ pub fn send(title_ptr: *const u8, body_ptr: *const u8) {
         };
         let content: Retained<AnyObject> = msg_send![content_cls, new];
 
-        let ns_title = NSString::from_str(title);
+        let ns_title = NSString::from_str(&title);
         let _: () = msg_send![&*content, setTitle: &*ns_title];
 
-        let ns_body = NSString::from_str(body);
+        let ns_body = NSString::from_str(&body);
         let _: () = msg_send![&*content, setBody: &*ns_body];
 
         let Some(trigger_cls) = AnyClass::get(c"UNTimeIntervalNotificationTrigger") else {

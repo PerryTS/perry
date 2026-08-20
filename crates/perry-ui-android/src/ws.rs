@@ -54,20 +54,7 @@ unsafe impl Send for SendPromise {}
 static PENDING_RESOLVES: Mutex<Vec<(SendPromise, f64)>> = Mutex::new(Vec::new());
 
 /// Extract a Rust &str from a Perry StringHeader pointer.
-fn str_from_header(ptr: *const StringHeader) -> Option<&'static str> {
-    if ptr.is_null() {
-        return None;
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data =
-            (ptr as *const u8).add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            data, len,
-        )))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Set the read timeout on the underlying TcpStream (works for both plain and TLS).
 fn set_read_timeout(ws: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Option<Duration>) {
@@ -215,13 +202,11 @@ fn start_connection(url: String, promise: Option<SendPromise>) -> usize {
 pub extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut Promise {
     ws_log("js_ws_connect called");
 
-    let url = match str_from_header(url_ptr) {
-        Some(u) => u.to_string(),
-        None => {
-            ws_log("js_ws_connect: null URL");
-            return std::ptr::null_mut();
-        }
-    };
+    if url_ptr.is_null() {
+        ws_log("js_ws_connect: null URL");
+        return std::ptr::null_mut();
+    }
+    let url = unsafe { str_from_header(url_ptr) };
 
     ws_log(&format!("js_ws_connect: url={}", &url));
 
@@ -241,13 +226,11 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ws_log("js_ws_connect_start called");
 
     let url_ptr = perry_runtime::js_get_string_pointer_unified(url_nanboxed) as *const StringHeader;
-    let url = match str_from_header(url_ptr) {
-        Some(u) => u.to_string(),
-        None => {
-            ws_log("js_ws_connect_start: null URL");
-            return 0.0;
-        }
-    };
+    if url_ptr.is_null() {
+        ws_log("js_ws_connect_start: null URL");
+        return 0.0;
+    }
+    let url = unsafe { str_from_header(url_ptr) };
 
     ws_log(&format!("js_ws_connect_start: url={}", &url));
 
@@ -280,10 +263,7 @@ pub extern "C" fn js_ws_send(handle: i64, message_ptr: *const StringHeader) {
     if idx < 1 || message_ptr.is_null() {
         return;
     }
-    let msg = match str_from_header(message_ptr) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
+    let msg = unsafe { str_from_header(message_ptr) };
 
     let conns = CONNECTIONS.lock().unwrap();
     if let Some(Some(conn)) = conns.get(idx - 1) {

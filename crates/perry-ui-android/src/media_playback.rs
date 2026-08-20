@@ -94,24 +94,14 @@ thread_local! {
 // String helpers
 // ---------------------------------------------------------------------------
 
-fn str_from_header<'a>(ptr: *const u8) -> &'a str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 // ---------------------------------------------------------------------------
 // Public FFI
 // ---------------------------------------------------------------------------
 
 pub fn create_player(url_ptr: *const u8) -> i64 {
-    let url = str_from_header(url_ptr);
+    let url = unsafe { str_from_header(url_ptr) };
     if url.is_empty() {
         return 0;
     }
@@ -429,10 +419,10 @@ pub fn set_now_playing(
     // explicit active player should manage that themselves.
     let _ = handle;
 
-    let title = str_from_header(title_ptr).to_string();
-    let artist = str_from_header(artist_ptr).to_string();
-    let album = str_from_header(album_ptr).to_string();
-    let artwork = str_from_header(artwork_ptr).to_string();
+    let title = unsafe { str_from_header(title_ptr) }.to_string();
+    let artist = unsafe { str_from_header(artist_ptr) }.to_string();
+    let album = unsafe { str_from_header(album_ptr) }.to_string();
+    let artwork = unsafe { str_from_header(artwork_ptr) }.to_string();
 
     let session = match ensure_session() {
         Some(s) => s,

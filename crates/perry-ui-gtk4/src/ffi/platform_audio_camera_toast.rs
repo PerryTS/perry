@@ -237,8 +237,8 @@ pub extern "C" fn perry_ui_camera_unregister_frame_callback(handle: i64) {
 /// msg_ptr is a raw StringHeader pointer (NaN-boxed string, unboxed to i64 by codegen).
 #[no_mangle]
 pub extern "C" fn perry_ui_show_toast(msg_ptr: i64) {
-    let msg = app::str_from_header(msg_ptr as *const u8);
-    widgets::toast::show_toast(msg);
+    let msg = unsafe { app::str_from_header(msg_ptr as *const u8) };
+    widgets::toast::show_toast(&msg);
 }
 
 /// Create a Text (GtkLabel) widget and register it under a string id so that
@@ -247,8 +247,8 @@ pub extern "C" fn perry_ui_show_toast(msg_ptr: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
     let handle = widgets::text::create(text_ptr as *const u8);
-    let id = app::str_from_header(id_ptr as *const u8);
-    widgets::text_registry::register(id, handle);
+    let id = unsafe { app::str_from_header(id_ptr as *const u8) };
+    widgets::text_registry::register(&id, handle);
     handle
 }
 
@@ -256,7 +256,7 @@ pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i6
 /// perry_ui_text_create_with_id.
 #[no_mangle]
 pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
-    let id = app::str_from_header(id_ptr as *const u8);
-    let value = app::str_from_header(value_ptr as *const u8);
-    widgets::text_registry::set_text_for_id(id, value);
+    let id = unsafe { app::str_from_header(id_ptr as *const u8) };
+    let value = unsafe { app::str_from_header(value_ptr as *const u8) };
+    widgets::text_registry::set_text_for_id(&id, &value);
 }

@@ -74,17 +74,7 @@ thread_local! {
 
 /// Extract a `&str` from a runtime `StringHeader` pointer (same layout as
 /// `clipboard.rs` / `widgets/button.rs`).
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// NaN-box a Rust string into a JS string value.
 unsafe fn nanbox_str(s: &str) -> f64 {
@@ -110,7 +100,7 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
     if sh.is_null() {
         None
     } else {
-        Some(str_from_header(sh))
+        Some(unsafe { str_from_header(sh) })
     }
 }
 

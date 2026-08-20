@@ -12,22 +12,12 @@ struct NavStackState {
     page_count: usize,
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create a NavigationStack with an initial page.
 pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
     crate::app::ensure_gtk_init();
-    let _title = str_from_header(title_ptr);
+    let _title = unsafe { str_from_header(title_ptr) };
     let stack = Stack::new();
     stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
     stack.set_transition_duration(250);
@@ -54,7 +44,7 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
 
 /// Push a new page onto the navigation stack.
 pub fn push(handle: i64, title_ptr: *const u8, body_handle: i64) {
-    let _title = str_from_header(title_ptr);
+    let _title = unsafe { str_from_header(title_ptr) };
     NAV_STACKS.with(|n| {
         let mut stacks = n.borrow_mut();
         if let Some(state) = stacks.get_mut(&handle) {

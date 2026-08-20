@@ -20,14 +20,10 @@ pub extern "C" fn hone_ws_connect(url_ptr: i64) -> f64 {
         let _ = writeln!(f, "hone_ws_connect called, url_ptr={}", url_ptr);
         let ptr = url_ptr as *const u8;
         if !ptr.is_null() && url_ptr > 0x1000 {
-            let header = ptr as *const perry_runtime::string::StringHeader;
-            unsafe {
-                let len = (*header).byte_len as usize;
-                let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-                if let Ok(s) = std::str::from_utf8(std::slice::from_raw_parts(data, len.min(200))) {
-                    let _ = writeln!(f, "  url_str={}", s);
-                }
-            }
+            // SAFETY: the FFI contract supplies a runtime string.
+            let url = unsafe { perry_ffi::copy_string_from_raw(ptr) };
+            let preview: String = url.chars().take(200).collect();
+            let _ = writeln!(f, "  url_str={}", preview);
         }
     }
     websocket::connect(url_ptr as *const u8)

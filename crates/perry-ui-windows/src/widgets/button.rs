@@ -22,17 +22,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -71,13 +61,13 @@ thread_local! {
 
 /// Create a Button. Returns widget handle.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
-    let label = str_from_header(label_ptr);
+    let label = unsafe { str_from_header(label_ptr) };
     let callback_ptr = unsafe { js_nanbox_get_pointer(on_press) } as *const u8;
     let control_id = alloc_control_id();
 
     #[cfg(target_os = "windows")]
     {
-        let wide = to_wide(label);
+        let wide = to_wide(&label);
         let class_name = to_wide("BUTTON");
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
@@ -106,7 +96,7 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
             BUTTON_CONTENT.with(|content| {
                 content
                     .borrow_mut()
-                    .insert(handle, ButtonContent::new(label));
+                    .insert(handle, ButtonContent::new(&label));
             });
             #[cfg(feature = "geisterhand")]
             {
@@ -241,7 +231,7 @@ fn update_button_content(handle: i64) {
 
 /// Set the title text of a Button.
 pub fn set_title(handle: i64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     BUTTON_CONTENT.with(|content| {
         let mut content = content.borrow_mut();
         content
@@ -308,8 +298,8 @@ fn symbol_fallback(name: &str) -> &str {
 
 /// Set button image by SF Symbol name. On Windows, maps known names to Unicode/text fallbacks.
 pub fn set_image(handle: i64, name_ptr: *const u8) {
-    let name = str_from_header(name_ptr);
-    let fallback = symbol_fallback(name);
+    let name = unsafe { str_from_header(name_ptr) };
+    let fallback = symbol_fallback(&name);
     BUTTON_CONTENT.with(|content| {
         content
             .borrow_mut()

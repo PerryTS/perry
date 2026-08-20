@@ -11,17 +11,7 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct ItemViews {
     button: gtk4::Button,
@@ -71,8 +61,8 @@ pub fn create(on_select: f64) -> i64 {
 }
 
 pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
-    let icon_name = str_from_header(icon_ptr);
-    let label_text = str_from_header(label_ptr);
+    let icon_name = unsafe { str_from_header(icon_ptr) };
+    let label_text = unsafe { str_from_header(label_ptr) };
 
     let bar = STATES.with(|s| s.borrow().get(&handle).map(|st| st.bar.clone()));
     let Some(bar) = bar else { return };
@@ -83,12 +73,12 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     let icon = if icon_name.is_empty() {
         gtk4::Image::new()
     } else {
-        gtk4::Image::from_icon_name(icon_name)
+        gtk4::Image::from_icon_name(&icon_name)
     };
     icon.set_pixel_size(24);
     inner.append(&icon);
 
-    let label = gtk4::Label::new(Some(label_text));
+    let label = gtk4::Label::new(Some(&label_text));
     label.add_css_class("caption");
     inner.append(&label);
 
@@ -139,7 +129,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
 }
 
 pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
-    let badge_text = str_from_header(badge_ptr);
+    let badge_text = unsafe { str_from_header(badge_ptr) };
     STATES.with(|s| {
         let mut nav = s.borrow_mut();
         let Some(state) = nav.get_mut(&handle) else {
@@ -152,7 +142,7 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
             item.container.remove(&old);
         }
         if !badge_text.is_empty() {
-            let badge = gtk4::Label::new(Some(badge_text));
+            let badge = gtk4::Label::new(Some(&badge_text));
             badge.add_css_class("error"); // Adwaita styles "error" badges red.
             badge.add_css_class("caption-heading");
             item.container.prepend(&badge);

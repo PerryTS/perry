@@ -88,17 +88,7 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer.
-pub(crate) fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app with title, width, height.
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
@@ -107,7 +97,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     let title = if title_ptr.is_null() {
         "Perry App".to_string()
     } else {
-        str_from_header(title_ptr).to_string()
+        unsafe { str_from_header(title_ptr) }.to_string()
     };
 
     let w = if width > 0.0 { width } else { 400.0 };
@@ -519,7 +509,7 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
 
 /// Set window level: "floating", "statusBar", "modal", or "normal".
 pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
-    let level_str = str_from_header(value_ptr);
+    let level_str = unsafe { str_from_header(value_ptr) };
     if level_str.is_empty() {
         return;
     }
@@ -551,7 +541,7 @@ pub fn app_set_transparent(app_handle: i64, value: f64) {
 /// Set vibrancy material. On GTK4 this is a best-effort CSS opacity effect
 /// since true vibrancy depends on the compositor.
 pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
-    let material_str = str_from_header(value_ptr);
+    let material_str = unsafe { str_from_header(value_ptr) };
     if material_str.is_empty() {
         return;
     }
@@ -567,7 +557,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
 /// Set activation policy: "regular", "accessory", or "background".
 /// On Linux: "accessory"/"background" skips the taskbar.
 pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
-    let policy_str = str_from_header(value_ptr);
+    let policy_str = unsafe { str_from_header(value_ptr) };
     if policy_str.is_empty() {
         return;
     }
@@ -588,7 +578,7 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
 /// for one of "normal" | "maximized" | "fullscreen". Anything else is
 /// silently ignored; the state is applied just before `window.present()`.
 pub fn app_set_window_state(app_handle: i64, value_ptr: *const u8) {
-    let state_str = str_from_header(value_ptr);
+    let state_str = unsafe { str_from_header(value_ptr) };
     if state_str.is_empty() {
         return;
     }
@@ -596,7 +586,7 @@ pub fn app_set_window_state(app_handle: i64, value_ptr: *const u8) {
         let mut apps = a.borrow_mut();
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
-            apps[idx].window_state = match state_str {
+            apps[idx].window_state = match state_str.as_str() {
                 "maximized" | "fullscreen" => Some(state_str.to_string()),
                 _ => None,
             };
@@ -615,7 +605,7 @@ fn install_shortcuts_on_window(window: &ApplicationWindow) {
         let matched = PENDING_SHORTCUTS.with(|ps| {
             let shortcuts = ps.borrow();
             for shortcut in shortcuts.iter() {
-                let shortcut_key = str_from_header(shortcut.key_ptr);
+                let shortcut_key = unsafe { str_from_header(shortcut.key_ptr) };
 
                 // Convert Perry modifier bits to GDK modifier state
                 let mod_bits = shortcut.modifiers as u64;
@@ -636,7 +626,7 @@ fn install_shortcuts_on_window(window: &ApplicationWindow) {
                 }
 
                 // Check key match (case-insensitive single char)
-                let key_matches = key_name.eq_ignore_ascii_case(shortcut_key);
+                let key_matches = key_name.eq_ignore_ascii_case(&shortcut_key);
 
                 // Check modifier match (mask out irrelevant bits)
                 let relevant = gdk::ModifierType::CONTROL_MASK
@@ -739,21 +729,21 @@ pub fn on_terminate(callback: f64) {
 /// Register a system-wide global hotkey.
 /// On Linux this is not yet supported (requires X11-specific code or Wayland portals).
 pub fn register_global_hotkey(key_ptr: *const u8, _modifiers: f64, _callback: f64) {
-    let key_str = str_from_header(key_ptr);
+    let key_str = unsafe { str_from_header(key_ptr) };
     eprintln!("[perry/ui] registerGlobalHotkey('{}') is not yet supported on Linux (requires X11/Wayland portal)", key_str);
 }
 
 /// Get the icon for an application at the given path.
 /// Supports .desktop files (Icon= field lookup via GTK icon theme) and direct image paths.
 pub fn get_app_icon(path_ptr: *const u8) -> i64 {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     if path.is_empty() {
         return 0;
     }
 
     // .desktop file: parse for Icon= field
     if path.ends_with(".desktop") {
-        if let Ok(content) = std::fs::read_to_string(path) {
+        if let Ok(content) = std::fs::read_to_string(&path) {
             for line in content.lines() {
                 if let Some(icon_name) = line.strip_prefix("Icon=") {
                     let icon_name = icon_name.trim();
@@ -779,7 +769,7 @@ pub fn get_app_icon(path_ptr: *const u8) -> i64 {
     }
 
     // Direct file path — try loading as image
-    if std::path::Path::new(path).exists() {
+    if std::path::Path::new(&path).exists() {
         let image = gtk4::Image::from_file(path);
         image.set_pixel_size(32);
         return widgets::register_widget(image.upcast());

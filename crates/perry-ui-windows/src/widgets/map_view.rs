@@ -83,17 +83,7 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Convert a MapKit-style latitude/longitude span to the corresponding map
 /// zoom. This matches Perry's GTK4 backend and clamps to MapControl's range.
@@ -355,7 +345,7 @@ pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64)
 }
 
 pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
-    let title = str_from_header(title_ptr);
+    let title = unsafe { str_from_header(title_ptr) };
     #[cfg(target_os = "windows")]
     let map = MAPS.with(|maps| {
         let mut maps = maps.borrow_mut();

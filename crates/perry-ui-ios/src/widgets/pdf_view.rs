@@ -5,21 +5,10 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::AnyThread;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIView;
 
-fn str_from_header(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)).to_string()
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn create(width: f64, height: f64) -> i64 {
     unsafe {
@@ -44,7 +33,7 @@ pub fn create(width: f64, height: f64) -> i64 {
 }
 
 pub fn load_file(handle: i64, path_ptr: *const u8) -> bool {
-    let path = str_from_header(path_ptr);
+    let path = unsafe { str_from_header(path_ptr) };
     if path.is_empty() {
         return false;
     }

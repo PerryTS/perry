@@ -57,17 +57,7 @@ extern "C" {
 }
 
 /// Extract a &str from a *const StringHeader pointer. Mirrors menu.rs.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Mutable per-tray state — read by `impl ksni::Tray for PerryTray` on
 /// each property fetch. Updates require a `Handle::update` call to
@@ -374,7 +364,7 @@ fn tray_runtime() -> Option<&'static Runtime> {
 /// `trayCreate(iconPath)` — start a KSNI service on the background
 /// runtime, return a 1-based handle index. Returns 0 on failure.
 pub fn create(icon_path_ptr: *const u8) -> i64 {
-    let icon_path = str_from_header(icon_path_ptr).to_string();
+    let icon_path = unsafe { str_from_header(icon_path_ptr) }.to_string();
 
     let rt = match tray_runtime() {
         Some(r) => r,
@@ -456,7 +446,7 @@ where
 }
 
 pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
-    let path = str_from_header(icon_path_ptr).to_string();
+    let path = unsafe { str_from_header(icon_path_ptr) }.to_string();
     if path.is_empty() {
         return;
     }
@@ -469,7 +459,7 @@ pub fn set_icon(handle: i64, icon_path_ptr: *const u8) {
 }
 
 pub fn set_tooltip(handle: i64, tooltip_ptr: *const u8) {
-    let tooltip = str_from_header(tooltip_ptr).to_string();
+    let tooltip = unsafe { str_from_header(tooltip_ptr) }.to_string();
     with_tray(handle, |tray| {
         if let Ok(mut s) = tray.state.lock() {
             s.tooltip = tooltip.clone();

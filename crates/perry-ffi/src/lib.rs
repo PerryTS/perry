@@ -237,6 +237,81 @@ pub fn read_bytes(handle: JsString) -> Option<&'static [u8]> {
     }
 }
 
+/// Copy a runtime string payload into GC-independent Rust storage.
+///
+/// A null pointer is treated as an empty string. Invalid UTF-8 is replaced
+/// with the Unicode replacement character, matching
+/// [`String::from_utf8_lossy`]. Unlike [`read_string`], the returned value
+/// remains valid if a later Perry runtime allocation moves the source object.
+///
+/// # Safety
+///
+/// `ptr` must be null or point to a valid Perry [`StringHeader`] followed by
+/// at least `byte_len` initialized payload bytes. The source must not move or
+/// be freed while this function is copying it.
+pub unsafe fn copy_string_from_raw<T>(ptr: *const T) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+
+    let ptr = ptr.cast::<u8>();
+    // SAFETY: upheld by the caller; the payload immediately follows the header.
+    let header = unsafe { &*(ptr.cast::<StringHeader>()) };
+    let data = unsafe { ptr.add(std::mem::size_of::<StringHeader>()) };
+    let bytes = unsafe { std::slice::from_raw_parts(data, header.byte_len as usize) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(test)]
+mod copy_string_tests {
+    use super::*;
+
+    fn runtime_string(bytes: &[u8]) -> Vec<u32> {
+        let header_len = std::mem::size_of::<StringHeader>();
+        let word_count = (header_len + bytes.len()).div_ceil(std::mem::size_of::<u32>());
+        let mut storage = vec![0_u32; word_count];
+
+        let header = StringHeader {
+            utf16_len: String::from_utf8_lossy(bytes).encode_utf16().count() as u32,
+            byte_len: bytes.len() as u32,
+            capacity: bytes.len() as u32,
+            refcount: 1,
+            flags: 0,
+        };
+
+        // SAFETY: `Vec<u32>` supplies sufficient alignment and `word_count`
+        // reserves enough initialized storage for the header and payload.
+        unsafe {
+            storage.as_mut_ptr().cast::<StringHeader>().write(header);
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                storage.as_mut_ptr().cast::<u8>().add(header_len),
+                bytes.len(),
+            );
+        }
+
+        storage
+    }
+
+    #[test]
+    fn copies_non_ascii_payload_into_owned_storage() {
+        let mut storage = runtime_string("Grüße 👋".as_bytes());
+        // SAFETY: `runtime_string` created a valid header and payload.
+        let copied = unsafe { copy_string_from_raw(storage.as_ptr()) };
+
+        storage.fill(0);
+        assert_eq!(copied, "Grüße 👋");
+    }
+
+    #[test]
+    fn replaces_invalid_utf8_and_accepts_null() {
+        let storage = runtime_string(&[b'f', 0x80]);
+        // SAFETY: `runtime_string` created a valid header and payload.
+        assert_eq!(unsafe { copy_string_from_raw(storage.as_ptr()) }, "f�");
+        assert_eq!(unsafe { copy_string_from_raw::<u8>(std::ptr::null()) }, "");
+    }
+}
+
 /// Allocate a runtime string from raw bytes — bypasses the UTF-8
 /// validation [`alloc_string`] does implicitly. Use for compressed
 /// payloads, crypto digests, and other binary-as-string outputs

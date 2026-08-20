@@ -777,8 +777,8 @@ fn resolve_asset_path(path: &str) -> String {
 }
 
 pub fn load_image(path: *const u8) -> i64 {
-    let raw = crate::widgets::image::str_from_header(path);
-    let resolved = resolve_asset_path(raw);
+    let raw = unsafe { crate::widgets::image::str_from_header(path) };
+    let resolved = resolve_asset_path(&raw);
     if let Some(handle) = IMAGE_CACHE.with(|c| c.borrow().get(&resolved).copied()) {
         if let Some((width, height)) = CANVAS_IMAGES.with(|images| {
             images

@@ -23,20 +23,10 @@ use std::ffi::CString;
 use tree::{NodeData, NodeKind};
 
 /// Extract a &str from a *const StringHeader pointer.
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
+pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 pub fn cstring_from_header(ptr: *const u8) -> Option<CString> {
-    let s = str_from_header(ptr);
+    let s = unsafe { str_from_header(ptr) };
     CString::new(s).ok()
 }
 
@@ -1345,8 +1335,8 @@ fn warn_app_group_not_configured_watchos(symbol: &'static str) {
 
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
-    let key = str_from_header(key_ptr as *const u8);
-    let value = str_from_header(value_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
+    let value = unsafe { str_from_header(value_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -1356,8 +1346,8 @@ pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
             warn_app_group_not_configured_watchos("perry_system_app_group_set");
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
-        let ns_value = objc2_foundation::NSString::from_str(value);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
+        let ns_value = objc2_foundation::NSString::from_str(&value);
         let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -1368,7 +1358,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     }
     let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     if key.is_empty() {
         return empty();
     }
@@ -1378,7 +1368,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
             warn_app_group_not_configured_watchos("perry_system_app_group_get");
             return empty();
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let value: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, stringForKey: &*ns_key];
         if value.is_null() {
@@ -1399,7 +1389,7 @@ pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
-    let key = str_from_header(key_ptr as *const u8);
+    let key = unsafe { str_from_header(key_ptr as *const u8) };
     if key.is_empty() {
         return;
     }
@@ -1409,7 +1399,7 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
             warn_app_group_not_configured_watchos("perry_system_app_group_delete");
             return;
         }
-        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_key = objc2_foundation::NSString::from_str(&key);
         let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
         let _: () = objc2::msg_send![defaults, synchronize];
     }
@@ -1455,8 +1445,8 @@ pub extern "C" fn perry_system_get_os_version() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_set_output_filename(filename_ptr: i64) {
-    let filename = str_from_header(filename_ptr as *const u8);
-    audio::set_output_filename(filename);
+    let filename = unsafe { str_from_header(filename_ptr as *const u8) };
+    audio::set_output_filename(&filename);
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_start_recording() {
