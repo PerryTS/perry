@@ -355,6 +355,28 @@ fn collect_archive_symbols_by_member(
     )))
 }
 
+/// Per-member map of *externally-defined* symbols only — the per-member
+/// analogue of [`collect_archive_global_symbols_flat`]. Used to compute a
+/// member's surviving-export keep-list for `--keep-global-symbols` (#8455).
+fn collect_archive_global_symbols_by_member(
+    llvm_nm: &Path,
+    archive: &Path,
+) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+    let out = Command::new(llvm_nm)
+        .arg("--defined-only")
+        .arg("--extern-only")
+        .arg("--format=bsd")
+        .arg(archive)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(parse_nm_archive_output(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
+}
+
 /// Flat union of every symbol defined anywhere in the archive.
 fn collect_archive_symbols_flat(
     llvm_nm: &Path,
@@ -365,15 +387,63 @@ fn collect_archive_symbols_flat(
         .unwrap_or_default()
 }
 
-/// Flat union of every *external* symbol defined anywhere in the archive.
+/// Flat union of every symbol the archive can actually PROVIDE to the linker.
 /// Distinct from [`collect_archive_symbols_flat`], which includes local
 /// definitions: a local definition cannot satisfy a cross-object reference,
 /// so callers deciding "can this reference resolve from that archive
 /// instead?" must use this variant.
+///
+/// #8455: read from the archive's symbol INDEX (armap), not the members'
+/// symbol tables — the linker selects archive members exclusively via the
+/// index, so the index is the ground truth for resolvability. The two are
+/// known to diverge: a thin-LTO build internalizes std CGU symbols (local in
+/// the nlist, absent from the index), and an `llvm-objcopy`-rewritten member
+/// can keep `N_EXT` symbols in its nlist that the index no longer carries.
+/// Counting either as "provided" drops/localizes the only loadable copy and
+/// the final link fails with `symbol(s) not found` for a symbol `nm` still
+/// shows as `T`. Falls back to nm's extern-defined view only when the archive
+/// has no index at all.
 fn collect_archive_global_symbols_flat(
     llvm_nm: &Path,
     archive: &Path,
 ) -> std::collections::HashSet<String> {
+    let out = match Command::new(llvm_nm)
+        .arg("--print-armap")
+        .arg(archive)
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return Default::default(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut in_map = false;
+    let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == "Archive map" {
+            in_map = true;
+            continue;
+        }
+        if !in_map {
+            continue;
+        }
+        if trimmed.is_empty() {
+            break;
+        }
+        // Symbol names never contain spaces; the member path after the FIRST
+        // " in " may (so split from the left).
+        if let Some((symbol, _member)) = trimmed.split_once(" in ") {
+            symbols.insert(symbol.to_string());
+        }
+    }
+    if !symbols.is_empty() {
+        return symbols;
+    }
+
+    // No index (or an empty one): fall back to the members' extern-defined
+    // symbols. An index-less archive is not really linkable on ld64 anyway,
+    // but the COFF/ELF paths tolerate it and over-counting here only makes
+    // the dedup more aggressive on a shape we cannot reason about.
     let out = match Command::new(llvm_nm)
         .arg("--defined-only")
         .arg("--extern-only")
@@ -477,6 +547,36 @@ fn is_rust_codegen_unit(member: &str) -> bool {
 /// bundling staticlib carried unique CGUs (#181 part B). Falls back to the
 /// legacy name-pattern when `llvm-nm` isn't installed.
 pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<PathBuf> {
+    strip_duplicate_objects_from_lib_with_evidence(lib_path, StdlibEvidence::Locate)
+}
+
+/// Where the dedup evidence for `libperry_stdlib.a` comes from — i.e. whether
+/// its symbols may be counted as "provided elsewhere" when deciding to DROP a
+/// staticlib member.
+///
+/// #8455: the evidence set must equal the set of archives actually on the
+/// final link line. A pure-UI macOS program links runtime + UI lib but NOT
+/// stdlib, yet the trim counted stdlib's symbols as provided and dropped the
+/// UI staticlib's bundled-std members. Whenever the release-profile (thin-LTO)
+/// runtime archive internalizes one of those std CGUs (e.g.
+/// `<Stdout as Write>::flush`, referenced by `PerryTestExitTarget::test_exit`),
+/// nothing on the line defines it and every UI doc-test fails at link.
+pub(super) enum StdlibEvidence<'a> {
+    /// stdlib WILL be on the final link line at exactly this path.
+    Linked(&'a Path),
+    /// stdlib will NOT be on the final link line — its symbols must not
+    /// count as provided.
+    NotLinked,
+    /// The caller does not know the final link composition — locate stdlib
+    /// next to the lib / via `find_stdlib_library` (legacy behavior; used by
+    /// the tier-3 native-binding dedup, where stdlib is always linked).
+    Locate,
+}
+
+pub(super) fn strip_duplicate_objects_from_lib_with_evidence(
+    lib_path: &PathBuf,
+    stdlib_evidence: StdlibEvidence<'_>,
+) -> Result<PathBuf> {
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
     let is_win_lib = lib_name.ends_with(".lib");
     eprintln!("[strip-dedup] Processing: {}", lib_path.display());
@@ -543,11 +643,21 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     };
 
     // Find perry-stdlib members so we can compute the set difference.
-    let stdlib_path = lib_path
-        .parent()
-        .map(|p| p.join(stdlib_name))
-        .filter(|p| p.exists())
-        .or_else(|| find_stdlib_library(search_target));
+    // #8455: only when stdlib is actually evidence — see `StdlibEvidence`.
+    let stdlib_path: Option<PathBuf> = match stdlib_evidence {
+        StdlibEvidence::Linked(path) => Some(path.to_path_buf()),
+        StdlibEvidence::NotLinked => {
+            eprintln!(
+                "[strip-dedup] {stdlib_name} excluded from evidence: not on the final link line"
+            );
+            None
+        }
+        StdlibEvidence::Locate => lib_path
+            .parent()
+            .map(|p| p.join(stdlib_name))
+            .filter(|p| p.exists())
+            .or_else(|| find_stdlib_library(search_target)),
+    };
 
     let mut exclude_members: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -692,13 +802,13 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         if has_rlib {
             let abs_rlib = std::fs::canonicalize(&rlib_path).unwrap_or_else(|_| rlib_path.clone());
             let n = syms.len();
-            syms.extend(collect_archive_symbols_flat(nm, &abs_rlib));
+            syms.extend(collect_archive_global_symbols_flat(nm, &abs_rlib));
             eprintln!("[strip-dedup] rlib symbols loaded: {}", syms.len() - n);
         }
         if let Some(ref sp) = stdlib_path {
             let abs = std::fs::canonicalize(sp).unwrap_or_else(|_| sp.clone());
             let n = syms.len();
-            syms.extend(collect_archive_symbols_flat(nm, &abs));
+            syms.extend(collect_archive_global_symbols_flat(nm, &abs));
             eprintln!(
                 "[strip-dedup] {stdlib_name} symbols loaded: {}",
                 syms.len() - n
@@ -707,7 +817,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         if let Some(ref rp) = runtime_path {
             let abs = std::fs::canonicalize(rp).unwrap_or_else(|_| rp.clone());
             let n = syms.len();
-            syms.extend(collect_archive_symbols_flat(nm, &abs));
+            syms.extend(collect_archive_global_symbols_flat(nm, &abs));
             eprintln!(
                 "[strip-dedup] {runtime_name} symbols loaded: {}",
                 syms.len() - n
@@ -720,10 +830,15 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     };
 
     // Per-member symbols of the bundling staticlib (lazy-init to skip the
-    // whole nm parse if nm isn't usable).
+    // whole nm parse if nm isn't usable). Extern-only on both sides of the
+    // subset test (#8455): a member's LOCAL definitions can never be
+    // referenced from another object, so they are irrelevant to "can every
+    // reference to this member resolve elsewhere?" — and evidence-side
+    // locals (e.g. thin-LTO-internalized std CGUs in the runtime archive)
+    // cannot satisfy an external reference at all.
     let staticlib_member_symbols = if nm_works {
         let nm = llvm_nm.as_ref().expect("nm_works ⇒ Some");
-        collect_archive_symbols_by_member(nm, &abs_staticlib).unwrap_or_default()
+        collect_archive_global_symbols_by_member(nm, &abs_staticlib).unwrap_or_default()
     } else {
         std::collections::HashMap::new()
     };
@@ -1180,7 +1295,7 @@ pub(super) fn strip_bundled_runtime_from_well_known_lib(
         .ok_or_else(|| anyhow::anyhow!("failed to inspect defined symbols of {lib_name}"))?;
     let undefined_by_member = collect_archive_undefined_by_member(&nm, &abs_lib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect undefined symbols of {lib_name}"))?;
-    let stdlib_defined = collect_archive_symbols_flat(&nm, &abs_stdlib);
+    let stdlib_defined = collect_archive_global_symbols_flat(&nm, &abs_stdlib);
     if stdlib_defined.is_empty() {
         return Err(anyhow::anyhow!(
             "failed to inspect stdlib symbols (empty set)"
@@ -1326,35 +1441,50 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
         ));
     }
 
-    let defined_by_member = collect_archive_symbols_by_member(&nm, &abs_lib)
+    let defined_by_member = collect_archive_global_symbols_by_member(&nm, &abs_lib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect defined symbols of {lib_name}"))?;
 
-    let mut to_localize_by_member: std::collections::BTreeMap<String, Vec<String>> =
+    // Per member: the externally-defined symbols that must SURVIVE as globals
+    // (not provided by any linked archive). Everything else gets localized —
+    // expressed as a `--keep-global-symbols` keep-list rather than a
+    // `--localize-symbols` drop-list, because llvm-objcopy's localize path
+    // leaves LC_DYSYMTAB inconsistent on Mach-O (nextdefsym=0 while N_EXT
+    // symbols remain in the nlist). llvm-ar's archive index builder and ld64
+    // both trust LC_DYSYMTAB, so a partially-localized member's surviving
+    // exports vanished from the archive index and the final link failed with
+    // "symbol(s) not found" for symbols nm could still see as `T` (#8455 —
+    // every macOS UI doc-test). `--keep-global-symbols` rewrites the symbol
+    // table consistently.
+    let mut to_keep_by_member: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     let mut total_localized = 0usize;
     for member in &members {
         let Some(defined) = defined_by_member.get(member) else {
             continue;
         };
-        let mut duplicated: Vec<String> = defined
+        let duplicated = defined
             .iter()
             .filter(|s| linked_globals.contains(*s))
-            .cloned()
-            .collect();
-        if duplicated.is_empty() {
+            .count();
+        if duplicated == 0 {
             continue;
         }
-        duplicated.sort();
-        total_localized += duplicated.len();
-        to_localize_by_member.insert(member.clone(), duplicated);
+        let mut keep: Vec<String> = defined
+            .iter()
+            .filter(|s| !linked_globals.contains(*s))
+            .cloned()
+            .collect();
+        keep.sort();
+        total_localized += duplicated;
+        to_keep_by_member.insert(member.clone(), keep);
     }
-    if to_localize_by_member.is_empty() {
+    if to_keep_by_member.is_empty() {
         return Ok(lib_path.clone());
     }
     eprintln!(
         "[strip-dedup] {lib_name}: localizing {total_localized} bundled global(s) across \
          {} member(s) already provided by the linked stdlib/runtime",
-        to_localize_by_member.len()
+        to_keep_by_member.len()
     );
 
     let tmp_base = strip_tmp_base();
@@ -1374,12 +1504,12 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
         return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
     }
 
-    for (member, symbols) in &to_localize_by_member {
+    for (member, keep_globals) in &to_keep_by_member {
         let member_path = extract_dir.join(member);
-        let list_path = extract_dir.join(format!("{member}.localize-list"));
-        std::fs::write(&list_path, symbols.join("\n"))?;
+        let list_path = extract_dir.join(format!("{member}.keep-globals-list"));
+        std::fs::write(&list_path, keep_globals.join("\n"))?;
         let out = Command::new(&objcopy)
-            .arg(format!("--localize-symbols={}", list_path.display()))
+            .arg(format!("--keep-global-symbols={}", list_path.display()))
             .arg(&member_path)
             .output()?;
         if !out.status.success() {
@@ -1517,7 +1647,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         .ok_or_else(|| anyhow::anyhow!("failed to inspect defined symbols of {lib_name}"))?;
     let undefined_by_member = collect_archive_undefined_by_member(&nm, &abs_lib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect undefined symbols of {lib_name}"))?;
-    let stdlib_defined = collect_archive_symbols_flat(&nm, &abs_stdlib);
+    let stdlib_defined = collect_archive_global_symbols_flat(&nm, &abs_stdlib);
     if stdlib_defined.is_empty() {
         return Err(anyhow::anyhow!(
             "failed to inspect stdlib symbols (empty set)"
@@ -1696,258 +1826,7 @@ pub(super) fn dedup_native_lib_for_tier3(
 }
 
 #[cfg(test)]
-mod strip_dedup_tests {
-    use super::{force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_output};
-
-    #[test]
-    fn panic_unwind_classification_matches_dwref() {
-        // The compiler-emitted `DW.ref.rust_eh_personality` substring-matches
-        // `rust_eh_personality`; both must be treated as panic/unwind so the
-        // well-known localizer skips them on ELF (PIE relocation breakage).
-        assert!(is_panic_unwind_symbol("rust_eh_personality"));
-        assert!(is_panic_unwind_symbol("DW.ref.rust_eh_personality"));
-        assert!(is_panic_unwind_symbol("rust_begin_unwind"));
-        assert!(is_panic_unwind_symbol("rust_panic"));
-        // Allocator shims and ordinary symbols are not panic/unwind.
-        assert!(!is_panic_unwind_symbol("__rust_alloc"));
-        assert!(!is_panic_unwind_symbol("__rdl_dealloc"));
-        assert!(!is_panic_unwind_symbol("js_fetch_with_options"));
-
-        // Candidate collection is unchanged: allocator shims and the
-        // panic/unwind group are both still force-localize candidates (the ELF
-        // skip happens per-object in the well-known localizer, not here).
-        assert!(force_localize_symbol("rust_eh_personality"));
-        assert!(force_localize_symbol("__rust_alloc"));
-        assert!(force_localize_symbol("js_stdlib_init_dispatch"));
-        assert!(!force_localize_symbol("js_some_regular_export"));
-    }
-
-    #[test]
-    fn parser_handles_bare_member_headers() {
-        let nm_out = "\
-member_one.o:
-_sym_a
-_sym_b
-
-member_two.o:
-_sym_c
-";
-        let map = parse_nm_archive_output(nm_out);
-        assert_eq!(map.len(), 2);
-        assert!(map["member_one.o"].contains("_sym_a"));
-        assert!(map["member_one.o"].contains("_sym_b"));
-        assert_eq!(map["member_one.o"].len(), 2);
-        assert_eq!(map["member_two.o"].len(), 1);
-        assert!(map["member_two.o"].contains("_sym_c"));
-    }
-
-    #[test]
-    fn parser_strips_archive_wrapper_from_header() {
-        // Some llvm-nm versions wrap each member as
-        // `archive.a(member.o):` — we want the bare member name so the
-        // map keys match `ar t` output.
-        let nm_out = "\
-/path/to/lib.a(perry_runtime-abc.cgu.0.rcgu.o):
-_SYM
-";
-        let map = parse_nm_archive_output(nm_out);
-        assert_eq!(map.len(), 1);
-        assert!(map.contains_key("perry_runtime-abc.cgu.0.rcgu.o"));
-    }
-
-    #[test]
-    fn parser_handles_bsd_symbol_lines() {
-        let nm_out = "\
-member_one.o:
-0000000000000000 T _sym_a
-0000000000000010 r .Lprivate
-
-member_two.o:
-0000000000000000 T js_stdlib_init_dispatch
-";
-        let map = parse_nm_archive_output(nm_out);
-        assert_eq!(map.len(), 2);
-        assert!(map["member_one.o"].contains("_sym_a"));
-        assert!(map["member_one.o"].contains(".Lprivate"));
-        assert!(map["member_two.o"].contains("js_stdlib_init_dispatch"));
-    }
-
-    #[test]
-    fn parser_skips_empty_members() {
-        let nm_out = "\
-empty.o:
-
-next.o:
-_sym
-";
-        let map = parse_nm_archive_output(nm_out);
-        // Empty.o produces no entry — `member_syms.is_empty()` is the
-        // call-site guard that keeps zero-symbol members anyway.
-        assert!(!map.contains_key("empty.o"));
-        assert_eq!(map["next.o"].len(), 1);
-    }
-
-    #[test]
-    fn subset_check_prunes_only_full_overlap() {
-        // The actual filter logic: keep a member iff at least one of its
-        // symbols is unique (i.e. not in the provided set). This pins
-        // down the v0.5.320 #181 invariant — a member with a unique
-        // generic monomorphization (not in standalone runtime/stdlib)
-        // must be KEPT even if its name happens to match the pattern.
-        let nm_out = "\
-fully_dup.o:
-_a
-_b
-
-unique_mono.o:
-_a
-_specific_to_this_lib
-
-empty_marker.o:
-";
-        let by_member = parse_nm_archive_output(nm_out);
-        let provided: std::collections::HashSet<String> =
-            ["_a".to_string(), "_b".to_string(), "_z".to_string()]
-                .into_iter()
-                .collect();
-
-        // fully_dup.o → all symbols provided → drop
-        let m1 = &by_member["fully_dup.o"];
-        assert!(!m1.is_empty() && m1.iter().all(|s| provided.contains(s)));
-
-        // unique_mono.o → has _specific_to_this_lib not in provided → keep
-        let m2 = &by_member["unique_mono.o"];
-        assert!(!m2.is_empty() && !m2.iter().all(|s| provided.contains(s)));
-
-        // empty_marker.o → no entry; call site keeps it defensively.
-        assert!(!by_member.contains_key("empty_marker.o"));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn coff_archive_dedup_drops_only_fully_provided_members() {
-        use super::{
-            collect_archive_symbols_flat, find_llvm_tool_or_beside_lld, rebuild_archive,
-            strip_duplicate_objects_from_lib,
-        };
-        use std::path::Path;
-        use std::process::Command;
-
-        fn compile_object(source: &Path, output: &Path, crate_name: &str) {
-            let result = Command::new("rustc")
-                .arg("--crate-name")
-                .arg(crate_name)
-                .arg("--crate-type=lib")
-                .arg("--emit=obj")
-                .arg("-Cpanic=abort")
-                .arg(source)
-                .arg("-o")
-                .arg(output)
-                .output()
-                .expect("rustc must run");
-            assert!(
-                result.status.success(),
-                "rustc failed: {}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-
-        let temp = tempfile::tempdir().expect("temporary COFF fixture directory");
-        let duplicate_source = temp.path().join("runtime.rs");
-        let unique_source = temp.path().join("ui.rs");
-        std::fs::write(
-            &duplicate_source,
-            "#[no_mangle]\npub extern \"C\" fn runtime_canonical() {}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            &unique_source,
-            "#[no_mangle]\npub extern \"C\" fn ui_only_symbol() {}\n",
-        )
-        .unwrap();
-
-        let duplicate_object = temp.path().join("runtime.obj");
-        let unique_object = temp.path().join("ui.obj");
-        compile_object(&duplicate_source, &duplicate_object, "runtime_fixture");
-        compile_object(&unique_source, &unique_object, "ui_fixture");
-
-        let llvm_ar =
-            find_llvm_tool_or_beside_lld("llvm-ar").expect("Windows LLVM must provide llvm-ar");
-        let llvm_nm =
-            find_llvm_tool_or_beside_lld("llvm-nm").expect("Windows LLVM must provide llvm-nm");
-        let runtime = temp.path().join("perry_runtime.lib");
-        let ui = temp.path().join("perry_ui_windows.lib");
-        let ui_rlib = temp.path().join("libperry_ui_windows.rlib");
-        // Current rustc uses opaque CGU components such as
-        // `.1v150fxu9jccif28r12uax7fb.02s2fqd.rcgu.o`, without the literal
-        // `.cgu.` / `-cgu.` segments recognized by the old extraction code.
-        let current_rustc_cgu = temp
-            .path()
-            .join("perry_ui_windows-deadbeef.opaque.codegen.rcgu.o");
-        std::fs::copy(&unique_object, &current_rustc_cgu).unwrap();
-        rebuild_archive(
-            &llvm_ar,
-            &runtime,
-            std::slice::from_ref(&duplicate_object),
-            true,
-        )
-        .unwrap();
-        rebuild_archive(
-            &llvm_ar,
-            &ui,
-            &[duplicate_object.clone(), unique_object],
-            true,
-        )
-        .unwrap();
-        rebuild_archive(
-            &llvm_ar,
-            &ui_rlib,
-            std::slice::from_ref(&current_rustc_cgu),
-            true,
-        )
-        .unwrap();
-
-        let trimmed = strip_duplicate_objects_from_lib(&ui).expect("COFF dedup must succeed");
-        let symbols = collect_archive_symbols_flat(&llvm_nm, &trimmed);
-        assert!(symbols.contains("ui_only_symbol"));
-        assert!(!symbols.contains("runtime_canonical"));
-    }
-
-    #[test]
-    fn rust_codegen_unit_recognizes_current_and_legacy_member_names() {
-        assert!(super::is_rust_codegen_unit(
-            "perry_ui_windows-deadbeef.opaque.codegen.rcgu.o"
-        ));
-        assert!(super::is_rust_codegen_unit(
-            "perry_ui_windows-deadbeef.perry_ui_windows.hash-cgu.0.rcgu.o"
-        ));
-        assert!(!super::is_rust_codegen_unit("allocator_shim.o"));
-        assert!(!super::is_rust_codegen_unit("lib.rmeta"));
-    }
-
-    #[test]
-    fn extracted_path_qualified_archive_member_falls_back_to_basename() {
-        let temp = tempfile::tempdir().unwrap();
-        let extracted = temp.path().join("loader_impl.obj");
-        std::fs::write(&extracted, b"native object fixture").unwrap();
-
-        assert_eq!(
-            super::extracted_archive_member(
-                temp.path(),
-                "obj/edge_embedded_browser/client/win/WebView2LoaderLib/loader_impl.obj",
-            ),
-            Some(extracted)
-        );
-    }
-
-    #[test]
-    fn windows_import_members_include_dll_and_driver_archives() {
-        assert!(super::is_windows_import_archive_member("uxtheme.dll"));
-        assert!(super::is_windows_import_archive_member("winspool.drv"));
-        assert!(super::is_windows_import_archive_member("WINSPool.DRV"));
-        assert!(!super::is_windows_import_archive_member("loader_impl.obj"));
-    }
-}
+mod strip_dedup_tests;
 
 #[cfg(test)]
 mod strip_tmp_base_tests {

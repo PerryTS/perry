@@ -1004,7 +1004,30 @@ pub(crate) fn build_and_run_link(
             let ui_lib = if is_android || is_visionos {
                 ui_lib
             } else {
-                let trimmed = match strip_duplicate_objects_from_lib(&ui_lib) {
+                // #8455: the trim's evidence set must equal the archives that
+                // will actually be on this link line. stdlib joins it when
+                // `ctx.needs_stdlib || is_windows` (the arm above), and on
+                // Linux unconditionally (appended after the UI lib below). A
+                // pure-UI ld64 program links neither — counting stdlib's
+                // symbols anyway dropped the UI lib's bundled-std members that
+                // the thin-LTO runtime archive does not export (e.g.
+                // `<Stdout as Write>::flush` from `PerryTestExitTarget::
+                // test_exit`), failing every UI doc-test at link.
+                let stdlib_on_link_line: Option<PathBuf> = if is_linux {
+                    stdlib_lib.clone().or_else(|| find_stdlib_library(target))
+                } else if ctx.needs_stdlib || is_windows {
+                    stdlib_lib.clone()
+                } else {
+                    None
+                };
+                let stdlib_evidence = match stdlib_on_link_line {
+                    Some(ref path) => StdlibEvidence::Linked(path.as_path()),
+                    None => StdlibEvidence::NotLinked,
+                };
+                let trimmed = match strip_duplicate_objects_from_lib_with_evidence(
+                    &ui_lib,
+                    stdlib_evidence,
+                ) {
                     Ok(trimmed) => trimmed,
                     Err(e) => {
                         eprintln!("[strip-dedup] skipped for UI lib (non-fatal): {e}");
@@ -1024,8 +1047,13 @@ pub(crate) fn build_and_run_link(
                 if is_linux || is_windows {
                     trimmed
                 } else {
+                    // #8455: same evidence rule for the localize pass — only
+                    // rebind UI globals to archives actually on the link line.
+                    // Localizing against an unlinked stdlib turns the UI lib's
+                    // own definition local while the external reference stays
+                    // unresolved.
                     let mut linked_refs: Vec<&Path> = vec![runtime_lib];
-                    if let Some(ref s) = stdlib_lib {
+                    if let Some(ref s) = stdlib_on_link_line {
                         linked_refs.push(s.as_path());
                     }
                     match dedup_ui_lib_against_linked_libs(&trimmed, &linked_refs) {
