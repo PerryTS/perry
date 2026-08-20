@@ -1,0 +1,1 @@
+Register `test_gap_gc_string_copy_source_rooting` and `test_gap_gc_string_repeat_reentrant_count` in `test-parity/gc_repsel_corpus.txt`. #8439 and #8443 added them to `test-files/` without registering them, so `scripts/gc_repsel_matrix.sh` never executed either — a GC regression test that never runs is not a gate. `check_test_registration` was red on `main`.

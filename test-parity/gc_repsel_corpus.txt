@@ -816,3 +816,11 @@ test_gap_gc_http2_pending_event_callback_rooting
 # `Object.getPrototypeOf(undefined)` throws. Pre-fix `bad > 0` under seeded
 # GC; post-fix `bad 0`. Clean under `PERRY_GEN_GC=0`.
 test_gap_gc_interp_global_this_rooting
+
+# #8439: `js_string_copy` borrowed its source's bytes across an allocation that
+# can trigger a moving minor. Registered so gc-stress / gc-moving-witnesses
+# actually execute it instead of leaving it dark on disk.
+test_gap_gc_string_copy_source_rooting
+# #8443: `String.prototype.repeat` held its receiver unrooted across a
+# re-entrant count coercion. Same reason.
+test_gap_gc_string_repeat_reentrant_count
