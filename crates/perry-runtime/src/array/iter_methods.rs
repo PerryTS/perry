@@ -1077,6 +1077,62 @@ pub(crate) fn throw_reduce_of_empty() -> ! {
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
+/// Read one exotic join element while keeping the receiver current across a
+/// getter or prototype lookup that can allocate and move it.
+#[cold]
+#[inline(never)]
+fn join_exotic_element(arr: *const ArrayHeader, index: u32) -> (Option<u64>, *const ArrayHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
+    let present = arr_handle.with_const_ptr(|arr| crate::array::array_spec_has_index(arr, index));
+    if !present {
+        return (
+            None,
+            normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
+        );
+    }
+    let value = arr_handle.with_const_ptr(|arr| crate::array::array_spec_get(arr, index));
+    (
+        Some(value.to_bits()),
+        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
+    )
+}
+
+/// Run an allocating element conversion with the receiver and value rooted,
+/// then return the receiver's post-collection address.
+#[cold]
+#[inline(never)]
+fn join_element_to_string(
+    arr: *const ArrayHeader,
+    element_bits: u64,
+) -> (*const crate::string::StringHeader, *const ArrayHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
+    let element_handle = scope.root_nanbox_u64(element_bits);
+    let string = crate::value::js_jsvalue_to_string(element_handle.get_nanbox_f64());
+    (
+        string,
+        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn join_bigint_to_string(
+    arr: *const ArrayHeader,
+    element_bits: u64,
+) -> (*const crate::string::StringHeader, *const ArrayHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_const_ptr(arr);
+    let element_handle = scope.root_nanbox_u64(element_bits);
+    let value = crate::value::JSValue::from_bits(element_handle.get_nanbox_u64());
+    let string = crate::bigint::js_bigint_to_string(value.as_bigint_ptr());
+    (
+        string,
+        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
+    )
+}
+
 /// join - Join array elements into a string with a separator
 /// Returns pointer to new StringHeader
 #[no_mangle]
@@ -1084,10 +1140,10 @@ pub extern "C" fn js_array_join(
     arr: *const ArrayHeader,
     separator: *const crate::string::StringHeader,
 ) -> *mut crate::string::StringHeader {
-    use crate::string::{js_string_from_bytes, StringHeader};
+    use crate::string::{js_string_from_bytes, OwnedStringBytes, StringHeader};
     use crate::value::JSValue;
 
-    let arr = normalize_array_receiver(arr);
+    let mut arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
@@ -1106,35 +1162,38 @@ pub extern "C" fn js_array_join(
             return js_string_from_bytes(ptr::null(), 0);
         }
 
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let mut elements_ptr =
+            (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
-        // Get separator string
-        let sep_str = if separator.is_null() {
-            ","
-        } else {
-            let sep_len = (*separator).byte_len as usize;
-            let sep_data = (separator as *const u8).add(std::mem::size_of::<StringHeader>());
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(sep_data, sep_len))
-        };
+        // Element coercion can run user code and move a heap separator. Keep an
+        // owned snapshot so the hot loop never holds a GC payload borrow across
+        // a collection point.
+        let separator_snapshot =
+            (!separator.is_null()).then(|| OwnedStringBytes::copy_from_header(separator));
+        let separator_str = separator_snapshot
+            .as_ref()
+            .map_or(",", |bytes| std::str::from_utf8_unchecked(bytes.as_bytes()));
 
-        // Separators are an exact lower bound for the result. Reserving them
-        // up front avoids the zero-capacity growth ladder without speculatively
-        // coercing elements (which could run user code or mutate the array).
-        let separator_bytes = sep_str
+        // Separators are an exact lower bound for the result. Element
+        // coercion remains single-pass because it can run user code.
+        let separator_bytes = separator_str
             .len()
             .saturating_mul(length.saturating_sub(1) as usize);
         let mut result = String::with_capacity(separator_bytes);
+
         for i in 0..length as usize {
             if i > 0 {
-                result.push_str(sep_str);
+                result.push_str(separator_str);
             }
             let element_bits = if exotic {
-                if !crate::array::array_spec_has_index(arr, i as u32) {
+                let (element, arr_now) = join_exotic_element(arr, i as u32);
+                arr = arr_now;
+                let Some(bits) = element else {
                     // absent slot (own or inherited) → empty string per spec
                     continue;
-                }
-                crate::array::array_spec_get(arr, i as u32).to_bits()
+                };
+                bits
             } else {
                 let bits = (*elements_ptr.add(i)).to_bits();
                 // Issue #907: `Array(n)` initializes slots to TAG_HOLE; per
@@ -1187,7 +1246,12 @@ pub extern "C" fn js_array_join(
                     let s_ptr = if is_string_obj {
                         ptr_addr as *const StringHeader
                     } else {
-                        crate::value::js_jsvalue_to_string(f64::from_bits(element_bits))
+                        let (s_ptr, arr_now) = join_element_to_string(arr, element_bits);
+                        arr = arr_now;
+                        if !exotic {
+                            elements_ptr = array_elements_ptr(arr);
+                        }
+                        s_ptr
                     };
                     if !s_ptr.is_null() {
                         let str_len = (*s_ptr).byte_len as usize;
@@ -1205,7 +1269,11 @@ pub extern "C" fn js_array_join(
                 // so they bypass the pointer arm above and previously fell through
                 // to the `[object Object]` catch-all. ToString(BigInt) is the plain
                 // decimal digits with NO `n` suffix (`[10n].join() === "10"`).
-                let s_ptr = crate::bigint::js_bigint_to_string(jsvalue.as_bigint_ptr());
+                let (s_ptr, arr_now) = join_bigint_to_string(arr, element_bits);
+                arr = arr_now;
+                if !exotic {
+                    elements_ptr = array_elements_ptr(arr);
+                }
                 if !s_ptr.is_null() {
                     let str_len = (*s_ptr).byte_len as usize;
                     let str_data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
