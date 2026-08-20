@@ -78,6 +78,11 @@ jobs:
           EXISTING: ${{ inputs.build-run-id }}
         run: |
           set -euo pipefail
+          # The commit THIS workflow run is dispatching from — every downstream
+          # check (reused-run headSha match, or the fresh dispatch's --ref and
+          # run-selection below) pins to this, never to "whatever the default
+          # branch happens to be at the moment we call gh".
+          CUR_SHA=$(git rev-parse HEAD)
           if [ -n "$EXISTING" ]; then
             RUN_ID="$EXISTING"
             # Validate the reused run before trusting its artifacts: it must
@@ -85,7 +90,6 @@ jobs:
             # and it must have built the commit we're dispatching from — a
             # stale or wrong-workflow run-id would otherwise stage old/wrong
             # binaries under today's version and dist-tag with no error.
-            CUR_SHA=$(git rev-parse HEAD)
             RUN_JSON=$(gh run view "$RUN_ID" -R "$REPO" --json workflowName,conclusion,status,headSha)
             RUN_WORKFLOW=$(echo "$RUN_JSON" | jq -r '.workflowName')
             RUN_STATUS=$(echo "$RUN_JSON" | jq -r '.status')
@@ -105,30 +109,38 @@ jobs:
             fi
             echo "Reusing build run $RUN_ID (verified: Release Packages, success, sha $RUN_SHA)."
           else
-            # Dispatch release-packages.yml in stage mode. Stage mode is the
+            # Dispatch release-packages.yml in stage mode, pinned to OUR exact
+            # commit via --ref. Without this, `gh workflow run` dispatches
+            # against the repo's default branch tip at call time — which can
+            # differ from the commit this npm-stage-publish.yml run itself
+            # checked out (a different ref triggered it, or main advanced in
+            # the gap between the two dispatches) — and would build/stage the
+            # wrong commit's binaries under today's version. Stage mode is the
             # DEFAULT workflow_dispatch (no inputs = build-only smoke run; the
-            # preflight job's else-branch sets MODE=stage), so no input is needed.
+            # preflight job's else-branch sets MODE=stage), so no other input
+            # is needed.
             DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            gh workflow run release-packages.yml -R "$REPO"
+            gh workflow run release-packages.yml -R "$REPO" --ref "$CUR_SHA"
             # Poll for the workflow_dispatch run we just created. Match by
-            # event + createdAt after the dispatch timestamp — NOT just the
-            # newest run, which could be a concurrent or unrelated dispatch and
-            # would stage the wrong artifacts.
+            # event + createdAt AFTER the dispatch timestamp AND headSha ==
+            # our commit — createdAt alone could still match a concurrent
+            # dispatch of the SAME workflow from a different ref that happened
+            # to land in the same window, which would stage the wrong commit.
             sleep 5
             RUN_ID=""
             for i in $(seq 1 20); do
               RUN_ID=$(gh run list --workflow release-packages.yml -R "$REPO" \
                 --event workflow_dispatch --limit 5 \
-                --json databaseId,createdAt \
-                --jq "[.[] | select(.createdAt >= \"$DISPATCHED_AT\")][0].databaseId" 2>/dev/null || true)
+                --json databaseId,createdAt,headSha \
+                --jq "[.[] | select(.createdAt >= \"$DISPATCHED_AT\" and .headSha == \"$CUR_SHA\")][0].databaseId" 2>/dev/null || true)
               if [ -n "$RUN_ID" ]; then break; fi
               sleep 3
             done
             if [ -z "$RUN_ID" ]; then
-              echo "::error::could not resolve a release-packages.yml run id after dispatch." >&2
+              echo "::error::could not resolve a release-packages.yml run id (dispatched at $CUR_SHA) after dispatch." >&2
               exit 1
             fi
-            echo "Dispatched release-packages.yml stage build: run $RUN_ID."
+            echo "Dispatched release-packages.yml stage build: run $RUN_ID (sha $CUR_SHA)."
           fi
           echo "build-run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
       - name: Await the stage-mode build

@@ -11,6 +11,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import process from 'node:process'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { renderPerryFormula } from './brew/formula.mts'
@@ -280,6 +282,27 @@ test('pipeline.mts: no mode flag is a usage error, not a default action', () => 
     src,
     /No mode flag given/,
     'pipeline.mts must refuse to run without an explicit mode flag',
+  )
+})
+
+test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {
+  // Mode resolution used to be `flags.find(...)`, which silently picked
+  // whichever mode flag argv happened to list first — so `--stage-only
+  // --approve` ran --stage-only (or, with the args reversed, --approve)
+  // instead of refusing an ambiguous invocation. This spawns the real CLI:
+  // the conflict must be caught before any gh/network call, so this is safe
+  // to exercise directly rather than only asserting against the source text.
+  const result = spawnSync(
+    process.execPath,
+    [path.join(PUBLISH_DIR, 'pipeline.mts'), '--stage-only', '--approve'],
+    { encoding: 'utf8' },
+  )
+  assert.equal(result.status, 1, 'conflicting mode flags must exit non-zero')
+  const output = `${result.stdout}${result.stderr}`
+  assert.match(
+    output,
+    /Conflicting mode flags/,
+    'pipeline.mts must name the conflict rather than silently choosing a mode',
   )
 })
 

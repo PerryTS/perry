@@ -222,20 +222,23 @@ async function main(): Promise<void> {
     }
   }
   const dryRun = flags.has('--dry-run')
-  const mode = [...flags].find(f => MODE_FLAGS.has(f))
+  const modesGiven = [...flags].filter(f => MODE_FLAGS.has(f))
   const unknown = [...flags].filter(f => !MODE_FLAGS.has(f) && !MODIFIER_FLAGS.has(f))
 
-  if (!mode || unknown.length > 0) {
+  if (modesGiven.length !== 1 || unknown.length > 0) {
     logger.fail(
-      (!mode
+      (modesGiven.length === 0
         ? 'No mode flag given — refusing to guess. '
-        : `Unknown flag(s): ${unknown.join(', ')}. `) +
+        : modesGiven.length > 1
+          ? `Conflicting mode flags: ${modesGiven.join(', ')} — refusing to guess which one wins. `
+          : `Unknown flag(s): ${unknown.join(', ')}. `) +
         'Usage: publish:pipeline <--stage-only | --scan-only | --approve | --release-only | --status> ' +
         '[--dry-run] [--yes] [--otp <code>] [--tag <tag>]',
     )
     process.exitCode = 1
     return
   }
+  const mode = modesGiven[0]!
 
   // Resolve the version from the gate.
   const gate = await checkVersionGate(rootPath)
