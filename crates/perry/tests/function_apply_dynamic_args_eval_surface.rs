@@ -37,11 +37,19 @@ fn workspace_root() -> PathBuf {
         .expect("canonicalize workspace root")
 }
 
-fn target_debug_dir() -> PathBuf {
+/// #8479: `release`, not `debug`. `panic` is a PROFILE-level setting and only
+/// `release`/`dist`/`perry-dev` set `panic = "abort"`. A debug archive is
+/// `panic = "unwind"`, and under that strategy rustc plants an RFC-2945
+/// abort-on-unwind guard in every `extern "C"` helper — which a JS throw
+/// crossing that helper trips ("panic in a function that cannot unwind").
+/// Perry never ships such a runtime, so linking one here tested unwind
+/// semantics that do not exist in production and made this test and
+/// `bun_ffi_stage1`'s use-after-close case mutually unsatisfiable.
+fn target_runtime_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
+        .join("release")
 }
 
 /// Build `libperry_{runtime,stdlib}.a` once so the compiled binaries can link.
@@ -55,6 +63,9 @@ fn ensure_runtime_archive() {
         let build = Command::new(cargo)
             .current_dir(workspace_root())
             .arg("build")
+            // #8479: must match `target_runtime_dir()` — a debug archive has
+            // the wrong panic strategy (see that function's comment).
+            .arg("--release")
             .arg("-p")
             .arg("perry-runtime-static")
             .arg("-p")
@@ -72,7 +83,7 @@ fn ensure_runtime_archive() {
 
 fn runtime_dir() -> PathBuf {
     ensure_runtime_archive();
-    target_debug_dir()
+    target_runtime_dir()
 }
 
 /// Literal-source `Function` / `Function.apply` / `Function.call` are const-folded and
