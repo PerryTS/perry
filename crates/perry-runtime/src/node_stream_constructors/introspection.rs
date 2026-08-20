@@ -3,7 +3,6 @@
 //! `_isArrayBufferView` type predicates), default-highWaterMark accessors and
 //! abort-signal wiring (split out of node_stream_constructors.rs for the
 //! 2000-line file-size gate, #1987).
-use super::super::*;
 use super::*;
 use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 use crate::value::JSValue;
