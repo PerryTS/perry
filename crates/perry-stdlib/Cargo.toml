@@ -339,11 +339,6 @@ perry-updater = { workspace = true }
 # entry is still required for `cargo build -p perry-container-compose`
 # to succeed — that's enforced by the `crate_in_workspace_members` test
 # in this crate's tests/.
-#
-# NOTE 2: do NOT enable the crate's own `ffi` feature here — it exports
-# a *different* legacy `js_compose_*` shape (YAML-file-path-based) that
-# would collide with stdlib's canonical SPEC §9.1 stack-handle
-# signatures at link.
 perry-container-compose = { path = "../perry-container-compose", optional = true }
 
 thiserror.workspace = true

@@ -24,14 +24,6 @@ pub mod yaml;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;
 
-// FFI exports (Perry TypeScript integration). NOTE: when this crate is
-// consumed by perry-stdlib (the canonical FFI host), the `ffi` feature
-// must NOT be enabled — perry-stdlib publishes a different (canonical
-// SPEC §9.1, stack-handle based) `js_compose_*` shape that would collide
-// at link with this module's legacy YAML-file-path shape.
-#[cfg(feature = "ffi")]
-pub mod ffi;
-
 // Re-exports
 pub use backend::{
     detect_backend, platform_candidates, probe_all_candidates, AppleContainerProtocol,
