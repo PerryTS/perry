@@ -9,11 +9,15 @@ show("unicode", ["A", "😀", "é"].join("·"));
 let calls = 0;
 const values: unknown[] = [];
 const churn = (): number => {
-  const live: unknown[] = [];
-  for (let i = 0; i < 128; i++) {
-    live.push({ i, text: ("allocation-" + i).repeat(32) });
+  let n = 0;
+  for (let round = 0; round < 64; round++) {
+    const live: unknown[] = [];
+    for (let i = 0; i < 512; i++) {
+      live.push({ i, text: ("allocation-" + i).repeat(48) });
+    }
+    n += live.length;
   }
-  return live.length;
+  return n;
 };
 const allocating = {
   toString(): string {
