@@ -53,6 +53,12 @@ fn compile_and_run(dir: &Path, entry: &Path, envs: &[(&str, &str)]) -> (bool, St
         String::from_utf8_lossy(&compile.stderr)
     );
     let mut run = Command::new(&output);
+    // #8479 diagnostic: the use-after-close abort reproduces only on Linux
+    // ("panic in a function that cannot unwind"), and the frame carrying the
+    // nounwind guard has not been identifiable from the message alone — two
+    // candidate fixes (#8464's dispatch family, #8480's ffi thunks) both left
+    // it aborting. Ask the child for a backtrace so CI names the frame.
+    run.env("RUST_BACKTRACE", "full");
     for (k, v) in envs {
         run.env(k, v);
     }
