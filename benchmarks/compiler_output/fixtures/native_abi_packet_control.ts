@@ -40,11 +40,42 @@ function controlAllocationChurn(): number {
   return checksum;
 }
 
+
+// #8456: the boxed control packet must keep at least one codegen-visible
+// (STATIC) heap write-barrier site. The original array push lost its inline
+// barrier when the push barrier moved into the runtime helper, which zeroed
+// `write_barriers_static` and broke the packet contract while the traced
+// counter still saw tens of thousands of runtime barriers. A boxed link
+// stitch stores heap values into heap object fields, which lowers to inline
+// stores plus `js_write_barrier_slot`.
+class ControlLink {
+  next: ControlLink | null = null;
+  box: any = null;
+  tag = 0;
+}
+
+const controlLinks: ControlLink[] = [];
+for (let i = 0; i < CHURN; i++) controlLinks.push(new ControlLink());
+
+function controlLinkStitch(): number {
+  let checksum = 0;
+  control_link_stitch:
+  for (let i = 1; i < CHURN; i++) {
+    const prev = controlLinks[i - 1];
+    prev.next = controlLinks[i];
+    prev.box = new Number(i + 0.25);
+    prev.tag = i;
+    checksum = (checksum + prev.tag) | 0;
+  }
+  return checksum;
+}
+
 let controlTotal = 0;
 control_packet_rounds:
 for (let r = 0; r < ROUNDS; r++) {
   controlTotal = (controlTotal + controlPacketKernel(controlBuf, controlPacket)) | 0;
 }
 controlTotal = (controlTotal + controlAllocationChurn()) | 0;
+controlTotal = (controlTotal + controlLinkStitch()) | 0;
 
 console.log("native_abi_packet_control:" + controlTotal);
