@@ -624,6 +624,20 @@ pub fn lower_module_full(
                     continue;
                 }
 
+                // #8447: `declare function require(...)` is the ambient-typing
+                // idiom for "the global CommonJS require exists" — it names the
+                // compile-time require intrinsic, not an external C symbol (no
+                // archive defines `require`; an FFI call to it can never link).
+                // Registering it as an imported func makes every require guard
+                // see a shadowing binding (`require_is_shadowed_by_local`,
+                // `try_require_literal`), which since #8343 lowered
+                // `require("node:fs")` to a call to that nonexistent symbol.
+                // A `function require(...)` WITH a body (e.g. the CJS wrap's
+                // synthetic require) still shadows via `register_func` below.
+                if func_name == "require" {
+                    continue;
+                }
+
                 // No implementation exists - treat as external FFI declaration
                 // Extract parameter types for FFI signature
                 let param_types: Vec<Type> = fn_decl

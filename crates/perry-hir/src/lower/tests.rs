@@ -990,3 +990,55 @@ fn method_local_shadowing_the_class_name_still_wins_in_new() {
         "a method-scope local named after the class must still win for `new`: {body}"
     );
 }
+
+/// #8447: the ambient-typing idiom `declare function require(name: string): any`
+/// names the global require intrinsic — it must NOT be registered as an
+/// external FFI function. That registration made every require-shadowing guard
+/// (`require_is_shadowed_by_local`, `try_require_literal`) treat the global as
+/// shadowed since #8343, so `require("node:fs")` lowered to a call to a
+/// `require` symbol no archive defines, and every consumer failed at link
+/// (`Undefined symbols: "_require"`).
+#[test]
+fn test_ambient_require_declare_does_not_shadow_the_intrinsic() {
+    let source = r#"
+        declare function require(name: string): any;
+        function probe(): string {
+            const fs = require("node:fs");
+            return typeof fs.constants.O_RDONLY;
+        }
+        console.log(probe());
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("ExternFuncRef { name: \"require\""),
+        "an ambient `declare function require` must not lower calls to an \
+         extern `require` symbol — nothing defines it, so linking fails: {dump}"
+    );
+    assert!(
+        dump.contains("\"fs\""),
+        "the require(\"node:fs\") call must resolve to the fs native module: {dump}"
+    );
+}
+
+/// The counterpart (#8343's intent, unchanged): a `function require(...)` WITH
+/// a body — e.g. the CJS wrap's synthetic require — is a real user binding and
+/// must keep shadowing the intrinsic, so the call stays a plain user-function
+/// call instead of a native-module namespace binding.
+#[test]
+fn test_user_require_function_with_body_still_shadows_the_intrinsic() {
+    let source = r#"
+        function require(name: string): string { return "shadowed:" + name; }
+        const fs = require("node:fs");
+        console.log(fs);
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeModuleRef(\"fs\")"),
+        "a user `function require` with a body shadows the intrinsic — the \
+         call must not be rewritten into a native-module namespace: {dump}"
+    );
+}
