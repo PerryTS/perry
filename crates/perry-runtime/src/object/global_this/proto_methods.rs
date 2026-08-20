@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 // Array.prototype thunks live in the sibling `array_error` module (split out of
 // `global_this`); pull them in directly so the prototype-install tables resolve

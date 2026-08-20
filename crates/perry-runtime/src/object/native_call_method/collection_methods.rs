@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 /// Whether `method` is a backing-store collection method for a `class … extends

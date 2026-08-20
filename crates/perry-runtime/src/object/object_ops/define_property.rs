@@ -1,5 +1,4 @@
 //! `Object.defineProperty` and its class-prototype-method installation helper.
-use super::super::*;
 use super::*;
 
 /// #2159 helper: install a `target_cid.method` entry from an

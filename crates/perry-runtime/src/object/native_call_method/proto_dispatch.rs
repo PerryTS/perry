@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 /// #3716: a built-in *prototype method* read off its prototype and called *as

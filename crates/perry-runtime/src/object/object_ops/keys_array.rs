@@ -1,6 +1,5 @@
 //! keys_array maintenance helpers shared by the descriptor-define paths:
 //! `ensure_key_in_keys_array`, `install_builtin_getter`, `own_key_present`.
-use super::super::*;
 use super::*;
 
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`

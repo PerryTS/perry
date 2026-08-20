@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 // Math.* thunks live in the sibling `builtin_thunks` module (split out of
 // `global_this`); pull them in directly so `install_math_namespace` resolves

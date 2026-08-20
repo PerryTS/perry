@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 /// Distinguishes plain vs async generator closures for the intrinsic-tower
