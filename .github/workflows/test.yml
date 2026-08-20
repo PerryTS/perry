@@ -704,7 +704,12 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.check
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90 (was 60): full-tier runs share the free-plan runner pool with the
+    # coalesced main sweeps; in dispatch run 32298711372 sibling jobs pushed
+    # this past its cap and the cancellation alone failed full-suite-gate
+    # (the gate treats cancelled == failed). The cap is a hang backstop, not
+    # a perf budget — margin costs nothing on healthy runs.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -783,7 +788,9 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.warnings
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90 (was 60): same contention margin as `check` — cancelled at exactly
+    # 60:26 in full-tier run 32298711372 while doing useful work.
+    timeout-minutes: 90
     env:
       RUSTFLAGS: -D warnings
       RUSTC_WRAPPER: sccache
@@ -2197,7 +2204,12 @@ jobs:
     # heavy shard) while still bounding a genuine hang. Durable fix — raising
     # the shard count 8->12 so no single slice approaches the cap — tracked as
     # a follow-up on #6456.
-    timeout-minutes: 75
+    # 110 (was 75): in full-tier run 32298711372 the auto-optimize shards ran
+    # ~70 min when they finished at all, and shards 2/4/5 were cancelled at
+    # exactly 75:00 under runner contention — each cancellation fails
+    # full-suite-gate on its own. Margin over the observed worst case until
+    # the #6456 reshard lands.
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v7
 
