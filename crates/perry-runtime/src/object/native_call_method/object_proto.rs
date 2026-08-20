@@ -61,10 +61,15 @@ pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
 }
 
 unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
-    let jsval = JSValue::from_bits(receiver.to_bits());
+    // `builtin_proto_user_value` may call an accessor and collect. Keep the
+    // receiver rooted before that lookup and reload it for every later use.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    let receiver = || receiver_h.get_nanbox_f64();
+    let jsval = JSValue::from_bits(receiver().to_bits());
     // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
     // them. Check the symbol registry before the pointer guard.
-    let is_symbol = crate::symbol::js_is_symbol(receiver) != 0;
+    let is_symbol = crate::symbol::js_is_symbol(receiver()) != 0;
     if !jsval.is_pointer() || is_symbol {
         // `Invoke(receiver, "toString")` resolves the method on a primitive's
         // prototype chain and calls it with the original primitive as `this`.
@@ -85,11 +90,17 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
         };
         if !builtin_name.is_empty() {
             if let Some(patched) =
-                super::builtin_proto_user_value(builtin_name, "toString", receiver)
+                super::builtin_proto_user_value(builtin_name, "toString", receiver())
             {
-                if let Some(result) =
-                    call_primitive_closure_value(receiver, patched, std::ptr::null(), 0)
-                {
+                // The accessor result is live across sloppy-this coercion and
+                // closure cloning, both allocation points.
+                let patched_h = scope.root_nanbox_u64(patched.bits());
+                if let Some(result) = call_primitive_closure_value(
+                    receiver(),
+                    JSValue::from_bits(patched_h.get_nanbox_u64()),
+                    std::ptr::null(),
+                    0,
+                ) {
                     return result;
                 }
                 // `Invoke` must call the value returned by `GetV`. A present
@@ -99,17 +110,17 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
             }
         }
         return js_native_call_method(
-            receiver,
+            receiver(),
             b"toString".as_ptr() as *const i8,
             "toString".len(),
             std::ptr::null(),
             0,
         );
     }
-    if let Some(result) = call_object_to_string_method(receiver) {
+    if let Some(result) = call_object_to_string_method(receiver()) {
         return result;
     }
-    crate::object::js_object_to_string(receiver)
+    crate::object::js_object_to_string(receiver())
 }
 
 /// The body of `%Object.prototype.toLocaleString%`.

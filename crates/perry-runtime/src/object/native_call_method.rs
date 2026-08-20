@@ -287,6 +287,13 @@ unsafe fn call_primitive_closure_value(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // Both values remain live across ToObject(this), closure cloning and the
+    // user call. Any of those can allocate, so derive pointer bits only from
+    // handles that the moving collector can rewrite.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    let value_h = scope.root_nanbox_u64(value.bits());
+    let value = JSValue::from_bits(value_h.get_nanbox_u64());
     if value.is_undefined() {
         return None;
     }
@@ -307,14 +314,20 @@ unsafe fn call_primitive_closure_value(
     let strict_callee =
         !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
     let this_receiver = if strict_callee {
-        receiver
+        receiver_h.get_nanbox_f64()
     } else {
-        crate::object::js_object_coerce(receiver)
+        crate::object::js_object_coerce(receiver_h.get_nanbox_f64())
     };
-    let bound = crate::closure::clone_closure_rebind_this(bits, this_receiver);
-    let prev_this = crate::object::js_implicit_this_set(this_receiver);
-    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
-    crate::object::js_implicit_this_set(prev_this);
+    let this_h = scope.root_nanbox_f64(this_receiver);
+    let bound = crate::closure::clone_closure_rebind_this(
+        value_h.get_nanbox_u64(),
+        this_h.get_nanbox_f64(),
+    );
+    let bound_h = scope.root_nanbox_u64(bound);
+    let prev_this = crate::object::js_implicit_this_set(this_h.get_nanbox_f64());
+    let prev_this_h = scope.root_nanbox_f64(prev_this);
+    let result = crate::closure::js_native_call_value(bound_h.get_nanbox_f64(), args_ptr, args_len);
+    crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
     Some(result)
 }
 
