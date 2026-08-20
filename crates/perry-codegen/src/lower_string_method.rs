@@ -11,12 +11,14 @@ use crate::expr::{
     i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
     FnCtx,
 };
-use crate::lower_string_concat::str_operand_handle_tag_dispatched;
-use crate::rooting::{
-    open_rooted_group, operand_may_collect, with_rooted_accumulator, Arg, EmittedValue, Repr,
-    RootedGroup,
+use crate::lower_string_concat::{
+    emit_string_concat_chain, str_operand_handle_tag_dispatched, CONCAT_CHAIN_MAX_PARTS,
 };
-use crate::type_analysis::is_string_expr;
+use crate::rooting::{
+    open_rooted_group, operand_may_collect, with_rooted_accumulator, with_rooted_group, Arg,
+    EmittedValue, Repr, RootedGroup,
+};
+use crate::type_analysis::{is_string_expr, string_value_is_runtime_guaranteed};
 
 mod char_code_at;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
@@ -158,7 +160,14 @@ fn lower_string_method_from_box(
     // `gc::root_words` bare form covers. Root it across the whole dispatch;
     // the truncate below is the single release point for every one of the
     // match's ~60 return paths.
-    let args_can_collect = args.iter().any(|a| operand_may_collect(ctx, a));
+    let args_can_collect = if property == "concat" {
+        // concat immediately ToString-coerces every argument. A plain object
+        // local is inert to load but can run arbitrary user code while being
+        // coerced, so that coercion must be part of the receiver's window.
+        args.iter().any(|a| concat_arg_may_collect(ctx, a))
+    } else {
+        args.iter().any(|a| operand_may_collect(ctx, a))
+    };
     // #7615 slice 8: the ESCAPING group form. The release has to post-dominate
     // ~60 return paths inside the dispatch, which no closure form can own
     // without swallowing the whole 1,100-line match — the same argument
@@ -168,7 +177,7 @@ fn lower_string_method_from_box(
     // twice: it never sees an index.
     let mut group = open_rooted_group(1);
     let recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, args_can_collect);
-    let result = lower_string_method_dispatch(ctx, object, property, args, &recv_box, &group, recv);
+    let result = lower_string_method_dispatch(ctx, object, property, args, &group, recv);
     // Released only after the dispatch's consuming runtime call has run: that
     // call allocates while it reads the receiver.
     //
@@ -211,17 +220,38 @@ fn reread_recv(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>, recv: EmittedValue)
     group.reread_emitted(ctx, recv)
 }
 
+/// Whether lowering and immediately `ToString`-coercing one concat argument
+/// can collect. A plain object local does not collect when loaded, but its
+/// coercion can call user `toString`, so `operand_may_collect` alone is not
+/// enough for the receiver/previous-part rooting window.
+fn concat_arg_may_collect(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
+    operand_may_collect(ctx, arg) || !string_value_is_runtime_guaranteed(ctx, arg)
+}
+
+/// Perform one `String.prototype.concat` argument's spec-mandated `ToString`
+/// after call-argument evaluation has finished. Proven string values stay
+/// boxed so the chain runtime can consume SSO directly; every other value is
+/// coerced now and returned as a boxed heap string.
+fn coerce_concat_arg_to_box(ctx: &mut FnCtx<'_>, arg: &Expr, raw_box: &str) -> String {
+    if string_value_is_runtime_guaranteed(ctx, arg) {
+        return raw_box.to_string();
+    }
+
+    let handle = ctx
+        .block()
+        .call(I64, "js_string_coerce", &[(DOUBLE, raw_box)]);
+    nanbox_string_inline(ctx.block(), &handle)
+}
+
 #[allow(clippy::too_many_lines)]
 fn lower_string_method_dispatch(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     args: &[Expr],
-    recv_box: &str,
     group: &RootedGroup<'_>,
     recv: EmittedValue,
 ) -> Result<String> {
-    let recv_box = recv_box.to_string();
     match property {
         "indexOf" => {
             // No `searchString` → `undefined`, which `js_string_coerce`
@@ -1100,50 +1130,87 @@ fn lower_string_method_dispatch(
             // arg (`undefined`, a boolean, a `{ toString }` object) must render
             // as its string form, not be bit-cast as a string handle (which
             // dropped `undefined`/booleans). A static string arg skips coercion.
-            // #6971: unlike every other arm, `concat` unboxes the receiver
-            // BEFORE it lowers its arguments, then keeps threading the running
-            // accumulator through an SSA register across each one. That
-            // accumulator is a bare `StringHeader*`, so the generic
-            // `reread_recv` above cannot help: it has to be rooted in its own
-            // right and written back after every concat, because each iteration
-            // produces a NEW address.
-            let acc_handle = {
-                let blk = ctx.block();
-                unbox_str_handle(blk, &recv_box)
-            };
-            let args_can_collect = args.iter().any(|a| operand_may_collect(ctx, a));
-            // #7615 slice 8: `RootedAcc::advance` IS the "re-read, call, write
-            // the new address back" triple this arm spelled out by hand, and it
-            // exists for this exact reason (its doc names `js_string_concat`'s
-            // sibling `js_array_push_f64`). The accumulator never becomes a
-            // register the loop holds: `advance` materialises argument 0 from
-            // the slot as part of emitting the call.
-            with_rooted_accumulator(
-                ctx,
-                Repr::Ptr,
-                &acc_handle,
-                args_can_collect,
-                |ctx, acc| {
-                    for a in args {
-                        let a_is_str = is_string_expr(ctx, a);
-                        let s_box = lower_expr(ctx, a)?;
-                        // The ToString coercion allocates too, so re-read only after it.
-                        let s_handle = {
-                            let blk = ctx.block();
-                            if a_is_str {
-                                unbox_str_handle(blk, &s_box)
-                            } else {
-                                blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)])
-                            }
-                        };
-                        // Write the new accumulator back, so the NEXT argument's
-                        // lowering keeps *this* string alive rather than its input.
-                        acc.advance(ctx, "js_string_concat", &[Arg::Plain(I64, &s_handle)]);
+            if args.is_empty() {
+                return Ok(reread_recv(ctx, group, recv));
+            }
+
+            // A call evaluates every argument before entering the method. Keep
+            // those raw values rooted, then perform ToString left-to-right;
+            // interleaving `lower(arg); coerce(arg)` would observably differ
+            // for `concat(make("a"), make("b"))`.
+            with_rooted_group(ctx, args.len(), |ctx, raw_group| {
+                let mut raw_args = Vec::with_capacity(args.len());
+                let raw_window_collects = args.iter().any(|arg| concat_arg_may_collect(ctx, arg));
+                for arg in args {
+                    // The window covers both later argument evaluation and the
+                    // subsequent user-code-capable coercion pass.
+                    raw_args.push(raw_group.lower(ctx, arg, raw_window_collects)?);
+                }
+
+                // Fuse the receiver plus the first 31 arguments. The runtime
+                // caps one chain at 32 parts, so a pathological larger call
+                // keeps the existing rooted pairwise lowering only for its tail.
+                let fused_arg_count = args.len().min(CONCAT_CHAIN_MAX_PARTS - 1);
+                let fused = with_rooted_group(ctx, fused_arg_count, |ctx, parts_group| {
+                    let mut part_roots = Vec::with_capacity(fused_arg_count);
+                    for (i, arg) in args[..fused_arg_count].iter().enumerate() {
+                        let raw_box = raw_group.reread(ctx, raw_args[i])?;
+                        let part_box = coerce_concat_arg_to_box(ctx, arg, &raw_box);
+                        let future_can_collect = args[i + 1..fused_arg_count]
+                            .iter()
+                            .any(|later| concat_arg_may_collect(ctx, later));
+                        part_roots.push(parts_group.adopt_emitted(
+                            ctx,
+                            Repr::Boxed,
+                            &part_box,
+                            future_can_collect,
+                        ));
                     }
-                    Ok(())
-                },
-                |ctx, handle| Ok(nanbox_string_inline(ctx.block(), handle)),
-            )
+
+                    // Store only post-coercion, post-collection re-reads in the
+                    // scratch array. A plain alloca is not a GC root.
+                    let mut parts = Vec::with_capacity(fused_arg_count + 1);
+                    parts.push(reread_recv(ctx, group, recv));
+                    for part in part_roots {
+                        parts.push(parts_group.reread_emitted(ctx, part));
+                    }
+                    Ok(emit_string_concat_chain(ctx, &parts))
+                })?;
+
+                if fused_arg_count == args.len() {
+                    return Ok(fused);
+                }
+
+                // Above the cap, the fused prefix becomes the accumulator and
+                // the old pairwise path handles only the remaining arguments.
+                let tail = &args[fused_arg_count..];
+                let acc_handle = unbox_str_handle(ctx.block(), &fused);
+                let tail_can_collect = tail.iter().any(|a| concat_arg_may_collect(ctx, a));
+                with_rooted_accumulator(
+                    ctx,
+                    Repr::Ptr,
+                    &acc_handle,
+                    tail_can_collect,
+                    |ctx, acc| {
+                        for (tail_i, arg) in tail.iter().enumerate() {
+                            let raw_i = fused_arg_count + tail_i;
+                            let raw_box = raw_group.reread(ctx, raw_args[raw_i])?;
+                            let s_box = coerce_concat_arg_to_box(ctx, arg, &raw_box);
+                            // The tail's pointer-only helper needs a heap handle.
+                            // This is inert for a coerced heap string and
+                            // materializes a proven SSO value.
+                            let s_handle =
+                                ctx.block()
+                                    .call(I64, "js_string_coerce", &[(DOUBLE, &s_box)]);
+                            // Write the new accumulator back, so the NEXT
+                            // argument keeps this result alive, not its input.
+                            acc.advance(ctx, "js_string_concat", &[Arg::Plain(I64, &s_handle)]);
+                        }
+                        Ok(())
+                    },
+                    |ctx, handle| Ok(nanbox_string_inline(ctx.block(), handle)),
+                )
+            })
         }
         "substr" => {
             // Legacy substr(start, length) — distinct from substring/slice:

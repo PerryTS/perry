@@ -367,6 +367,37 @@ fn a_self_append_chain_retains_the_accumulator_and_fuses_only_the_suffix() {
 }
 
 #[test]
+fn string_concat_method_fuses_four_arguments_into_one_chain_call() {
+    let ir = ir(
+        Vec::new(),
+        Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::String("head".to_string())),
+                property: "concat".to_string(),
+                byte_offset: 0,
+            }),
+            args: ["a", "b", "c", "d"]
+                .into_iter()
+                .map(|s| Expr::String(s.to_string()))
+                .collect(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        },
+    );
+
+    assert_eq!(
+        ir.matches("call i64 @js_string_concat_chain(").count(),
+        1,
+        "a four-argument String.concat should allocate one chain result:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call i64 @js_string_concat(").count(),
+        0,
+        "the fused String.concat must not retain pairwise concat calls:\n{ir}"
+    );
+}
+
+#[test]
 fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
     // `s = s + n + "x"` cannot split after `s`: when a lying string slot and
     // `n` both contain numbers, the head pair is numeric addition before the

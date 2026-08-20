@@ -519,7 +519,7 @@ pub(crate) fn lower_string_concat(
 /// Cap the per-call part count for the n-way fold. Must match the
 /// runtime's `MAX_PARTS` in `js_string_concat_chain`. 32 covers every
 /// realistic CSV / log-line / template chain in user code.
-const CONCAT_CHAIN_MAX_PARTS: usize = 32;
+pub(crate) const CONCAT_CHAIN_MAX_PARTS: usize = 32;
 
 /// Try to flatten a left-spine of `Binary { Add }` nodes where every Add
 /// has at least one statically-string operand. Returns the parts in
@@ -606,24 +606,38 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
     // one allocating interpolation was enough to sweep the parts already
     // lowered. Parts that nothing allocating follows emit no rooting calls.
     with_operands_rooted(ctx, parts, |ctx, lowered| {
-        let n = lowered.len();
-        // Hoist the buffer to the function entry block. Issue #167.
-        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
-        let blk = ctx.block();
-        for (i, val) in lowered.iter().enumerate() {
-            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-            blk.store(DOUBLE, val, &slot);
-        }
-        // Pass the array's base pointer as i64 (codegen ABI uses i64 for
-        // raw pointer args matching the existing `js_string_concat` shape).
-        let base_i64 = blk.next_reg();
-        blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
-
-        let result_handle = blk.call(
-            I64,
-            "js_string_concat_chain",
-            &[(I64, &base_i64), (I32, &format!("{}", n))],
-        );
-        Ok(nanbox_string_inline(blk, &result_handle))
+        Ok(emit_string_concat_chain(ctx, lowered))
     })
+}
+
+/// Emit the shared stack-buffer + runtime-call core for values that have
+/// already been lowered, coerced where required, and re-read from their roots.
+///
+/// `String.prototype.concat` needs this lower-level entry point because its
+/// arguments are evaluated first and then `ToString`-coerced left-to-right.
+/// Each coercion needs a fresh root re-read of the raw value, which is more
+/// than `with_operands_rooted`'s single re-read point can provide.
+pub(crate) fn emit_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[String]) -> String {
+    debug_assert!(parts.len() >= 2);
+    debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
+
+    let n = parts.len();
+    // Hoist the buffer to the function entry block. Issue #167.
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
+    let blk = ctx.block();
+    for (i, val) in parts.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+        blk.store(DOUBLE, val, &slot);
+    }
+    // Pass the array's base pointer as i64 (codegen ABI uses i64 for
+    // raw pointer args matching the existing `js_string_concat` shape).
+    let base_i64 = blk.next_reg();
+    blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
+
+    let result_handle = blk.call(
+        I64,
+        "js_string_concat_chain",
+        &[(I64, &base_i64), (I32, &format!("{}", n))],
+    );
+    nanbox_string_inline(blk, &result_handle)
 }
