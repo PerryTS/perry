@@ -285,7 +285,7 @@ pub use object::{object_live_slot_count, perry_object_header_abi_revision};
 pub use promise::Promise;
 pub use regex::RegExpHeader;
 pub use set::SetHeader;
-pub use string::StringHeader;
+pub use string::{OwnedStringBytes, StringHeader};
 pub use value::JSValue;
 
 // Re-export closure module for stdlib to use js_closure_call* functions
