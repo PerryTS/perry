@@ -1086,15 +1086,12 @@ fn join_exotic_element(arr: *const ArrayHeader, index: u32) -> (Option<u64>, *co
     let arr_handle = scope.root_raw_const_ptr(arr);
     let present = arr_handle.with_const_ptr(|arr| crate::array::array_spec_has_index(arr, index));
     if !present {
-        return (
-            None,
-            normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
-        );
+        return (None, arr_handle.with_const_ptr(normalize_array_receiver));
     }
     let value = arr_handle.with_const_ptr(|arr| crate::array::array_spec_get(arr, index));
     (
         Some(value.to_bits()),
-        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
+        arr_handle.with_const_ptr(normalize_array_receiver),
     )
 }
 
@@ -1110,10 +1107,7 @@ fn join_element_to_string(
     let arr_handle = scope.root_raw_const_ptr(arr);
     let element_handle = scope.root_nanbox_u64(element_bits);
     let string = crate::value::js_jsvalue_to_string(element_handle.get_nanbox_f64());
-    (
-        string,
-        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
-    )
+    (string, arr_handle.with_const_ptr(normalize_array_receiver))
 }
 
 #[cold]
@@ -1127,10 +1121,7 @@ fn join_bigint_to_string(
     let element_handle = scope.root_nanbox_u64(element_bits);
     let value = crate::value::JSValue::from_bits(element_handle.get_nanbox_u64());
     let string = crate::bigint::js_bigint_to_string(value.as_bigint_ptr());
-    (
-        string,
-        normalize_array_receiver(arr_handle.get_raw_const_ptr::<ArrayHeader>()),
-    )
+    (string, arr_handle.with_const_ptr(normalize_array_receiver))
 }
 
 /// join - Join array elements into a string with a separator
