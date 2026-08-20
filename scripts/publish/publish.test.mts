@@ -285,6 +285,21 @@ test('pipeline.mts: no mode flag is a usage error, not a default action', () => 
   )
 })
 
+test('pipeline.mts: --scan-only sets a failing exit code on an incomplete/blocked/not-passed scan', () => {
+  // --scan-only is what CI's "Socket scan the staged tarballs" step relies on
+  // as a gate (npm-stage-publish.yml) — unlike --stage-only, where a human
+  // reads the printed status and publish:approve is the real enforcement
+  // point, a CI caller only sees the exit code. Assert the branch actually
+  // sets process.exitCode = 1 rather than always returning 0.
+  const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
+  const scanOnlyBranch = src.slice(src.indexOf("mode === '--scan-only'"))
+  assert.match(
+    scanOnlyBranch,
+    /process\.exitCode = 1/,
+    '--scan-only must set a non-zero exit code when the scan did not fully pass',
+  )
+})
+
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {
   // Mode resolution used to be `flags.find(...)`, which silently picked
   // whichever mode flag argv happened to list first — so `--stage-only

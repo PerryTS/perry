@@ -172,6 +172,7 @@ jobs:
       DIST_TAG: ${{ inputs.dist-tag }}
       BUILD_RUN_ID: ${{ needs.resolve-build.outputs.build-run-id }}
       PUBLISH: ${{ inputs.publish }}
+      SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -287,3 +288,13 @@ jobs:
             exit 1
           fi
           echo "All 9 packages staged (not public). Next: npm run publish:approve locally."
+
+      - name: Socket scan the staged tarballs
+        # Mandatory, same as the local pipeline — CI scans what it just staged
+        # immediately, rather than leaving the ONLY scan gate to whichever
+        # human later remembers to run `publish:approve` correctly. Reuses
+        # pipeline.mts's --scan-only path (list staged entries, sha1-verify,
+        # Socket full scan) instead of duplicating that logic here — same
+        # code, same gate, whether it runs in CI or locally.
+        if: env.PUBLISH == 'true'
+        run: node scripts/publish/pipeline.mts --scan-only

@@ -282,6 +282,19 @@ async function main(): Promise<void> {
   if (mode === '--scan-only') {
     state = await verifyAndScan(gate.version, state)
     printStatus(state)
+    // Unlike --stage-only (where a human sees the printed status and
+    // publish:approve is the real enforcement point), --scan-only is what CI
+    // uses as a gate — a caller checking only the exit code must see a
+    // failure for a blocked/incomplete/not-passed scan, not just a log line.
+    const complete = state.staged.length === ALL_PACKAGES.length
+    const allVerified = state.verified.length === state.staged.length
+    const allScanned =
+      !state.scanBlocked &&
+      state.scanResults.length === state.verified.length &&
+      state.scanResults.every(r => r.status === 'passed')
+    if (!complete || !allVerified || !allScanned) {
+      process.exitCode = 1
+    }
     return
   }
 
