@@ -109,7 +109,7 @@ fn normalize_form_coercion_must_not_strand_the_subject_payload() {
             EXPECTED.len(),
             "normalized length must come from the live subject"
         );
-        let data = (result as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let data = crate::string::string_data(result);
         let bytes = std::slice::from_raw_parts(data, EXPECTED.len());
         assert_eq!(
             bytes, EXPECTED,
