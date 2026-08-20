@@ -62,8 +62,8 @@ fn normalize_form_coercion_must_not_strand_the_subject_payload() {
             crate::object::js_object_set_field_by_name(
                 form_ptr,
                 key_ptr,
-                crate::value::js_nanbox_pointer(
-                    to_string_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+                to_string_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(
+                    |to_string_ptr| crate::value::js_nanbox_pointer(to_string_ptr as i64),
                 ),
             );
         });
@@ -71,13 +71,17 @@ fn normalize_form_coercion_must_not_strand_the_subject_payload() {
 
     NORMALIZE_FORM_COERCIONS.with(|c| c.set(0));
     let before_collections = gc_collection_count();
-    let form_value = crate::value::js_nanbox_pointer(
-        form_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
-    );
-    // `with_const_ptr`, not a bare read: since the fix `js_string_normalize`
-    // roots the subject itself, so it is a self-rooting entry point.
-    let result = subject_handle.with_const_ptr::<crate::StringHeader, _>(|s| {
-        crate::string::js_string_normalize(s, form_value)
+    let form_value = form_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|form_ptr| {
+        crate::value::js_nanbox_pointer(form_ptr as i64)
+    });
+    // Two combinators, no bare read (#7341): `with_const_ptr` hands the
+    // subject to `js_string_normalize`, which since the fix roots it itself
+    // (a self-rooting entry point), and `across_const` hands back its
+    // POST-collection address — the coercion inside moves it.
+    let (result, after_ptr) = subject_handle.across_const::<crate::StringHeader, _>(|| {
+        subject_handle.with_const_ptr::<crate::StringHeader, _>(|s| {
+            crate::string::js_string_normalize(s, form_value)
+        })
     });
 
     assert_eq!(
@@ -92,7 +96,7 @@ fn normalize_form_coercion_must_not_strand_the_subject_payload() {
     // (2) the subject really was evacuated inside the window — otherwise a
     // stale borrow would still point at live bytes and this test could not
     // distinguish the fix from the bug.
-    let after_addr = subject_handle.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    let after_addr = after_ptr as usize;
     assert_ne!(
         after_addr, before_addr,
         "test premise: the copying minor must have MOVED the subject"
