@@ -497,6 +497,148 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     }
 }
 
+/// N-way concat for `s = s + a + b + ...`, where `parts[0]` is an owner read
+/// of `s`. An all-heap-string chain can copy the suffix pieces straight into a
+/// unique accumulator, or allocate the complete result once when it cannot.
+/// Other value shapes retain the ordinary concat-chain semantics.
+#[no_mangle]
+pub extern "C" fn js_string_append_chain(parts: *const f64, n: i32) -> *mut StringHeader {
+    let n = (n as usize).min(CONCAT_CHAIN_MAX_PARTS);
+    if n < 2 || parts.is_null() {
+        return js_string_concat_chain(parts, n as i32);
+    }
+    if n <= 4 {
+        append_chain_all_heap_strings::<4>(parts, n)
+    } else if n <= 8 {
+        append_chain_all_heap_strings::<8>(parts, n)
+    } else {
+        append_chain_all_heap_strings::<CONCAT_CHAIN_MAX_PARTS>(parts, n)
+    }
+}
+
+/// All-heap-string fast path for [`js_string_append_chain`]. Falling back to
+/// `js_string_concat_chain` preserves dynamic/SSO coercion and the `s + s`
+/// overlap case without adding those branches to the hot copy loop.
+fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
+    parts: *const f64,
+    n: usize,
+) -> *mut StringHeader {
+    let mut piece_ptrs: [*const StringHeader; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
+    let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
+    let mut total_blen = 0u32;
+    let mut total_u16 = 0u32;
+    let mut piece_flags = 0u32;
+
+    for i in 0..n {
+        let bits = unsafe { *parts.add(i) }.to_bits();
+        if bits >> 48 != 0x7FFF {
+            return js_string_concat_chain(parts, n as i32);
+        }
+        let piece = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if !is_valid_string_ptr(piece) || (i > 0 && piece == piece_ptrs[0]) {
+            return js_string_concat_chain(parts, n as i32);
+        }
+        let blen = unsafe { (*piece).byte_len };
+        piece_ptrs[i] = piece;
+        piece_lens[i] = blen;
+        total_blen = total_blen.saturating_add(blen);
+        total_u16 = total_u16.saturating_add(unsafe { (*piece).utf16_len });
+        piece_flags |= unsafe { (*piece).flags };
+    }
+
+    let dest = piece_ptrs[0] as *mut StringHeader;
+    let dest_blen = piece_lens[0];
+    let suffix_blen = total_blen.saturating_sub(dest_blen);
+    if suffix_blen == 0 {
+        return dest;
+    }
+
+    unsafe {
+        if (*dest).refcount == 1 && total_blen <= (*dest).capacity {
+            let mut cursor = (string_data(dest) as *mut u8).add(dest_blen as usize);
+            for i in 1..n {
+                let len = piece_lens[i] as usize;
+                ptr::copy_nonoverlapping(string_data(piece_ptrs[i]), cursor, len);
+                cursor = cursor.add(len);
+            }
+            (*dest).byte_len = total_blen;
+            (*dest).utf16_len = total_u16;
+            (*dest).flags |= piece_flags;
+            return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+                canonicalize_surrogate_pairs(dest)
+            } else {
+                dest
+            };
+        }
+    }
+
+    // An empty one-frame accumulator keeps exact capacity: no RSS-for-speed
+    // reserve. Once a non-empty accumulator grows, match js_string_append's
+    // existing geometric capacity so later iterations remain amortized.
+    let capacity = if dest_blen == 0 {
+        total_blen
+    } else {
+        total_blen.saturating_mul(2).max(32)
+    };
+
+    if let Some((result, cursor)) = string_storage_alloc_no_collect(capacity) {
+        return unsafe {
+            init_string_header(result, total_u16, total_blen, capacity, 1, piece_flags);
+            copy_heap_chain(&piece_ptrs, &piece_lens, n, cursor);
+            if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+                canonicalize_surrogate_pairs(result)
+            } else {
+                result
+            }
+        };
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut handles = [None; MAX_PARTS];
+    for i in 0..n {
+        handles[i] = Some(scope.root_string_ptr(piece_ptrs[i]));
+    }
+    let (result, mut cursor) = string_storage_alloc(capacity);
+    unsafe {
+        init_string_header(result, total_u16, total_blen, capacity, 1, piece_flags);
+        for i in 0..n {
+            let len = piece_lens[i] as usize;
+            if len == 0 {
+                continue;
+            }
+            handles[i]
+                .expect("append-chain string handle")
+                .with_const_ptr::<StringHeader, _>(|piece| {
+                    ptr::copy_nonoverlapping(string_data(piece), cursor, len);
+                });
+            cursor = cursor.add(len);
+        }
+        if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+            canonicalize_surrogate_pairs(result)
+        } else {
+            result
+        }
+    }
+}
+
+unsafe fn copy_heap_chain<const MAX_PARTS: usize>(
+    piece_ptrs: &[*const StringHeader; MAX_PARTS],
+    piece_lens: &[u32; MAX_PARTS],
+    n: usize,
+    mut cursor: *mut u8,
+) {
+    for i in 0..n {
+        let len = piece_lens[i] as usize;
+        if len == 0 {
+            continue;
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(string_data(piece_ptrs[i]), cursor, len);
+            cursor = cursor.add(len);
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
 /// #7912 counter: how many chains took the unrooted fast path below. A gate

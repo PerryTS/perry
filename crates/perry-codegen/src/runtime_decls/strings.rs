@@ -47,6 +47,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // second arg is the count. Returns a raw string handle.
     // (`crates/perry-runtime/src/string.rs::js_string_concat_chain`)
     module.declare_function("js_string_concat_chain", I64, &[I64, I32]);
+    // Self-append variant of the N-way chain. The first part is the binding's
+    // current owner value; the runtime may extend it in place when unique and
+    // otherwise writes the complete result in one allocation.
+    module.declare_function("js_string_append_chain", I64, &[I64, I32]);
 
     // In-place append for the `x = x + y` pattern. When `x` has
     // refcount=1 (unique owner), the runtime mutates in-place and
