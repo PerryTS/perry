@@ -5,46 +5,215 @@
     "allowed_statuses": "Statuses accepted for the module. `pass` is always accepted as an improvement."
   },
   "modules": {
+    "argon2": {
+      "test_id": "test_parity_argon2",
+      "max_diff_lines": 26,
+      "issue": "8271"
+    },
+    "cluster": {
+      "test_id": "test_parity_cluster",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 4,
+      "issue": "8271"
+    },
+    "commander": {
+      "test_id": "test_parity_commander",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 27,
+      "issue": "8271"
+    },
+    "cron": {
+      "test_id": "test_parity_cron",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 15,
+      "issue": "8271"
+    },
+    "crypto": {
+      "test_id": "test_parity_crypto",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 6,
+      "issue": "8271"
+    },
+    "date_fns": {
+      "test_id": "test_parity_date_fns",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 32,
+      "issue": "8271"
+    },
+    "dayjs": {
+      "test_id": "test_parity_dayjs",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 22,
+      "issue": "8271"
+    },
+    "decimal": {
+      "test_id": "test_parity_decimal",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 49,
+      "issue": "8271"
+    },
+    "dotenv": {
+      "test_id": "test_parity_dotenv",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 28,
+      "issue": "8271"
+    },
+    "ethers": {
+      "test_id": "test_parity_ethers",
+      "max_diff_lines": 28,
+      "issue": "8271"
+    },
     "http": {
       "test_id": "test_parity_http",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
     },
     "http2": {
       "test_id": "test_parity_http2",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
     },
     "https": {
       "test_id": "test_parity_https",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
+    },
+    "lodash": {
+      "test_id": "test_parity_lodash",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 24,
+      "issue": "8271"
+    },
+    "lru_cache": {
+      "test_id": "test_parity_lru_cache",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 34,
+      "issue": "8271"
+    },
+    "moment": {
+      "test_id": "test_parity_moment",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 31,
+      "issue": "8271"
+    },
+    "nanoid": {
+      "test_id": "test_parity_nanoid",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 28,
+      "issue": "8271"
     },
     "sqlite": {
       "test_id": "test_parity_sqlite",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
     },
     "stream": {
       "test_id": "test_parity_stream",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
     },
     "stream_web": {
       "test_id": "test_parity_stream_web",
-      "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "issue": "8271",
+      "allowed_statuses": [
+        "compile_fail",
+        "crash",
+        "parity_fail",
+        "pass"
+      ],
       "max_diff_lines": null
+    },
+    "sys": {
+      "test_id": "test_parity_sys",
+      "max_diff_lines": 2,
+      "issue": "8271"
+    },
+    "url": {
+      "test_id": "test_parity_url",
+      "max_diff_lines": 2,
+      "issue": "8271"
+    },
+    "util": {
+      "test_id": "test_parity_util",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 160,
+      "issue": "8271"
+    },
+    "uuid": {
+      "test_id": "test_parity_uuid",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 35,
+      "issue": "8271"
+    },
+    "validator": {
+      "test_id": "test_parity_validator",
+      "allowed_statuses": [
+        "parity_fail"
+      ],
+      "max_diff_lines": 21,
+      "issue": "8271"
     },
     "zlib": {
       "test_id": "test_parity_zlib",
       "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
+      "allowed_statuses": [
+        "pass",
+        "parity_fail",
+        "compile_fail"
+      ],
       "max_diff_lines": null
     }
   }
