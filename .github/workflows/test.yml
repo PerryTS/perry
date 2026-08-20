@@ -1036,8 +1036,25 @@ jobs:
             # (e.g. functional_batch2_regressions) link the prebuilt archive
             # directly and fail with "Could not find libperry_runtime.a" if the
             # cached staticlib was invalidated. Build them explicitly.
+            # #8479: build these with `--release`. The `panic` strategy is a
+            # PROFILE-level setting, and only `release`/`dist`/`perry-dev` set
+            # `panic = "abort"` — a bare `cargo build` produces a DEBUG,
+            # `panic = "unwind"` runtime. Under `panic = "unwind"` rustc plants
+            # an RFC-2945 abort guard in every `extern "C"` helper, which a JS
+            # throw crossing that helper trips ("panic in a function that
+            # cannot unwind"). So the child binaries were linking a runtime
+            # whose unwind semantics are the OPPOSITE of what Perry ships, and
+            # the two throw-transport canaries could not both pass: #8416
+            # papered over it with `extern "C-unwind"` (correct for the debug
+            # runtime, WRONG for the shipped one), #8464 generalised that and
+            # cost +20 gap crashes, and #8480 added more. Verified: against a
+            # `panic = "abort"` runtime, with those conversions removed, BOTH
+            # `tier1_every_ffi_type_against_test_dylib` and
+            # `function_apply_with_runtime_args_defers_to_a_located_aot_error`
+            # pass.
             if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
-              cargo build -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
             # Large perry / perry-stdlib integration-test binaries: serialize
@@ -1274,9 +1291,15 @@ jobs:
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
           # and the suites that compile with PERRY_NO_AUTO_OPTIMIZE=1 link them
           # directly ("Could not find libperry_runtime.a" otherwise).
+          # #8479: `--release` so the child links a `panic = "abort"` runtime,
+          # matching what Perry ships. A bare `cargo build` yields a DEBUG,
+          # `panic = "unwind"` runtime whose `extern "C"` helpers carry
+          # RFC-2945 abort guards that a JS throw trips — the opposite of the
+          # shipped semantics. See the longer note in `cargo-test`.
           if printf '%s\n' "$SUITES" | grep -qE '^(perry|perry-stdlib) '; then
-            cargo build -p perry-runtime -p perry-stdlib \
+            cargo build --release -p perry-runtime -p perry-stdlib \
               -p perry-runtime-static -p perry-stdlib-static
+            export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
 
           status=0
