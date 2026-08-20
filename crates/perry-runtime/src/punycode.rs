@@ -331,11 +331,14 @@ fn string_ptr_if_string(value: f64) -> Option<*const StringHeader> {
     None
 }
 
-fn string_bytes(ptr: *const StringHeader) -> &'static [u8] {
+/// Copy a heap string's payload before any subsequent runtime allocation can
+/// move it. A slice into the inline payload cannot safely escape this function:
+/// the collector rewrites rooted pointer slots, not borrows derived from them.
+fn copy_string_bytes(ptr: *const StringHeader) -> Vec<u8> {
     if !crate::string::is_valid_string_ptr(ptr) {
-        return &[];
+        return Vec::new();
     }
-    unsafe { slice::from_raw_parts(string_data(ptr), (*ptr).byte_len as usize) }
+    unsafe { slice::from_raw_parts(string_data(ptr), (*ptr).byte_len as usize).to_vec() }
 }
 
 fn push_utf16_units_from_scalar(units: &mut Vec<u16>, cp: u32) {
@@ -425,7 +428,8 @@ pub extern "C" fn js_punycode_ucs2_decode(value: f64) -> f64 {
         return f64::from_bits(crate::value::JSValue::array_ptr(arr).bits());
     };
 
-    let units = decode_wtf8_to_utf16_units(string_bytes(str_ptr));
+    let input = copy_string_bytes(str_ptr);
+    let units = decode_wtf8_to_utf16_units(&input);
     let mut arr = crate::array::js_array_alloc(units.len() as u32);
     let mut i = 0usize;
     while i < units.len() {
@@ -495,6 +499,17 @@ pub extern "C" fn js_punycode_ucs2_encode(value: f64) -> f64 {
 #[cfg(test)]
 mod ucs2_tests {
     use super::*;
+
+    #[test]
+    fn heap_string_bytes_are_copied_into_owned_storage() {
+        let source = b"owned-before-allocation";
+        let ptr = crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+
+        let copied = copy_string_bytes(ptr);
+        unsafe { string_data(ptr).cast_mut().write(b'X') };
+
+        assert_eq!(copied, source);
+    }
 
     #[test]
     fn wtf8_decode_preserves_lone_surrogates() {
