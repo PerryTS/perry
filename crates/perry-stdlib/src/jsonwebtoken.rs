@@ -10,16 +10,7 @@ use perry_runtime::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
+use crate::common::string_from_header;
 
 /// Generic claims structure that can hold any JSON
 #[derive(Debug, Serialize, Deserialize)]

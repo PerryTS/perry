@@ -175,15 +175,7 @@ enum PendingNetEvent {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
-    let p = ptr as usize;
-    if p < 0x1000 {
-        return None;
-    }
-    let hdr = ptr as *const StringHeader;
-    let len = (*hdr).byte_len as usize;
-    let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+    crate::common::string_from_header(ptr as *const StringHeader)
 }
 
 /// Issue #770 — true iff `val_f64` carries `POINTER_TAG` (0x7FFD), i.e.

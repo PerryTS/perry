@@ -22,7 +22,9 @@
 //! noted "we'd invoke js_callback_invoke(callback_id) here" — callbacks
 //! never fired in user code.
 
-use crate::common::{get_handle, register_handle, Handle, RUNTIME};
+use crate::common::{
+    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle, RUNTIME,
+};
 use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
 use perry_runtime::gc::{gc_register_mutable_root_scanner_named, RuntimeRootVisitor};
@@ -31,17 +33,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Once};
 use std::time::Instant;
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 /// Cron job handle.
 ///

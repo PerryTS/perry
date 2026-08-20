@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use perry_ffi::{
     alloc_string, build_object_shape, get_handle, get_handle_mut, js_object_alloc_with_shape,
-    js_object_set_field, ArrayHeader, Handle, JsValue, ObjectHeader, StringHeader,
+    js_object_set_field, read_bytes, ArrayHeader, Handle, JsString, JsValue, ObjectHeader,
+    StringHeader,
 };
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -211,13 +212,8 @@ fn urlencoding_decode(s: &str) -> String {
 
 /// Read a `*const StringHeader` into an owned `String`.
 pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
+    let handle = JsString::from_raw(ptr as *mut StringHeader);
+    read_bytes(handle).map(|bytes| String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// Pull a string out of a raw i64 NaN-boxed value.

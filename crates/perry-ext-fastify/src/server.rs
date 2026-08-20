@@ -24,8 +24,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, register_handle, Handle,
-    JsClosure, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, read_bytes, register_handle,
+    Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
 };
 
 use crate::app::{ClosurePtr, FastifyApp};
@@ -1412,13 +1412,8 @@ unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
 }
 
 unsafe fn string_header_to_string(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
+    let handle = JsString::from_raw(ptr as *mut StringHeader);
+    read_bytes(handle).map(|bytes| String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn push_json_string(out: &mut Vec<u8>, bytes: &[u8]) {

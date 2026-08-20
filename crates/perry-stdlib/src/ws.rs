@@ -18,6 +18,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(not(target_os = "ios"))]
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
+use crate::common::string_from_header;
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 /// #6117 — rustls panics resolving the process-level CryptoProvider on the
@@ -215,17 +216,6 @@ fn cleanup_ws_client(ws_id: usize) {
             server.client_ids.retain(|client_id| *client_id != ws_id);
         }
     }
-}
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
 /// Create a new WebSocket connection

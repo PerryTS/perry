@@ -8,19 +8,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
 
+use crate::common::string_from_header;
+
 lazy_static::lazy_static! {
     static ref DOTENV_LOADED: Mutex<bool> = Mutex::new(false);
-}
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
 /// Parse a .env file content into key-value pairs

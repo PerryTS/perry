@@ -291,15 +291,7 @@ fn closure_ptr_from_bits(bits: u64) -> *const ClosureHeader {
 }
 
 fn string_header_to_string(str_ptr: *const StringHeader) -> Option<String> {
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
-        return None;
-    }
-    unsafe {
-        let len = (*str_ptr).byte_len as usize;
-        let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data_ptr, len);
-        Some(String::from_utf8_lossy(slice).into_owned())
-    }
+    unsafe { crate::common::string_from_header_lossy(str_ptr) }
 }
 
 fn string_value_to_string(value: f64) -> Option<String> {

@@ -3,19 +3,11 @@
 //! Native implementation of the 'axios' npm package using reqwest.
 //! Provides HTTP client functionality with a promise-based API.
 
-use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
+use crate::common::{
+    get_handle, register_handle, spawn_for_promise, string_from_header_lossy as string_from_header,
+    Handle,
+};
 use perry_runtime::{js_promise_new, js_string_from_bytes, Promise, StringHeader};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 /// #598: read the body argument as a JSON string. Strings pass
 /// through as-is; everything else is JSON.stringify'd via the

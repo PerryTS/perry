@@ -3,32 +3,13 @@
 //! Native implementation of the 'sharp' npm package using the image crate.
 //! Provides image processing functionality.
 
-use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
+use crate::common::{
+    bytes_from_header, get_handle, register_handle, spawn_for_promise,
+    string_from_header_lossy as string_from_header, Handle,
+};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
 use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
 use std::io::Cursor;
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
-
-/// Helper to extract bytes from StringHeader pointer
-unsafe fn bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(bytes.to_vec())
-}
 
 /// Sharp image handle with pending operations
 pub struct SharpHandle {

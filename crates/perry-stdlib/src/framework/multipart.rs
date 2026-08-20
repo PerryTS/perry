@@ -5,17 +5,9 @@
 
 use perry_runtime::{js_string_from_bytes, StringHeader};
 
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
+use crate::common::string_from_header_lossy as string_from_header;
 
+/// Helper to extract string from StringHeader pointer
 /// A single part from a multipart/form-data body
 #[derive(Debug, Clone)]
 pub struct MultipartPart {

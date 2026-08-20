@@ -3,6 +3,7 @@
 //! Native implementation of the 'mongodb' npm package.
 //! Provides MongoDB client functionality.
 
+use crate::common::string_from_header_lossy as string_from_header;
 use crate::common::{
     get_handle, register_handle, spawn_for_promise, spawn_for_promise_deferred, Handle,
 };
@@ -33,16 +34,6 @@ unsafe fn jsvalue_to_json_string(value: f64) -> String {
 }
 
 /// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
-
 /// MongoDB client handle.
 ///
 /// Lives in two states like PgConnectionHandle: pre-connect (`pending_uri`

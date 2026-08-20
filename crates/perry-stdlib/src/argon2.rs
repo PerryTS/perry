@@ -4,22 +4,12 @@
 //! Provides secure password hashing using Argon2id algorithm.
 
 use crate::common::spawn_for_promise;
+use crate::common::string_from_header_lossy as string_from_header;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use perry_runtime::{js_promise_new, js_string_from_bytes, Promise, StringHeader};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 /// argon2.hash(password) -> Promise<string>
 ///

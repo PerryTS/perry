@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
-use crate::common::{register_handle, Handle};
+use crate::common::{register_handle, string_from_header, Handle};
 
 /// Default timeout for Redis operations
 const DEFAULT_TIMEOUT_SECS: u64 = 10;
@@ -28,17 +28,6 @@ lazy_static::lazy_static! {
     static ref CONNECTIONS: Mutex<HashMap<Handle, redis::aio::MultiplexedConnection>> = Mutex::new(HashMap::new());
     /// URL storage for handles
     static ref URLS: Mutex<HashMap<Handle, String>> = Mutex::new(HashMap::new());
-}
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
 /// Create a new Redis client (synchronous, connects lazily like real ioredis)

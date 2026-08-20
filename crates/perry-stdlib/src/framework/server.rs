@@ -16,19 +16,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use crate::common::{get_handle, register_handle, Handle, RUNTIME};
+use crate::common::{
+    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle, RUNTIME,
+};
 
 /// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
-
 /// Request ID counter
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 

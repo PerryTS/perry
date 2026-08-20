@@ -1,4 +1,5 @@
 use super::*;
+pub(crate) use crate::common::string_from_header_lossy as string_from_header;
 use perry_runtime::{
     closure::{is_closure_ptr, ClosureHeader},
     js_get_string_pointer_unified, js_nanbox_pointer, js_object_get_field_by_name,
@@ -6,17 +7,6 @@ use perry_runtime::{
 };
 use rusqlite::{ffi, limits::Limit, Connection};
 use std::ffi::{CStr, CString};
-
-/// Helper to extract string from StringHeader pointer
-pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 pub(crate) fn undefined_f64() -> f64 {
     f64::from_bits(TAG_UNDEFINED_BITS)

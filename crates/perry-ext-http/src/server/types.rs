@@ -1,7 +1,7 @@
 //! Shared NaN-boxing constants, runtime extern declarations, and
 //! port/host extraction helpers.
 
-use perry_ffi::{ArrayHeader, BufferHeader, JsValue, StringHeader};
+use perry_ffi::{read_bytes, ArrayHeader, BufferHeader, JsString, JsValue, StringHeader};
 
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -311,29 +311,15 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
 
 /// Read a `StringHeader` as a Rust `String`, copying its bytes.
 pub(crate) fn read_string_header(ptr: *mut StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data, len);
-        Some(String::from_utf8_lossy(slice).into_owned())
-    }
+    let handle = unsafe { JsString::from_raw(ptr) };
+    read_bytes(handle).map(|bytes| String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// Read a `StringHeader` as raw bytes — used when the payload is
 /// not necessarily UTF-8 (Buffer / Uint8Array round-trip).
 pub(crate) fn read_string_header_bytes(ptr: *mut StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() {
-        return None;
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data, len);
-        Some(slice.to_vec())
-    }
+    let handle = unsafe { JsString::from_raw(ptr) };
+    read_bytes(handle).map(<[u8]>::to_vec)
 }
 
 #[allow(dead_code)]

@@ -18,7 +18,10 @@ use perry_runtime::{
 };
 use std::collections::HashMap;
 
-use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
+use crate::common::{
+    for_each_handle_mut_of, get_handle_mut, register_handle,
+    string_from_header_lossy as string_from_header, Handle,
+};
 
 // NaN-box tags. Mirror perry-runtime/src/value.rs constants. Duplicated
 // here because they're not exported across crate boundaries; if either
@@ -117,16 +120,6 @@ fn scan_commander_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<
 
 // ---------------------------------------------------------------------------
 // Helpers
-
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() || (ptr as usize) < 4096 {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 /// Parse the commander flag-spec mini-language used in `.option(...)`:
 /// `"-p, --port <number>"` → `(Some('p'), "port", false)`.

@@ -1,5 +1,6 @@
 //! Type definitions for the perry/container module.
 
+pub(crate) use crate::common::string_from_header_lossy as string_from_header;
 use dashmap::DashMap;
 use perry_runtime::StringHeader;
 use serde::{Deserialize, Serialize};
@@ -125,13 +126,3 @@ pub use perry_container_compose::types::{
 };
 
 // ============ Helper for StringHeader ============
-
-pub unsafe fn string_from_header(header: *const StringHeader) -> Option<String> {
-    if header.is_null() || (header as usize) < 0x1000 {
-        return None;
-    }
-    let byte_len = (*header).byte_len as usize;
-    let data_ptr = (header as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, byte_len);
-    Some(String::from_utf8_lossy(bytes).into_owned())
-}

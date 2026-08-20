@@ -323,32 +323,7 @@ pub(crate) fn handle_to_f64(id: usize) -> f64 {
     perry_runtime::value::js_nanbox_pointer(id as i64)
 }
 
-/// Helper to extract string from StringHeader pointer
-pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    // NaN-boxed TAG_UNDEFINED (0x7FFC_0000_0000_0001) unboxes to 0x1
-    // after POINTER_MASK. Treat any pointer below page size as invalid.
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    // A handle-band value (`< 0x100000`: Web Fetch Headers/Request/Response/Blob
-    // ids, net/http small handles, zlib/proxy ids) is a registry id, NOT a
-    // `StringHeader` pointer. It reaches here when `fetch()` is called with a
-    // non-string first argument such as a `Request`/`Headers` object — the
-    // codegen passes the bare handle id into the `url_ptr` `*StringHeader`
-    // slot. Reading `(*ptr).byte_len` at `id + 4` then dereferences an
-    // unmapped low address → SIGSEGV (the doctor / mcp-list startup crash at
-    // the fetch-handle address). The `< 0x1000` floor above only catches the
-    // TAG_UNDEFINED `0x1` remnant; widen it to the whole handle band so any
-    // native handle is treated as "not a string" (`None`) rather than
-    // dereferenced.
-    if perry_runtime::value::addr_class::is_handle_band(ptr as usize) {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
+pub(crate) use crate::common::string_from_header;
 
 /// Diagnostic: return the number of FETCH_RESPONSES entries.
 /// Useful for detecting response handle leaks in long-running services.

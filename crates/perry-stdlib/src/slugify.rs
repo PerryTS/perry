@@ -23,17 +23,9 @@
 
 use perry_runtime::{js_string_from_bytes, JSValue, ObjectHeader, StringHeader};
 
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
+use crate::common::string_from_header;
 
+/// Helper to extract string from StringHeader pointer
 /// Subset of npm slugify's charMap. Case-preserving, may expand to
 /// multiple chars ('ß' → "ss", '&' → "and") — exactly like the npm map.
 pub(crate) fn char_map(c: char) -> Option<&'static str> {

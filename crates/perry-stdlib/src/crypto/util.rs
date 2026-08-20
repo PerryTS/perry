@@ -49,16 +49,7 @@ pub(super) use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512, Sh
 // as of sha3 0.12 (RustCrypto/hashes#869).
 pub(super) use shake::{ExtendableOutput, Shake128, Shake256, XofReader};
 
-/// Helper to extract string from StringHeader pointer
-pub(super) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(bytes.to_vec())
-}
+pub(super) use crate::common::bytes_from_header as string_from_header;
 
 /// Extract the raw bytes from a pointer that might be a Buffer, a
 /// StringHeader, or anything that uses the `[u32 byte-length prefix][bytes]`

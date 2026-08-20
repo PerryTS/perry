@@ -1,6 +1,9 @@
 //! Minimal node:domain surface.
 
-use crate::common::{for_each_handle_mut_of, get_handle, get_handle_mut, register_handle, Handle};
+use crate::common::{
+    for_each_handle_mut_of, get_handle, get_handle_mut, register_handle,
+    string_from_header_lossy as string_from_header, Handle,
+};
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_nanbox_get_pointer, js_nanbox_pointer,
     js_string_from_bytes, ArrayHeader, ClosureHeader, JSValue, ObjectHeader, StringHeader,
@@ -158,16 +161,6 @@ fn handle_from_value(value: f64) -> Handle {
     } else {
         bits as Handle
     }
-}
-
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
 }
 
 fn event_name_from_value(value: f64) -> Option<*const StringHeader> {

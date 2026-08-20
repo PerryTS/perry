@@ -11,7 +11,7 @@
 
 use perry_ffi::{
     alloc_string, build_object_shape, js_object_alloc_with_shape, js_object_set_field,
-    nanbox_string_bits, BufferHeader, JsValue, ObjectHeader, StringHeader,
+    nanbox_string_bits, read_string, BufferHeader, JsString, JsValue, ObjectHeader, StringHeader,
 };
 
 pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
@@ -23,11 +23,8 @@ pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     if p < 0x100000 {
         return None;
     }
-    let hdr = ptr as *const StringHeader;
-    let len = (*hdr).byte_len as usize;
-    let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+    let handle = JsString::from_raw(ptr as *mut StringHeader);
+    read_string(handle).map(str::to_owned)
 }
 
 // Runtime entrypoints provided by perry-runtime (declared as extern so

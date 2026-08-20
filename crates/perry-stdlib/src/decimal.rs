@@ -7,7 +7,9 @@ use perry_runtime::{js_string_from_bytes, StringHeader};
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
-use crate::common::{get_handle_mut, register_handle, Handle};
+use crate::common::{
+    get_handle_mut, register_handle, string_from_header_lossy as string_from_header, Handle,
+};
 
 /// DecimalHandle stores a Decimal value
 pub struct DecimalHandle {
@@ -18,17 +20,6 @@ impl DecimalHandle {
     pub fn new(value: Decimal) -> Self {
         DecimalHandle { value }
     }
-}
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
 }
 
 /// Create a new Decimal from a number

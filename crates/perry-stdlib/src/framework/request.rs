@@ -6,18 +6,7 @@ use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::collections::HashMap;
 
 use super::server::RequestHandle;
-use crate::common::{get_handle, Handle};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
+use crate::common::{get_handle, string_from_header_lossy as string_from_header, Handle};
 
 /// Get request ID (for debugging/logging)
 #[no_mangle]

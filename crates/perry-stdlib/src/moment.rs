@@ -3,20 +3,11 @@
 //! Native implementation of the 'moment' npm package using chrono.
 //! Provides date/time manipulation with moment.js compatible API.
 
-use crate::common::{get_handle, register_handle, Handle};
+use crate::common::{
+    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle,
+};
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, TimeZone, Timelike, Utc};
 use perry_runtime::{js_string_from_bytes, StringHeader};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
 
 /// Moment handle
 pub struct MomentHandle {

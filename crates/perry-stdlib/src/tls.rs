@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::task::{Context, Poll};
 
+use crate::common::string_from_header;
 use perry_runtime::{
     js_array_alloc, js_array_is_array, js_array_push, js_closure_call0, js_closure_call1,
     js_get_string_pointer_unified, js_nanbox_pointer, js_object_alloc, js_object_get_field_by_name,
@@ -126,16 +127,6 @@ fn nanbox_str(s: &str) -> f64 {
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
         f64::from_bits(JSValue::string_ptr(ptr).bits())
     }
-}
-
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
 unsafe fn value_to_string(value: f64) -> Option<String> {

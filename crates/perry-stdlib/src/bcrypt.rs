@@ -6,17 +6,7 @@
 use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
+use crate::common::string_from_header;
 
 /// Hash a password with the given cost factor
 /// bcrypt.hash(password, saltRounds) -> Promise<string>

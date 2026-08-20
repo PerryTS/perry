@@ -406,14 +406,7 @@ fn boxed_str(bytes: &[u8]) -> f64 {
 }
 
 fn string_header_to_string(ptr: *const StringHeader) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
+    unsafe { crate::common::string_from_header_lossy(ptr) }.unwrap_or_default()
 }
 
 fn value_to_string(value: f64) -> String {

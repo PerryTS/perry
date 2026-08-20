@@ -6,18 +6,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use perry_runtime::{js_string_from_bytes, StringHeader};
 
-use crate::common::{register_handle, Handle};
-
-/// Helper to extract string from StringHeader pointer
-unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
+use crate::common::{register_handle, string_from_header, Handle};
 
 /// Wrapper around DateTime for handle storage
 pub struct DayjsHandle {

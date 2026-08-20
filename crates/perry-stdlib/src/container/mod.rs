@@ -47,6 +47,7 @@ pub use types::{
     ContainerSpec, ImageInfo, ListOrDict,
 };
 
+pub(crate) use crate::common::string_from_header_lossy as string_from_header;
 pub use backend::{detect_backend, ContainerBackend};
 use perry_runtime::{js_promise_new, Promise, StringHeader};
 use std::collections::HashMap;
@@ -98,16 +99,6 @@ pub(crate) async fn get_global_backend(
 }
 
 /// Helper to extract string from StringHeader pointer
-pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
-}
-
 /// Helper to create a JS string from a Rust string
 pub(crate) unsafe fn string_to_js(s: &str) -> *const StringHeader {
     let bytes = s.as_bytes();

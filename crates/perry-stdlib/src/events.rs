@@ -454,7 +454,7 @@ fn remove_one_matching_listener(
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if ptr.is_null() {
+    if ptr.is_null() || perry_runtime::value::addr_class::is_handle_band(ptr as usize) {
         return None;
     }
 
@@ -465,10 +465,7 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
         return string_from_header(rendered as *const StringHeader);
     }
 
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    Some(String::from_utf8_lossy(bytes).to_string())
+    crate::common::string_from_header_lossy(ptr)
 }
 
 fn value_from_bits(bits: i64) -> f64 {
