@@ -360,7 +360,7 @@ unsafe fn read_function_name_property(closure_ptr: usize) -> Option<String> {
 /// `.name` is set to `"bound " + target.name` and `.length` to
 /// `max(0, target.length - boundArgs.length)`, matching Node. Refs #2840.
 #[no_mangle]
-pub unsafe extern "C" fn js_function_bind(
+pub unsafe extern "C-unwind" fn js_function_bind(
     target_value: f64,
     args_ptr: *const f64,
     args_len: usize,
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn js_function_bind(
 /// survives the bitcode pipeline. See project_auto_optimize_keepalive_3320.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
+static KEEP_JS_FUNCTION_BIND: unsafe extern "C-unwind" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
 
 /// Reify a `Function.prototype.{bind,call,apply}` (or any function method)

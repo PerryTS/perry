@@ -11,7 +11,7 @@ use super::*;
 
 /// Call a closure with 0 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
+pub extern "C-unwind" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[]);
@@ -26,7 +26,7 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
             dispatch_with_arity(closure, func_ptr, &[], declared)
         },
         _ => {
-            let func: extern "C" fn(*const ClosureHeader) -> f64 =
+            let func: extern "C-unwind" fn(*const ClosureHeader) -> f64 =
                 unsafe { std::mem::transmute(func_ptr) };
             func(closure)
         }
@@ -84,7 +84,7 @@ pub extern "C-unwind" fn js_closure_call2(
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
         },
         _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
+            let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64) -> f64 =
                 unsafe { std::mem::transmute(func_ptr) };
             func(closure, arg0, arg1)
         }
@@ -93,7 +93,7 @@ pub extern "C-unwind" fn js_closure_call2(
 
 /// Call a closure with 3 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call3(
+pub extern "C-unwind" fn js_closure_call3(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -117,7 +117,7 @@ pub extern "C" fn js_closure_call3(
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
         },
         _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
+            let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
                 unsafe { std::mem::transmute(func_ptr) };
             func(closure, arg0, arg1, arg2)
         }
@@ -126,7 +126,7 @@ pub extern "C" fn js_closure_call3(
 
 /// Call a closure with 4 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call4(
+pub extern "C-unwind" fn js_closure_call4(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -157,7 +157,7 @@ pub extern "C" fn js_closure_call4(
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
         },
         _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
+            let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
                 unsafe { std::mem::transmute(func_ptr) };
             func(closure, arg0, arg1, arg2, arg3)
         }
@@ -166,7 +166,7 @@ pub extern "C" fn js_closure_call4(
 
 /// Call a closure with 5 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call5(
+pub extern "C-unwind" fn js_closure_call5(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -202,14 +202,14 @@ pub extern "C" fn js_closure_call5(
             };
         }
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
+    let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4)
 }
 
 /// Call a closure with 6 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call6(
+pub extern "C-unwind" fn js_closure_call6(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -251,7 +251,7 @@ pub extern "C" fn js_closure_call6(
             };
         }
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
+    let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5)
 }
@@ -291,7 +291,7 @@ pub(crate) fn dispatch_rest_or_declared_arity(
 
 /// Call a closure with 7 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call7(
+pub extern "C-unwind" fn js_closure_call7(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -316,14 +316,14 @@ pub extern "C" fn js_closure_call7(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 7) {
         return result;
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
+    let func: extern "C-unwind" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
 }
 
 /// Call a closure with 8 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call8(
+pub extern "C-unwind" fn js_closure_call8(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -349,14 +349,23 @@ pub extern "C" fn js_closure_call8(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 8) {
         return result;
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(func_ptr) };
+    let func: extern "C-unwind" fn(
+        *const ClosureHeader,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
 }
 
 /// Call a closure with 9 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call9(
+pub extern "C-unwind" fn js_closure_call9(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -383,7 +392,7 @@ pub extern "C" fn js_closure_call9(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 9) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -402,7 +411,7 @@ pub extern "C" fn js_closure_call9(
 
 /// Call a closure with 10 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call10(
+pub extern "C-unwind" fn js_closure_call10(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -430,7 +439,7 @@ pub extern "C" fn js_closure_call10(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 10) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -450,7 +459,7 @@ pub extern "C" fn js_closure_call10(
 
 /// Call a closure with 11 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call11(
+pub extern "C-unwind" fn js_closure_call11(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -485,7 +494,7 @@ pub extern "C" fn js_closure_call11(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 11) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -506,7 +515,7 @@ pub extern "C" fn js_closure_call11(
 
 /// Call a closure with 12 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call12(
+pub extern "C-unwind" fn js_closure_call12(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -542,7 +551,7 @@ pub extern "C" fn js_closure_call12(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 12) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -564,7 +573,7 @@ pub extern "C" fn js_closure_call12(
 
 /// Call a closure with 13 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call13(
+pub extern "C-unwind" fn js_closure_call13(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -601,7 +610,7 @@ pub extern "C" fn js_closure_call13(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 13) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -624,7 +633,7 @@ pub extern "C" fn js_closure_call13(
 
 /// Call a closure with 14 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call14(
+pub extern "C-unwind" fn js_closure_call14(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -663,7 +672,7 @@ pub extern "C" fn js_closure_call14(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 14) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -688,7 +697,7 @@ pub extern "C" fn js_closure_call14(
 
 /// Call a closure with 15 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call15(
+pub extern "C-unwind" fn js_closure_call15(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -730,7 +739,7 @@ pub extern "C" fn js_closure_call15(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 15) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,
@@ -756,7 +765,7 @@ pub extern "C" fn js_closure_call15(
 
 /// Call a closure with 16 arguments, returning f64
 #[no_mangle]
-pub extern "C" fn js_closure_call16(
+pub extern "C-unwind" fn js_closure_call16(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -799,7 +808,7 @@ pub extern "C" fn js_closure_call16(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 16) {
         return result;
     }
-    let func: extern "C" fn(
+    let func: extern "C-unwind" fn(
         *const ClosureHeader,
         f64,
         f64,

@@ -1,3 +1,9 @@
+// #8463: these fixtures exercise JS exceptions unwinding through the closure
+// dispatch family (`js_closure_call*`, `dispatch_with_arity`). After #8416 the
+// whole family must be `extern "C-unwind"` — a single plain `extern "C"` edge
+// turns a deferred Function error into `panic in a function that cannot
+// unwind` and aborts the binary on Linux. Naming this file in a runtime diff
+// also opts the suite into the PR tier's e2e-scoped job.
 //! bun:ffi stages 1-2 (#6562) — e2e: compile TS that dlopens real C-ABI
 //! dylibs and drive them through the typed call stubs.
 //!

@@ -390,7 +390,7 @@ pub unsafe extern "C-unwind" fn js_native_call_value(
 /// rather than xmm0 — matching the trampoline's `extern "C"` int-arg
 /// expectation.
 #[no_mangle]
-pub unsafe extern "C" fn js_closure_call_array(
+pub unsafe extern "C-unwind" fn js_closure_call_array(
     closure_env: i64,
     args_ptr: *const f64,
     args_len: i64,
@@ -661,7 +661,7 @@ pub unsafe extern "C" fn js_closure_call_array(
 /// `lower_expr` produces for a closure-typed expression). A null/undefined
 /// box returns TAG_UNDEFINED.
 #[no_mangle]
-pub unsafe extern "C" fn js_closure_call_apply_with_spread(
+pub unsafe extern "C-unwind" fn js_closure_call_apply_with_spread(
     closure_box: f64,
     regular_args: *const f64,
     regular_count: i64,
