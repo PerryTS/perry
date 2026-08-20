@@ -1094,3 +1094,49 @@ fn test_function_require_with_body_still_shadows_the_namespace_fast_path() {
         "the `net` binding must stay a runtime local under a shadowing require: {dump}"
     );
 }
+
+/// #8470: the plain, non-reactive documented form
+/// `widget.animateOpacity(target, dur)` must lower to the perry/ui animation
+/// call. The reactive desugar bailed when no argument read `State.value`, so
+/// the call fell onto the generic instance-method path and was rejected as an
+/// unknown method — making a declared API usable only by accident, when an
+/// argument happened to be reactive.
+#[test]
+fn test_non_reactive_widget_animate_lowers_to_the_ui_call() {
+    let source = r#"
+        import { App, Text, VStack } from "perry/ui"
+        const fading = Text("Fading text")
+        fading.animateOpacity(1.0, 0.3)
+        App({ title: "t", width: 400, height: 300, body: VStack(16, [fading]) })
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        dump.contains("widgetAnimateOpacity"),
+        "a literal-argument animateOpacity must still reach the perry/ui \
+         animation call: {dump}"
+    );
+}
+
+/// The guard on that arm: this desugar keys on the METHOD NAME, so a user
+/// class with its own `animateOpacity` must not be rewritten into a widget
+/// call just because the name matches.
+#[test]
+fn test_user_class_animate_method_is_not_hijacked_as_a_widget_call() {
+    let source = r#"
+        class Fader {
+            animateOpacity(target: number, dur: number): number { return target + dur; }
+        }
+        const f = new Fader();
+        console.log(f.animateOpacity(1.0, 0.3));
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("widgetAnimateOpacity"),
+        "a user class method that merely shares the name must stay an ordinary \
+         method call: {dump}"
+    );
+}

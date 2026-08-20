@@ -132,7 +132,46 @@ pub(crate) fn try_desugar_reactive_animate(
         collect_state_value_reads(ctx, &arg.expr, &mut state_names);
     }
     if state_names.is_empty() {
-        return Ok(None);
+        // #8470: no reactive dependency — the plain documented form
+        // `fading.animateOpacity(1.0, 0.3)`. There is nothing to subscribe to,
+        // so emit the animation call directly. Returning `None` here instead
+        // dropped the call onto the generic instance-method path, which
+        // rejects it ("'.animateOpacity(...)' is not a known instance
+        // method") even though `types/perry/ui/index.d.ts` declares it — so
+        // the whole method was usable ONLY when an argument happened to read
+        // `State.value`.
+        //
+        // Guarded on the receiver actually being a perry/ui native instance:
+        // this desugar keys on the method NAME, so without the guard a user
+        // class with its own `animateOpacity` would be rewritten into a
+        // widget call. (The reactive arm below carries the same hazard, but
+        // narrowing that is a behavioural change to shipped code and is left
+        // alone here.)
+        let receiver_is_ui_widget = match member.obj.as_ref() {
+            ast::Expr::Ident(id) => {
+                matches!(
+                    ctx.lookup_native_instance(id.sym.as_ref()),
+                    Some(("perry/ui", _))
+                )
+            }
+            _ => false,
+        };
+        if !receiver_is_ui_widget {
+            return Ok(None);
+        }
+        let widget_expr = lower_expr(ctx, member.obj.as_ref())?;
+        let mut args: Vec<Expr> = Vec::with_capacity(expected_arity + 1);
+        args.push(widget_expr);
+        for a in &call.args {
+            args.push(lower_expr(ctx, &a.expr)?);
+        }
+        return Ok(Some(Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            method: method_name.to_string(),
+            object: None,
+            args,
+            class_name: None,
+        }));
     }
 
     // Lower the receiver once; store in an IIFE local so the initial call and
