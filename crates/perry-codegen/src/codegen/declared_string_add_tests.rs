@@ -106,8 +106,7 @@ fn ir(params: Vec<Param>, body: Expr) -> String {
 }
 
 fn function_ir(module: Module) -> String {
-    let ir =
-        String::from_utf8(compile_module(&module, ir_opts()).unwrap()).expect("LLVM IR is UTF-8");
+    let ir = module_ir(module);
     // An ordinary typed parameter may now produce a public guard wrapper plus
     // proof-bearing and generic clones (#8079). This suite's subject remains
     // the annotation-distrusting body, so inspect the generic clone when one
@@ -132,6 +131,10 @@ fn function_ir(module: Module) -> String {
         .map(|offset| start + offset + 3)
         .unwrap_or(ir.len());
     ir[start..end].to_string()
+}
+
+fn module_ir(module: Module) -> String {
+    String::from_utf8(compile_module(&module, ir_opts()).unwrap()).expect("LLVM IR is UTF-8")
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
@@ -391,6 +394,208 @@ fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
     assert!(
         !ir.contains("call i64 @js_string_append("),
         "an opaque numeric-capable head pair must remain in source-tree order:\n{ir}"
+    );
+}
+
+#[test]
+fn a_module_global_self_append_uses_the_amortized_path_and_demotes_extractions() {
+    const GLOBAL: u32 = 10;
+    let value = add(
+        add(Expr::LocalGet(GLOBAL), Expr::String("[".to_string())),
+        Expr::String("]".to_string()),
+    );
+    let mut module = module_with(probe_fn_with_body(
+        Vec::new(),
+        vec![
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::LocalSet(GLOBAL, Box::new(value)))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(GLOBAL))),
+        ],
+    ));
+    module.init.push(Stmt::Let {
+        id: GLOBAL,
+        name: "module_accumulator".to_string(),
+        ty: Type::String,
+        mutable: true,
+        init: Some(Expr::String(String::new())),
+    });
+    let ir = function_ir(module);
+
+    assert!(
+        ir.contains("call i64 @js_string_append("),
+        "a module root is binding storage and can retain the unique string owner:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @js_string_addref_if_heap_string("),
+        "returning the global extracts an alias and must demote it first:\n{ir}"
+    );
+}
+
+#[test]
+fn a_boxed_local_self_append_uses_the_amortized_path() {
+    const ACC: u32 = 10;
+    const READER: u32 = 11;
+    let value = add(Expr::LocalGet(ACC), Expr::String("long-part".to_string()));
+    let module = module_with(probe_fn_with_body(
+        Vec::new(),
+        vec![
+            Stmt::Let {
+                id: ACC,
+                name: "accumulator".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String(String::new())),
+            },
+            // Capturing a local that is also mutated in this scope makes the
+            // source binding a shared variable box.
+            Stmt::Let {
+                id: READER,
+                name: "reader".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 2,
+                    params: Vec::new(),
+                    return_type: Type::String,
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(ACC)))],
+                    captures: vec![ACC],
+                    mutable_captures: vec![ACC],
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: true,
+                }),
+            },
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::LocalSet(ACC, Box::new(value)))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(ACC))),
+        ],
+    ));
+    let ir = function_ir(module);
+
+    assert!(
+        ir.contains("call i64 @js_string_append("),
+        "a variable box must retain the accumulator owner across iterations:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_box_get_bits(") && ir.contains("call void @js_box_set_bits("),
+        "the append result must be read from and written back to the box:\n{ir}"
+    );
+}
+
+#[test]
+fn a_boxed_capture_self_append_uses_the_amortized_path() {
+    const ACC: u32 = 10;
+    const APPENDER: u32 = 11;
+    let module = module_with(probe_fn_with_body(
+        Vec::new(),
+        vec![
+            Stmt::Let {
+                id: ACC,
+                name: "accumulator".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String(String::new())),
+            },
+            Stmt::Let {
+                id: APPENDER,
+                name: "append".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 2,
+                    params: Vec::new(),
+                    return_type: Type::String,
+                    body: vec![
+                        Stmt::While {
+                            condition: Expr::Bool(false),
+                            body: vec![Stmt::Expr(Expr::LocalSet(
+                                ACC,
+                                Box::new(add(
+                                    Expr::LocalGet(ACC),
+                                    Expr::String("long-part".to_string()),
+                                )),
+                            ))],
+                        },
+                        Stmt::Return(Some(Expr::LocalGet(ACC))),
+                    ],
+                    captures: vec![ACC],
+                    mutable_captures: vec![ACC],
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: true,
+                }),
+            },
+            Stmt::Return(Some(Expr::LocalGet(APPENDER))),
+        ],
+    ));
+    let ir = module_ir(module);
+
+    assert!(
+        ir.contains("call i64 @js_string_append("),
+        "a captured variable box must reach the append helper:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_closure_get_capture_bits(")
+            && ir.contains("call void @js_box_set_bits("),
+        "the captured owner must be dereferenced and written through its box:\n{ir}"
+    );
+}
+
+#[test]
+fn a_module_global_numeric_capable_head_pair_does_not_select_append() {
+    const GLOBAL: u32 = 10;
+    let value = add(
+        add(Expr::LocalGet(GLOBAL), Expr::Number(1.0)),
+        Expr::String("x".to_string()),
+    );
+    let mut module = module_with(probe_fn_with_body(
+        Vec::new(),
+        vec![Stmt::While {
+            condition: Expr::Bool(false),
+            body: vec![Stmt::Expr(Expr::LocalSet(GLOBAL, Box::new(value)))],
+        }],
+    ));
+    module.init.push(Stmt::Let {
+        id: GLOBAL,
+        name: "lying_accumulator".to_string(),
+        ty: Type::String,
+        mutable: true,
+        init: Some(Expr::Number(42.0)),
+    });
+    let ir = function_ir(module);
+
+    assert!(
+        !ir.contains("call i64 @js_string_append("),
+        "the newly eligible storage must not weaken the numeric-head guard:\n{ir}"
+    );
+}
+
+#[test]
+fn assigning_one_local_to_another_demotes_a_possible_string_alias() {
+    let module = module_with(probe_fn_with_body(
+        vec![str_param(), param(2, "snapshot", Type::String)],
+        vec![
+            Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::LocalGet(1)))),
+            Stmt::Return(Some(Expr::Number(0.0))),
+        ],
+    ));
+    let ir = function_ir(module);
+
+    assert!(
+        ir.contains("call void @js_string_addref_if_heap_string("),
+        "assignment aliases need the same demote as declaration aliases:\n{ir}"
     );
 }
 

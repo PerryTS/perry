@@ -8,7 +8,9 @@ use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UpdateOp};
 
-use crate::lower_string_concat::{flatten_string_add_chain, lower_string_self_append};
+use crate::lower_string_concat::{
+    can_lower_string_self_append, flatten_string_add_chain, lower_string_self_append,
+};
 use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
 use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
@@ -20,6 +22,25 @@ use super::{
     is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
     lower_pod_local_reassignment, materialize_pod_local, nanbox_string_inline, FnCtx,
 };
+
+/// A box, closure cell, or module root is the storage for the source binding,
+/// not an alias of the string it currently owns. An ordinary read extracts a
+/// second copy of that value, so demote a heap string before it can outlive the
+/// cell and be silently changed by a later in-place append (#8432).
+///
+/// The append lowering reads these targets directly and therefore deliberately
+/// bypasses this rule. Limit the call to declared-string bindings: only those
+/// bindings can select in-place append, and erased annotations remain safe
+/// because the runtime helper checks the live tag.
+fn demote_extracted_string_binding(ctx: &mut FnCtx<'_>, id: u32, value: &str) {
+    let persistent_binding = ctx.closure_captures.contains_key(&id)
+        || (ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id))
+        || ctx.module_globals.contains_key(&id);
+    if persistent_binding && matches!(ctx.local_type_hint(&id), Some(HirType::String)) {
+        ctx.block()
+            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
+    }
+}
 
 /// #1380: method names addressable on a `Set` instance, used by the
 /// `typeof set.<name>` fold to report "function" (Set method values are
@@ -404,14 +425,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
                     let bits = blk.call(I64, "js_box_get_bits", &[(I64, &box_ptr)]);
-                    return Ok(blk.bitcast_i64_to_double(&bits));
+                    let value = blk.bitcast_i64_to_double(&bits);
+                    demote_extracted_string_binding(ctx, *id, &value);
+                    return Ok(value);
                 }
                 let bits = ctx.block().call(
                     I64,
                     "js_closure_get_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str)],
                 );
-                return Ok(ctx.block().bitcast_i64_to_double(&bits));
+                let value = ctx.block().bitcast_i64_to_double(&bits);
+                demote_extracted_string_binding(ctx, *id, &value);
+                return Ok(value);
             }
             // Boxed local in enclosing function: load the slot (box
             // pointer), deref via js_box_get_bits.
@@ -434,7 +459,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
                     let bits = blk.call(I64, "js_box_get_bits", &[(I64, &box_ptr)]);
-                    return Ok(blk.bitcast_i64_to_double(&bits));
+                    let value = blk.bitcast_i64_to_double(&bits);
+                    demote_extracted_string_binding(ctx, *id, &value);
+                    return Ok(value);
                 }
             }
             // Repsel Phase 1: a canonical-i32 local's ONLY storage is the i32
@@ -458,10 +485,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     return Ok(v);
                 }
-                Ok(ctx.block().load(DOUBLE, &slot))
+                let value = ctx.block().load(DOUBLE, &slot);
+                demote_extracted_string_binding(ctx, *id, &value);
+                Ok(value)
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                 let g_ref = format!("@{}", global_name);
-                Ok(ctx.block().load(DOUBLE, &g_ref))
+                let value = ctx.block().load(DOUBLE, &g_ref);
+                demote_extracted_string_binding(ctx, *id, &value);
+                Ok(value)
             } else {
                 // Soft fallback: the HIR sometimes carries stale
                 // local references that don't correspond to any
@@ -498,26 +529,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `js_string_concat_chain` would copy the growing `x` prefix on
             // every loop iteration, turning the otherwise-amortized append
             // path back into O(n^2) work (#8394).
-            // The fast path requires a plain alloca slot in `ctx.locals` —
-            // module globals (use `@global` loads), closure captures (use
-            // `js_closure_{get,set}_capture_bits`), and boxed vars (use
-            // `js_box_set_bits` through a heap cell) all need different store
-            // mechanics, so they fall through to the regular `LocalSet`
-            // path below. Issue #319: without the `ctx.locals.contains_key`
-            // / closure_captures / boxed_vars guards, a closure-captured
-            // string-typed local that does `s = s + t` aborted codegen
-            // with `string self-append: local N not in scope` because the
-            // helper's `ctx.locals.get(id)` lookup whiffed.
+            // The append helper abstracts over plain slots, module roots,
+            // closure captures, and variable boxes. Ordinary reads from the
+            // latter three storage families demote a heap string to shared;
+            // this owner read deliberately bypasses that extraction rule so
+            // the binding can retain uniqueness across iterations (#8432).
             // #7841: the tag-dispatched helper validates the destination's
             // current value before choosing append versus ordinary JS `+`.
             // This is therefore a dispatch hint, not a binding proof; using
             // the stable-only query would disable the optimization for every
             // self-append because this `LocalSet` is itself a reassignment.
             if matches!(ctx.local_type_hint(id), Some(HirType::String))
-                && !ctx.module_globals.contains_key(id)
-                && !ctx.closure_captures.contains_key(id)
-                && !ctx.boxed_vars.contains(id)
-                && ctx.locals.contains_key(id)
+                && can_lower_string_self_append(ctx, *id)
             {
                 if let Expr::Binary {
                     op: BinaryOp::Add,
@@ -615,6 +638,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             let v = lower_expr(ctx, value)?;
+            // `target = source` creates the same string-buffer alias as a
+            // `let target = source` initializer. The declaration path has
+            // demoted this shape since #5552, but assignment aliases were
+            // previously missed. Async lowering expresses mid-body snapshot
+            // variables as LocalSet, making that gap observable as the saved
+            // string growing in place with its boxed accumulator (#8432).
+            if matches!(value.as_ref(), Expr::LocalGet(source_id) if source_id != id) {
+                ctx.block()
+                    .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+            }
             // Closure captures first (write through the runtime), then
             // locals, then module globals.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {

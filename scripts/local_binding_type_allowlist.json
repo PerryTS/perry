@@ -107,6 +107,14 @@
     },
     {
       "path": "crates/perry-codegen/src/expr/literals_vars.rs",
+      "function": "demote_extracted_string_binding",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint limits demotion to bindings eligible for in-place append; js_string_addref_if_heap_string validates the current value's live tag before touching string ownership."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/literals_vars.rs",
       "function": "lower",
       "access": "local_type_hint",
       "count": 1,
