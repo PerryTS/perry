@@ -86,19 +86,22 @@ function lruCacheExample(): void {
 // ANCHOR_END: lru-cache
 
 // ANCHOR: child-process
-import { spawnBackground, getProcessStatus, killProcess } from "child_process"
+// `spawnBackground` / `getProcessStatus` / `killProcess` are Perry EXTENSIONS —
+// Node's `child_process` has no such named exports, so importing them by name
+// is rejected (correctly) with U006. Reach them through the module namespace.
+import * as child_process from "child_process"
 
 function childProcessExample(): void {
     // Spawn a background process
-    const { pid, handleId } = spawnBackground("sleep", ["10"], "/tmp/log.txt")
+    const { pid, handleId } = child_process.spawnBackground("sleep", ["10"], "/tmp/log.txt")
 
     // Check if it's still running
-    const status = getProcessStatus(handleId)
+    const status = child_process.getProcessStatus(handleId)
     console.log(status.alive) // true
     console.log(`pid=${pid}`)
 
     // Kill it
-    killProcess(handleId)
+    child_process.killProcess(handleId)
 }
 // ANCHOR_END: child-process
 

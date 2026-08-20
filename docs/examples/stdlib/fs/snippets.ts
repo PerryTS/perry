@@ -10,9 +10,12 @@
 // We use os.tmpdir() throughout so the file is portable across macOS/Linux
 // (where /tmp exists) and Windows (where it doesn't).
 
+// `readFileBuffer` is a Perry EXTENSION, not part of Node's `fs` named-export
+// surface — Node itself has no such export, so `import { readFileBuffer }`
+// is rejected (correctly) with U006. Reach it through the module namespace.
+import * as fs from "fs"
 import {
     readFileSync,
-    readFileBuffer,
     writeFileSync,
     existsSync,
     statSync,
@@ -42,7 +45,7 @@ console.log(content)
 
 // ANCHOR: read-binary
 const imagePath = join(scratch, "image.png")
-const buffer = readFileBuffer(imagePath)
+const buffer = fs.readFileBuffer(imagePath)
 console.log(`Read ${buffer.length} bytes`)
 // ANCHOR_END: read-binary
 
