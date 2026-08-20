@@ -982,6 +982,17 @@ pub struct LoweringContext {
     /// observe the failure instead of rejecting the whole user source at
     /// compile time. Outside try blocks, `require(literal)` still hard-errors.
     pub(crate) optional_require_try_depth: u32,
+    /// #8465: `const require = createRequire(import.meta.url)` (node:module's
+    /// own ESM idiom, including an aliased import of `createRequire`) binds
+    /// the REAL module-scoped CommonJS require — for builtin specifiers it
+    /// returns exactly the native namespace. Set when that declaration is
+    /// seen so `require_is_shadowed_by_local` does not treat the binding as
+    /// shadowing the require intrinsic; the CJS wrap's synthetic
+    /// `function require(...)` (a real function with a body) still shadows
+    /// via `lookup_func`. Module-wide and scope-blind like `proxy_locals` —
+    /// strictly narrower than the pre-#8343 behavior, which ignored ALL
+    /// local `require` bindings on this path.
+    pub(crate) require_local_is_create_require: bool,
     /// Pre-scanned constant environment for `new Function` / `Function(...)`
     /// argument resolution (single-assignment module vars, `toString`-bearing
     /// object literals, counters). Built once per module in

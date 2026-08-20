@@ -70,7 +70,15 @@ pub(crate) fn require_resolvable_native_specifier(init: &ast::Expr) -> Option<St
 /// the callers to let the `require(...)` call flow through to the synthetic
 /// require at runtime, which resolves builtins via `createRequire`.
 pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
-    ctx.lookup_local("require").is_some()
+    // #8465: a local `require` created by node:module's `createRequire` IS the
+    // module-scoped require — for builtin specifiers it returns exactly the
+    // native namespace, so it must not suppress the static namespace fast
+    // path (pre-#8343 behavior for this idiom; regressed net.connect reached
+    // as a bound value to a runtime dispatch arm that is null in
+    // default-feature builds).
+    let local_shadow =
+        ctx.lookup_local("require").is_some() && !ctx.require_local_is_create_require;
+    local_shadow
         || ctx.lookup_func("require").is_some()
         || ctx.lookup_imported_func("require").is_some()
 }

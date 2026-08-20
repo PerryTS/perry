@@ -990,7 +990,6 @@ fn method_local_shadowing_the_class_name_still_wins_in_new() {
         "a method-scope local named after the class must still win for `new`: {body}"
     );
 }
-
 /// #8447: the ambient-typing idiom `declare function require(name: string): any`
 /// names the global require intrinsic — it must NOT be registered as an
 /// external FFI function. That registration made every require-shadowing guard
@@ -1040,5 +1039,58 @@ fn test_user_require_function_with_body_still_shadows_the_intrinsic() {
         !dump.contains("NativeModuleRef(\"fs\")"),
         "a user `function require` with a body shadows the intrinsic — the \
          call must not be rewritten into a native-module namespace: {dump}"
+    );
+}
+
+/// #8465: `const require = createRequire(import.meta.url)` binds the REAL
+/// module-scoped require — `const net = require("net")` must still take the
+/// static native-namespace fast path (as it did before #8343's shadow guard),
+/// not flow to the runtime createRequire surface, where `net.connect` reached
+/// as a bound value dispatches through a null-by-default function pointer and
+/// silently returns undefined.
+#[test]
+fn test_create_require_local_keeps_the_native_namespace_fast_path() {
+    let source = r#"
+        import { createRequire } from "node:module";
+        const require = createRequire(import.meta.url);
+        const net = require("net");
+        console.log(typeof net.connect);
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        dump.contains("NativeModuleRef(\"net\")"),
+        "require(\"net\") under a createRequire-backed local must fold to the \
+         static native namespace: {dump}"
+    );
+    assert!(
+        !dump.contains("name: \"net\""),
+        "the namespace binding must not leave a runtime `net` local behind: {dump}"
+    );
+}
+
+/// The #8465 counterpart, complementary to
+/// `test_user_require_function_with_body_still_shadows_the_intrinsic` above:
+/// that one pins that a real `function require` body suppresses the fold; this
+/// one additionally pins that the bound name survives as a runtime local, which
+/// is what the CJS wrap's synthetic require depends on.
+#[test]
+fn test_function_require_with_body_still_shadows_the_namespace_fast_path() {
+    let source = r#"
+        function require(name: string): any { return { connect: 1 }; }
+        const net = require("net");
+        console.log(typeof net.connect);
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeModuleRef(\"net\")"),
+        "a real `function require` body must keep shadowing: {dump}"
+    );
+    assert!(
+        dump.contains("name: \"net\""),
+        "the `net` binding must stay a runtime local under a shadowing require: {dump}"
     );
 }

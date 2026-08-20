@@ -31,6 +31,28 @@ pub(crate) fn register_native_fetch_and_streams(
     // fs/path/crypto-only `is_require_builtin_module` path. Non-literal
     // / unresolvable specifiers fall through to the legacy compile-time
     // refusal in `expr_call::intrinsics::try_require_literal`.
+    // #8465: `const require = createRequire(import.meta.url)` — recognize the
+    // binding as the REAL module-scoped require (see the context field's doc)
+    // before the shadow check below consults it. Accepts a renamed import
+    // (`import { createRequire as cr } from "node:module"`) by resolving the
+    // callee through the imported-function table.
+    if name == "require" {
+        if let Some(init_expr) = &decl.init {
+            if let ast::Expr::Call(call) = init_expr.as_ref() {
+                if let ast::Callee::Expr(callee) = &call.callee {
+                    if let ast::Expr::Ident(callee_ident) = callee.as_ref() {
+                        let callee_name = callee_ident.sym.as_ref();
+                        let is_create_require = callee_name == "createRequire"
+                            || ctx.lookup_imported_func(callee_name) == Some("createRequire");
+                        if is_create_require {
+                            ctx.require_local_is_create_require = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(init_expr) = &decl.init {
         // #8342: inside a CJS-wrapped module the wrap's synthetic
         // `function require(...)` (with a `createRequire`-backed built-in arm)
