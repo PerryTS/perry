@@ -113,8 +113,9 @@ pub(crate) fn spec_abi_max() -> usize {
 /// How proven call sites reach the specialized entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpecDispatch {
-    /// Tier A: every non-Boxed slot proven BY CONSTRUCTION at the call site —
-    /// direct `call @{name}$spec_...` with raw args, no guard.
+    /// Tier A: raw slots are proven BY CONSTRUCTION at the direct call site.
+    /// Boxed container facts may additionally be validated in one call-site
+    /// descriptor diamond when the raw `TaPtr` ABI prevents a public wrapper.
     Static,
     /// Tier B: reps proven only by declared types — the call site keeps the
     /// runtime-guarded diamond (guard → spec entry / boxed fallback → phi).
@@ -135,7 +136,7 @@ pub(crate) struct SpecFnPlan {
 /// LLVM parameter type for a rep slot.
 pub(crate) fn spec_rep_llvm_ty(rep: SpecParamRep) -> LlvmType {
     match rep {
-        SpecParamRep::Boxed | SpecParamRep::F64 => DOUBLE,
+        SpecParamRep::Boxed | SpecParamRep::NumberArray | SpecParamRep::F64 => DOUBLE,
         SpecParamRep::I32 => I32,
         SpecParamRep::TaPtr { .. } => I64,
     }

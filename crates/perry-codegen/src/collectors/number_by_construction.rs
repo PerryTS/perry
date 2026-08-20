@@ -54,7 +54,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::Stmt;
+use perry_hir::types::Type as HirType;
+use perry_hir::{Expr, Param, Stmt};
 
 /// `PERRY_NUMBER_BY_CONSTRUCTION` gate. Enabled by default; `=0`/`off`/`false`
 /// empties the fact, reverting every reassigned numeric accumulator to the
@@ -80,18 +81,468 @@ pub(crate) fn enabled() -> bool {
 /// verdict without it.
 pub(crate) fn collect_number_by_construction_locals(
     stmts: &[Stmt],
+    params: &[Param],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, HirType>,
+    spec_ta_lens: &HashMap<u32, i64>,
+    spec_numeric_params: &HashSet<u32>,
     not_bigint_locals: &HashSet<u32>,
 ) -> HashSet<u32> {
     if !enabled() {
         return HashSet::new();
     }
-    super::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
+    let mut numeric = super::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
         stmts,
         boxed_vars,
         module_globals,
         not_bigint_locals,
         &HashMap::new(),
-    )
+    );
+    numeric.extend(collect_number_at_read_after_undefined(
+        stmts,
+        params,
+        boxed_vars,
+        module_globals,
+        binding_types,
+        spec_ta_lens,
+        spec_numeric_params,
+    ));
+    numeric
+}
+
+/// Locals whose only non-Number state is `undefined`, and whose every read is
+/// dominated by a write that establishes a genuine Number.
+///
+/// TypeScript lowers `let n: number;` to an explicit `Undefined` seed.  The
+/// whole-write proof above must reject that seed, but rejecting the local at
+/// every later read is unnecessarily strong when control flow overwrites it
+/// first on every path.  This pass supplies the missing flow leg without
+/// trusting the declaration: writes qualify only through runtime-established
+/// facts (literals, Number-producing operations, or an in-bounds int typed-
+/// array read backed by a specialized-entry/constructor length proof).
+///
+/// A non-Number write other than `undefined` poisons the candidate even when
+/// it is overwritten before a read.  That keeps the broader consumers of
+/// `number_by_construction_locals` sound: between reads they may also use the
+/// fact to omit pointer rooting, and `undefined` is non-pointer while a string
+/// or object is not.
+fn collect_number_at_read_after_undefined(
+    stmts: &[Stmt],
+    params: &[Param],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, HirType>,
+    spec_ta_lens: &HashMap<u32, i64>,
+    spec_numeric_params: &HashSet<u32>,
+) -> HashSet<u32> {
+    let mut writes: HashMap<u32, Vec<Option<&Expr>>> = HashMap::new();
+    let mut let_bound = HashSet::new();
+    super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut let_bound);
+
+    let candidates: HashSet<u32> = let_bound
+        .into_iter()
+        .filter(|id| !boxed_vars.contains(id) && !module_globals.contains_key(id))
+        .filter(|id| {
+            writes.get(id).is_some_and(|local_writes| {
+                local_writes
+                    .iter()
+                    .any(|write| matches!(write, None | Some(Expr::Undefined)))
+            })
+        })
+        .collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut types = binding_types.clone();
+    for param in params {
+        types.entry(param.id).or_insert_with(|| param.ty.clone());
+    }
+    let mut ta_lens = super::integer_locals::collect_const_int_ta_views(stmts);
+    for (id, len) in spec_ta_lens {
+        ta_lens.entry(*id).or_insert(*len);
+    }
+
+    // Only raw numeric parameters proven by the specialized entry seed the
+    // initial flow state.  Declared `number` parameters remain untrusted in a
+    // generic body.  The same set is the conservative numeric-key evidence
+    // passed to the shared typed-array write predicate.
+    let mut numberish = spec_numeric_params.clone();
+    let invalid = {
+        let mut flow = NumberAtReadFlow {
+            candidates: &candidates,
+            types: &types,
+            ta_lens: &ta_lens,
+            numeric_index_locals: spec_numeric_params,
+            invalid: HashSet::new(),
+        };
+        flow.stmts(stmts, &mut numberish);
+        flow.invalid
+    };
+
+    candidates
+        .into_iter()
+        .filter(|id| !invalid.contains(id))
+        .collect()
+}
+
+struct NumberAtReadFlow<'a> {
+    candidates: &'a HashSet<u32>,
+    types: &'a HashMap<u32, HirType>,
+    ta_lens: &'a HashMap<u32, i64>,
+    numeric_index_locals: &'a HashSet<u32>,
+    invalid: HashSet<u32>,
+}
+
+impl NumberAtReadFlow<'_> {
+    fn stmts(&mut self, stmts: &[Stmt], numberish: &mut HashSet<u32>) {
+        for stmt in stmts {
+            self.stmt(stmt, numberish);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt, numberish: &mut HashSet<u32>) {
+        match stmt {
+            Stmt::Let { id, init, .. } => match init {
+                Some(rhs) => self.write(*id, rhs, numberish),
+                None => {
+                    numberish.remove(id);
+                }
+            },
+            Stmt::Expr(expr) | Stmt::Throw(expr) => self.expr(expr, numberish, true),
+            Stmt::Return(Some(expr)) => self.expr(expr, numberish, false),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.expr(condition, numberish, false);
+                let mut then_state = numberish.clone();
+                self.stmts(then_branch, &mut then_state);
+                let mut else_state = numberish.clone();
+                if let Some(else_branch) = else_branch {
+                    self.stmts(else_branch, &mut else_state);
+                }
+                *numberish = then_state.intersection(&else_state).copied().collect();
+            }
+            Stmt::While { condition, body } => {
+                let entry = numberish.clone();
+                self.expr(condition, numberish, false);
+                let mut backedge = numberish.clone();
+                self.stmts(body, &mut backedge);
+                // Re-check the condition under the back-edge state.  This is
+                // what prevents a body write from invalidating a value read
+                // by the next iteration's condition without being noticed.
+                self.expr(condition, &mut backedge, false);
+                *numberish = entry.intersection(&backedge).copied().collect();
+            }
+            Stmt::DoWhile { body, condition } => {
+                let entry = numberish.clone();
+                let mut backedge = numberish.clone();
+                self.stmts(body, &mut backedge);
+                self.expr(condition, &mut backedge, false);
+                // A second conservative body walk covers later iterations
+                // whose entry state is the meet of the first entry/back-edge.
+                let mut loop_entry: HashSet<u32> = entry.intersection(&backedge).copied().collect();
+                self.stmts(body, &mut loop_entry);
+                self.expr(condition, &mut loop_entry, false);
+                *numberish = backedge.intersection(&loop_entry).copied().collect();
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    self.stmt(init, numberish);
+                }
+                let entry = numberish.clone();
+                if let Some(condition) = condition {
+                    self.expr(condition, numberish, false);
+                }
+                let mut backedge = numberish.clone();
+                self.stmts(body, &mut backedge);
+                if let Some(update) = update {
+                    self.expr(update, &mut backedge, false);
+                }
+                if let Some(condition) = condition {
+                    self.expr(condition, &mut backedge, false);
+                }
+                let mut loop_entry: HashSet<u32> = entry.intersection(&backedge).copied().collect();
+                self.stmts(body, &mut loop_entry);
+                if let Some(update) = update {
+                    self.expr(update, &mut loop_entry, false);
+                }
+                *numberish = entry.intersection(&loop_entry).copied().collect();
+            }
+            Stmt::Labeled { body, .. } => self.stmt(body, numberish),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                let entry = numberish.clone();
+                let mut try_state = numberish.clone();
+                self.stmts(body, &mut try_state);
+                let mut merged: HashSet<u32> = entry.intersection(&try_state).copied().collect();
+                if let Some(catch) = catch {
+                    let mut catch_state = entry.clone();
+                    self.stmts(&catch.body, &mut catch_state);
+                    merged.retain(|id| catch_state.contains(id));
+                }
+                if let Some(finally) = finally {
+                    self.stmts(finally, &mut merged);
+                }
+                *numberish = merged;
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                self.expr(discriminant, numberish, false);
+                let entry = numberish.clone();
+                let mut merged = entry.clone();
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        let mut test_state = entry.clone();
+                        self.expr(test, &mut test_state, false);
+                        merged.retain(|id| test_state.contains(id));
+                    }
+                    let mut case_state = entry.clone();
+                    self.stmts(&case.body, &mut case_state);
+                    merged.retain(|id| case_state.contains(id));
+                }
+                *numberish = merged;
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::Return(None)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    fn write(&mut self, target: u32, rhs: &Expr, numberish: &mut HashSet<u32>) {
+        self.expr(rhs, numberish, false);
+        if matches!(rhs, Expr::Undefined) {
+            numberish.remove(&target);
+            return;
+        }
+        if super::int_valued_ta_locals::write_establishes_number(
+            rhs,
+            self.types,
+            self.ta_lens,
+            numberish,
+            self.numeric_index_locals,
+        ) {
+            numberish.insert(target);
+        } else {
+            numberish.remove(&target);
+            if self.candidates.contains(&target) {
+                self.invalid.insert(target);
+            }
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr, numberish: &mut HashSet<u32>, root_store: bool) {
+        match expr {
+            Expr::LocalGet(id) => {
+                if self.candidates.contains(id) && !numberish.contains(id) {
+                    self.invalid.insert(*id);
+                }
+            }
+            Expr::LocalSet(id, rhs) if root_store => self.write(*id, rhs, numberish),
+            Expr::LocalSet(id, rhs) => {
+                // Conditional/short-circuit expression writes need their own
+                // CFG before they can establish dominance.  Decline them.
+                self.expr(rhs, numberish, false);
+                numberish.remove(id);
+                if self.candidates.contains(id) {
+                    self.invalid.insert(*id);
+                }
+            }
+            Expr::Update { id, .. } => {
+                if self.candidates.contains(id) && !numberish.contains(id) {
+                    self.invalid.insert(*id);
+                }
+                if !numberish.contains(id) {
+                    numberish.remove(id);
+                }
+            }
+            Expr::Closure { .. } => {
+                // Captured mutable locals are excluded through `boxed_vars`.
+                // The HIR walker intentionally keeps closure bodies separate.
+            }
+            _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                self.expr(child, numberish, false)
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{BinaryOp, CompareOp};
+
+    const N: u32 = 1;
+    const S: u32 = 2;
+    const L: u32 = 3;
+
+    fn let_n() -> Stmt {
+        Stmt::Let {
+            id: N,
+            name: "n".to_string(),
+            ty: HirType::Number,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        }
+    }
+
+    fn set_n(rhs: Expr) -> Stmt {
+        Stmt::Expr(Expr::LocalSet(N, Box::new(rhs)))
+    }
+
+    fn s_read(index: Expr) -> Expr {
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(S)),
+            index: Box::new(index),
+        }
+    }
+
+    fn add(left: Expr, right: Expr) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    fn run(stmts: &[Stmt]) -> HashSet<u32> {
+        let params = [Param {
+            id: S,
+            name: "S".to_string(),
+            ty: HirType::Named("Int32Array".to_string()),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+        collect_number_at_read_after_undefined(
+            stmts,
+            &params,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::from([(S, 1024)]),
+            &HashSet::new(),
+        )
+    }
+
+    fn masked_s_read() -> Expr {
+        s_read(Expr::Binary {
+            op: BinaryOp::UShr,
+            left: Box::new(Expr::LocalGet(L)),
+            right: Box::new(Expr::Integer(24)),
+        })
+    }
+
+    #[test]
+    fn undefined_seed_reset_before_each_loop_read_is_number_at_reads() {
+        let stmts = vec![
+            let_n(),
+            Stmt::While {
+                condition: Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::Integer(0)),
+                    right: Box::new(Expr::Integer(1)),
+                },
+                body: vec![
+                    set_n(masked_s_read()),
+                    set_n(add(Expr::LocalGet(N), s_read(Expr::Integer(256)))),
+                    Stmt::Expr(Expr::Binary {
+                        op: BinaryOp::BitXor,
+                        left: Box::new(Expr::LocalGet(N)),
+                        right: Box::new(Expr::Integer(7)),
+                    }),
+                ],
+            },
+        ];
+
+        assert!(run(&stmts).contains(&N));
+    }
+
+    #[test]
+    fn read_before_first_numeric_write_keeps_dynamic_type() {
+        let stmts = vec![
+            let_n(),
+            Stmt::While {
+                condition: Expr::Bool(true),
+                body: vec![set_n(add(Expr::LocalGet(N), Expr::Integer(1)))],
+            },
+        ];
+
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    #[test]
+    fn zero_trip_loop_does_not_dominate_a_later_read() {
+        let stmts = vec![
+            let_n(),
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![set_n(Expr::Integer(1))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    #[test]
+    fn both_branch_writes_dominate_the_join_read() {
+        let stmts = vec![
+            let_n(),
+            Stmt::If {
+                condition: Expr::LocalGet(99),
+                then_branch: vec![set_n(Expr::Integer(1))],
+                else_branch: Some(vec![set_n(Expr::Number(2.5))]),
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+
+        assert!(run(&stmts).contains(&N));
+    }
+
+    #[test]
+    fn missing_branch_write_keeps_join_read_dynamic() {
+        let stmts = vec![
+            let_n(),
+            Stmt::If {
+                condition: Expr::LocalGet(99),
+                then_branch: vec![set_n(Expr::Integer(1))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    #[test]
+    fn pointer_write_poisons_rooting_fact_even_when_overwritten() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::String("temporary".to_string())),
+            set_n(Expr::Integer(1)),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+
+        assert!(!run(&stmts).contains(&N));
+    }
 }

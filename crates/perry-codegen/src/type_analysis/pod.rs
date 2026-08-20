@@ -589,7 +589,17 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
         // `const sum = o.x + o.y`). Without this bit, a later `v * 2` or
         // `sum * scale` becomes a bare `fmul` on whatever boxed value the slot
         // holds, and a NaN-boxed string passes straight through it.
-        Expr::LocalGet(id) => ctx.declared_only_numeric_locals.contains(id),
+        Expr::LocalGet(id) => {
+            ctx.declared_only_numeric_locals.contains(id)
+                // A declaration-only marker is seeded when the `Let` lowers,
+                // before later assignments are seen.  The whole-region
+                // write/flow proof can subsequently establish the stronger
+                // fact that every observable read is a Number (including an
+                // `undefined` seed overwritten on every path before use).
+                // Keep the historical marker for generic/unproven bodies,
+                // but do not let it mask that runtime-derived proof.
+                && !ctx.number_by_construction_locals.contains(id)
+        }
         // `a + b` is numeric only when both sides are, so it is violable when
         // either side is; `a || b` / `a && b` / `a ?? b` pass one operand
         // VALUE through, so the same holds. Both mirror `is_numeric_expr`.

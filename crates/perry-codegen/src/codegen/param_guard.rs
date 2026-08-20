@@ -766,14 +766,35 @@ pub(crate) fn declaration_guards(
             }
             Some(SpecParamGuard {
                 proof: param.ty.clone(),
-                descriptor_name: format!(
-                    "perry_param_guard_{}_{}_{}",
-                    module_prefix, function_id, index
-                ),
+                descriptor_name: guard_descriptor_name(module_prefix, function_id, index),
                 descriptor,
             })
         })
         .collect()
+}
+
+pub(crate) fn guard_descriptor_name(module_prefix: &str, function_id: u32, index: usize) -> String {
+    format!("perry_param_guard_{module_prefix}_{function_id}_{index}")
+}
+
+/// Build a descriptor for a proof inferred from a guarded direct-call shape
+/// rather than from the callee's annotation. The caller owns the eligibility
+/// checks; this helper deliberately only serializes the requested type.
+pub(crate) fn inferred_guard(
+    proof: Type,
+    descriptor_name: String,
+    type_aliases: &HashMap<String, Type>,
+    interfaces: &HashMap<String, perry_hir::Interface>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    class_ids: &HashMap<String, u32>,
+) -> Option<SpecParamGuard> {
+    let (descriptor, _) =
+        descriptor_for_type_with_walk_bound(&proof, type_aliases, interfaces, classes, class_ids)?;
+    Some(SpecParamGuard {
+        proof,
+        descriptor_name,
+        descriptor,
+    })
 }
 
 /// Whether the current function body can suspend after its entry guard.

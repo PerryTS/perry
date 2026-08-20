@@ -19,11 +19,10 @@ fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     }
 }
 
-/// Representation-selection Phase 2, Tier A: statically-proven dispatch to a
-/// specialized entry — direct call with raw args, no guard, no diamond, no
-/// phi. Every non-`Boxed` slot must be proven BY CONSTRUCTION at this exact
-/// call site (this check, not the collector, is the load-bearing soundness
-/// gate — a mismatch silently keeps today's boxed path):
+/// Representation-selection Phase 2, Tier A: direct dispatch to a specialized
+/// entry. Raw slots are proven by construction at this exact call site. A
+/// boxed container proof may add one descriptor diamond for the whole call;
+/// a mismatch keeps the permanent boxed fallback.
 ///
 /// - `I32` — integer literal in i32 range.
 /// - `F64` — numeric literal (bit-identical raw double).
@@ -60,6 +59,9 @@ fn try_emit_spec_static_call(
     for (i, (rep, arg)) in plan.reps.iter().zip(args.iter()).enumerate() {
         match rep {
             SpecParamRep::Boxed => raw_plan.push(RawArg::Double(i)),
+            // Plan construction normalizes this call-site-only marker to a
+            // boxed slot plus a descriptor before lowering.
+            SpecParamRep::NumberArray => return None,
             SpecParamRep::F64 => match arg {
                 Expr::Number(_) | Expr::Integer(_) => raw_plan.push(RawArg::Double(i)),
                 _ => return None,
@@ -143,7 +145,8 @@ fn try_emit_spec_static_call(
         raw_args_storage
     }
 
-    if !range_checked.is_empty() {
+    let check_descriptors = matches!(plan.dispatch, crate::codegen::SpecDispatch::Static);
+    if !range_checked.is_empty() || (check_descriptors && plan.guards.iter().any(Option::is_some)) {
         // One diamond for the whole call: every range-checked slot's test is
         // ANDed, so the fast arm is entered only when EVERY raw slot's
         // contract holds. The fallback is the permanent boxed ABI, which is
@@ -160,10 +163,37 @@ fn try_emit_spec_static_call(
                 None => ok,
             });
         }
+        if check_descriptors {
+            for (i, descriptor) in plan.guards.iter().enumerate() {
+                let Some(descriptor) = descriptor else {
+                    continue;
+                };
+                let ok = if let Some(rep) =
+                    crate::codegen::scalar_descriptor_rep(&descriptor.descriptor)
+                {
+                    crate::codegen::emit_typed_arg_guard(ctx.block(), rep, &lowered[i])
+                } else {
+                    let raw = ctx.block().call(
+                        I32,
+                        "js_param_type_guard",
+                        &[
+                            (DOUBLE, lowered[i].as_str()),
+                            (PTR, &format!("@{}", descriptor.descriptor_name)),
+                            (I32, &descriptor.descriptor.len().to_string()),
+                        ],
+                    );
+                    ctx.block().icmp_ne(I32, &raw, "0")
+                };
+                guard = Some(match guard {
+                    Some(prev) => ctx.block().and(I1, &prev, &ok),
+                    None => ok,
+                });
+            }
+        }
         let guard = guard?;
-        let fast_idx = ctx.new_block("spec_i32_call.fast");
-        let fallback_idx = ctx.new_block("spec_i32_call.fallback");
-        let merge_idx = ctx.new_block("spec_i32_call.merge");
+        let fast_idx = ctx.new_block("spec_checked_call.fast");
+        let fallback_idx = ctx.new_block("spec_checked_call.fallback");
+        let merge_idx = ctx.new_block("spec_checked_call.merge");
         let fast_label = ctx.block_label(fast_idx);
         let fallback_label = ctx.block_label(fallback_idx);
         let merge_label = ctx.block_label(merge_idx);
@@ -201,7 +231,7 @@ fn try_emit_spec_static_call(
         ctx.record_lowered_value(
             "Call",
             None,
-            "spec_abi_range_checked_call",
+            "spec_abi_checked_call",
             &LoweredValue::js_value(result.clone()),
             None,
             None,
@@ -209,9 +239,19 @@ fn try_emit_spec_static_call(
             false,
             false,
             vec![
-                format!("spec_call=range_checked; symbol={spec_name}; boxed_fallback={fname}"),
+                format!("spec_call=checked; symbol={spec_name}; boxed_fallback={fname}"),
                 format!("tuple={}", tuple_note.join(",")),
                 format!("range_checked_slots={range_checked:?}"),
+                format!(
+                    "descriptor_checked_slots={:?}",
+                    plan.guards
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, guard)| {
+                            (check_descriptors && guard.is_some()).then_some(i)
+                        })
+                        .collect::<Vec<_>>()
+                ),
             ],
         );
         return Some(result);

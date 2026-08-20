@@ -535,8 +535,12 @@ pub(crate) fn collect_type_facts(
     // `PERRY_PTR_SHAPE_LOCALS=0` — `is_numeric_expr` is not a repsel consumer.
     let number_by_construction_locals = super::collect_number_by_construction_locals(
         stmts,
+        params,
         boxed_vars,
         module_globals,
+        binding_types,
+        spec_ta_lens,
+        spec_numeric_params,
         &not_bigint_locals,
     );
     let (mut array_facts, effect_facts, materialization_hazards) =

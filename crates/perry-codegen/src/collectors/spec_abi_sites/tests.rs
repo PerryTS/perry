@@ -455,3 +455,39 @@ fn local_is_reassigned_sees_closure_writes() {
     assert!(local_is_reassigned(&stmts, 5));
     assert!(!local_is_reassigned(&stmts, 6));
 }
+
+#[test]
+fn guarded_number_array_rejects_stale_or_aliasable_reads() {
+    let read = || Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::Integer(0)),
+    };
+    let write = || {
+        Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(5)),
+            index: Box::new(Expr::Integer(0)),
+            value: Box::new(Expr::Integer(1)),
+        })
+    };
+    let loop_stmt = || Stmt::While {
+        condition: Expr::Bool(false),
+        body: Vec::new(),
+    };
+
+    assert!(guarded_number_array_param_eligible(
+        &[let_stmt(6, false, read()), loop_stmt(), write(),],
+        5,
+    ));
+    assert!(!guarded_number_array_param_eligible(
+        &[write(), loop_stmt(), Stmt::Return(Some(read()))],
+        5,
+    ));
+    assert!(!guarded_number_array_param_eligible(
+        &[
+            let_stmt(6, false, read()),
+            loop_stmt(),
+            Stmt::Expr(call(9, Vec::new())),
+        ],
+        5,
+    ));
+}

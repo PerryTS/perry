@@ -54,6 +54,10 @@ pub enum SpecParamRep {
     I32,
     /// Raw double (bit-identical to the boxed form for numbers).
     F64,
+    /// NaN-boxed plain array whose elements are expected to be Numbers. The
+    /// call site still validates that expectation with a descriptor guard;
+    /// this marker only carries the profitable shape through tuple selection.
+    NumberArray,
     /// Raw `TypedArrayHeader*` of a proven non-view typed array.
     TaPtr {
         /// `perry_hir::TYPED_ARRAY_KIND_*` element kind.
@@ -71,6 +75,7 @@ impl SpecParamRep {
             Self::Boxed => "b".to_string(),
             Self::I32 => "i32".to_string(),
             Self::F64 => "f64".to_string(),
+            Self::NumberArray => "narr".to_string(),
             Self::TaPtr { kind, const_len } => match const_len {
                 Some(len) => format!("ta{kind}x{len}"),
                 None => format!("ta{kind}"),
@@ -515,6 +520,16 @@ fn array_literal_len(e: &Expr) -> Option<i64> {
     }
 }
 
+fn is_number_array_literal(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Array(elements)
+            if elements
+                .iter()
+                .all(|element| matches!(element, Expr::Integer(_) | Expr::Number(_)))
+    )
+}
+
 /// A typed-array constructor length literal. Keep this deliberately aligned
 /// with the direct-literal arm of [`judge_ctor_arg`].
 fn typed_array_length_literal(e: &Expr) -> Option<i64> {
@@ -559,6 +574,7 @@ fn judge_sites_in_body(
     stmts: &[Stmt],
     params: &[perry_hir::Param],
     ta_bindings: &HashMap<u32, SpecTaBinding>,
+    number_array_bindings: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
     // Use the same transitive, all-writes range proof as canonical i32 slots.
@@ -576,9 +592,16 @@ fn judge_sites_in_body(
     );
     let mut ready: HashSet<u32> = HashSet::new();
     for s in stmts {
-        judge_stmt(s, ta_bindings, &integer_locals, &ready, out);
+        judge_stmt(
+            s,
+            ta_bindings,
+            number_array_bindings,
+            &integer_locals,
+            &ready,
+            out,
+        );
         if let Stmt::Let { id, .. } = s {
-            if ta_bindings.contains_key(id) {
+            if ta_bindings.contains_key(id) || number_array_bindings.contains(id) {
                 ready.insert(*id);
             }
         }
@@ -588,17 +611,22 @@ fn judge_sites_in_body(
 fn judge_stmt(
     s: &Stmt,
     ta: &HashMap<u32, SpecTaBinding>,
+    number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
     match s {
-        Stmt::Let { init: Some(e), .. } => judge_expr(e, ta, integer_locals, ready, out),
+        Stmt::Let { init: Some(e), .. } => {
+            judge_expr(e, ta, number_arrays, integer_locals, ready, out)
+        }
         Stmt::Let { init: None, .. } => {}
-        Stmt::Expr(e) | Stmt::Throw(e) => judge_expr(e, ta, integer_locals, ready, out),
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            judge_expr(e, ta, number_arrays, integer_locals, ready, out)
+        }
         Stmt::Return(opt) => {
             if let Some(e) = opt {
-                judge_expr(e, ta, integer_locals, ready, out);
+                judge_expr(e, ta, number_arrays, integer_locals, ready, out);
             }
         }
         Stmt::If {
@@ -606,20 +634,20 @@ fn judge_stmt(
             then_branch,
             else_branch,
         } => {
-            judge_expr(condition, ta, integer_locals, ready, out);
+            judge_expr(condition, ta, number_arrays, integer_locals, ready, out);
             for st in then_branch {
-                judge_stmt(st, ta, integer_locals, ready, out);
+                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
             }
             if let Some(eb) = else_branch {
                 for st in eb {
-                    judge_stmt(st, ta, integer_locals, ready, out);
+                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
                 }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            judge_expr(condition, ta, integer_locals, ready, out);
+            judge_expr(condition, ta, number_arrays, integer_locals, ready, out);
             for st in body {
-                judge_stmt(st, ta, integer_locals, ready, out);
+                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
             }
         }
         Stmt::For {
@@ -629,35 +657,37 @@ fn judge_stmt(
             body,
         } => {
             if let Some(i) = init {
-                judge_stmt(i, ta, integer_locals, ready, out);
+                judge_stmt(i, ta, number_arrays, integer_locals, ready, out);
             }
             if let Some(c) = condition {
-                judge_expr(c, ta, integer_locals, ready, out);
+                judge_expr(c, ta, number_arrays, integer_locals, ready, out);
             }
             if let Some(u) = update {
-                judge_expr(u, ta, integer_locals, ready, out);
+                judge_expr(u, ta, number_arrays, integer_locals, ready, out);
             }
             for st in body {
-                judge_stmt(st, ta, integer_locals, ready, out);
+                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
             }
         }
-        Stmt::Labeled { body, .. } => judge_stmt(body, ta, integer_locals, ready, out),
+        Stmt::Labeled { body, .. } => {
+            judge_stmt(body, ta, number_arrays, integer_locals, ready, out)
+        }
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
             for st in body {
-                judge_stmt(st, ta, integer_locals, ready, out);
+                judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
             }
             if let Some(c) = catch {
                 for st in &c.body {
-                    judge_stmt(st, ta, integer_locals, ready, out);
+                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
                 }
             }
             if let Some(f) = finally {
                 for st in f {
-                    judge_stmt(st, ta, integer_locals, ready, out);
+                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
                 }
             }
         }
@@ -665,13 +695,13 @@ fn judge_stmt(
             discriminant,
             cases,
         } => {
-            judge_expr(discriminant, ta, integer_locals, ready, out);
+            judge_expr(discriminant, ta, number_arrays, integer_locals, ready, out);
             for case in cases {
                 if let Some(t) = &case.test {
-                    judge_expr(t, ta, integer_locals, ready, out);
+                    judge_expr(t, ta, number_arrays, integer_locals, ready, out);
                 }
                 for st in &case.body {
-                    judge_stmt(st, ta, integer_locals, ready, out);
+                    judge_stmt(st, ta, number_arrays, integer_locals, ready, out);
                 }
             }
         }
@@ -686,6 +716,7 @@ fn judge_stmt(
 pub(crate) fn judge_arg(
     arg: &Expr,
     ta: &HashMap<u32, SpecTaBinding>,
+    number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
 ) -> SpecParamRep {
@@ -699,6 +730,8 @@ pub(crate) fn judge_arg(
                     kind: binding.kind,
                     const_len: binding.const_len,
                 }
+            } else if number_arrays.contains(id) && ready.contains(id) {
+                SpecParamRep::NumberArray
             } else if integer_locals.contains(id) {
                 SpecParamRep::I32
             } else {
@@ -712,6 +745,7 @@ pub(crate) fn judge_arg(
 fn judge_expr(
     e: &Expr,
     ta: &HashMap<u32, SpecTaBinding>,
+    number_arrays: &HashSet<u32>,
     integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
@@ -720,7 +754,7 @@ fn judge_expr(
         if let Expr::FuncRef(fid) = callee.as_ref() {
             let judged: Vec<SpecParamRep> = args
                 .iter()
-                .map(|a| judge_arg(a, ta, integer_locals, ready))
+                .map(|a| judge_arg(a, ta, number_arrays, integer_locals, ready))
                 .collect();
             out.entry(*fid).or_default().push(judged);
         }
@@ -731,7 +765,7 @@ fn judge_expr(
         return;
     }
     perry_hir::walker::walk_expr_children(e, &mut |c| {
-        judge_expr(c, ta, integer_locals, ready, out)
+        judge_expr(c, ta, number_arrays, integer_locals, ready, out)
     });
 }
 
@@ -745,6 +779,7 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     // local has NO uses outside element-access-receiver / TA-ctor-arg
     // positions — `len_unsafe_uses` records everything else).
     let mut array_literal_locals: HashMap<u32, Option<i64>> = HashMap::new();
+    let mut number_array_bindings: HashSet<u32> = HashSet::new();
     let mut collect_array_literals = |stmts: &[Stmt]| {
         for s in stmts {
             if let Stmt::Let {
@@ -758,6 +793,9 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
                     if let Some(len) = array_literal_len(e) {
                         let exact = !scan.len_unsafe_uses.contains(id);
                         array_literal_locals.insert(*id, exact.then_some(len));
+                        if is_number_array_literal(e) {
+                            number_array_bindings.insert(*id);
+                        }
                     }
                 }
             }
@@ -842,15 +880,196 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
 
     // Judge every direct call site in init + function bodies.
     let mut call_sites: HashMap<u32, Vec<Vec<SpecParamRep>>> = HashMap::new();
-    judge_sites_in_body(&hir.init, &[], &ta_bindings, &mut call_sites);
+    judge_sites_in_body(
+        &hir.init,
+        &[],
+        &ta_bindings,
+        &number_array_bindings,
+        &mut call_sites,
+    );
     for f in &hir.functions {
-        judge_sites_in_body(&f.body, &f.params, &ta_bindings, &mut call_sites);
+        judge_sites_in_body(
+            &f.body,
+            &f.params,
+            &ta_bindings,
+            &number_array_bindings,
+            &mut call_sites,
+        );
     }
 
     SpecAbiModuleFacts {
         ta_bindings,
         call_sites,
     }
+}
+
+/// Whether an entry guard may lend `Array<Number>` to reads from `param_id`.
+/// The descriptor proves the initial contents. Keep that proof only when the
+/// body has enough work to amortize the walk, cannot call aliasing code, and
+/// performs all reads before its first element write. Later writes therefore
+/// cannot invalidate any read that consumed the proof.
+pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32) -> bool {
+    #[derive(Default)]
+    struct Uses {
+        read: bool,
+        write: bool,
+        call: bool,
+    }
+
+    fn scan_expr(expr: &Expr, param_id: u32, uses: &mut Uses) {
+        match expr {
+            Expr::Call { .. } | Expr::New { .. } => {
+                uses.call = true;
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    scan_expr(child, param_id, uses)
+                });
+            }
+            Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            {
+                uses.read = true;
+                scan_expr(index, param_id, uses);
+            }
+            Expr::IndexSet {
+                object,
+                index,
+                value,
+            } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) => {
+                uses.write = true;
+                scan_expr(index, param_id, uses);
+                scan_expr(value, param_id, uses);
+            }
+            Expr::LocalGet(id) if *id == param_id => uses.read = true,
+            Expr::Closure { .. } => {}
+            _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                scan_expr(child, param_id, uses)
+            }),
+        }
+    }
+
+    fn scan_stmts(stmts: &[Stmt], param_id: u32, uses: &mut Uses) {
+        for stmt in stmts {
+            scan_stmt(stmt, param_id, uses);
+        }
+    }
+
+    fn scan_stmt(stmt: &Stmt, param_id: u32, uses: &mut Uses) {
+        match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Expr(expr)
+            | Stmt::Throw(expr) => scan_expr(expr, param_id, uses),
+            Stmt::Return(Some(expr)) => scan_expr(expr, param_id, uses),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                scan_expr(condition, param_id, uses);
+                scan_stmts(then_branch, param_id, uses);
+                if let Some(branch) = else_branch {
+                    scan_stmts(branch, param_id, uses);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                scan_expr(condition, param_id, uses);
+                scan_stmts(body, param_id, uses);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    scan_stmt(init, param_id, uses);
+                }
+                if let Some(condition) = condition {
+                    scan_expr(condition, param_id, uses);
+                }
+                if let Some(update) = update {
+                    scan_expr(update, param_id, uses);
+                }
+                scan_stmts(body, param_id, uses);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                scan_stmts(body, param_id, uses);
+                if let Some(catch) = catch {
+                    scan_stmts(&catch.body, param_id, uses);
+                }
+                if let Some(finally) = finally {
+                    scan_stmts(finally, param_id, uses);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                scan_expr(discriminant, param_id, uses);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        scan_expr(test, param_id, uses);
+                    }
+                    scan_stmts(&case.body, param_id, uses);
+                }
+            }
+            Stmt::Labeled { body, .. } => scan_stmt(body, param_id, uses),
+            Stmt::Let { init: None, .. }
+            | Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    fn contains_loop(stmts: &[Stmt]) -> bool {
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => contains_loop(then_branch) || else_branch.as_deref().is_some_and(contains_loop),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                contains_loop(body)
+                    || catch
+                        .as_ref()
+                        .is_some_and(|catch| contains_loop(&catch.body))
+                    || finally.as_deref().is_some_and(contains_loop)
+            }
+            Stmt::Switch { cases, .. } => cases.iter().any(|case| contains_loop(&case.body)),
+            Stmt::Labeled { body, .. } => contains_loop(std::slice::from_ref(body.as_ref())),
+            _ => false,
+        })
+    }
+
+    if !contains_loop(stmts) {
+        return false;
+    }
+    let mut after_write = false;
+    let mut saw_read = false;
+    for stmt in stmts {
+        let mut uses = Uses::default();
+        scan_stmt(stmt, param_id, &mut uses);
+        if uses.call || (uses.read && (after_write || uses.write)) {
+            return false;
+        }
+        saw_read |= uses.read;
+        after_write |= uses.write;
+    }
+    saw_read
 }
 
 #[cfg(test)]

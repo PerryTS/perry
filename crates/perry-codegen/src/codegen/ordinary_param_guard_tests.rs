@@ -128,6 +128,121 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
 }
 
 #[test]
+fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
+    let lr = Param {
+        id: 10,
+        name: "lr".to_string(),
+        ty: Type::Any,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    };
+    let table = Param {
+        id: 11,
+        name: "table".to_string(),
+        ty: Type::Any,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    };
+    let loaded = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(10)),
+        index: Box::new(Expr::Integer(0)),
+    };
+    let xor_loaded = || Expr::Binary {
+        op: BinaryOp::BitXor,
+        left: Box::new(Expr::LocalGet(12)),
+        right: Box::new(Expr::Integer(1)),
+    };
+    let encipher = Function {
+        id: 1,
+        name: "encipher".to_string(),
+        type_params: Vec::new(),
+        params: vec![lr, table],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 12,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(loaded),
+            },
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(11)),
+                    index: Box::new(Expr::Integer(0)),
+                })],
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(10)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(xor_loaded()),
+            }),
+            Stmt::Return(Some(xor_loaded())),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("number_array_guard.ts");
+    module.functions.push(encipher);
+    module.init.extend([
+        Stmt::Let {
+            id: 20,
+            name: "lr".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])),
+        },
+        Stmt::Let {
+            id: 21,
+            name: "table".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::TypedArrayNew {
+                kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+                arg: Some(Box::new(Expr::Integer(4))),
+            }),
+        },
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![Expr::LocalGet(20), Expr::LocalGet(21)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    ]);
+
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let init = function_ir(&ir, "@number_array_guard_ts__init_body(");
+    let specialized = function_ir(&ir, "encipher$spec_b_ta4x4(");
+    let generic = function_ir(&ir, "@perry_fn_number_array_guard_ts__encipher(");
+
+    assert!(
+        init.contains("call i32 @js_param_type_guard("),
+        "direct call must validate the inferred array proof:\n{init}"
+    );
+    assert!(init.contains("encipher$spec_b_ta4x4("), "{init}");
+    assert!(init.contains("@perry_fn_number_array_guard_ts__encipher("));
+    assert!(!specialized.contains("js_dynamic_bitxor"));
+    assert!(generic.contains("js_dynamic_bitxor"));
+}
+
+#[test]
 fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone() {
     // An async body with no `await` runs to completion synchronously, so the
     // entry guard still describes the live arguments when the body reads them.

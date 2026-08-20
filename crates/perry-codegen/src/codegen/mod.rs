@@ -226,6 +226,7 @@ pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
+pub(crate) use param_guard::scalar_descriptor_rep;
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
@@ -2652,7 +2653,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let plan = match sites
                 .and_then(|sites| spec_abi::select_dominant_tuple(sites, f.params.len(), &demoted))
             {
-                Some((reps, _matching_sites)) => {
+                Some((mut reps, _matching_sites)) => {
                     // Raw slots already carry a by-construction proof. Boxed
                     // slots may additionally recover an ordinary declared
                     // parameter fact, but only through their runtime
@@ -2660,23 +2661,49 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     // unknown/public caller has no equivalent cheap guard for
                     // the raw pointer + length contract, so mixed TaPtr plans
                     // keep their existing static-only route.
-                    let guards: Vec<_> = if reps
+                    let mut inferred_guards = vec![None; reps.len()];
+                    for (index, (rep, param)) in reps.iter_mut().zip(f.params.iter()).enumerate() {
+                        if !matches!(rep, crate::collectors::SpecParamRep::NumberArray) {
+                            continue;
+                        }
+                        *rep = crate::collectors::SpecParamRep::Boxed;
+                        if crate::collectors::guarded_number_array_param_eligible(&f.body, param.id)
+                        {
+                            inferred_guards[index] = param_guard::inferred_guard(
+                                perry_hir::types::Type::Array(Box::new(
+                                    perry_hir::types::Type::Number,
+                                )),
+                                param_guard::guard_descriptor_name(&module_prefix, f.id, index),
+                                &cross_module.type_aliases,
+                                &cross_module.interfaces,
+                                &class_table,
+                                &class_ids,
+                            );
+                        }
+                    }
+                    let has_ta_ptr = reps
                         .iter()
-                        .any(|rep| matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }))
-                    {
-                        vec![None; reps.len()]
-                    } else {
-                        declaration_guards
-                            .into_iter()
-                            .zip(reps.iter())
-                            .map(|(guard, rep)| {
-                                matches!(rep, crate::collectors::SpecParamRep::Boxed)
-                                    .then_some(guard)
-                                    .flatten()
-                            })
-                            .collect()
-                    };
-                    let dispatch = if guards.iter().any(Option::is_some) {
+                        .any(|rep| matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }));
+                    let guards: Vec<_> = declaration_guards
+                        .into_iter()
+                        .zip(inferred_guards)
+                        .zip(reps.iter())
+                        .map(|((declared, inferred), rep)| {
+                            if !matches!(rep, crate::collectors::SpecParamRep::Boxed) {
+                                None
+                            } else if has_ta_ptr {
+                                inferred
+                            } else {
+                                inferred.or(declared)
+                            }
+                        })
+                        .collect();
+                    let dispatch = if has_ta_ptr {
+                        // Raw typed-array pointers remain direct-call-only.
+                        // Any inferred boxed-array descriptor is checked in
+                        // the same call-site diamond as an i32 range check.
+                        SpecDispatch::Static
+                    } else if guards.iter().any(Option::is_some) {
                         SpecDispatch::Guarded
                     } else {
                         SpecDispatch::Static

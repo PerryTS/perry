@@ -271,7 +271,7 @@ fn additive_write_admissible(
 /// Does this RHS provably leave a NUMBER (never `undefined`) in the target?
 /// `numberish` is the flow set at the write site (for `LocalGet` copies and
 /// additive sub-trees).
-fn write_establishes_number(
+pub(super) fn write_establishes_number(
     e: &Expr,
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,

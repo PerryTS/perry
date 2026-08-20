@@ -137,7 +137,7 @@ fn plan_param_proofs(function: &Function, plan: &SpecFnPlan) -> HashMap<u32, Typ
                 (None, SpecParamRep::TaPtr { kind, .. }) => {
                     Type::Named(spec_ta_kind_class_name(*kind)?.to_string())
                 }
-                (None, SpecParamRep::Boxed) => return None,
+                (None, SpecParamRep::Boxed | SpecParamRep::NumberArray) => return None,
             };
             Some((param.id, proof))
         })
@@ -176,7 +176,8 @@ fn call_is_proven(
                 // The verifier currently handles ordinary boxed/scalar plans.
                 // TaPtr's construction proof stays in its existing call-site
                 // machinery and cannot publish a return fact here.
-                (None, SpecParamRep::TaPtr { .. }) | (None, SpecParamRep::Boxed) => return false,
+                (None, SpecParamRep::TaPtr { .. })
+                | (None, SpecParamRep::Boxed | SpecParamRep::NumberArray) => return false,
             };
             expr_proves(ctx, locals, arg, expected, 0)
         })
