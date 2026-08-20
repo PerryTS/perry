@@ -15,6 +15,7 @@ mod old_defrag_contract;
 mod prototype_addr_cache;
 mod regexp_last_index;
 mod side_table_scanners;
+mod string_normalize_form;
 mod string_slice;
 mod symbol_description;
 mod transient_handles;

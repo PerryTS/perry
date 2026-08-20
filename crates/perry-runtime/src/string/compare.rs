@@ -517,25 +517,41 @@ pub extern "C" fn js_string_normalize(
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(std::ptr::null(), 0);
     }
-    let str_data = string_as_str(s);
 
     // `undefined` (omitted argument) → default NFC. Note: explicit `null`
     // is NOT undefined — it stringifies to "null" and falls through to the
     // invalid-form error path below.
     let form_jsval = crate::value::JSValue::from_bits(form_value.to_bits());
-    let form_owned: String = if form_jsval.is_undefined() {
-        "NFC".to_string()
-    } else {
-        // ToString(form) runs before the form-validity check, so a Symbol form
-        // throws a TypeError (§7.1.17) — not the RangeError of an invalid form.
-        crate::builtins::reject_symbol_to_string(form_value);
-        let form_ptr = crate::value::js_jsvalue_to_string(form_value);
-        if is_valid_string_ptr(form_ptr) {
-            string_as_str(form_ptr).to_string()
+
+    // Coerce the form BEFORE borrowing the subject's payload. `ToString(form)`
+    // is a collection point twice over: an inline short-string form
+    // materializes to the heap (so even `s.normalize("NFC")` allocates here),
+    // and an object form runs user `toString`, whose loop back-edge polls can
+    // run a moving minor. Either can evacuate `s`, and a `&str` taken
+    // beforehand is a copy the collector cannot rewrite — rooting rewrites
+    // slots, never already-materialized borrows
+    // (`docs/src/internals/gc-rooting-invariant.md`). Root the subject across
+    // the coercion and borrow only from the address handed back. (#8426)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let (form_owned, s) = s_handle.across_const::<StringHeader, _>(|| -> String {
+        if form_jsval.is_undefined() {
+            "NFC".to_string()
         } else {
-            String::new()
+            // ToString(form) runs before the form-validity check, so a Symbol
+            // form throws a TypeError (§7.1.17) — not the RangeError of an
+            // invalid form. The reorder preserves that ordering: coercion
+            // still precedes validation.
+            crate::builtins::reject_symbol_to_string(form_value);
+            let form_ptr = crate::value::js_jsvalue_to_string(form_value);
+            if is_valid_string_ptr(form_ptr) {
+                string_as_str(form_ptr).to_string()
+            } else {
+                String::new()
+            }
         }
-    };
+    });
+    let str_data = string_as_str(s);
 
     #[cfg(feature = "string-normalize")]
     let normalized: String = {
