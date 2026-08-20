@@ -14,6 +14,14 @@
 //!
 //! Literal-source forms must keep working: those are const-folded and compiled AOT.
 
+//! #8479: this suite is the counterpart canary to `bun_ffi_stage1`. #8416 made
+//! the deferred error here survive on Linux by marking `js_closure_call1` /
+//! `js_native_call_value` `extern "C-unwind"` — which, in a `panic=abort`
+//! runtime whose JS throws are raw Itanium unwinds, installs an RFC-2945
+//! abort guard on a frame the throw must pass THROUGH, and that is what broke
+//! `tier1_every_ffi_type_against_test_dylib`. Those conversions were undone;
+//! keep this file in the diff of any change to that path so `e2e-scoped`
+//! actually runs the suite (it skips silently, and reports green, otherwise).
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
