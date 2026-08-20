@@ -140,7 +140,22 @@ fn coff_archive_dedup_drops_only_fully_provided_members() {
     use std::process::Command;
 
     fn compile_object(source: &Path, output: &Path, crate_name: &str) {
-        let result = Command::new("rustc")
+        // Resolve rustc without consulting `PATH`. Sibling tests in
+        // `optimized_libs/tests.rs` overwrite — and briefly remove — the
+        // process-global `PATH`, and the environment is shared across test
+        // threads, so a bare-name spawn here fails with ENOENT whenever those
+        // run concurrently. Cargo exports `CARGO` to test binaries and rustc
+        // sits beside it in the same toolchain directory. See #8472.
+        let rustc = std::env::var_os("RUSTC")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("CARGO")
+                    .map(std::path::PathBuf::from)
+                    .and_then(|cargo| cargo.parent().map(|dir| dir.join("rustc")))
+                    .filter(|candidate| candidate.exists())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("rustc"));
+        let result = Command::new(rustc)
             .arg("--crate-name")
             .arg(crate_name)
             .arg("--crate-type=lib")
@@ -235,7 +250,22 @@ fn stdlib_evidence_gate_keeps_members_when_stdlib_is_not_linked() {
     use std::process::Command;
 
     fn compile_object(source: &Path, output: &Path, crate_name: &str) {
-        let result = Command::new("rustc")
+        // Resolve rustc without consulting `PATH`. Sibling tests in
+        // `optimized_libs/tests.rs` overwrite — and briefly remove — the
+        // process-global `PATH`, and the environment is shared across test
+        // threads, so a bare-name spawn here fails with ENOENT whenever those
+        // run concurrently. Cargo exports `CARGO` to test binaries and rustc
+        // sits beside it in the same toolchain directory. See #8472.
+        let rustc = std::env::var_os("RUSTC")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("CARGO")
+                    .map(std::path::PathBuf::from)
+                    .and_then(|cargo| cargo.parent().map(|dir| dir.join("rustc")))
+                    .filter(|candidate| candidate.exists())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("rustc"));
+        let result = Command::new(rustc)
             .arg("--crate-name")
             .arg(crate_name)
             .arg("--crate-type=lib")
