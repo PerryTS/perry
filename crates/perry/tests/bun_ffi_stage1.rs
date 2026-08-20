@@ -332,6 +332,15 @@ console.log("closed-throws:", closedError.includes("close()"));
 console.log("TIER1-DONE");
 "#;
 
+/// #8479: this test is the canary for the JS-throw transport. Its
+/// use-after-close case throws from inside an FFI symbol stub, so the throw
+/// must cross the runtime's dispatch frames. The runtime is `panic=abort`
+/// and that throw is a raw Itanium unwind that has to pass THROUGH those
+/// frames — so any `extern "C-unwind"` on a pass-through frame installs an
+/// RFC-2945 abort guard and turns this into "panic in a function that cannot
+/// unwind" (Linux only; macOS never reproduces it). Keep this file in the
+/// diff of any change to that path so `e2e-scoped` actually runs the suite:
+/// the job SKIPS silently and reports green when nothing in scope changed.
 #[test]
 fn tier1_every_ffi_type_against_test_dylib() {
     let dir = tempfile::tempdir().expect("tempdir");
