@@ -299,14 +299,40 @@ pub extern "C" fn js_string_repeat(s: *const StringHeader, count_value: f64) -> 
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
-    let str_data = string_as_str(s);
-    let count_number = crate::builtins::js_number_coerce(count_value);
+    // `count` may be an object, so ToNumber runs its
+    // `valueOf`/`Symbol.toPrimitive` — arbitrary user JS, whose loop back-edge
+    // polls are moving-GC safepoints (default-on since #7721). Two distinct
+    // hazards follow, and the ordering below is what closes both (#8427):
+    //
+    //   * The receiver's WTF-8 payload must NOT be borrowed across the
+    //     coercion. `string_as_str` materializes a `&str` at the *pre-move*
+    //     address; rooting rewrites slots, never an already-live borrow, so no
+    //     root can repair one (`HeapKeyBytes`, `object/field_get_set.rs`).
+    //     Pre-fix, an evacuating minor inside `valueOf` left `str_data`
+    //     pointing at retired from-space and `repeat` copied garbage.
+    //   * `s` itself is a raw pointer in a native Rust frame, which the
+    //     collector does not scan by default — so deferring the borrow is not
+    //     enough on its own. Park it in a transient root and take the
+    //     *post-collection* address back out of the handle.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_root = scope.root_string_ptr(s);
+    let (count_number, s) = receiver_root
+        .across_const::<StringHeader, _>(|| crate::builtins::js_number_coerce(count_value));
+
     let count_integer = to_integer_or_infinity(count_number);
     if count_integer < 0.0 || count_integer.is_infinite() {
         throw_repeat_range_error(count_number);
     }
 
-    if count_integer == 0.0 || str_data.is_empty() {
+    // ECMA-262 §22.1.3.17 step 4 returns "" for n = 0 before the receiver is
+    // consulted at all; an empty receiver repeats to "" for every remaining n.
+    // Both are checked here so the payload is borrowed only on the path that
+    // actually reads it — and only once no user code is left to run.
+    if count_integer == 0.0 {
+        return js_string_from_bytes("".as_ptr(), 0);
+    }
+    let str_data = string_as_str(s);
+    if str_data.is_empty() {
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
