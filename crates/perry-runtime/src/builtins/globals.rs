@@ -747,9 +747,11 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                 return value;
             }
             unsafe {
-                let len = (*str_ptr).byte_len as usize;
-                let data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let new_str = js_string_from_bytes(data, len as u32);
+                let len = (*str_ptr).byte_len;
+                let utf16_len = (*str_ptr).utf16_len;
+                let flags = (*str_ptr).flags;
+                // Root and refresh the source across the destination allocation.
+                let new_str = crate::string::string_copy_range(str_ptr, 0, len, utf16_len, flags);
                 let new_bits = 0x7FFF_0000_0000_0000u64 | (new_str as u64 & 0x0000_FFFF_FFFF_FFFF);
                 f64::from_bits(new_bits)
             }

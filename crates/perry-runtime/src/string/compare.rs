@@ -777,11 +777,13 @@ pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut Strin
     }
     let flags = unsafe { (*s).flags };
     let blen = unsafe { (*s).byte_len } as usize;
-    let data = string_data(s);
     if flags & STRING_FLAG_HAS_LONE_SURROGATES == 0 {
-        // Well-formed UTF-8: return a copy without scanning
-        return js_string_from_bytes(data, blen as u32);
+        // Well-formed UTF-8: return a copy without scanning. The destination
+        // allocation can move `s`, so refresh its payload pointer afterwards.
+        let utf16_len = unsafe { (*s).utf16_len };
+        return string_copy_range(s, 0, blen as u32, utf16_len, flags);
     }
+    let data = string_data(s);
     // Scan raw bytes and replace every WTF-8 lone-surrogate sequence with U+FFFD.
     // WTF-8 surrogate: first byte = 0xED, second = 0xA0..=0xBF, third = 0x80..=0xBF.
     let bytes = unsafe { slice::from_raw_parts(data, blen) };
