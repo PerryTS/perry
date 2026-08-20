@@ -134,7 +134,7 @@ pub use alloc::{
     js_string_from_bytes_longlived, js_string_from_bytes_with_capacity, js_string_from_wtf8_bytes,
     js_string_length, js_string_materialize_to_heap, js_string_new_sso,
 };
-pub use append::js_string_append;
+pub use append::{js_string_append, js_string_append_known_heap};
 pub use base64_codec::{js_atob, js_btoa};
 pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,

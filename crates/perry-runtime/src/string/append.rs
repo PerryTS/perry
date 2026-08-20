@@ -69,6 +69,23 @@ pub extern "C" fn js_string_append(
         return js_string_concat(dest as *const StringHeader, src);
     }
 
+    // These identity cases cannot allocate or collect, so handle them before
+    // opening a runtime handle scope. In particular, short-lived accumulators
+    // commonly append exactly one freshly-concatenated (shared) suffix to the
+    // shared empty string; rooting both operands just to return `src` was most
+    // of #8486's residual overhead.
+    unsafe {
+        if (*src).byte_len == 0 {
+            return dest;
+        }
+        // Do not reuse a uniquely-owned source: storing it into `dest` would
+        // create an unrecorded alias while leaving refcount=1, allowing a
+        // later append through either binding to mutate the other.
+        if (*dest).byte_len == 0 && (*src).refcount == 0 {
+            return src as *mut StringHeader;
+        }
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let dest_handle = scope.root_string_ptr(dest as *const StringHeader);
     let src_handle = scope.root_string_ptr(src);
@@ -76,10 +93,6 @@ pub extern "C" fn js_string_append(
     unsafe {
         let dest_blen = (*dest).byte_len;
         let src_blen = (*src).byte_len;
-
-        if src_blen == 0 {
-            return dest;
-        }
 
         let new_blen = dest_blen + src_blen;
 
@@ -162,4 +175,33 @@ pub extern "C" fn js_string_append(
             new_ptr
         }
     }
+}
+
+/// Append entry point for codegen paths that already tag-checked both handles
+/// as heap strings. It keeps the defensive helper as the sole implementation
+/// for every mutating or allocating case, but lets the common non-allocating
+/// identities avoid repeating generic raw-pointer validation (#8486).
+///
+/// # Safety contract
+///
+/// Both pointers must be valid `StringHeader` handles. Callers may establish
+/// this only from a live `STRING_TAG` value (or a runtime string coercion), and
+/// must preserve the usual GC rooting requirements across operand evaluation.
+#[no_mangle]
+pub extern "C" fn js_string_append_known_heap(
+    dest: *mut StringHeader,
+    src: *const StringHeader,
+) -> *mut StringHeader {
+    if std::ptr::eq(dest, src) {
+        return js_string_append(dest, src);
+    }
+    unsafe {
+        if (*src).byte_len == 0 {
+            return dest;
+        }
+        if (*dest).byte_len == 0 && (*src).refcount == 0 {
+            return src as *mut StringHeader;
+        }
+    }
+    js_string_append(dest, src)
 }

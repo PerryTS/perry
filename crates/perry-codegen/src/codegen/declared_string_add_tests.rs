@@ -359,7 +359,7 @@ fn a_self_append_chain_retains_the_accumulator_and_fuses_only_the_suffix() {
     let ir = function_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append("),
+        ir.contains("call i64 @js_string_append_known_heap("),
         "the growing prefix must reach the amortized append path:\n{ir}"
     );
     assert_eq!(
@@ -423,7 +423,7 @@ fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
     let ir = function_ir(module);
 
     assert!(
-        !ir.contains("call i64 @js_string_append("),
+        !ir.contains("call i64 @js_string_append_known_heap("),
         "an opaque numeric-capable head pair must remain in source-tree order:\n{ir}"
     );
 }
@@ -455,7 +455,7 @@ fn a_module_global_self_append_uses_the_amortized_path_and_demotes_extractions()
     let ir = function_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append("),
+        ir.contains("call i64 @js_string_append_known_heap("),
         "a module root is binding storage and can retain the unique string owner:\n{ir}"
     );
     assert!(
@@ -512,7 +512,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
     let ir = function_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append("),
+        ir.contains("call i64 @js_string_append_known_heap("),
         "a variable box must retain the accumulator owner across iterations:\n{ir}"
     );
     assert!(
@@ -574,7 +574,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
     let ir = module_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append("),
+        ir.contains("call i64 @js_string_append_known_heap("),
         "a captured variable box must reach the append helper:\n{ir}"
     );
     assert!(
@@ -608,7 +608,7 @@ fn a_module_global_numeric_capable_head_pair_does_not_select_append() {
     let ir = function_ir(module);
 
     assert!(
-        !ir.contains("call i64 @js_string_append("),
+        !ir.contains("call i64 @js_string_append_known_heap("),
         "the newly eligible storage must not weaken the numeric-head guard:\n{ir}"
     );
 }

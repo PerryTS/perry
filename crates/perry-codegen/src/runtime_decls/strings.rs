@@ -54,6 +54,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Either way the caller must use the returned pointer.
     // (`crates/perry-runtime/src/string.rs:88`)
     module.declare_function("js_string_append", I64, &[I64, I64]);
+    module.declare_function("js_string_append_known_heap", I64, &[I64, I64]);
 
     // String methods (Phase B.12).
     // All take/return raw i64 string handles. Length args are i32.

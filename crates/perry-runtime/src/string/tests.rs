@@ -469,6 +469,44 @@ fn test_string_append_shared_no_inplace() {
 }
 
 #[test]
+fn test_string_append_empty_reuses_only_shared_source() {
+    let empty = js_string_from_bytes(b"".as_ptr(), 0);
+    let shared = js_string_from_bytes(b"suffix".as_ptr(), 6);
+    assert_eq!(unsafe { (*shared).refcount }, 0);
+
+    let reused = js_string_append(empty, shared);
+    assert_eq!(reused, shared);
+    assert_eq!(unsafe { (*reused).refcount }, 0);
+
+    // A later append must allocate instead of changing the aliased source.
+    let bang = js_string_from_bytes(b"!".as_ptr(), 1);
+    let grown = js_string_append(reused, bang);
+    assert_ne!(grown, shared);
+    assert_eq!(string_as_str(shared), "suffix");
+    assert_eq!(string_as_str(grown), "suffix!");
+
+    // A unique source cannot be reused: doing so would silently create a
+    // second owner while leaving its in-place mutation permission intact.
+    let a = js_string_from_bytes(b"a".as_ptr(), 1);
+    let b = js_string_from_bytes(b"b".as_ptr(), 1);
+    let unique = js_string_append(a, b);
+    assert_eq!(unsafe { (*unique).refcount }, 1);
+    let empty2 = js_string_from_bytes(b"".as_ptr(), 0);
+    let copied = js_string_append(empty2, unique);
+    assert_ne!(copied, unique);
+    assert_eq!(string_as_str(copied), "ab");
+    assert_eq!(string_as_str(unique), "ab");
+
+    // The tag-checked codegen entry point applies the same ownership rule.
+    let empty3 = js_string_from_bytes(b"".as_ptr(), 0);
+    assert_eq!(js_string_append_known_heap(empty3, shared), shared);
+    let empty4 = js_string_from_bytes(b"".as_ptr(), 0);
+    let copied_known = js_string_append_known_heap(empty4, unique);
+    assert_ne!(copied_known, unique);
+    assert_eq!(string_as_str(copied_known), "ab");
+}
+
+#[test]
 fn test_string_append_self() {
     // Self-append (s += s) must always allocate fresh
     let a = js_string_from_bytes(b"ab".as_ptr(), 2);

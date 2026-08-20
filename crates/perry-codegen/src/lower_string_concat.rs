@@ -309,9 +309,11 @@ fn lower_tag_dispatched_str_self_append(
             };
             let bits_d_after = ctx.block().bitcast_double_to_i64(&lhs_after_coercion);
             let h_d = ctx.block().and(I64, &bits_d_after, POINTER_MASK_I64);
-            let h_new = ctx
-                .block()
-                .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_handle)]);
+            let h_new = ctx.block().call(
+                I64,
+                "js_string_append_known_heap",
+                &[(I64, &h_d), (I64, &r_handle)],
+            );
             let box_append = nanbox_string_inline(ctx.block(), &h_new);
             let append_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
@@ -386,9 +388,11 @@ fn lower_tag_dispatched_str_self_append(
         ctx.current_block = heap_idx;
         let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
         let h_r = ctx.block().and(I64, &bits_r, POINTER_MASK_I64);
-        let h_new = ctx
-            .block()
-            .call(I64, "js_string_append", &[(I64, &h_d), (I64, &h_r)]);
+        let h_new = ctx.block().call(
+            I64,
+            "js_string_append_known_heap",
+            &[(I64, &h_d), (I64, &h_r)],
+        );
         let box_heap = nanbox_string_inline(ctx.block(), &h_new);
         let heap_pred = ctx.block().label.clone();
         ctx.block().br(&merge_label);
@@ -408,7 +412,7 @@ fn lower_tag_dispatched_str_self_append(
         let h_d_after = ctx.block().and(I64, &bits_d_after, POINTER_MASK_I64);
         let h_sso = ctx.block().call(
             I64,
-            "js_string_append",
+            "js_string_append_known_heap",
             &[(I64, &h_d_after), (I64, &r_handle)],
         );
         let box_sso = nanbox_string_inline(ctx.block(), &h_sso);
