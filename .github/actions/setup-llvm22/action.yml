@@ -93,9 +93,39 @@ runs:
         $llvmArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq "Arm64") { "aarch64" } else { "x86_64" }
         $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-$llvmArch-pc-windows-msvc.tar.xz"
         Write-Host "downloading $url"
-        curl.exe -sSL --retry 3 -o "$env:RUNNER_TEMP\llvm.tar.xz" $url
+        # #8468: bound the transfer. `--retry` only re-runs a request that
+        # FINISHED and failed; a stalled connection with no timeout hangs
+        # forever, and a composite-action step cannot carry its own
+        # `timeout-minutes`, so the stall consumed this job's whole budget —
+        # doc-tests (windows) burned GitHub's 6 h default in this exact step
+        # and was cancelled having run zero tests, which fails
+        # `full-suite-gate` and blocked the release (run 32298711372).
+        # `--connect-timeout`/`--max-time` turn that into a fast, retryable
+        # failure; `--retry-all-errors` makes the retries actually cover
+        # transport stalls.
+        $archive = "$env:RUNNER_TEMP\llvm.tar.xz"
+        curl.exe -sSL --retry 5 --retry-all-errors --retry-delay 10 `
+          --connect-timeout 30 --max-time 1500 -o "$archive" $url
+        # A native command's non-zero exit does NOT trip
+        # $ErrorActionPreference, so check it explicitly — otherwise a failed
+        # download fell through to `tar` and surfaced as a confusing archive
+        # error instead of naming the real problem.
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "::error::LLVM download failed (curl exit $LASTEXITCODE): $url"
+          exit 1
+        }
+        $bytes = (Get-Item $archive).Length
+        Write-Host "downloaded $bytes bytes"
+        if ($bytes -lt 100MB) {
+          Write-Error "::error::LLVM archive is implausibly small ($bytes bytes) — truncated transfer or an error page, not a tarball"
+          exit 1
+        }
         New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
-        tar -xf "$env:RUNNER_TEMP\llvm.tar.xz" -C C:\llvm --strip-components=1
+        tar -xf "$archive" -C C:\llvm --strip-components=1
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "::error::extracting the LLVM archive failed (tar exit $LASTEXITCODE)"
+          exit 1
+        }
         $v = & "C:\llvm\bin\llvm-config.exe" --version
         if (-not $v.StartsWith("22.")) { Write-Error "LLVM is not 22.x ($v)"; exit 1 }
 

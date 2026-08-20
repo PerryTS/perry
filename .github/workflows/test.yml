@@ -3110,6 +3110,14 @@ jobs:
     # the same 20-slot pool.
     needs: [plan, check]
     if: fromJSON(needs.plan.outputs.plan).jobs.doc_tests
+    # #8468: an explicit cap. Without one this job inherited GitHub's 360-min
+    # default, so when the Windows leg stalled in the LLVM download it burned
+    # six hours before being cancelled — having run ZERO doc-tests — and a
+    # cancelled job fails `full-suite-gate`, blocking the release. Measured
+    # healthy runs: macOS 34 min end-to-end. 120 leaves generous headroom for
+    # the slower Windows host while bounding a hang to a fifth of what it cost
+    # (run 32298711372).
+    timeout-minutes: 120
     # Blocking host runs and the portable cross-compile subset gate the job.
     # Known platform-tail failures remain advisory at their individual steps.
     strategy:
