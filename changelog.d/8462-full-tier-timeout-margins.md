@@ -1,0 +1,1 @@
+ci: `check` (60→90), `warnings` (60→90) and `gap-suite` (75→110) got timeout margin over the contention observed in full-tier run 32298711372, where exact-cap cancellations — not failures — redded `full-suite-gate` (the gate counts cancelled as failed). Windows doc-tests' 6h hard-cap overrun is tracked separately (needs sharding, not margin).
