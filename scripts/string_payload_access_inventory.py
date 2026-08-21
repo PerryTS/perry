@@ -34,9 +34,10 @@ DEFAULT_BASELINE = REPO_ROOT / "scripts" / "string_payload_access_baseline.txt"
 RULES = ("inline-offset", "reader-helper")
 
 INLINE_OFFSET_RE = re.compile(
-    r"(?:\.(?:add|wrapping_add|byte_add|wrapping_byte_add|offset|wrapping_offset)"
+    r"(?:\.(?:add|wrapping_add|byte_add|wrapping_byte_add"
+    r"|offset|wrapping_offset|byte_offset|wrapping_byte_offset)"
     r"\s*\(\s*|\+\s*)"
-    r"(?:(?:std|core)::mem::)?size_of\s*::\s*<\s*"
+    r"(?:(?:std|core)::)?(?:mem::)?size_of\s*::\s*<\s*"
     r"(?:[A-Za-z_][A-Za-z0-9_]*::)*StringHeader\s*>\s*\(\s*\)"
     r"(?:\s+as\s+(?:usize|isize))?",
     re.MULTILINE,
@@ -320,13 +321,16 @@ unsafe fn alternate_offsets(ptr: *const u8) {
     let _ = ptr.wrapping_byte_add(size_of::<crate::StringHeader>());
     let _ = ptr.offset(std::mem::size_of::<perry_runtime::StringHeader>() as isize);
     let _ = ptr.wrapping_offset(size_of::<StringHeader>() as isize);
+    let _ = ptr.byte_offset(size_of::<StringHeader>() as isize);
+    let _ = ptr.wrapping_byte_offset(size_of::<StringHeader>() as isize);
+    let _ = ptr.add(mem::size_of::<StringHeader>());
 }
 '''
     alternate_findings = scan_text(
         "synthetic-crate", "crates/synthetic-crate/src/alternate.rs", alternate_offsets
     )
     expect(
-        sum(f.rule == "inline-offset" for f in alternate_findings) == 4,
+        sum(f.rule == "inline-offset" for f in alternate_findings) == 7,
         "alternate raw-pointer payload offsets were not all detected",
     )
 
