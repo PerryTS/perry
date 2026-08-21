@@ -38,6 +38,11 @@ pub(crate) fn lower_module_decl(
                 .strip_prefix("node:")
                 .unwrap_or(&raw_source)
                 .to_string();
+            let source = if source.starts_with("@parcel/watcher-") {
+                "@parcel/watcher".to_string()
+            } else {
+                source
+            };
 
             if raw_source.starts_with("node:") && source == "punycode.ucs2" {
                 crate::lower_bail!(

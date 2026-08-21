@@ -132,6 +132,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             source_cow = Cow::Owned(rewritten);
         }
     }
+    if let Some(rewritten) = fold_parcel_watcher_template_require(source_cow.as_ref(), target) {
+        source_cow = Cow::Owned(rewritten);
+    }
 
     // Issue #665 (fifth pass): rewrite `module.exports = class X { ... };`
     // expressions into declaration form + bare-identifier assignment so the
@@ -1175,6 +1178,62 @@ fn target_node_platform(target: Option<&str>) -> Option<&'static str> {
             }
         }
     }
+}
+
+fn target_node_arch(target: Option<&str>) -> Option<&'static str> {
+    match target {
+        Some(value) if value.contains("x86_64") || value.contains("x64") => Some("x64"),
+        Some(value) if value.contains("aarch64") || value.contains("arm64") => Some("arm64"),
+        Some("windows") | Some("linux") | Some("linux-musl") | Some("macos") => host_node_arch(),
+        Some(_) => None,
+        None => host_node_arch(),
+    }
+}
+
+fn host_node_arch() -> Option<&'static str> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return Some("x64");
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Some("arm64");
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        None
+    }
+}
+
+/// Fold OpenCode's target-dependent @parcel/watcher sidecar require before
+/// the ordinary literal-require extractor runs. Native build targets make
+/// process.platform/process.arch/libc constants, so this is the same branch
+/// selection Node's package loader would perform at startup.
+fn fold_parcel_watcher_template_require(source: &str, target: Option<&str>) -> Option<String> {
+    let platform = target_node_platform(target)?;
+    let arch = target_node_arch(target)?;
+    let suffix = if platform == "linux" {
+        if target.is_some_and(|value| value.contains("musl")) {
+            "-musl"
+        } else {
+            "-glibc"
+        }
+    } else {
+        ""
+    };
+    let specifier = format!("@parcel/watcher-{platform}-{arch}{suffix}");
+    let template = regex::Regex::new(
+        r#"`@parcel/watcher-\$\{process\.platform\}-\$\{process\.arch\}\$\{process\.platform\s*===\s*[\"']linux[\"']\s*\?\s*`-\$\{libc\s*\|\|\s*[\"']glibc[\"']\}`\s*:\s*[\"'][\"']\}`"#,
+    )
+    .expect("parcel watcher template regex");
+    if !template.is_match(source) {
+        return None;
+    }
+    Some(
+        template
+            .replace_all(source, format!("\"{specifier}\"").as_str())
+            .into_owned(),
+    )
 }
 
 fn cyclic_require_specs(source: &str, source_path: &Path) -> std::collections::HashSet<String> {

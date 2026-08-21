@@ -6022,6 +6022,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ext-parcel-watcher"
+version = "0.5.1514"
+dependencies = [
+ "fancy-regex",
+ "notify",
+ "perry-ffi",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "perry-ext-pdf"
 version = "0.5.1514"
 dependencies = [

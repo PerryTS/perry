@@ -437,6 +437,12 @@
       "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
     },
     {
+      "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
+      "name": "PENDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Pending watcher events carry only a subscription u64 id plus Rust-owned PathBuf/String payloads and enum tags. Callback closures live in perry-ffi CallbackRoot handles, which scan_subscription_roots visits and rewrites."
+    },
+    {
       "file": "crates/perry-runtime/src/perf_hooks.rs",
       "name": "LOOP_START_MS",
       "verdict": "not_a_gc_pointer",

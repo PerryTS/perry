@@ -613,6 +613,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 /// wants bespoke routing can always override its family by adding an exact row.
 #[rustfmt::skip]
 const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
+    // @parcel/watcher's notify-backed native-addon facade.
+    ("js_parcel_watcher_", "@parcel/watcher"),
     // Redis / Valkey RESP client (perry-ext-ioredis). `ioredis`, `iovalkey`,
     // and `valkey` all share this wrapper + the `js_ioredis_*` surface, so the
     // single `ioredis` binding key covers every RESP package that lowers here.
@@ -1139,9 +1141,9 @@ mod tests {
     /// The measured `_js_ioredis_new` link gap: an AOT-compiled `iovalkey`
     /// (a `perry.compilePackages` member, so never in `native_module_imports`
     /// and never in the well-known iteration set) lowers its client usage to
-    /// `js_ioredis_new`. The prefix net must route the WHOLE `js_ioredis_*` /
-    /// `js_undici_*` / `js_node_forge_*` family to its well-known wrapper off
-    /// codegen provenance alone — no exact-table row per symbol required.
+    /// `js_ioredis_new`. The prefix net must route each registered ext family
+    /// to its well-known wrapper off codegen provenance alone — no exact-table
+    /// row per symbol required.
     #[test]
     fn emitted_ext_prefix_symbols_route_to_well_known_binding() {
         let _guard = ProviderTestGuard::new();
@@ -1153,6 +1155,8 @@ mod tests {
             ("js_undici_proxy_agent_new", "undici"),
             ("js_node_forge_generate_key_pair", "node-forge"),
             ("js_node_forge_create_certificate", "node-forge"),
+            ("js_parcel_watcher_subscribe", "@parcel/watcher"),
+            ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }
