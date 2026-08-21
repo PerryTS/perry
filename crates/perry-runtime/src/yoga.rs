@@ -116,7 +116,7 @@ impl YogaNode {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static YOGA_NODES: RefCell<Option<HashMap<u32, YogaNode>>> = const { RefCell::new(None) };
     // The GC scanner registry is also thread-local, so this latch must be
     // per-thread: every JS worker that creates yoga nodes needs its own entry.
