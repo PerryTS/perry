@@ -1,8 +1,5 @@
-//! AST to HIR lowering — extracted from `lower/mod.rs` (issue #1101).
-//!
-//! Pure mechanical split: no logic changes. Helpers keep their original
-//! visibility and are re-exported from `lower/mod.rs` so the existing
-//! `expr_*` submodules and the rest of the crate keep compiling unchanged.
+//! AST to HIR module-declaration lowering, with topical helpers split into
+//! sibling modules.
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
@@ -12,10 +9,10 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-// Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
 pub(super) mod native_profile_import;
+mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -190,11 +187,11 @@ pub(crate) fn lower_module_decl(
                             .unwrap_or_else(|| local.clone());
                         if is_native {
                             let is_node_core = perry_api_manifest::is_node_core_module(&source);
-                            if is_node_core
-                                && !perry_api_manifest::module_has_public_named_export(
-                                    &source, &imported,
-                                )
-                            {
+                            if typescript::should_defer_unknown_named_import(
+                                &source,
+                                &imported,
+                                is_node_core,
+                            ) {
                                 // Almost always a TS TYPE in a mixed import —
                                 // `import { createCipheriv, BinaryLike } from "crypto"`.
                                 // tsc/esbuild/Bun all erase such a specifier; bailing here
@@ -281,6 +278,9 @@ pub(crate) fn lower_module_decl(
                                     });
                                 }
                             }
+                            typescript::register_runtime_enum(
+                                ctx, module, &source, &local, &imported,
+                            );
                         } else {
                             if is_node_builtin_module(&source) {
                                 ctx.register_builtin_named_import(
