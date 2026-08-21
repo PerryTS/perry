@@ -10,7 +10,7 @@ use perry_hir::Expr;
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
@@ -23,6 +23,49 @@ use crate::lower_call::method_override::{
 /// long inline compare chain — more instruction cache than the single tower
 /// call it replaces — so past this width the site keeps the single-arm guard.
 const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
+
+/// Can an exact canonical shape prove that `property` is not an own field?
+///
+/// A post-construction assignment such as `this.run = f` mints a successor
+/// ShapeId, so an exact canonical-shape match excludes that override. A
+/// declared field is different: it is already part of the canonical shape and
+/// may intentionally shadow a prototype method (#620). Computed fields and
+/// incomplete/dynamic parent chains are similarly unknowable here and retain
+/// the runtime own-property probe.
+fn canonical_shape_excludes_own_property(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name.clone()) {
+            return false;
+        }
+        let Some(class) = ctx.classes.get(&name) else {
+            return false;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || field.name == property)
+        {
+            return false;
+        }
+        if class.extends_expr.is_some() || class.native_extends.is_some() {
+            return false;
+        }
+        current = class.extends_name.clone().or_else(|| {
+            class.extends.and_then(|parent_id| {
+                ctx.classes
+                    .iter()
+                    .find_map(|(name, candidate)| (candidate.id == parent_id).then(|| name.clone()))
+            })
+        });
+    }
+    true
+}
 
 /// A declared class may select the direct-method guard, but never prove the
 /// direct call. The guard validates the live class id, keys token, own
@@ -338,6 +381,11 @@ pub(crate) fn try_lower_instance_method_call(
         // instance with a longer chain. Inherited dispatch gets `None` and
         // keeps today's lowering.
         let mut impl_owner: Vec<Option<String>> = Vec::new();
+        // Concrete receiver class for each implementor entry. Unlike
+        // `impl_owner`, this is present for inherited implementations too and
+        // lets the override probe compare the receiver against that class's
+        // canonical ShapeId.
+        let mut impl_class: Vec<String> = Vec::new();
         let mut seen_pairs: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
         // Walk `class_ids` in a FIXED order, not `HashMap` order (#7622). Each
@@ -371,6 +419,7 @@ pub(crate) fn try_lower_instance_method_call(
                             crate::codegen::arguments::method_has_user_rest(ctx, &c, property);
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
                         impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
+                        impl_class.push(start_cls.clone());
                         implementors.push((start_cid, fname));
                         impl_meta.push((has_rest, has_synthetic_arguments, has_user_rest, decl));
                     }
@@ -449,6 +498,69 @@ pub(crate) fn try_lower_instance_method_call(
             let probe_entry = ctx.strings.entry(key_idx_probe);
             let probe_bytes_global = format!("@{}", probe_entry.bytes_global);
             let probe_name_len_str = probe_entry.byte_len.to_string();
+            let probe_override_idx = ctx.new_block("idisp.override");
+            let probe_dispatch_idx = ctx.new_block("idisp.dispatch");
+            let probe_outer_merge_idx = ctx.new_block("idisp.outer_merge");
+            let probe_override_label = ctx.block_label(probe_override_idx);
+            let probe_dispatch_label = ctx.block_label(probe_dispatch_idx);
+            let probe_outer_merge_label = ctx.block_label(probe_outer_merge_idx);
+
+            // #8406: an exact compiler-published (class id, ShapeId) pair can
+            // prove that no post-construction own-method override was added.
+            // Probe the receiver once and bypass the keys-array scan for those
+            // canonical shapes. Classes whose canonical layout itself may
+            // contain `property` stay on the old probe, as do wide towers to
+            // keep code-size growth bounded.
+            let shape_probe_arms: Vec<(u32, String)> = if implementors.len()
+                <= MAX_SUBCLASS_DISPATCH_ARMS
+            {
+                implementors
+                    .iter()
+                    .zip(impl_class.iter())
+                    .filter_map(|((class_id, _), class_name)| {
+                        if !canonical_shape_excludes_own_property(ctx, class_name, property) {
+                            return None;
+                        }
+                        let keys_global = ctx.class_keys_globals.get(class_name)?;
+                        let expected_shape =
+                            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global);
+                        Some((*class_id, expected_shape))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut shape_probe_cid: Option<String> = None;
+            if !shape_probe_arms.is_empty() {
+                let shape_slot = ctx.func.alloca_entry(I32);
+                let cid = ctx.block().call(
+                    I32,
+                    "js_method_direct_shape_class",
+                    &[(DOUBLE, &recv_box), (crate::types::PTR, &shape_slot)],
+                );
+                let shape_id = ctx.block().load(I32, &shape_slot);
+                shape_probe_cid = Some(cid.clone());
+                let own_idx = ctx.new_block("idisp.own_probe");
+                let test_idxs: Vec<usize> = (1..shape_probe_arms.len())
+                    .map(|i| ctx.new_block(&format!("idisp.shape_test{i}")))
+                    .collect();
+                for (i, (class_id, expected_shape)) in shape_probe_arms.iter().enumerate() {
+                    if i > 0 {
+                        ctx.current_block = test_idxs[i - 1];
+                    }
+                    let miss_label = test_idxs
+                        .get(i)
+                        .map(|&idx| ctx.block_label(idx))
+                        .unwrap_or_else(|| ctx.block_label(own_idx));
+                    let blk = ctx.block();
+                    let cid_ok = blk.icmp_eq(I32, &cid, &class_id.to_string());
+                    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape);
+                    let exact = blk.and(I1, &cid_ok, &shape_ok);
+                    blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
+                }
+                ctx.current_block = own_idx;
+            }
+
             let own_method_probe = ctx.block().call(
                 DOUBLE,
                 "js_object_get_own_field_or_undef",
@@ -461,12 +573,6 @@ pub(crate) fn try_lower_instance_method_call(
             let own_bits_probe = ctx.block().bitcast_double_to_i64(&own_method_probe);
             let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
             let is_undef_probe = ctx.block().icmp_eq(I64, &own_bits_probe, &undef_bits_str);
-            let probe_override_idx = ctx.new_block("idisp.override");
-            let probe_dispatch_idx = ctx.new_block("idisp.dispatch");
-            let probe_outer_merge_idx = ctx.new_block("idisp.outer_merge");
-            let probe_override_label = ctx.block_label(probe_override_idx);
-            let probe_dispatch_label = ctx.block_label(probe_dispatch_idx);
-            let probe_outer_merge_label = ctx.block_label(probe_outer_merge_idx);
             ctx.block().cond_br(
                 &is_undef_probe,
                 &probe_dispatch_label,
@@ -570,9 +676,17 @@ pub(crate) fn try_lower_instance_method_call(
             // closure-call fallback would also handle this but
             // returning a sentinel is cheaper).
             ctx.current_block = tower_idx;
-            let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cid = blk.call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
+            let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
+            let cid = if let Some(probed_cid) = shape_probe_cid {
+                // Reuse the class id that the shape probe already validated.
+                // Zero is intentional: it sends descriptor/prototype
+                // invalidation and every non-instance receiver to the runtime
+                // fallback instead of re-entering this hard-coded tower.
+                probed_cid
+            } else {
+                ctx.block()
+                    .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)])
+            };
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {
                 let case_label = ctx.block_label(case_idxs[i]);

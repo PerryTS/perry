@@ -800,35 +800,44 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
             panic!("nothing conditionally branches to {clone_block} — the clone is reached unguarded:\n{ir}")
         });
 
-    // 1. the class ShapeId global is loaded once at function entry …
-    let global_load = ir
-        .lines()
-        .find(|l| l.contains("= load i32, ptr @perry_class_shape_id_"))
-        .unwrap_or_else(|| panic!("the class ShapeId is never read:\n{ir}"));
-    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+    // 1. a class ShapeId global is loaded at function entry …
     // 2. … and parked in an entry slot …
-    let store = ir
+    // 3. … which THIS guard block reloads …
+    // 4. … and compares against the receiver's live ShapeId.
+    //
+    // There may be another hoisted load of the same global for an earlier
+    // dynamic-dispatch shape probe (#8406), so follow each candidate's
+    // dataflow into this guard instead of assuming the first load owns it.
+    let (slot, expected) = ir
         .lines()
-        .find(|l| l.contains(&format!("store i32 {}, ptr ", global_reg)))
-        .unwrap_or_else(|| panic!("the hoisted ShapeId is never stored:\n{ir}"));
-    let slot = store.rsplit(' ').next().expect("slot name");
-    assert!(
-        !ir.lines()
-            .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(slot)),
-        "a ShapeId scalar must not be registered as a moving GC root:\n{ir}"
-    );
-    // 3. … which the guard block reloads …
-    let expected = guard_body
-        .iter()
-        .find_map(|l| {
-            let l = l.trim();
-            l.ends_with(&format!("load i32, ptr {}", slot))
-                .then(|| l.split(' ').next().expect("ssa name").to_string())
+        .filter(|line| line.contains("= load i32, ptr @perry_class_shape_id_"))
+        .find_map(|global_load| {
+            let global_reg = global_load.trim().split(' ').next()?;
+            let store = ir
+                .lines()
+                .find(|line| line.contains(&format!("store i32 {global_reg}, ptr ")))?;
+            let slot = store.rsplit(' ').next()?;
+            let expected = guard_body.iter().find_map(|line| {
+                let line = line.trim();
+                line.ends_with(&format!("load i32, ptr {slot}"))
+                    .then(|| line.split(' ').next().map(str::to_string))
+                    .flatten()
+            })?;
+            guard_body
+                .iter()
+                .any(|line| line.contains("icmp eq i32") && line.contains(&expected))
+                .then(|| (slot.to_string(), expected))
         })
         .unwrap_or_else(|| {
-            panic!("the guard block never reads the hoisted ShapeId:\n{guard_body:#?}")
+            panic!(
+                "the routed call is not dominated by the hoisted ShapeId's reload and compare:\n{guard_body:#?}"
+            )
         });
-    // 4. … and compares against the receiver's live ShapeId.
+    assert!(
+        !ir.lines()
+            .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(&slot)),
+        "a ShapeId scalar must not be registered as a moving GC root:\n{ir}"
+    );
     assert!(
         guard_body
             .iter()
