@@ -9,28 +9,153 @@
 pub(super) use super::utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
+use crate::string::{StringHeader, STRING_FLAG_HAS_LONE_SURROGATES};
 use crate::value::js_nanbox_string;
 
 use super::js_string_from_str;
 
-pub(super) fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
-    if arr.is_null() {
-        return;
-    }
-    let index_key = js_string_from_str("index");
-    crate::array::js_array_set_string_key(arr, index_key, index);
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-    let input_key = js_string_from_str("input");
-    let input_str = js_string_from_str(input);
-    let input_value = js_nanbox_string(input_str as i64);
-    crate::array::js_array_set_string_key(arr, input_key, input_value);
+/// A capture snapshotted while the subject payload is borrowed. Runtime result
+/// materialization uses only these scalar offsets after the borrow is dropped.
+#[derive(Clone, Copy)]
+pub(super) struct OwnedCapture {
+    byte_start: usize,
+    byte_len: u32,
+    utf16_len: u32,
+    flags: u32,
+    utf16_range: Option<(f64, f64)>,
 }
 
-/// [`set_exec_array_metadata`] variant taking the `input` property as an
-/// already-boxed string VALUE (typically the rooted original subject) instead
-/// of a `&str` to copy. Both the array and the input value are rooted across
-/// the internal key-string allocations, which can trigger a (potentially
-/// moving) minor GC.
+impl OwnedCapture {
+    pub(super) fn from_range(str_data: &str, byte_start: usize, byte_end: usize) -> Self {
+        Self::from_range_with_indices(str_data, byte_start, byte_end, false)
+    }
+
+    fn from_range_with_indices(
+        str_data: &str,
+        byte_start: usize,
+        byte_end: usize,
+        with_indices: bool,
+    ) -> Self {
+        let bytes = &str_data.as_bytes()[byte_start..byte_end];
+        let utf16_len = crate::string::compute_utf16_len_wtf8(bytes);
+        let flags = if crate::string::bytes_have_lone_surrogate(bytes) {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
+        Self {
+            byte_start,
+            byte_len: bytes.len() as u32,
+            utf16_len,
+            flags,
+            utf16_range: with_indices.then(|| {
+                (
+                    byte_index_to_utf16_index(str_data, byte_start) as f64,
+                    byte_index_to_utf16_index(str_data, byte_end) as f64,
+                )
+            }),
+        }
+    }
+}
+
+/// All subject-derived state needed to build one RegExp match result. This is
+/// deliberately owned/scalar-only: no `&str`, `regex::Match`, or `Captures`
+/// may survive into the allocation phase (#8449).
+pub(super) struct OwnedExecMatch {
+    captures: Vec<Option<OwnedCapture>>,
+    named: Vec<(String, usize)>,
+    pub(super) match_index: f64,
+}
+
+impl OwnedExecMatch {
+    pub(super) fn from_standard(
+        str_data: &str,
+        search_start_byte: usize,
+        regex: &regex::Regex,
+        caps: &regex::Captures,
+        has_indices: bool,
+    ) -> Self {
+        let captures: Vec<Option<OwnedCapture>> = caps
+            .iter()
+            .map(|capture| {
+                capture.map(|m| {
+                    OwnedCapture::from_range_with_indices(
+                        str_data,
+                        search_start_byte + m.start(),
+                        search_start_byte + m.end(),
+                        has_indices,
+                    )
+                })
+            })
+            .collect();
+        let named = regex
+            .capture_names()
+            .enumerate()
+            .filter_map(|(index, name)| name.map(|name| (name.to_string(), index)))
+            .collect();
+        let match_index = captures
+            .first()
+            .and_then(|capture| capture.as_ref())
+            .map(|capture| {
+                capture.utf16_range.map(|range| range.0).unwrap_or_else(|| {
+                    byte_index_to_utf16_index(str_data, capture.byte_start) as f64
+                })
+            })
+            .unwrap_or(0.0);
+        Self {
+            captures,
+            named,
+            match_index,
+        }
+    }
+
+    pub(super) fn from_fancy(
+        str_data: &str,
+        search_start_byte: usize,
+        regex: &fancy_regex::Regex,
+        caps: &fancy_regex::Captures,
+        has_indices: bool,
+    ) -> Self {
+        let captures: Vec<Option<OwnedCapture>> = (0..caps.len())
+            .map(|index| {
+                caps.get(index).map(|m| {
+                    OwnedCapture::from_range_with_indices(
+                        str_data,
+                        search_start_byte + m.start(),
+                        search_start_byte + m.end(),
+                        has_indices,
+                    )
+                })
+            })
+            .collect();
+        let named = regex
+            .capture_names()
+            .enumerate()
+            .filter_map(|(index, name)| name.map(|name| (name.to_string(), index)))
+            .collect();
+        let match_index = captures
+            .first()
+            .and_then(|capture| capture.as_ref())
+            .map(|capture| {
+                capture.utf16_range.map(|range| range.0).unwrap_or_else(|| {
+                    byte_index_to_utf16_index(str_data, capture.byte_start) as f64
+                })
+            })
+            .unwrap_or(0.0);
+        Self {
+            captures,
+            named,
+            match_index,
+        }
+    }
+}
+
+/// Match-result metadata helper taking the `input` property as an already-boxed
+/// string VALUE (typically the rooted original subject) instead of a `&str` to
+/// copy. Both the array and the input value are rooted across the internal
+/// key-string allocations, which can trigger a (potentially moving) minor GC.
 pub(super) fn set_exec_array_metadata_value(arr: *mut ArrayHeader, input_value: f64, index: f64) {
     if arr.is_null() {
         return;
@@ -54,8 +179,7 @@ pub(super) fn set_exec_array_metadata_value(arr: *mut ArrayHeader, input_value: 
 }
 
 /// Combined `index`/`input`/`groups` decoration for a FRESHLY built
-/// match-result array (#6386). Differences from calling
-/// [`set_exec_array_metadata`] + [`set_exec_array_groups`]:
+/// match-result array (#6386).
 ///
 /// * `input` re-boxes the already-heap-allocated subject `StringHeader`
 ///   instead of copying the whole subject per match (the string is demoted
@@ -97,271 +221,194 @@ pub(super) fn set_exec_array_metadata_groups_fresh(
     }
 }
 
-/// Attach the `groups` own property to a regex match-result array.
-///
-/// Mirrors `set_exec_array_metadata` for `index`/`input`: the result of
-/// `regex.exec(s)` / `s.match(regex)` carries `groups` as a real own property
-/// so reads stay correct under aliasing and interleaved matches — a stored
-/// `m.groups` survives a later `re2.exec(...)`, instead of resolving through a
-/// single most-recent-match thread-local (`LAST_EXEC_GROUPS`). Per ECMA-262
-/// RegExpBuiltinExec, `groups` is the named-capture object when the pattern
-/// has named groups, else `undefined`.
-pub(super) fn set_exec_array_groups(arr: *mut ArrayHeader, groups_obj: *mut ObjectHeader) {
-    if arr.is_null() {
-        return;
-    }
-    let groups_key = js_string_from_str("groups");
-    let value = if groups_obj.is_null() {
-        f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-    } else {
-        crate::value::js_nanbox_pointer(groups_obj as i64)
-    };
-    crate::array::js_array_set_string_key(arr, groups_key, value);
+fn copy_owned_capture(
+    source: &crate::gc::RuntimeHandle<'_>,
+    capture: OwnedCapture,
+) -> *mut StringHeader {
+    source.with_const_ptr::<StringHeader, _>(|source_now| {
+        crate::string::string_copy_range(
+            source_now,
+            capture.byte_start,
+            capture.byte_len,
+            capture.utf16_len,
+            capture.flags,
+        )
+    })
 }
 
-/// Attach the `indices` own property to a regex match-result array when the
-/// `d` flag (hasIndices) is set. Per ECMA-262 RegExpBuiltinExec, `indices` is
-/// an array where each element is `[start, end]` for the corresponding capture
-/// group. Element 0 is the full match, elements 1..N are capture groups.
-/// Unmatched groups are `undefined`. The `indices` array also has a `.groups`
-/// property with named captures mapping to `[start, end]` pairs.
-pub(super) fn set_exec_array_indices(
-    arr: *mut ArrayHeader,
-    str_data: &str,
-    search_start_byte: usize,
-    caps: &regex::Captures,
-    regex: &regex::Regex,
+unsafe fn attach_owned_indices(
+    result_handle: &crate::gc::RuntimeHandle<'_>,
+    data: &OwnedExecMatch,
+    scope: &crate::gc::RuntimeHandleScope,
 ) {
-    if arr.is_null() {
-        return;
-    }
+    let indices = crate::array::js_array_alloc(data.captures.len() as u32);
+    let indices_handle = scope.root_raw_mut_ptr(indices);
+    (*indices_handle.get_raw_mut_ptr::<ArrayHeader>()).length = data.captures.len() as u32;
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-
-    // Build the indices array: [[start, end], [start, end], ...]
-    let indices_arr = crate::array::js_array_alloc(caps.len() as u32);
-    let indices_handle = scope.root_raw_mut_ptr(indices_arr);
-    unsafe {
-        (*indices_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-    }
-
-    for (i, cap) in caps.iter().enumerate() {
-        let indices_arr_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
-        if let Some(m) = cap {
-            // Convert byte offsets to JS string indices (UTF-16 code units),
-            // consistent with `.index` / `lastIndex` / `str.length`.
-            let start_byte = m.start() + search_start_byte;
-            let end_byte = m.end() + search_start_byte;
-            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
-            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
-
-            // Create [start, end] pair
-            let pair = crate::array::js_array_alloc(2);
-            let pair_handle = scope.root_raw_mut_ptr(pair);
-            unsafe {
-                (*pair_handle.get_raw_mut_ptr::<ArrayHeader>()).length = 2;
-                crate::array::store_array_slot(
-                    pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                    0,
-                    start_char.to_bits(),
-                );
-                crate::array::store_array_slot(
-                    pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                    1,
-                    end_char.to_bits(),
-                );
-            }
-
-            let pair_ptr = pair_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let nanboxed = crate::value::js_nanbox_pointer(pair_ptr as i64);
-            unsafe {
-                crate::array::store_array_slot(indices_arr_ptr, i, nanboxed.to_bits());
-            }
-        } else {
-            // Unmatched capture group -> undefined
-            let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-            unsafe {
-                crate::array::store_array_slot(indices_arr_ptr, i, undefined.to_bits());
-            }
-        }
-    }
-
-    // If there are named groups, attach .groups property to indices array
-    let has_named_groups = regex.capture_names().any(|n| n.is_some());
-    if has_named_groups {
-        let groups_obj = crate::object::js_object_alloc(0, 0);
-        let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-
-        for (name, m) in regex
-            .capture_names()
-            .enumerate()
-            .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-        {
-            let val = if let Some(m) = m {
-                let start_byte = m.start() + search_start_byte;
-                let end_byte = m.end() + search_start_byte;
-                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
-                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
-
-                // Create [start, end] pair for named group
-                let pair = crate::array::js_array_alloc(2);
-                let pair_handle = scope.root_raw_mut_ptr(pair);
-                unsafe {
-                    (*pair_handle.get_raw_mut_ptr::<ArrayHeader>()).length = 2;
-                    crate::array::store_array_slot(
-                        pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        0,
-                        start_char.to_bits(),
-                    );
-                    crate::array::store_array_slot(
-                        pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        1,
-                        end_char.to_bits(),
-                    );
-                }
-                let pair_ptr = pair_handle.get_raw_mut_ptr::<ArrayHeader>();
-                crate::value::js_nanbox_pointer(pair_ptr as i64)
-            } else {
-                f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-            };
-
-            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let groups_obj_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            crate::object::js_object_set_field_by_name(groups_obj_ptr, key_ptr, val);
-        }
-
-        let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        let groups_nanboxed = crate::value::js_nanbox_pointer(groups_ptr as i64);
-        let indices_key = js_string_from_str("groups");
-        crate::array::js_array_set_string_key(
-            indices_handle.get_raw_mut_ptr::<ArrayHeader>(),
-            indices_key,
-            f64::from_bits(groups_nanboxed.to_bits()),
-        );
-    }
-
-    // Attach indices array to the match result
-    let indices_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
-    let indices_nanboxed = crate::value::js_nanbox_pointer(indices_ptr as i64);
-    let indices_key = js_string_from_str("indices");
-    crate::array::js_array_set_string_key(
-        arr,
-        indices_key,
-        f64::from_bits(indices_nanboxed.to_bits()),
-    );
-}
-
-/// Build and attach the `indices` property for fancy-regex captures (lookbehind/backreference fallback).
-pub(super) unsafe fn set_exec_array_indices_fancy(
-    arr: *mut ArrayHeader,
-    str_data: &str,
-    search_start_byte: usize,
-    fre: &fancy_regex::Regex,
-    caps: &fancy_regex::Captures,
-) {
-    if arr.is_null() {
-        return;
-    }
-
-    let scope = crate::gc::RuntimeHandleScope::new();
-
-    // Build the indices array: [[start, end], [start, end], ...]
-    let indices_arr = crate::array::js_array_alloc(caps.len() as u32);
-    let indices_handle = scope.root_raw_mut_ptr(indices_arr);
-    (*indices_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-
-    for i in 0..caps.len() {
-        let indices_arr_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
-        if let Some(m) = caps.get(i) {
-            let start_byte = m.start() + search_start_byte;
-            let end_byte = m.end() + search_start_byte;
-            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
-            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
-
-            // Create [start, end] pair
+    for (index, capture) in data.captures.iter().enumerate() {
+        let value = if let Some(capture) = capture {
             let pair = crate::array::js_array_alloc(2);
             let pair_handle = scope.root_raw_mut_ptr(pair);
             (*pair_handle.get_raw_mut_ptr::<ArrayHeader>()).length = 2;
+            let (start, end) = capture
+                .utf16_range
+                .expect("hasIndices snapshots every UTF-16 capture range");
             crate::array::store_array_slot(
                 pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
                 0,
-                start_char.to_bits(),
+                start.to_bits(),
             );
             crate::array::store_array_slot(
                 pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
                 1,
-                end_char.to_bits(),
+                end.to_bits(),
             );
-
-            let pair_ptr = pair_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let nanboxed = crate::value::js_nanbox_pointer(pair_ptr as i64);
-            crate::array::store_array_slot(indices_arr_ptr, i, nanboxed.to_bits());
+            crate::value::js_nanbox_pointer(pair_handle.get_raw_mut_ptr::<ArrayHeader>() as i64)
         } else {
-            // Unmatched capture group -> undefined
-            let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-            crate::array::store_array_slot(indices_arr_ptr, i, undefined.to_bits());
-        }
-    }
-
-    // If there are named groups, attach .groups property to indices array
-    let has_named_groups = fre.capture_names().any(|n| n.is_some());
-    if has_named_groups {
-        let groups_obj = crate::object::js_object_alloc(0, 0);
-        let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-
-        for (name, m) in fre
-            .capture_names()
-            .enumerate()
-            .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-        {
-            let val = if let Some(m) = m {
-                let start_byte = m.start() + search_start_byte;
-                let end_byte = m.end() + search_start_byte;
-                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
-                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
-
-                // Create [start, end] pair for named group
-                let pair = crate::array::js_array_alloc(2);
-                let pair_handle = scope.root_raw_mut_ptr(pair);
-                (*pair_handle.get_raw_mut_ptr::<ArrayHeader>()).length = 2;
-                crate::array::store_array_slot(
-                    pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                    0,
-                    start_char.to_bits(),
-                );
-                crate::array::store_array_slot(
-                    pair_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                    1,
-                    end_char.to_bits(),
-                );
-                let pair_ptr = pair_handle.get_raw_mut_ptr::<ArrayHeader>();
-                crate::value::js_nanbox_pointer(pair_ptr as i64)
-            } else {
-                f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-            };
-
-            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let groups_obj_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            crate::object::js_object_set_field_by_name(groups_obj_ptr, key_ptr, val);
-        }
-
-        let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        let groups_nanboxed = crate::value::js_nanbox_pointer(groups_ptr as i64);
-        let indices_key = js_string_from_str("groups");
-        crate::array::js_array_set_string_key(
+            f64::from_bits(TAG_UNDEFINED)
+        };
+        crate::array::store_array_slot(
             indices_handle.get_raw_mut_ptr::<ArrayHeader>(),
-            indices_key,
-            f64::from_bits(groups_nanboxed.to_bits()),
+            index,
+            value.to_bits(),
         );
     }
 
-    // Attach indices array to the match result
-    let indices_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
-    let indices_nanboxed = crate::value::js_nanbox_pointer(indices_ptr as i64);
-    let indices_key = js_string_from_str("indices");
+    if !data.named.is_empty() {
+        let groups = crate::object::js_object_alloc(0, 0);
+        let groups_handle = scope.root_raw_mut_ptr(groups);
+        for (name, capture_index) in &data.named {
+            // ECMAScript exposes the same index-pair object at `indices[i]`
+            // and `indices.groups.name`; re-read it from the rooted array.
+            let value = crate::array::js_array_get_f64(
+                indices_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                *capture_index as u32,
+            );
+            let value_handle = scope.root_nanbox_f64(value);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            groups_handle.with_mut_ptr::<ObjectHeader, _>(|groups_now| {
+                crate::object::js_object_set_field_by_name(
+                    groups_now,
+                    key,
+                    value_handle.get_nanbox_f64(),
+                )
+            });
+        }
+
+        let (groups_key, groups_now) =
+            groups_handle.across_mut::<ObjectHeader, _>(|| js_string_from_str("groups"));
+        let groups_value = crate::value::js_nanbox_pointer(groups_now as i64);
+        crate::array::js_array_set_string_key(
+            indices_handle.get_raw_mut_ptr::<ArrayHeader>(),
+            groups_key,
+            groups_value,
+        );
+    }
+
+    let (indices_key, indices_now) =
+        indices_handle.across_mut::<ArrayHeader, _>(|| js_string_from_str("indices"));
+    let indices_value = crate::value::js_nanbox_pointer(indices_now as i64);
     crate::array::js_array_set_string_key(
-        arr,
+        result_handle.get_raw_mut_ptr::<ArrayHeader>(),
         indices_key,
-        f64::from_bits(indices_nanboxed.to_bits()),
+        indices_value,
     );
+}
+
+/// Phase 2 for `RegExp#exec` and non-global `String#match`: allocate solely
+/// from an owned byte-range snapshot. `source` is rooted before the first JS
+/// allocation and each capture copy re-reads it after allocating its result.
+pub(super) unsafe fn materialize_exec_match(
+    source: *const StringHeader,
+    data: &OwnedExecMatch,
+    has_indices: bool,
+) -> (*mut ArrayHeader, *mut ObjectHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_handle = scope.root_string_ptr(source);
+
+    let result = crate::array::js_array_alloc(data.captures.len() as u32);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    (*result_handle.get_raw_mut_ptr::<ArrayHeader>()).length = data.captures.len() as u32;
+
+    for (index, capture) in data.captures.iter().enumerate() {
+        if let Some(capture) = capture {
+            let (string, result_now) = result_handle
+                .across_mut::<ArrayHeader, _>(|| copy_owned_capture(&source_handle, *capture));
+            let value = js_nanbox_string(string as i64);
+            crate::array::store_array_slot(result_now, index, value.to_bits());
+        } else {
+            crate::array::store_array_slot(
+                result_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                index,
+                TAG_UNDEFINED,
+            );
+        }
+    }
+
+    let groups_handle = if data.named.is_empty() {
+        None
+    } else {
+        let groups = crate::object::js_object_alloc(0, 0);
+        let groups_handle = scope.root_raw_mut_ptr(groups);
+        for (name, capture_index) in &data.named {
+            let value = if let Some(capture) = data.captures[*capture_index] {
+                js_nanbox_string(copy_owned_capture(&source_handle, capture) as i64)
+            } else {
+                f64::from_bits(TAG_UNDEFINED)
+            };
+            let value_handle = scope.root_nanbox_f64(value);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            groups_handle.with_mut_ptr::<ObjectHeader, _>(|groups_now| {
+                crate::object::js_object_set_field_by_name(
+                    groups_now,
+                    key,
+                    value_handle.get_nanbox_f64(),
+                )
+            });
+        }
+        Some(groups_handle)
+    };
+
+    let groups = groups_handle
+        .as_ref()
+        .map(|handle| handle.get_raw_mut_ptr::<ObjectHeader>())
+        .unwrap_or(std::ptr::null_mut());
+    source_handle.with_const_ptr::<StringHeader, _>(|source_now| {
+        set_exec_array_metadata_groups_fresh(
+            result_handle.get_raw_mut_ptr::<ArrayHeader>(),
+            source_now,
+            data.match_index,
+            groups,
+        )
+    });
+
+    if has_indices {
+        attach_owned_indices(&result_handle, data, &scope);
+    }
+
+    let groups = groups_handle
+        .as_ref()
+        .map(|handle| handle.get_raw_mut_ptr::<ObjectHeader>())
+        .unwrap_or(std::ptr::null_mut());
+    (result_handle.get_raw_mut_ptr::<ArrayHeader>(), groups)
+}
+
+/// Phase 2 for global `String#match`, which returns only the full-match strings.
+pub(super) unsafe fn materialize_match_list(
+    source: *const StringHeader,
+    matches: &[OwnedCapture],
+) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_handle = scope.root_string_ptr(source);
+    let result = crate::array::js_array_alloc(matches.len() as u32);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    (*result_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
+
+    for (index, capture) in matches.iter().enumerate() {
+        let (string, result_now) = result_handle
+            .across_mut::<ArrayHeader, _>(|| copy_owned_capture(&source_handle, *capture));
+        let value = js_nanbox_string(string as i64);
+        crate::array::store_array_slot(result_now, index, value.to_bits());
+    }
+    result_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
