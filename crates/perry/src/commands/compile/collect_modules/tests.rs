@@ -740,6 +740,20 @@ fn wildcard_preflight_skips_node_native_addon_package() {
 }
 
 #[test]
+fn parcel_watcher_sidecar_is_served_by_facade_not_rejected_as_addon() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package_name = "@parcel/watcher-darwin-arm64";
+    let entry = write_compile_package_fixture(root, package_name, "");
+    let package = root.join("node_modules").join(package_name);
+    std::fs::write(package.join("watcher.node"), b"not a real addon").expect("write addon marker");
+
+    assert!(!package_has_unsupported_node_addon(&package));
+    guard_compile_package(root, package_name, &entry)
+        .expect("the registered @parcel/watcher sidecar must route to its native facade");
+}
+
+#[test]
 fn static_pure_js_subpath_of_auto_skipped_native_addon_is_aot_compiled() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();

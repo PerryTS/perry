@@ -9,6 +9,62 @@ use super::*;
 
 pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     method_sig(
+        "@parcel/watcher",
+        "subscribe",
+        false,
+        None,
+        &[p_str("dir"), p_any("callback"), p_any("options")],
+        TypeSpec::Promise,
+    ),
+    method_sig(
+        "@parcel/watcher",
+        "unsubscribe",
+        false,
+        None,
+        &[p_str("dir"), p_any("callback"), p_any("options")],
+        TypeSpec::Promise,
+    ),
+    method_sig(
+        "@parcel/watcher",
+        "writeSnapshot",
+        false,
+        None,
+        &[p_str("dir"), p_str("snapshot"), p_any("options")],
+        TypeSpec::Promise,
+    ),
+    method_sig(
+        "@parcel/watcher",
+        "getEventsSince",
+        false,
+        None,
+        &[p_str("dir"), p_str("snapshot"), p_any("options")],
+        TypeSpec::Promise,
+    ),
+    method_sig(
+        "@parcel/watcher",
+        "__nativeEventCount",
+        false,
+        None,
+        &[],
+        TypeSpec::Number,
+    ),
+    // Platform sidecars canonicalize to the root dispatch table during HIR
+    // lowering. One manifest row per alias keeps resolver/manifest coverage
+    // explicit without duplicating the full surface eight times.
+    method("@parcel/watcher-darwin-x64", "subscribe", false, None),
+    method("@parcel/watcher-darwin-arm64", "subscribe", false, None),
+    method("@parcel/watcher-linux-x64-glibc", "subscribe", false, None),
+    method("@parcel/watcher-linux-x64-musl", "subscribe", false, None),
+    method(
+        "@parcel/watcher-linux-arm64-glibc",
+        "subscribe",
+        false,
+        None,
+    ),
+    method("@parcel/watcher-linux-arm64-musl", "subscribe", false, None),
+    method("@parcel/watcher-win32-x64", "subscribe", false, None),
+    method("@parcel/watcher-win32-arm64", "subscribe", false, None),
+    method_sig(
         "lodash",
         "drop",
         false,

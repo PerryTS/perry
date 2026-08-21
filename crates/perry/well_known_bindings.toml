@@ -651,3 +651,69 @@ repo = "https://github.com/nodejs/undici"
 ref = "21a8e1ed1843e74c3004a2926c12bb0ceaca6b71"
 ported-at = "8.9.0"
 date = "2026-07-30"
+
+# `@parcel/watcher` 2.5.1 ships a pure-JS option wrapper plus one platform
+# package whose `main` is a Node-API `.node` file. Perry serves the binding
+# object natively from one notify-backed static archive; all published sidecar
+# names are aliases so a target-folded dynamic require reaches the same facade.
+[bindings."@parcel/watcher"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+compat = "partial"
+
+[bindings."@parcel/watcher".upstream]
+version = "2.5.1"
+sha256 = "bf7a6b5577a287153c9a6bf7be953556b998f2a57706eb7a5371ec7eb0088d41"
+repo = "https://github.com/parcel-bundler/watcher"
+ref = "119f1ff04bb41c2369929e37274900c61b0a9f49"
+ported-at = "2.5.1"
+date = "2026-08-21"
+
+[bindings."@parcel/watcher-darwin-x64"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-darwin-arm64"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-linux-x64-glibc"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-linux-x64-musl"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-linux-arm64-glibc"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-linux-arm64-musl"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-win32-x64"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"
+
+[bindings."@parcel/watcher-win32-arm64"]
+crate = "perry-ext-parcel-watcher"
+lib = "perry_ext_parcel_watcher"
+tracking = "#8513"
+alias-of = "@parcel/watcher"

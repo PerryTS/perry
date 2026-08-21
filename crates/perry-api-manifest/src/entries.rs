@@ -187,6 +187,17 @@ pub const NATIVE_MODULES: &[&str] = &[
     // for Socket Firewall's TLS-MITM CA so forge's pure-JS crypto isn't
     // AOT-compiled.
     "node-forge",
+    // @parcel/watcher's root binding and the eight published Node-API
+    // sidecars. HIR canonicalizes sidecars to the root dispatch table.
+    "@parcel/watcher",
+    "@parcel/watcher-darwin-x64",
+    "@parcel/watcher-darwin-arm64",
+    "@parcel/watcher-linux-x64-glibc",
+    "@parcel/watcher-linux-x64-musl",
+    "@parcel/watcher-linux-arm64-glibc",
+    "@parcel/watcher-linux-arm64-musl",
+    "@parcel/watcher-win32-x64",
+    "@parcel/watcher-win32-arm64",
 ];
 
 /// Node built-in submodules that Perry routes through the

@@ -963,6 +963,19 @@ pub(crate) fn build_and_run_link(
                 .arg("-lresolv")
                 .arg("-lobjc");
         }
+        // #8513: notify's macOS backend references FSEventStream*. Cargo
+        // normally propagates fsevent-sys's CoreServices link metadata to a
+        // final Rust binary, but a perry-ext static archive crosses Perry's
+        // custom linker boundary, where that metadata is no longer present.
+        // Restore it only for binaries that selected the watcher facade.
+        if (cfg!(target_os = "macos") || is_cross_macos)
+            && ctx
+                .native_module_imports
+                .iter()
+                .any(|module| module == "@parcel/watcher" || module.starts_with("@parcel/watcher-"))
+        {
+            cmd.arg("-framework").arg("CoreServices");
+        }
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {

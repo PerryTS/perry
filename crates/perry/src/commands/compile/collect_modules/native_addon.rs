@@ -49,6 +49,11 @@ fn package_name_from_package_json(package_root: &std::path::Path) -> Option<Stri
         .map(str::to_string)
 }
 
+fn package_is_parcel_watcher_facade(package_root: &std::path::Path) -> bool {
+    package_name_from_package_json(package_root)
+        .is_some_and(|name| name == "@parcel/watcher" || name.starts_with("@parcel/watcher-"))
+}
+
 fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathBuf> {
     if max_depth == 0 {
         return None;
@@ -137,7 +142,9 @@ fn wildcard_node_addon_marker(package_root: &std::path::Path) -> Option<(&'stati
 pub(in crate::commands::compile) fn package_has_unsupported_node_addon(
     package_root: &std::path::Path,
 ) -> bool {
-    !has_perry_native_library(package_root) && wildcard_node_addon_marker(package_root).is_some()
+    !has_perry_native_library(package_root)
+        && !package_is_parcel_watcher_facade(package_root)
+        && wildcard_node_addon_marker(package_root).is_some()
 }
 
 fn package_json_dependency_uses_native_addon_loader(
@@ -170,7 +177,14 @@ pub(super) fn refuse_node_addon_binary(canonical: &std::path::Path) -> Result<()
     if canonical.extension().and_then(|ext| ext.to_str()) != Some("node") {
         return Ok(());
     }
-    let package_name = nearest_package_root(canonical)
+    let package_root = nearest_package_root(canonical);
+    if package_root
+        .as_deref()
+        .is_some_and(package_is_parcel_watcher_facade)
+    {
+        return Ok(());
+    }
+    let package_name = package_root
         .and_then(|root| package_name_from_package_json(&root))
         .unwrap_or_else(|| canonical.display().to_string());
     anyhow::bail!(
@@ -199,6 +213,9 @@ pub(super) fn refuse_compile_package_native_addon(
         return Ok(());
     }
     if has_perry_native_library(&package_root) {
+        return Ok(());
+    }
+    if package_is_parcel_watcher_facade(&package_root) {
         return Ok(());
     }
     let Some((marker, marker_path)) = node_addon_marker(&package_root) else {

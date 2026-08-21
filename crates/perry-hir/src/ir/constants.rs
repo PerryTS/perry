@@ -441,6 +441,13 @@ pub fn is_native_module(path: &str) -> bool {
     if !NATIVE_MODULES.contains(&normalized) {
         return false;
     }
+    // #8513: @parcel/watcher's root and platform packages are native facade
+    // entry points even when a broad compilePackages wildcard selected their
+    // package roots. The pure-JS `@parcel/watcher/wrapper` subpath is not in
+    // NATIVE_MODULES, so it still compiles normally.
+    if normalized == "@parcel/watcher" || normalized.starts_with("@parcel/watcher-") {
+        return true;
+    }
     let pkg = package_name_of(path);
     let overridden = COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow().contains(pkg));
     !overridden

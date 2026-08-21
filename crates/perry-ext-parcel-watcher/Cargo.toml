@@ -1,0 +1,23 @@
+[package]
+name = "perry-ext-parcel-watcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native @parcel/watcher 2.5 compatibility facade backed by notify"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+notify.workspace = true
+fancy-regex = "0.18"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+tempfile.workspace = true

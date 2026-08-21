@@ -5,7 +5,9 @@
 /// `require(someVar)` is unrepresentable as ESM and the bound `require`
 /// inside the IIFE will throw at runtime if hit.
 pub fn extract_require_specifiers(source: &str) -> Vec<String> {
-    let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    // A trailing comma is valid in calls and is emitted by formatters for
+    // multiline require expressions (including OpenCode's watcher selector).
+    let re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*,?\s*\)"#).unwrap();
     let masked = super::detect::strip_comments_and_strings(source);
     let mut specs = Vec::new();
     for cap in re.captures_iter(source) {
