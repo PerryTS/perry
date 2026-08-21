@@ -530,16 +530,20 @@ impl PathModuleRegistry {
     }
 }
 
-/// Canonical path -> generated initializer address, shared by every heap in
-/// the process. Holds only code addresses, so unlike the per-heap export table
-/// it is not a GC root and needs no scanner.
-///
-/// `per_test_global!` because `perry-runtime`'s tests share one process: two
-/// tests registering DIFFERENT addresses for the same canonical path would
-/// otherwise collide, and the second would be rejected by the idempotence
-/// check below.
-/// `Option` because `HashMap::new` is not const and this must also compile as
-/// a plain `static` outside a test build.
+// Canonical path -> generated initializer address, shared by every heap in
+// the process. Holds only code addresses, so unlike the per-heap export table
+// it is not a GC root and needs no scanner.
+//
+// `per_test_global!` because `perry-runtime`'s tests share one process: two
+// tests registering DIFFERENT addresses for the same canonical path would
+// otherwise collide, and the second would be rejected by the idempotence
+// check below.
+// `Option` because `HashMap::new` is not const and this must also compile as
+// a plain `static` outside a test build.
+//
+// Plain `//`: a `///` here attaches to nothing the macro emits, so rustc drops
+// it and `-D warnings` (a required PR gate) rejects the build. The rationale
+// above is the point of the comment, so keep it — just not as rustdoc.
 per_test_global!(
     static PATH_MODULE_INIT_ADDRS: std::sync::Mutex<
         Option<std::collections::HashMap<String, usize>>,
