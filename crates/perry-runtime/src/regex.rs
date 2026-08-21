@@ -54,9 +54,8 @@ pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
 use exec_array::{
-    byte_index_to_utf16_index, set_exec_array_groups, set_exec_array_indices,
-    set_exec_array_indices_fancy, set_exec_array_metadata, set_exec_array_metadata_value,
-    utf16_index_to_byte,
+    byte_index_to_utf16_index, materialize_exec_match, materialize_match_list,
+    set_exec_array_metadata_value, utf16_index_to_byte, OwnedCapture, OwnedExecMatch,
 };
 #[cfg(feature = "regex-engine")]
 use grammar::{
@@ -1282,41 +1281,6 @@ fn expand_js_replacement_fancy(
         }
     }
     out
-}
-
-/// Build a named-capture `groups` object from a fancy-regex match, or return
-/// null when the pattern declares no named capture groups. Mirrors the
-/// named-group construction in the standard-engine `js_regexp_exec` path
-/// (fresh per-result object + by-name setters so each match grows its own
-/// shape). The returned object must be stored into a GC-visible slot by the
-/// caller immediately; it is rooted via `scope` until then.
-#[cfg(feature = "regex-engine")]
-pub(crate) unsafe fn build_fancy_groups(
-    fre: &fancy_regex::Regex,
-    caps: &fancy_regex::Captures,
-    scope: &crate::gc::RuntimeHandleScope,
-) -> *mut ObjectHeader {
-    let group_names: Vec<(&str, Option<fancy_regex::Match>)> = fre
-        .capture_names()
-        .enumerate()
-        .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-        .collect();
-    if group_names.is_empty() {
-        return ptr::null_mut();
-    }
-    let groups_obj = crate::object::js_object_alloc(0, 0);
-    let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-    for (name, m) in &group_names {
-        let val = if let Some(m) = m {
-            js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-        } else {
-            f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-        };
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
-    }
-    groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
 }
 
 /// Fancy-regex fallback for the string-replacement (non-callback) forms of
