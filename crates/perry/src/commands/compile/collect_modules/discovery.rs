@@ -40,17 +40,18 @@ pub(crate) fn is_nextjs_runtime_module(path: &Path) -> bool {
         .any(|w| w[0] == std::ffi::OsStr::new(".next") && w[1] == std::ffi::OsStr::new("server"))
 }
 
-/// #6769: a statically resolved import must be compiled natively — Perry has
-/// no runtime JavaScript engine for it to fall back to. Promoting the FILE
-/// alone (rather than its whole package) keeps `perry.compilePackages`
-/// meaningful: a runtime-computed load inside an unauthorized package still
-/// routes the old way. Both promotion sites — the import walk and the
+/// #6769 / #8518: a statically resolved import must be compiled natively —
+/// Perry has no runtime JavaScript engine for it to fall back to. Promote the
+/// FILE alone when the host trust policy allows its package. `compilePackages`
+/// remains an eager whole-package routing hint, but it must not also be a
+/// second, ever-growing list of every ordinary JS file reached by the graph.
+/// A runtime-computed load inside an unauthorized package still routes to the
+/// V8-free refusal gate. Both promotion sites — the import walk and the
 /// re-export walk — ask this, so the boundary cannot drift between them.
 pub(super) fn aot_promotion_is_authorized(resolved_path: &Path, ctx: &CompilationContext) -> bool {
     super::super::audit_manifest::package_name_for_path(&resolved_path.to_string_lossy())
         .is_none_or(|package| {
-            (ctx.compile_packages.contains(&package)
-                && super::super::allowlist_matches(&package, &ctx.allow_compile_packages))
+            super::super::allowlist_matches(&package, &ctx.allow_compile_packages)
                 // Automatic whole-package routing deliberately omits Node
                 // native addons, but a package can expose a pure JS/TS helper
                 // subpath. A static edge to that exact file is safe to
