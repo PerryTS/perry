@@ -831,9 +831,17 @@ pub(crate) unsafe fn node_sqlite_row_value(
     stmt: &NodeSqliteStmtHandle,
     raw_stmt: *mut ffi::sqlite3_stmt,
 ) -> JSValue {
+    node_sqlite_row_value_with_mode(stmt, raw_stmt, stmt.return_arrays.load(Ordering::Relaxed))
+}
+
+pub(crate) unsafe fn node_sqlite_row_value_with_mode(
+    stmt: &NodeSqliteStmtHandle,
+    raw_stmt: *mut ffi::sqlite3_stmt,
+    return_arrays: bool,
+) -> JSValue {
     let column_count = ffi::sqlite3_column_count(raw_stmt);
     let read_bigints = stmt.read_bigints.load(Ordering::Relaxed);
-    if stmt.return_arrays.load(Ordering::Relaxed) {
+    if return_arrays {
         let mut arr = js_array_alloc(column_count as u32);
         for index in 0..column_count {
             arr = js_array_push(arr, node_sqlite_column_value(raw_stmt, index, read_bigints));

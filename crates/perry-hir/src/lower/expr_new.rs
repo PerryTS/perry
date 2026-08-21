@@ -73,6 +73,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     if let ast::Expr::Ident(callee_ident) = callee_expr {
+        // Keep Bun's `Database` distinct from better-sqlite3's same-named
+        // constructor while still allocating the shared native SQLite handle.
+        if matches!(
+            ctx.lookup_native_module(callee_ident.sym.as_ref()),
+            Some(("bun:sqlite", Some("Database")))
+        ) {
+            return Ok(Expr::New {
+                class_name: "BunSqliteDatabase".to_string(),
+                args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                type_args: Vec::new(),
+                byte_offset: new_byte_offset,
+                cap_args_appended: 0,
+            });
+        }
         let module_constructor = ctx
             .lookup_native_module(callee_ident.sym.as_ref())
             .map(|(module_name, method)| {

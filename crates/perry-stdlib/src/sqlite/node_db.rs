@@ -166,11 +166,21 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
 ) -> Handle {
     let path = node_sqlite_database_path(path_value);
     let options = parse_node_sqlite_options(options_value);
+    register_node_sqlite_database(path, options, "node:sqlite")
+}
+
+pub(crate) unsafe fn register_node_sqlite_database(
+    path: String,
+    options: NodeSqliteOptions,
+    type_name: &str,
+) -> Handle {
     let open = options.open;
     let handle = register_handle(NodeSqliteDbHandle {
         conn: Mutex::new(None),
         path,
         read_only: options.read_only,
+        read_write: options.read_write,
+        create: options.create,
         enable_foreign_keys: options.enable_foreign_keys,
         enable_dqs: options.enable_dqs,
         timeout_ms: options.timeout_ms,
@@ -192,7 +202,7 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_new(
     perry_runtime::symbol::js_object_set_symbol_property(
         js_nanbox_pointer(handle),
         type_symbol,
-        f64_from_jsvalue(string_value("node:sqlite")),
+        f64_from_jsvalue(string_value(type_name)),
     );
     if open {
         js_node_sqlite_database_sync_open(handle);

@@ -1151,6 +1151,31 @@ pub fn fix_native_instance_expr_with_locals(
             }
             fix_native_instance_expr_with_locals(inner, native_instances, local_id_instances);
         }
+        // #8510: the AST lowerer's any-receiver fallback folds a zero-argument
+        // `.values()` into ArrayValues before this pass knows that the local is
+        // a bun:sqlite Statement. Recover the native call once the statement
+        // result from Database.query()/prepare() has been tracked. Without
+        // this, `statement.values()` runs the Array iterator helper against a
+        // native statement handle and produces undefined rows.
+        Expr::ArrayValues(array) => {
+            if let Expr::LocalGet(local_id) = array.as_ref() {
+                if matches!(
+                    local_id_instances.get(local_id),
+                    Some((module, class)) if module == "bun:sqlite" && class == "Statement"
+                ) {
+                    let object = std::mem::replace(array.as_mut(), Expr::Undefined);
+                    *expr = Expr::NativeMethodCall {
+                        module: "bun:sqlite".to_string(),
+                        class_name: Some("Statement".to_string()),
+                        object: Some(Box::new(object)),
+                        method: "values".to_string(),
+                        args: Vec::new(),
+                    };
+                    return;
+                }
+            }
+            fix_native_instance_expr_with_locals(array, native_instances, local_id_instances);
+        }
         // Recurse into other expressions
         Expr::Binary { left, right, .. } => {
             fix_native_instance_expr_with_locals(left, native_instances, local_id_instances);
@@ -1398,6 +1423,9 @@ pub fn detect_native_instance_creation_with_context(
                 ("sqlite", "DatabaseSync", "createSession") => {
                     Some((module.clone(), "Session".to_string()))
                 }
+                ("bun:sqlite", "Database", "query" | "prepare") => {
+                    Some((module.clone(), "Statement".to_string()))
+                }
                 _ => None,
             }
         }
@@ -1434,6 +1462,9 @@ pub fn detect_native_instance_creation_with_context(
                             ("sqlite", "DatabaseSync", "createSession") => {
                                 Some((module.clone(), "Session".to_string()))
                             }
+                            ("bun:sqlite", "Database", "query" | "prepare") => {
+                                Some((module.clone(), "Statement".to_string()))
+                            }
                             _ => None,
                         };
                     }
@@ -1457,6 +1488,7 @@ pub fn detect_native_instance_creation_with_context(
                 "Database" => Some(("better-sqlite3".to_string(), "Database".to_string())),
                 "DatabaseSync" => Some(("sqlite".to_string(), "DatabaseSync".to_string())),
                 "StatementSync" => Some(("sqlite".to_string(), "StatementSync".to_string())),
+                "BunSqliteDatabase" => Some(("bun:sqlite".to_string(), "Database".to_string())),
                 _ => None,
             }
         }

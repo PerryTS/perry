@@ -1,0 +1,9 @@
+filename: :memory:
+insert: 1 1
+rows: 2 alpha
+values: 1 alpha 3
+bigint: bigint 1
+transaction: gamma 3
+rollback: 3
+serialized: true
+closed: true

@@ -29,7 +29,7 @@ works unchanged.
 ### Databases
 - **mysql2** — MySQL client
 - **pg** — PostgreSQL client
-- **better-sqlite3** — SQLite
+- **bun:sqlite** / **node:sqlite** / **better-sqlite3** — SQLite, backed by Perry's native engine
 - **mongodb** — MongoDB client
 - **ioredis** / **redis** — Redis client
 

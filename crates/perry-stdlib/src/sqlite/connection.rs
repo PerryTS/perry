@@ -6,12 +6,16 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub(crate) fn open_node_sqlite_connection(db: &NodeSqliteDbHandle) -> rusqlite::Result<Connection> {
-    let flags = if db.read_only {
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-    } else {
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
-    } | OpenFlags::SQLITE_OPEN_URI
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut flags = OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if db.read_only {
+        flags |= OpenFlags::SQLITE_OPEN_READ_ONLY;
+    }
+    if db.read_write {
+        flags |= OpenFlags::SQLITE_OPEN_READ_WRITE;
+    }
+    if db.create {
+        flags |= OpenFlags::SQLITE_OPEN_CREATE;
+    }
 
     let conn = if db.path == ":memory:" {
         Connection::open_in_memory_with_flags(flags)?

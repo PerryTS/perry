@@ -59,6 +59,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
     // (unlike `node:`, which is stripped) — `import { dlopen } from "bun:ffi"`.
     "bun:ffi",
+    "bun:sqlite", // Bun facade over Perry's native SQLite engine
     "node-cron",  // cron-style scheduler (npm node-cron; aliases `cron`)
     "nodemailer", // SMTP email sending
     // ── Node.js builtin modules ──

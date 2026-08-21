@@ -24,6 +24,9 @@ fn database_method_name_static(property: &str) -> Option<&'static [u8]> {
         "close" => Some(b"close"),
         "exec" => Some(b"exec"),
         "prepare" => Some(b"prepare"),
+        "query" => Some(b"query"),
+        "run" => Some(b"run"),
+        "transaction" => Some(b"transaction"),
         "serialize" => Some(b"serialize"),
         "deserialize" => Some(b"deserialize"),
         "function" => Some(b"function"),
@@ -47,6 +50,9 @@ fn tag_store_method_name_static(property: &str) -> Option<&'static [u8]> {
         "run" => Some(b"run"),
         "get" => Some(b"get"),
         "all" => Some(b"all"),
+        "values" => Some(b"values"),
+        "safeIntegers" => Some(b"safeIntegers"),
+        "finalize" => Some(b"finalize"),
         "iterate" => Some(b"iterate"),
         "clear" => Some(b"clear"),
         _ => None,
@@ -111,6 +117,18 @@ pub unsafe fn dispatch_node_sqlite_database_method(
             let stmt = js_node_sqlite_database_sync_prepare(handle, arg0, arg1);
             Some(js_nanbox_pointer(stmt))
         }
+        "query" => Some(js_nanbox_pointer(js_bun_sqlite_database_query(
+            handle, arg0,
+        ))),
+        "run" => {
+            let params = packed_args_array(args.get(1..).unwrap_or_default());
+            Some(js_nanbox_pointer(
+                js_bun_sqlite_database_run(handle, arg0, params) as i64,
+            ))
+        }
+        "transaction" => Some(js_nanbox_pointer(
+            js_bun_sqlite_database_transaction(handle, arg0) as i64,
+        )),
         "serialize" => Some(js_nanbox_pointer(
             js_node_sqlite_database_sync_serialize(handle, arg0) as i64,
         )),
@@ -166,6 +184,10 @@ pub unsafe fn dispatch_node_sqlite_database_property(
         return None;
     }
     match property_name {
+        "filename" => Some(f64_from_jsvalue(JSValue::string_ptr(
+            js_bun_sqlite_database_filename(handle),
+        ))),
+        "inTransaction" => Some(js_node_sqlite_database_sync_is_transaction(handle)),
         "isOpen" => Some(js_node_sqlite_database_sync_is_open(handle)),
         "isTransaction" => Some(js_node_sqlite_database_sync_is_transaction(handle)),
         "limits" => Some(js_nanbox_pointer(js_node_sqlite_database_sync_limits(
@@ -308,6 +330,17 @@ pub unsafe fn dispatch_node_sqlite_statement_method(
         "all" => Some(js_nanbox_pointer(
             js_node_sqlite_statement_sync_all(handle, args_arr) as i64,
         )),
+        "values" => Some(js_nanbox_pointer(
+            js_bun_sqlite_statement_values(handle, args_arr) as i64,
+        )),
+        "safeIntegers" => Some(js_bun_sqlite_statement_safe_integers(
+            handle,
+            args.first().copied().unwrap_or_else(undefined_f64),
+        )),
+        "finalize" => {
+            js_bun_sqlite_statement_finalize(handle);
+            Some(undefined_f64())
+        }
         "iterate" => Some(js_node_sqlite_statement_sync_iterate(handle, args_arr)),
         "columns" => Some(js_nanbox_pointer(
             js_node_sqlite_statement_sync_columns(handle) as i64,

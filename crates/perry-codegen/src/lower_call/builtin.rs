@@ -637,6 +637,29 @@ pub(super) fn lower_builtin_new<'a>(
             let handle = blk.call(I64, "js_pg_pool_new", &[(DOUBLE, &config_val)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // bun:sqlite Database — distinct internal name avoids colliding with
+        // better-sqlite3's exported `Database` while preserving full JS values
+        // for Bun's optional filename and flags object.
+        "BunSqliteDatabase" => {
+            let path_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let path_value = match path_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
+            };
+            let options_value = match options_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_bun_sqlite_database_new",
+                &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // better-sqlite3 Database — `new Database(filename)` opens a SQLite
         // connection. Without this, `new Database(...)` falls into lower_new's
         // empty-object placeholder, so `db` is a generic ObjectHeader pointer

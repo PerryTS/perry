@@ -424,6 +424,15 @@ pub(crate) fn lower_new_member_native(
             }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
+                if module_name == "bun:sqlite" && class_name == "Database" {
+                    return Ok(Some(Expr::New {
+                        class_name: "BunSqliteDatabase".to_string(),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                        type_args: Vec::new(),
+                        byte_offset: new_byte_offset,
+                        cap_args_appended: 0,
+                    }));
+                }
                 if matches!(
                     (module_name, class_name),
                     ("events", "EventEmitter")

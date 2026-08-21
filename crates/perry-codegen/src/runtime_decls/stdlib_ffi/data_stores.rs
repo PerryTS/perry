@@ -103,6 +103,19 @@ pub(crate) fn declare_data_stores(module: &mut LlModule) {
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);
     module.declare_function("js_sqlite_transaction_rollback", VOID, &[I64]);
+    module.declare_function("js_bun_sqlite_database_call", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_bun_sqlite_database_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_bun_sqlite_database_query", I64, &[I64, DOUBLE]);
+    module.declare_function("js_bun_sqlite_database_run", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_bun_sqlite_database_filename", I64, &[I64]);
+    module.declare_function("js_bun_sqlite_database_transaction", I64, &[I64, DOUBLE]);
+    module.declare_function("js_bun_sqlite_statement_values", I64, &[I64, I64]);
+    module.declare_function(
+        "js_bun_sqlite_statement_safe_integers",
+        DOUBLE,
+        &[I64, DOUBLE],
+    );
+    module.declare_function("js_bun_sqlite_statement_finalize", VOID, &[I64]);
     module.declare_function("js_node_sqlite_backup", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_node_sqlite_database_sync_call", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_node_sqlite_database_sync_new", I64, &[DOUBLE, DOUBLE]);

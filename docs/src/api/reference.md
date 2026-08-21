@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2951 entries across 125 modules.
+Total: 2969 entries across 126 modules.
 
 ## Modules
 
@@ -20,6 +20,7 @@ Total: 2951 entries across 125 modules.
 - [`buffer`](#buffer)
 - [`bun`](#bun)
 - [`bun:ffi`](#bunffi)
+- [`bun:sqlite`](#bunsqlite)
 - [`cheerio`](#cheerio)
 - [`child_process`](#child_process)
 - [`cluster`](#cluster)
@@ -381,6 +382,35 @@ Total: 2951 entries across 125 modules.
 
 - `FFIType`
 - `suffix`
+
+## `bun:sqlite`
+
+### Classes
+
+- `Database`
+- `Statement`
+
+### Methods
+
+- `Database` — module
+- `all` — instance *(class: `Statement`)*
+- `close` — instance *(class: `Database`)*
+- `finalize` — instance *(class: `Statement`)*
+- `get` — instance *(class: `Statement`)*
+- `loadExtension` — instance *(class: `Database`)*
+- `prepare` — instance *(class: `Database`)*
+- `query` — instance *(class: `Database`)*
+- `run` — instance *(class: `Database`)*
+- `run` — instance *(class: `Statement`)*
+- `safeIntegers` — instance *(class: `Statement`)*
+- `serialize` — instance *(class: `Database`)*
+- `transaction` — instance *(class: `Database`)*
+- `values` — instance *(class: `Statement`)*
+
+### Properties
+
+- `filename`
+- `inTransaction`
 
 ## `cheerio`
 

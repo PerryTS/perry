@@ -12,6 +12,7 @@ use std::sync::{Mutex, Once, OnceLock};
 mod backup;
 mod better;
 mod bind;
+mod bun;
 mod connection;
 mod dispatch;
 mod node_db;
@@ -24,6 +25,7 @@ mod options;
 // keep resolving and sibling modules reach one another via `use super::*`.
 pub(crate) use backup::*;
 pub(crate) use bind::*;
+pub(crate) use bun::*;
 pub(crate) use connection::*;
 pub(crate) use dispatch::*;
 pub(crate) use node_db::*;
@@ -44,6 +46,8 @@ pub struct NodeSqliteDbHandle {
     pub conn: Mutex<Option<Connection>>,
     pub path: String,
     pub read_only: bool,
+    pub read_write: bool,
+    pub create: bool,
     pub enable_foreign_keys: bool,
     pub enable_dqs: bool,
     pub timeout_ms: i32,
@@ -178,6 +182,8 @@ pub(crate) struct NodeSqliteAggregateState {
 pub(crate) struct NodeSqliteOptions {
     open: bool,
     read_only: bool,
+    read_write: bool,
+    create: bool,
     enable_foreign_keys: bool,
     enable_dqs: bool,
     timeout_ms: i32,
@@ -195,6 +201,8 @@ impl Default for NodeSqliteOptions {
         Self {
             open: true,
             read_only: false,
+            read_write: true,
+            create: true,
             enable_foreign_keys: true,
             enable_dqs: false,
             timeout_ms: 0,

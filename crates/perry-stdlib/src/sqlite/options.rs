@@ -277,6 +277,8 @@ pub(crate) unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqlite
 
     options.open = bool_option(options_value, "open", options.open);
     options.read_only = bool_option(options_value, "readOnly", options.read_only);
+    options.read_write = !options.read_only;
+    options.create = !options.read_only;
     options.enable_foreign_keys = bool_option(
         options_value,
         "enableForeignKeyConstraints",

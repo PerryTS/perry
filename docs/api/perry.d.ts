@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2028 entries across 123 modules
+// Coverage: 2033 entries across 124 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -334,6 +334,19 @@ declare module "bun:ffi" {
   export function toBuffer(...args: any[]): any;
   /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function viewSource(...args: any[]): any;
+}
+
+declare module "bun:sqlite" {
+  /** stdlib */
+  export class Database { [key: string]: any; }
+  /** stdlib */
+  export class Statement { [key: string]: any; }
+  /** stdlib */
+  export const filename: any;
+  /** stdlib */
+  export const inTransaction: any;
+  /** stdlib */
+  export function Database(...args: any[]): any;
 }
 
 declare module "cheerio" {

@@ -80,7 +80,7 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // node:sqlite (#3183/#3184) shares the rusqlite-backed
         // `database-sqlite` feature with better-sqlite3 — DatabaseSync /
         // StatementSync route to the same `js_sqlite_*` runtime.
-        "sqlite" => &["database-sqlite"],
+        "sqlite" | "bun:sqlite" => &["database-sqlite"],
         // tursodb (#424) lives in the external
         // `PerryTS/tursodb-bindings` repo (`bun add @perryts/tursodb`)
         // since v0.5.557 — perry's package.json `perry.nativeLibrary`

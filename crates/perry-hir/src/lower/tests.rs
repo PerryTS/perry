@@ -646,6 +646,41 @@ fn test_perry_ui_state_value_uses_native_getter() {
     );
 }
 
+/// #8510: `.values()` on a bun:sqlite Statement is not Array.prototype.values.
+/// The statement is discovered by the post-lowering native-instance pass, so
+/// that pass must repair the eager any-receiver ArrayValues fold.
+#[test]
+fn test_bun_sqlite_statement_values_uses_native_dispatch() {
+    use crate::ir::clear_current_module_source;
+    use crate::js_transform::fix_local_native_instances;
+
+    let source = r#"
+        import { Database } from "bun:sqlite";
+        const db = new Database(":memory:");
+        const statement = db.query("SELECT 1");
+        const rows = statement.values();
+        console.log(rows[0][0]);
+    "#;
+    let module = perry_parser::parse_typescript(source, "bun_sqlite_values.ts")
+        .expect("source should parse");
+    let mut hir =
+        super::lower_module(&module, "test", "bun_sqlite_values.ts").expect("source should lower");
+    clear_current_module_source();
+    fix_local_native_instances(&mut hir);
+
+    let dump = format!("{hir:#?}");
+    assert!(
+        dump.contains("module: \"bun:sqlite\"")
+            && dump.contains("class_name: Some(\n                        \"Statement\"")
+            && dump.contains("method: \"values\""),
+        "Statement.values() must lower through bun:sqlite native dispatch: {dump}"
+    );
+    assert!(
+        !dump.contains("ArrayValues"),
+        "Statement.values() must not retain the Array iterator fold: {dump}"
+    );
+}
+
 /// #6642: the Widget `.addChild()` compatibility method must use the same
 /// native FFI dispatch as the canonical `widgetAddChild(parent, child)` free
 /// function, including for basic widget factories such as VStack and Text.
