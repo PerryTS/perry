@@ -324,24 +324,17 @@ pub(crate) fn js_callback_value(callback: f64, definition: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = crate::object::js_object_alloc(0, 3);
     let object = scope.root_raw_mut_ptr(object);
-    set_field(
-        object.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        "ptr",
-        super::number_value(pointer as f64),
-    );
-    set_field(
-        object.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        "threadsafe",
-        f64::from_bits(crate::value::TAG_FALSE),
-    );
+    let ptr_value = super::number_value(pointer as f64);
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "ptr", ptr_value));
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
+        set_field(o, "threadsafe", f64::from_bits(crate::value::TAG_FALSE))
+    });
     let close = scope.root_nanbox_f64(close_closure(index));
-    set_field(
-        object.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        "close",
-        close.get_nanbox_f64(),
-    );
+    let close_value = close.get_nanbox_f64();
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "close", close_value));
     f64::from_bits(
-        JSValue::object_ptr(object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as *mut u8)
+        object
+            .with_mut_ptr(|o: *mut crate::object::ObjectHeader| JSValue::object_ptr(o as *mut u8))
             .bits(),
     )
 }

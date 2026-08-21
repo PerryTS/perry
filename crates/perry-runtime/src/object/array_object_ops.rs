@@ -180,9 +180,10 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // fast paths — see OBJ_FLAG_ARRAY_DESCRIPTORS in define_array_property.
     // Set here too so the `Reflect.defineProperty` entry point is covered.
     {
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let gc = gc_header_for(obj);
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+        obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+            let gc = gc_header_for(obj);
+            (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+        });
     }
 
     let read_present = |name: &[u8]| -> bool {
@@ -236,10 +237,10 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // #7548: `obj` may be a pre-grow forwarding stub. `old_len` below drives
     // the shrink walk, so it must come from the array's current home. Re-read
     // after every descriptor allocation and user coercion above (#8507).
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let arr = array_header_mut(obj);
-    let owner = obj as usize;
-    let old_len = (*arr).length;
+    let (arr, owner, old_len) = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+        let arr = array_header_mut(obj);
+        (arr, obj as usize, (*arr).length)
+    });
     // `length` is non-configurable, non-enumerable; writable defaults to true
     // until explicitly set otherwise via the side table.
     let cur_writable = super::get_property_attrs(owner, "length")

@@ -497,12 +497,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         // enclosing (re-entrant) dispatch resumes with its own
                         // promise/next/value for settlement and trap routing,
                         // instead of the NULLs this arm would otherwise leave.
-                        CURRENT_MICROTASK_PROMISE
-                            .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
+                        prev_promise_handle.with_mut_ptr(|p: *mut Promise| {
+                            CURRENT_MICROTASK_PROMISE.with(|c| c.set(p))
+                        });
                         CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));
                         CURRENT_MICROTASK_VALUE.with(|c| c.set(prev_value));
-                        CURRENT_MICROTASK_NEXT
-                            .with(|c| c.set(prev_next_handle.get_raw_mut_ptr::<Promise>()));
+                        prev_next_handle.with_mut_ptr(|p: *mut Promise| {
+                            CURRENT_MICROTASK_NEXT.with(|c| c.set(p))
+                        });
                     }
                     restore_microtask_context();
                     ran += 1;

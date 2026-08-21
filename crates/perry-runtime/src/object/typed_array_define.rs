@@ -118,8 +118,9 @@ unsafe fn field_present_and_false(desc: *mut ObjectHeader, name: &[u8]) -> bool 
     // allocation rather than dereferencing the incoming raw pointer.
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc_handle = scope.root_raw_mut_ptr(desc);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let desc = desc_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let (key, desc) = desc_handle.across_mut::<ObjectHeader, _>(|| {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    });
     if !own_key_present(desc, key) {
         return false;
     }
@@ -131,8 +132,10 @@ unsafe fn field_present_and_false(desc: *mut ObjectHeader, name: &[u8]) -> bool 
 unsafe fn field_present(desc: *mut ObjectHeader, name: &[u8]) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc_handle = scope.root_raw_mut_ptr(desc);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    own_key_present(desc_handle.get_raw_mut_ptr::<ObjectHeader>(), key)
+    let (key, desc) = desc_handle.across_mut::<ObjectHeader, _>(|| {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    });
+    own_key_present(desc, key)
 }
 
 /// If `key_value` is a String key that is a CanonicalNumericIndexString, return
