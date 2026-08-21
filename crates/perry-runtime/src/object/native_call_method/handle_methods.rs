@@ -1080,8 +1080,11 @@ pub(super) unsafe fn dispatch_handle(
                                 // Mirrors `resolve_proto_chain_field_with_receiver`
                                 // (the winston `get transports()` fix).
                                 let receiver_f64 = f64::from_bits(jsval.bits());
-                                let prev_this =
-                                    IMPLICIT_THIS.with(|c| c.replace(receiver_f64.to_bits()));
+                                // #8495: root the displaced receiver across the call below.
+                                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                                let prev_this_h = prev_this_scope.root_nanbox_u64(
+                                    IMPLICIT_THIS.with(|c| c.replace(receiver_f64.to_bits())),
+                                );
                                 let prev_override =
                                     super::super::field_get_set::accessor_receiver_override_begin(
                                         receiver_f64,
@@ -1093,7 +1096,7 @@ pub(super) unsafe fn dispatch_handle(
                                 super::super::field_get_set::accessor_receiver_override_end(
                                     prev_override,
                                 );
-                                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                                 if !field_val.is_undefined() && !field_val.is_null() {
                                     resolved_method = Some(ResolvedMethod::ProtoClosure {
                                         field_bits: field_val.bits(),

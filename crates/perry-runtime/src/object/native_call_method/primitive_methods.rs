@@ -97,14 +97,17 @@ pub(super) unsafe fn dispatch_primitive(
                 );
                 let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
                 let args = refreshed_args();
-                let prev_this =
-                    IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                // #8495: root the displaced receiver across the call below.
+                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_this_h = prev_this_scope.root_nanbox_u64(
+                    IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())),
+                );
                 let result = crate::closure::js_native_call_value(
                     prop_handle.get_nanbox_f64(),
                     args.as_ptr(),
                     args.len(),
                 );
-                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return Some(result);
             }
         }
@@ -528,14 +531,17 @@ pub(super) unsafe fn dispatch_primitive(
                     );
                     let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
                     let args = refreshed_args();
-                    let prev_this =
-                        IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                    // #8495: root the displaced receiver across the call below.
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope.root_nanbox_u64(
+                        IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())),
+                    );
                     let result = crate::closure::js_native_call_value(
                         prop_handle.get_nanbox_f64(),
                         args.as_ptr(),
                         args.len(),
                     );
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return Some(result);
                 }
                 // Own key present but NOT callable (`re.exec = 5; re.exec()`).

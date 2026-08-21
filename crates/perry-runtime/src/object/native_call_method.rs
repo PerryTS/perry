@@ -1535,8 +1535,10 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     let getter = (acc.get & crate::value::POINTER_MASK)
                         as *const crate::closure::ClosureHeader;
                     if !getter.is_null() {
-                        let prev_getter_this =
-                            IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
+                        // #8495: root the displaced receiver across the call below.
+                        let prev_getter_this_scope = crate::gc::RuntimeHandleScope::new();
+                        let prev_getter_this_h = prev_getter_this_scope
+                            .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object().to_bits())));
                         let method_fn = crate::closure::js_closure_call0(getter);
                         let bound = crate::closure::clone_closure_rebind_this(
                             method_fn.to_bits(),
@@ -1553,7 +1555,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                             call_args.as_ptr(),
                             call_args.len(),
                         );
-                        IMPLICIT_THIS.with(|c| c.set(prev_getter_this));
+                        IMPLICIT_THIS.with(|c| c.set(prev_getter_this_h.get_nanbox_u64()));
                         return result;
                     }
                 }
