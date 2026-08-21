@@ -386,6 +386,25 @@ fn collect_module_one(
         &ctx.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
     );
+
+    // #8547: a builtin reached through `require("http")` never appears in the
+    // ESM import walk below, so `needs_stdlib` stayed false, the link came out
+    // runtime-only, `perry-stdlib`'s dispatch init never ran, and every
+    // stdlib-backed export returned `undefined` (`http.createServer` was the
+    // reported case; the bug is not http-specific). The lowered body cannot
+    // answer this — the CJS shim resolves the name through a generated runtime
+    // switch that contains EVERY builtin — so recover it from the literal
+    // call sites, which is exactly what `extract_require_specifiers` already
+    // finds for CJS wrapping. Dynamic `require(someVar)` remains undetectable
+    // and is unchanged.
+    for spec in super::cjs_wrap::extract_require_specifiers(&source) {
+        if !perry_hir::requires_stdlib(&spec) {
+            continue;
+        }
+        ctx.needs_stdlib = true;
+        let normalized = spec.strip_prefix("node:").unwrap_or(&spec).to_string();
+        ctx.native_module_imports.insert(normalized);
+    }
     if was_cjs_wrapped && ctx.debug_symbols {
         if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
