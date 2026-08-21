@@ -203,10 +203,10 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
-    // bun:ffi (#6562) — stage-1/2 surface. `FFIType` and `suffix` are
+    // bun:ffi (#6562). `FFIType` and `suffix` are
     // constants; symbol-table call stubs live on the object `dlopen`
     // returns, so the module surface itself is small. The later-stage
-    // exports (JSCallback / linkSymbols / CFunction / viewSource / read) are
+    // exports (linkSymbols / CFunction / viewSource / read) are
     // declared and throw a descriptive
     // ERR_NOT_IMPLEMENTED at runtime.
     method("bun:ffi", "dlopen", false, None),
@@ -216,12 +216,11 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     property("bun:ffi", "suffix"),
     method("bun:ffi", "toArrayBuffer", false, None),
     method("bun:ffi", "toBuffer", false, None),
-    // Stage ≥3 surface: declared so feature-probes get a clear error rather
+    method("bun:ffi", "JSCallback", false, None),
+    // Remaining surface: declared so feature-probes get a clear error rather
     // than `undefined is not a function`, but NOT implemented yet — each
     // throws at runtime. Marked `.stub_note` so the generated `.d.ts` /
     // `reference.md` say so instead of reading as usable APIs (#6562).
-    method("bun:ffi", "JSCallback", false, None)
-        .stub_note("stage 3 — not yet implemented, throws at runtime (#6562)"),
     method("bun:ffi", "CFunction", false, None)
         .stub_note("stage 3 — not yet implemented, throws at runtime (#6562)"),
     method("bun:ffi", "linkSymbols", false, None)

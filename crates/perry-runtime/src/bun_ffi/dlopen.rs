@@ -12,7 +12,7 @@
 //! deliberately stricter than Bun (which leaves use-after-close as UB).
 
 use super::call::{self, MAX_ARGS, MAX_FLOAT_ARGS, MAX_INT_ARGS};
-use super::types::{self, T_BUFFER, T_FUNCTION, T_NAPI_ENV, T_NAPI_VALUE, T_VOID};
+use super::types::{self, T_BUFFER, T_NAPI_ENV, T_NAPI_VALUE, T_VOID};
 use crate::closure::ClosureHeader;
 use crate::value::JSValue;
 use std::sync::Mutex;
@@ -345,12 +345,6 @@ fn validate_signature_checked(sym: &str, args: &[u8], ret: u8) -> Result<(), Str
     let mut floats = 0usize;
     for &t in args {
         match t {
-            T_FUNCTION => {
-                return Err(reject(
-                    "FFIType.function / JSCallback arguments are not yet supported \
-                     in perry (bun:ffi stage 1, #6562)",
-                ))
-            }
             T_NAPI_ENV | T_NAPI_VALUE => return Err(reject("napi types are not supported")),
             T_BUFFER => return Err(reject("FFIType.buffer is not yet supported (use ptr)")),
             T_VOID => return Err(reject("void is not a valid argument type")),
@@ -359,12 +353,6 @@ fn validate_signature_checked(sym: &str, args: &[u8], ret: u8) -> Result<(), Str
         }
     }
     match ret {
-        T_FUNCTION => {
-            return Err(reject(
-                "FFIType.function / JSCallback returns are not yet supported \
-                 in perry (bun:ffi stage 1, #6562)",
-            ))
-        }
         T_NAPI_ENV | T_NAPI_VALUE => return Err(reject("napi types are not supported")),
         T_BUFFER => {
             return Err(reject(
@@ -750,10 +738,10 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
 
 #[cfg(test)]
 mod tests {
-    // T_BUFFER / T_FUNCTION / T_NAPI_* / T_VOID come in via `use super::*`
+    // T_BUFFER / T_NAPI_* / T_VOID come in via `use super::*`
     // (re-exported from the module-level `use super::types::{...}`); pull the
     // remaining constants the tests need directly.
-    use super::super::types::{T_CSTRING, T_F64, T_I32, T_PTR, T_U64};
+    use super::super::types::{T_CSTRING, T_F64, T_FUNCTION, T_I32, T_PTR, T_U64};
     use super::*;
 
     #[test]
@@ -768,11 +756,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_callback_types_with_a_stage1_message() {
-        let e = validate_signature_checked("f", &[T_FUNCTION], T_VOID).unwrap_err();
-        assert!(e.contains("not yet supported"), "{e}");
-        let e = validate_signature_checked("f", &[T_I32], T_FUNCTION).unwrap_err();
-        assert!(e.contains("not yet supported"), "{e}");
+    fn accepts_function_pointer_types() {
+        assert!(validate_signature_checked("f", &[T_FUNCTION], T_VOID).is_ok());
+        assert!(validate_signature_checked("f", &[T_I32], T_FUNCTION).is_ok());
     }
 
     #[test]
@@ -805,7 +791,7 @@ mod tests {
 
     #[test]
     fn error_messages_name_the_symbol() {
-        let e = validate_signature_checked("my_symbol", &[T_FUNCTION], T_VOID).unwrap_err();
+        let e = validate_signature_checked("my_symbol", &[T_VOID], T_VOID).unwrap_err();
         assert!(e.contains("my_symbol"), "{e}");
     }
 }

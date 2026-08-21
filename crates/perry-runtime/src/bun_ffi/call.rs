@@ -3,7 +3,7 @@
 //!
 //! ## Why not libffi
 //!
-//! Every stage-1 `FFIType` is a scalar (integer, float, or pointer), so the
+//! Every supported `FFIType` is a scalar (integer, float, or pointer), so the
 //! full generality of libffi (struct classification, closures) buys nothing
 //! here, while costing a new native library on every final link (perry's
 //! driver links user binaries with `cc`; libffi would have to be added to
@@ -241,7 +241,7 @@ unsafe fn bigint_low_u64(v: JSValue) -> u64 {
 /// float→int cast (NaN → 0); BigInts wrap mod 2^64 like C; booleans are
 /// 0/1; null/undefined are 0. Objects/strings do NOT go through JS ToNumber
 /// here — Bun requires numeric-ish args for integer slots too.
-unsafe fn value_to_u64_int(v: f64) -> u64 {
+pub(crate) unsafe fn value_to_u64_int(v: f64) -> u64 {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_int32() {
         return jv.as_int32() as i64 as u64;
@@ -259,7 +259,7 @@ unsafe fn value_to_u64_int(v: f64) -> u64 {
 }
 
 /// Numeric coercion for float-typed args.
-unsafe fn value_to_f64_num(v: f64) -> f64 {
+pub(crate) unsafe fn value_to_f64_num(v: f64) -> f64 {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_int32() {
         return jv.as_int32() as f64;
@@ -333,7 +333,7 @@ fn describe_value_for_error(jv: JSValue) -> &'static str {
 /// through as addresses, buffer-ish objects hand over their (non-moving)
 /// data pointer, null/undefined/0 become NULL, strings are rejected with
 /// Bun's exact hint.
-unsafe fn value_to_pointer_arg(v: f64) -> usize {
+pub(crate) unsafe fn value_to_pointer_arg(v: f64) -> usize {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return 0;
@@ -417,7 +417,7 @@ pub(crate) unsafe fn marshal_args(arg_types: &[u8], js_args: &[f64]) -> ArgImage
                 image.ints[ii] = crate::value::js_is_truthy(v) as usize;
                 ii += 1;
             }
-            T_PTR => {
+            T_PTR | T_FUNCTION => {
                 image.ints[ii] = value_to_pointer_arg(v);
                 ii += 1;
             }
@@ -503,7 +503,7 @@ pub(crate) unsafe fn call_and_convert(fn_ptr: usize, ret_type: u8, image: &ArgIm
     result
 }
 
-fn convert_int_return(ret_type: u8, r: u64) -> f64 {
+pub(crate) fn convert_int_return(ret_type: u8, r: u64) -> f64 {
     match ret_type {
         T_VOID => super::undefined(),
         T_BOOL => bool_value((r as u8) != 0),
@@ -533,7 +533,7 @@ fn convert_int_return(ret_type: u8, r: u64) -> f64 {
                 bigint_value_u64(r)
             }
         }
-        T_PTR => {
+        T_PTR | T_FUNCTION => {
             if r == 0 {
                 super::null()
             } else {

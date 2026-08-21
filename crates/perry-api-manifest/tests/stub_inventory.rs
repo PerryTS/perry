@@ -93,11 +93,10 @@ fn stub_inventory_matches_known_clusters() {
         // event-loop refcount), mongodb.findOne (parsed document),
         // exponential-backoff options (honored, incl. retry predicate).
         ("#4917", 9),
-        // #6562 (bun:ffi stages 1-2) — the later FFI surface is declared so
+        // #6562 (bun:ffi) — the remaining FFI surface is declared so
         // feature probes get a clear error, but throws at runtime until the
-        // later stages land: JSCallback, CFunction, linkSymbols, viewSource,
-        // read.
-        ("#6562", 5),
+        // later stages land: CFunction, linkSymbols, viewSource, read.
+        ("#6562", 4),
     ];
     let expected_map: BTreeMap<String, usize> =
         expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();

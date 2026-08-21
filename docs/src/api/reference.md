@@ -368,7 +368,7 @@ Total: 2951 entries across 125 modules.
 
 - `CFunction` — module ⚠ **stub** — stage 3 — not yet implemented, throws at runtime (#6562)
 - `CString` — module
-- `JSCallback` — module ⚠ **stub** — stage 3 — not yet implemented, throws at runtime (#6562)
+- `JSCallback` — module
 - `dlopen` — module
 - `linkSymbols` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 - `ptr` — module

@@ -10,10 +10,8 @@
 //! buffer=20
 //! ```
 //!
-//! Stage 1 implements 0–16; `function` (17) parses but `dlopen` rejects it
-//! with a "not yet supported" error (JSCallback is stage 3), and the napi /
-//! buffer slots (18–20) are rejected as unsupported. The slots stay
-//! reserved so later stages only need to lift the rejection.
+//! Perry implements 0–17; the napi / buffer slots (18–20) are rejected as
+//! unsupported.
 
 use super::{number_value, string_value};
 use crate::value::JSValue;

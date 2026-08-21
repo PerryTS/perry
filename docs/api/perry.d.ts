@@ -318,7 +318,7 @@ declare module "bun:ffi" {
   export function CFunction(...args: any[]): any;
   /** stdlib */
   export function CString(...args: any[]): any;
-  /** stdlib @perryStub stage 3 — not yet implemented, throws at runtime (#6562) */
+  /** stdlib */
   export function JSCallback(...args: any[]): any;
   /** stdlib */
   export function dlopen(...args: any[]): any;

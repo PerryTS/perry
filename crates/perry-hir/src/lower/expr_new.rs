@@ -568,6 +568,21 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                // #6562: Bun exposes JSCallback as a constructor, but Perry's
+                // native-module export returns the already-built
+                // `{ ptr, threadsafe, close }` object. Route the named import
+                // through the module call directly so `new JSCallback(...)`
+                // observes that explicit object return instead of generic
+                // `Expr::New` manufacturing and retaining a blank instance.
+                if module_name == "bun:ffi" && method_name == Some("JSCallback") {
+                    return Ok(Expr::NativeMethodCall {
+                        module: "bun:ffi".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "JSCallback".to_string(),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    });
+                }
                 if module_name == "module"
                     && matches!(method_name, Some("Module") | Some("SourceMap"))
                 {

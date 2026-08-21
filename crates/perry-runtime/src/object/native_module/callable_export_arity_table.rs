@@ -4,7 +4,8 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
     match (module, prop) {
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
-        ("bun:ffi", "ptr" | "CString" | "JSCallback" | "CFunction" | "linkSymbols") => Some(1),
+        ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
+        ("bun:ffi", "JSCallback") => Some(2),
         ("bun:ffi", "toArrayBuffer" | "toBuffer") => Some(3),
         ("bun:ffi", "viewSource") => Some(2),
         ("bun:ffi", "read") => Some(0),
@@ -280,7 +281,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         &[
             ("CFunction", 1),
             ("CString", 1),
-            ("JSCallback", 1),
+            ("JSCallback", 2),
             ("dlopen", 2),
             ("linkSymbols", 1),
             ("ptr", 1),

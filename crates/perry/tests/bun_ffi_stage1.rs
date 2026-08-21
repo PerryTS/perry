@@ -8,7 +8,7 @@
 // only verdict that counts — naming this file in a runtime diff is what
 // opts the suite into that job, and a candidate fix must not be merged
 // before that job has reported green.
-//! bun:ffi stages 1-2 (#6562) — e2e: compile TS that dlopens real C-ABI
+//! bun:ffi (#6562) — e2e: compile TS that dlopens real C-ABI
 //! dylibs and drive them through the typed call stubs.
 //!
 //! Two tiers:
@@ -61,10 +61,14 @@ fn compile_and_run(dir: &Path, entry: &Path, envs: &[(&str, &str)]) -> (bool, St
         run.env(k, v);
     }
     let run = run.output().expect("run compiled binary");
+    let mut stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    if !run.status.success() {
+        stderr.push_str(&format!("\nprocess status: {}", run.status));
+    }
     (
         run.status.success(),
         String::from_utf8_lossy(&run.stdout).to_string(),
-        String::from_utf8_lossy(&run.stderr).to_string(),
+        stderr,
     )
 }
 
@@ -176,10 +180,34 @@ EXPORT uint8_t ffi_external_get(int32_t index) { return g_external_bytes[index];
 EXPORT void ffi_external_set(int32_t index, uint8_t value) {
     g_external_bytes[index] = value;
 }
+
+EXPORT int32_t ffi_call_callback(
+    int32_t (*callback)(int32_t, double, float),
+    int32_t a, double b, float c
+) {
+    return callback(a, b, c);
+}
+EXPORT void ffi_call_void_callback(
+    void (*callback)(uint8_t, void *, uint32_t), void *pointer
+) {
+    callback(7, pointer, 3);
+}
+EXPORT uint64_t ffi_call_u64_callback(
+    uint64_t (*callback)(uint64_t), uint64_t value
+) {
+    return callback(value);
+}
+EXPORT int32_t ffi_call_cstring_callback(
+    int32_t (*callback)(const char *)
+) {
+    return callback("native callback");
+}
+EXPORT void *ffi_echo_callback(void *callback) { return callback; }
 "#;
 
 const TIER1_TS: &str = r#"
-import { dlopen, FFIType, ptr, CString, suffix, toArrayBuffer, toBuffer } from "bun:ffi";
+import { dlopen, FFIType, ptr, CString, JSCallback, suffix, toArrayBuffer, toBuffer } from "bun:ffi";
+import * as ffiNamespace from "bun:ffi";
 
 console.log("suffix-ok:", suffix === "dylib" || suffix === "so");
 console.log("ffitype:", FFIType.i32, FFIType.cstring, FFIType.ptr, FFIType.void, FFIType.u64);
@@ -230,6 +258,26 @@ const lib = dlopen(process.env.FFI_TEST_LIB!, {
   ffi_external_ptr: { args: [], returns: FFIType.ptr },
   ffi_external_get: { args: [FFIType.i32], returns: FFIType.u8 },
   ffi_external_set: { args: [FFIType.i32, FFIType.u8], returns: FFIType.void },
+  ffi_call_callback: {
+    args: [FFIType.function, FFIType.i32, FFIType.f64, FFIType.f32],
+    returns: FFIType.i32,
+  },
+  ffi_call_void_callback: {
+    args: [FFIType.function, FFIType.ptr],
+    returns: FFIType.void,
+  },
+  ffi_call_u64_callback: {
+    args: [FFIType.function, FFIType.u64],
+    returns: FFIType.u64,
+  },
+  ffi_call_cstring_callback: {
+    args: [FFIType.function],
+    returns: FFIType.i32,
+  },
+  ffi_echo_callback: {
+    args: [FFIType.function],
+    returns: FFIType.function,
+  },
 });
 const s = lib.symbols;
 
@@ -318,6 +366,52 @@ s.ffi_external_set(2, 0);
 const terminated = toArrayBuffer(externalPtr);
 console.log("external-terminated:", terminated.byteLength);
 
+// Stage 3: same-thread native -> JS callbacks, including mixed register
+// classes, pointer/cstring conversion, BigInt, return conversion, close(),
+// and exception handoff to the enclosing FFI call.
+const mixedCallback = new JSCallback((a: number, b: number, c: number) => {
+  console.log("callback-mixed-args:", a, b, c);
+  return a + b + c;
+}, { args: [FFIType.i32, FFIType.f64, FFIType.f32], returns: FFIType.i32 });
+console.log("callback-shape:", typeof mixedCallback.ptr, mixedCallback.threadsafe, typeof mixedCallback.close);
+console.log("callback-mixed-return:", s.ffi_call_callback(mixedCallback.ptr, 10, 20.5, 11.5));
+console.log("callback-function-return:", s.ffi_echo_callback(mixedCallback.ptr) === mixedCallback.ptr);
+
+const pointerCallback = new JSCallback((value: number, pointer: number, length: number) => {
+  console.log("callback-pointer-args:", value, pointer === p, length);
+}, { args: [FFIType.u8, FFIType.ptr, FFIType.u32], returns: FFIType.void });
+s.ffi_call_void_callback(pointerCallback.ptr, p);
+
+const bigintCallback = new JSCallback((value: bigint) => value + 1n, {
+  args: [FFIType.u64], returns: FFIType.u64,
+});
+console.log("callback-bigint:", s.ffi_call_u64_callback(bigintCallback.ptr, 41n));
+
+const namespaceCallback = new ffiNamespace.JSCallback((value: bigint) => value + 2n, {
+  args: [FFIType.u64], returns: FFIType.u64,
+});
+console.log("callback-namespace-new:", s.ffi_call_u64_callback(namespaceCallback.ptr, 40n));
+
+const stringCallback = new JSCallback((value: string) => {
+  console.log("callback-cstring:", value);
+  return value.length;
+}, { args: [FFIType.cstring], returns: FFIType.i32 });
+console.log("callback-cstring-return:", s.ffi_call_cstring_callback(stringCallback.ptr));
+
+const throwingCallback = new JSCallback(() => { throw new Error("callback boom"); }, {
+  args: [], returns: FFIType.i32,
+});
+console.log("callback-throw-zero:", s.ffi_call_cstring_callback(throwingCallback.ptr));
+
+mixedCallback.close();
+mixedCallback.close();
+console.log("callback-closed-zero:", s.ffi_call_callback(mixedCallback.ptr, 1, 2, 3));
+pointerCallback.close();
+bigintCallback.close();
+namespaceCallback.close();
+stringCallback.close();
+throwingCallback.close();
+
 lib.close();
 
 // use-after-close throws a descriptive error instead of crashing
@@ -401,6 +495,17 @@ fn tier1_every_ffi_type_against_test_dylib() {
         "external-buffer: true 2 65",
         "external-buffer-write: 81",
         "external-terminated: 2",
+        "callback-shape: number false function",
+        "callback-mixed-args: 10 20.5 11.5",
+        "callback-mixed-return: 42",
+        "callback-function-return: true",
+        "callback-pointer-args: 7 true 3",
+        "callback-bigint: 42n",
+        "callback-namespace-new: 42n",
+        "callback-cstring: native callback",
+        "callback-cstring-return: 15",
+        "callback-throw-zero: 0",
+        "callback-closed-zero: 0",
         "closed-throws: true",
         "TIER1-DONE",
     ] {
@@ -432,20 +537,29 @@ try {
   console.log("missing-symbol:", String(e.message).includes('Symbol "not_a_real_symbol" not found'));
 }
 
-// FFIType.function -> clear stage-1 rejection at dlopen time
+// FFIType.function is accepted in symbol signatures.
 try {
-  dlopen(process.env.FFI_TEST_LIB!, { ffi_hello: { args: [FFIType.function], returns: FFIType.void } });
-  console.log("function-type: no-throw");
+  const functionLib = dlopen(process.env.FFI_TEST_LIB!, {
+    ffi_echo_callback: { args: [FFIType.function], returns: FFIType.function },
+  });
+  console.log("function-type:", typeof functionLib.symbols.ffi_echo_callback === "function");
+  functionLib.close();
 } catch (e: any) {
-  console.log("function-type:", String(e.message).includes("not yet supported"));
+  console.log("function-type: false");
 }
 
-// JSCallback export exists but throws the stage-1 error when used
+// Constructor validation is explicit, including the same-thread contract.
 try {
-  JSCallback(() => {}, {});
-  console.log("jscallback: no-throw");
+  JSCallback(1 as any, {});
+  console.log("jscallback-type: false");
 } catch (e: any) {
-  console.log("jscallback:", String(e.message).includes("not supported yet"));
+  console.log("jscallback-type:", String(e.message).includes("expects a function"));
+}
+try {
+  JSCallback(() => {}, { threadsafe: true });
+  console.log("jscallback-threadsafe: false");
+} catch (e: any) {
+  console.log("jscallback-threadsafe:", String(e.message).includes("creating thread"));
 }
 
 // strings are not pointers (Bun-compatible hint)
@@ -476,7 +590,8 @@ fn tier1b_error_surfaces() {
         "open-missing: true",
         "missing-symbol: true",
         "function-type: true",
-        "jscallback: true",
+        "jscallback-type: true",
+        "jscallback-threadsafe: true",
         "string-ptr: true",
         "ERRORS-DONE",
     ] {

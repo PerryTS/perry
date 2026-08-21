@@ -1,4 +1,4 @@
-//! `bun:ffi` — C-ABI foreign-function interface, stages 1-2 (#6562).
+//! `bun:ffi` — C-ABI foreign-function interface (#6562).
 //!
 //! Implements the Bun FFI API shape for perry-compiled programs:
 //!
@@ -12,14 +12,11 @@
 //!   (or length-bounded) UTF-8 string from a native pointer.
 //! - `toArrayBuffer` / `toBuffer` — zero-copy JS views over native-owned
 //!   memory. The native allocation remains caller-owned.
+//! - `JSCallback` / `FFIType.function` — same-thread native→JS callbacks.
 //! - `suffix` — platform dylib suffix ("dylib" / "so" / "dll").
 //!
-//! Remaining scope: `JSCallback` / `FFIType.function` (native→JS
-//! trampolines), `linkSymbols`, `CFunction`,
-//! `viewSource` and `read` are declared but throw a clear "not yet
-//! supported" error. The dispatch/type plumbing here is shaped so those can
-//! be added without reworking stage 1 (see `types::` for the reserved
-//! numeric slots and `dlopen::` for the per-symbol signature records).
+//! `linkSymbols`, `CFunction`, `viewSource` and `read` remain declared but
+//! throw a clear "not yet supported" error.
 //!
 //! ## Pointer lifetime / pinning contract (the part that must not be wrong)
 //!
@@ -51,11 +48,10 @@
 //!    through the view's codegen fast path can be stale. Pass base
 //!    (non-view) Buffers/TypedArrays to native code that writes — which is
 //!    what real `bun:ffi` consumers (bun-pty, opentui) do.
-//! 3. During a synchronous FFI call no GC can run on the calling thread
-//!    (stage 1 has no native→JS callbacks), and argument marshalling that
-//!    allocates (temporary NUL-terminated copies of string args) cannot
-//!    invalidate buffer arguments because buffers are non-moving and are
-//!    kept alive by the caller's frame.
+//! 3. A synchronous native call may invoke a same-thread `JSCallback` and
+//!    trigger GC. Buffer addresses remain valid because their storage is
+//!    non-moving, while the caller's frame keeps buffer arguments alive.
+//!    Callback functions are held in a runtime root registry until closed.
 //!
 //! ## Call-stub mechanism
 //!
@@ -73,6 +69,7 @@
 //! time rather than corrupting registers at call time.
 
 pub mod call;
+pub mod callback;
 pub mod dlopen;
 pub mod memory;
 pub mod types;
@@ -118,6 +115,7 @@ pub(crate) fn suffix_str() -> &'static str {
 /// side-table scanners.
 pub fn scan_bun_ffi_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     types::scan_ffi_type_cache_mut(visitor);
+    callback::scan_callback_roots_mut(visitor);
 }
 
 /// Later-stage boundary: named exports that exist in `bun:ffi` but are not yet
@@ -127,7 +125,8 @@ fn throw_unsupported(what: &str) -> ! {
     crate::fs::validate::throw_error_with_code(
         &format!(
             "bun:ffi: {what} is not supported yet in perry (#6562). \
-             Available: dlopen, FFIType, ptr, CString, toArrayBuffer, toBuffer, suffix."
+             Available: dlopen, FFIType, ptr, CString, JSCallback, \
+             toArrayBuffer, toBuffer, suffix."
         ),
         "ERR_NOT_IMPLEMENTED",
     )
@@ -161,7 +160,7 @@ pub(crate) unsafe fn dispatch(
         "FFIType" => Some(types::ffi_type_object_value()),
         "suffix" => Some(string_value(suffix_str())),
         "toArrayBuffer" => Some(memory::view_value(arg(0), arg(1), arg(2), true)),
-        "JSCallback" => throw_unsupported("JSCallback (native-to-JS callbacks)"),
+        "JSCallback" => Some(callback::js_callback_value(arg(0), arg(1))),
         "CFunction" => throw_unsupported("CFunction"),
         "linkSymbols" => throw_unsupported("linkSymbols"),
         "viewSource" => throw_unsupported("viewSource"),

@@ -71,6 +71,26 @@ pub(crate) fn lower_new_member_native(
                 }));
             }
 
+            // #6562: namespace/default/CommonJS `bun:ffi` access uses the
+            // same explicit-return constructor route as a named
+            // `JSCallback` import. OpenTUI's runtime-selected backend calls
+            // exactly `new bun.JSCallback(...)`.
+            let is_bun_ffi_module = ctx.lookup_builtin_module_alias(obj_name) == Some("bun:ffi")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .is_some_and(|(module, export)| {
+                        module == "bun:ffi" && (export.is_none() || export == Some("default"))
+                    });
+            if is_bun_ffi_module && prop_ident.sym.as_ref() == "JSCallback" {
+                return Ok(Some(Expr::NativeMethodCall {
+                    module: "bun:ffi".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "JSCallback".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                }));
+            }
+
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
             if is_net_module
