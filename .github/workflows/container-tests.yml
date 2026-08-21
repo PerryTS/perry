@@ -97,6 +97,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo registry
@@ -171,6 +173,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo registry
@@ -213,6 +217,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo registry
@@ -257,6 +263,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo registry

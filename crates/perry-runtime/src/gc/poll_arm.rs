@@ -109,7 +109,7 @@ fn arm_counters(armed: &AtomicU32, events: &AtomicU64) {
 /// See [`disarm_poll`] for why this saturates instead of wrapping.
 #[inline]
 fn disarm_counter(armed: &AtomicU32) {
-    let _ = armed.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |armed| {
+    let _ = armed.try_update(Ordering::Relaxed, Ordering::Relaxed, |armed| {
         (armed > 0).then(|| armed - 1)
     });
 }

@@ -1,6 +1,5 @@
 //! Annex B accessor methods (`__defineGetter__`/`__lookupSetter__` etc.) and
 //! the raw own-field read `js_object_get_own_field_or_undef`.
-use super::super::*;
 use super::*;
 // Disambiguate the two in-scope `value_is_callable` globs (object_ops'
 // `descriptor_helpers` via `super::*` and `object`'s `instanceof` via

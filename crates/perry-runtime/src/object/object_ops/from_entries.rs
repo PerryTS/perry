@@ -1,5 +1,4 @@
 //! `Object.fromEntries` and its iterable-materialization helpers.
-use super::super::*;
 use super::*;
 
 fn throw_from_entries_type_error(message: &[u8]) -> ! {

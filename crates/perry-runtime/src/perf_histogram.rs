@@ -269,8 +269,14 @@ impl Histogram {
         let mut it = self.iter();
         while it.step() {
             if it.count != 0 {
-                let dev = self.median_equivalent(it.value) as f64 - mean;
-                geometric_dev_total += dev * dev * it.count as f64;
+                // Rust 1.98's algebraic_* float methods let LLVM reassociate
+                // and vectorize this reduction (Node's own HdrHistogram-based
+                // stddev is already a bucketed approximation, not a value
+                // any spec requires bit-exact, so reordering is safe here).
+                let dev = self.median_equivalent(it.value) as f64;
+                let dev = dev.algebraic_sub(mean);
+                let sq = dev.algebraic_mul(dev).algebraic_mul(it.count as f64);
+                geometric_dev_total = geometric_dev_total.algebraic_add(sq);
             }
         }
         (geometric_dev_total / self.total_count as f64).sqrt()

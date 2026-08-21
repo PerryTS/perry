@@ -163,7 +163,7 @@ fn block_pool_process_bytes_sub(bytes: usize) {
         return;
     }
     BLOCK_POOL_PROCESS_BYTES
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_sub(bytes)
         })
         .unwrap_or_else(|current| {
@@ -181,7 +181,7 @@ pub(super) fn block_pool_counter_try_reserve(
     cap: usize,
 ) -> bool {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(size).filter(|&next| next <= cap)
         })
         .is_ok()

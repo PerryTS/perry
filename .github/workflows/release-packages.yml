@@ -359,6 +359,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 'nightly-2026-08-20'
           targets: ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
@@ -411,21 +412,13 @@ jobs:
       # the canonical _ios suffix (`libperry_ui_ios.a`); simulator libs use
       # `_ios_sim` (`libperry_ui_ios_sim.a`) so they don't collide in the
       # bottle's flat lib dir. library_search.rs's cross-compile branch
-      # picks the right variant per --target. tier-3 tvOS/visionOS/watchOS
-      # are still a follow-up (need nightly + -Zbuild-std).
+      # picks the right variant per --target. tvOS/visionOS/watchOS
+      # (Rust Tier-3, needed -Zbuild-std) are no longer built here — that
+      # unstable-cargo-feature build is dropped entirely, independent of
+      # which channel the toolchain step above pins.
       - name: Install iOS Rust targets (macOS)
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-
-      # Closes #396 / #397 / #398: tvOS, visionOS, and watchOS are Rust Tier-3
-      # targets — no prebuilt std, so we install nightly + rust-src and use
-      # `-Zbuild-std=core,std,panic_abort` below to compile the standard library
-      # from source for each (device, sim) triple. Stable stays the default
-      # toolchain; we only invoke nightly explicitly via `cargo +nightly` for
-      # the Tier-3 cross-builds.
-      - name: Install Rust nightly + rust-src for Tier-3 Apple targets (macOS)
-        if: runner.os == 'macOS'
-        run: rustup toolchain install nightly --component rust-src --profile minimal
 
       - name: Install GTK4 development libraries (Linux glibc)
         if: runner.os == 'Linux' && !endsWith(matrix.target, '-musl')
@@ -563,7 +556,8 @@ jobs:
       # filenames are disambiguated in the staging step — device libs keep
       # the canonical `_ios` name, simulator libs get a `_sim` variant
       # suffix so the bottle can ship both side-by-side. tvOS/visionOS/
-      # watchOS are Tier-3 (need nightly + -Zbuild-std) and out of scope.
+      # watchOS (Rust Tier-3, needed -Zbuild-std) are no longer built —
+      # that unstable-cargo-feature build is dropped entirely.
       - name: Build iOS cross-compile libraries (macOS)
         # Only on the arm64 mac job. These iOS/Apple cross-libs are aarch64 and
         # identical regardless of host, so building them on the x86_64 mac runner
@@ -577,74 +571,6 @@ jobs:
             cargo build --profile dist --target "$triple" -p perry-runtime -p perry-runtime-static
             cargo build --profile dist --target "$triple" -p perry-stdlib -p perry-stdlib-static
             cargo build --profile dist --target "$triple" -p perry-ui-ios
-          done
-
-      # Closes #396 / #397 / #398: cross-compile runtime + stdlib + UI for the
-      # Tier-3 Apple platforms (tvOS, visionOS, watchOS). Both device and
-      # simulator triples per platform; nightly + `-Zbuild-std=...` builds std
-      # from source. Note watchOS device uses the unusual `arm64_32` triple
-      # (32-bit pointers, 64-bit registers) — the only non-`aarch64-*` device
-      # triple in this set, so we keep the device/sim pairs explicit instead
-      # of deriving them. Library filenames are disambiguated in the staging
-      # step (device → `_<plat>.a`, sim → `_<plat>_sim.a`); library_search.rs's
-      # `apple_class_lib_name` already maps each `--target` to the correct
-      # variant (covered by the `handles_other_class_suffixes` unit test).
-      - name: Build tvOS/visionOS/watchOS cross-compile libraries (macOS)
-        # arm64 mac job only — same rationale as the iOS step above.
-        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
-        run: |
-          set -e
-          # Format: "<platform>:<device-triple>:<sim-triple>"
-          #
-          # watchOS is back (v0.5.888 dropped it). The drop reason was real but
-          # narrower than the old note claimed: ring 0.17.14's pointer-size
-          # assertion fails for `arm64_32-apple-watchos` — 32-bit pointers with
-          # 64-bit registers. That is ILP32-specific. `aarch64-apple-watchos` is
-          # LP64 and ring builds for it fine, as does `perry-ui-watchos`, so the
-          # LP64 device triple and its simulator are restored here. The ILP32
-          # `arm64_32` triple stays out until ring is fixed or pinned.
-          for entry in \
-            "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-            "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
-            "watchos:aarch64-apple-watchos:aarch64-apple-watchos-sim"; do
-            plat="${entry%%:*}"
-            rest="${entry#*:}"
-            dev="${rest%%:*}"
-            sim="${rest#*:}"
-            # watchOS and visionOS cannot build `dyn-eval` today, and it is in
-            # `default`. The feature reaches `psm` three crates down
-            # (dyn-eval -> perry-parser -> swc_ecma_parser -> stacker -> psm),
-            # whose Mach-O guard enumerates darwin/macos/ios/tvos and omits
-            # watchos/visionos — so both fall through to psm's ELF branch and
-            # emit `.type`/`.size`, which the Mach-O assembler rejects. Nothing
-            # in Perry is involved. Fix filed upstream as rust-lang/stacker#152;
-            # DELETE this branch and the feature list when it lands.
-            #
-            # The cost is scoped and worth stating: these two platforms ship
-            # without runtime `new Function` over a string body. Everything else
-            # in `default` is present — the list below is `default` minus
-            # `dyn-eval`, nothing more.
-            runtime_features=""
-            case "$plat" in
-              watchos|visionos)
-                runtime_features="--no-default-features --features full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,keepalive-anchors,alloc-mimalloc"
-                ;;
-            esac
-            for triple in "$dev" "$sim"; do
-              echo "::group::$plat $triple"
-              # Runtime first, with the per-platform feature set; stdlib and UI
-              # keep `default` (neither reaches psm).
-              cargo +nightly build --profile dist \
-                -Z build-std=core,std,panic_abort \
-                --target "$triple" \
-                $runtime_features \
-                -p perry-runtime -p perry-runtime-static
-              cargo +nightly build --profile dist \
-                -Z build-std=core,std,panic_abort \
-                --target "$triple" \
-                -p perry-stdlib -p perry-stdlib-static "-p" "perry-ui-${plat}"
-              echo "::endgroup::"
-            done
           done
 
       - name: Build UI library (Linux glibc)
@@ -785,44 +711,6 @@ jobs:
             if [ -f "$sim_dir/libperry_ui_ios.a" ]; then
               cp "$sim_dir/libperry_ui_ios.a" "staging/libperry_ui_ios_sim.a"
             fi
-            # Closes #396 / #397 / #398: same pattern as iOS for the Tier-3
-            # Apple platforms. Driven from an explicit triple list so the
-            # device/sim pairs stay visible rather than derived.
-            #
-            # watchOS uses `aarch64-apple-watchos`, NOT the ILP32
-            # `arm64_32-apple-watchos` an earlier note here assumed. That
-            # distinction is the whole reason it can ship again: ring 0.17.14's
-            # pointer-size assertion is ILP32-specific, so the LP64 triple was
-            # never affected. Keep them in step with the build step above.
-            for entry in \
-              "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-              "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
-              "watchos:aarch64-apple-watchos:aarch64-apple-watchos-sim"; do
-              plat="${entry%%:*}"
-              rest="${entry#*:}"
-              dev_triple="${rest%%:*}"
-              sim_triple="${rest#*:}"
-              dev_dir="target/${dev_triple}/dist"
-              sim_dir="target/${sim_triple}/dist"
-              if [ -f "$dev_dir/libperry_runtime.a" ]; then
-                cp "$dev_dir/libperry_runtime.a" "staging/libperry_runtime_${plat}.a"
-              fi
-              if [ -f "$dev_dir/libperry_stdlib.a" ]; then
-                cp "$dev_dir/libperry_stdlib.a" "staging/libperry_stdlib_${plat}.a"
-              fi
-              if [ -f "$dev_dir/libperry_ui_${plat}.a" ]; then
-                cp "$dev_dir/libperry_ui_${plat}.a" "staging/libperry_ui_${plat}.a"
-              fi
-              if [ -f "$sim_dir/libperry_runtime.a" ]; then
-                cp "$sim_dir/libperry_runtime.a" "staging/libperry_runtime_${plat}_sim.a"
-              fi
-              if [ -f "$sim_dir/libperry_stdlib.a" ]; then
-                cp "$sim_dir/libperry_stdlib.a" "staging/libperry_stdlib_${plat}_sim.a"
-              fi
-              if [ -f "$sim_dir/libperry_ui_${plat}.a" ]; then
-                cp "$sim_dir/libperry_ui_${plat}.a" "staging/libperry_ui_${plat}_sim.a"
-              fi
-            done
           fi
           cd staging
           tar czf ../${{ matrix.artifact }}.tar.gz *
@@ -1104,8 +992,8 @@ jobs:
   build-cross:
     needs: await-tests
     strategy:
-      # Each leg is independent; let one Tier-3 failure not cancel the
-      # other targets so we still ship the bundles that did build.
+      # Each leg is independent; let one cross-target failure not cancel
+      # the other targets so we still ship the bundles that did build.
       fail-fast: false
       matrix:
         include:
@@ -1114,65 +1002,23 @@ jobs:
             target: aarch64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
-            tier3: false
           - os: macos-15
             target: x86_64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
-            tier3: false
           - os: macos-14
             target: aarch64-apple-ios
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a
-            tier3: false
           - os: macos-14
             target: aarch64-apple-ios-sim
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a
-            tier3: false
-          # --- Apple, Tier-3 (nightly + build-std) --------------------------
-          # tvOS / visionOS / watchOS are Rust Tier-3: no prebuilt std, so we
-          # install nightly + rust-src and pass `-Zbuild-std=core,std,panic_abort`
-          # in the build step below. Mirrors the existing `build:` job.
-          #
-          # watchOS is restored here on `aarch64-apple-watchos`. The v0.5.888
-          # drop was for ring 0.17.14's pointer-size assertion, which is
-          # specific to the ILP32 `arm64_32-apple-watchos` triple; the LP64
-          # triple builds ring and `perry-ui-watchos` fine. `arm64_32` stays
-          # out until ring is fixed or pinned.
-          #
-          # watchOS and visionOS need `dyn-eval` excluded — see the long note
-          # in `build:` and rust-lang/stacker#152.
-          - os: macos-14
-            target: aarch64-apple-tvos
-            ui_crate: perry-ui-tvos
-            ui_lib: libperry_ui_tvos.a
-            tier3: true
-          - os: macos-14
-            target: aarch64-apple-tvos-sim
-            ui_crate: perry-ui-tvos
-            ui_lib: libperry_ui_tvos.a
-            tier3: true
-          - os: macos-14
-            target: aarch64-apple-visionos
-            ui_crate: perry-ui-visionos
-            ui_lib: libperry_ui_visionos.a
-            tier3: true
-          - os: macos-14
-            target: aarch64-apple-visionos-sim
-            ui_crate: perry-ui-visionos
-            ui_lib: libperry_ui_visionos.a
-            tier3: true
-          - os: macos-14
-            target: aarch64-apple-watchos
-            ui_crate: perry-ui-watchos
-            ui_lib: libperry_ui_watchos.a
-            tier3: true
-          - os: macos-14
-            target: aarch64-apple-watchos-sim
-            ui_crate: perry-ui-watchos
-            ui_lib: libperry_ui_watchos.a
-            tier3: true
+          # tvOS/visionOS/watchOS (Rust Tier-3, needed -Zbuild-std) are no
+          # longer built here — that unstable-cargo-feature build is
+          # dropped entirely, along with the matrix's `tier3` field and its
+          # two build-step branches; if Tier-3 support returns, re-add both
+          # rather than reviving a dead flag.
           # --- Android (NDK on Linux runner) --------------------------------
           # perry-ui-android requires the NDK clang++ wrapper and JNI; the
           # existing test.yml leg already cross-compiles it on ubuntu-24.04,
@@ -1182,12 +1028,10 @@ jobs:
             target: aarch64-linux-android
             ui_crate: perry-ui-android
             ui_lib: libperry_ui_android.a
-            tier3: false
           - os: ubuntu-24.04
             target: x86_64-linux-android
             ui_crate: perry-ui-android
             ui_lib: libperry_ui_android.a
-            tier3: false
           # --- Windows MSVC (native runner) ---------------------------------
           # Both native Windows architectures use their matching hosted runner
           # so Rust, LLVM, MSVC, and the packaged executable all agree.
@@ -1195,12 +1039,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             ui_crate: perry-ui-windows
             ui_lib: perry_ui_windows.lib
-            tier3: false
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             ui_crate: perry-ui-windows
             ui_lib: perry_ui_windows.lib
-            tier3: false
 
     runs-on: ${{ matrix.os }}
     env:
@@ -1211,15 +1053,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust stable + cross target
+      - name: Install Rust toolchain + cross target
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 'nightly-2026-08-20'
           targets: ${{ matrix.target }}
       - uses: ./.github/actions/setup-llvm22
-
-      - name: Install Rust nightly + rust-src (Tier-3 only)
-        if: matrix.tier3
-        run: rustup toolchain install nightly --component rust-src --profile minimal
 
       # Same cache shape as `build:` so the cross legs share crate compiles
       # across release cycles. Keyed on (target, Cargo.lock) — first run on a
@@ -1301,8 +1140,7 @@ jobs:
       # ships clang-cl + lib.exe through Visual Studio.
 
       # --- Build the three (or two, when UI is N/A) static libs ------------
-      - name: Build runtime + stdlib + UI (stable, Tier-2)
-        if: ${{ !matrix.tier3 }}
+      - name: Build runtime + stdlib + UI
         shell: bash
         run: |
           set -euo pipefail
@@ -1312,34 +1150,6 @@ jobs:
           # we wired above; perry-ui-windows builds against the MSVC SDK
           # already on windows-latest. Both go through plain `cargo build`.
           cargo build --profile dist --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
-
-      - name: Build runtime + stdlib + UI (nightly + build-std, Tier-3)
-        if: matrix.tier3
-        shell: bash
-        run: |
-          set -euo pipefail
-          # watchOS and visionOS cannot build `dyn-eval`, which is in `default`:
-          # it reaches `psm` via perry-parser -> swc_ecma_parser -> stacker, and
-          # psm's Mach-O guard omits watchos/visionos so both fall through to
-          # its ELF branch and emit directives the Mach-O assembler rejects.
-          # Upstream fix: rust-lang/stacker#152 — delete this branch when it
-          # lands. The list is `default` minus `dyn-eval`, nothing else, so the
-          # only capability these two lose is runtime `new Function`.
-          runtime_features=""
-          case "${{ matrix.target }}" in
-            *-apple-watchos|*-apple-watchos-sim|*-apple-visionos|*-apple-visionos-sim)
-              runtime_features="--no-default-features --features full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,keepalive-anchors,alloc-mimalloc"
-              ;;
-          esac
-          cargo +nightly build --profile dist \
-            -Z build-std=core,std,panic_abort \
-            --target ${{ matrix.target }} \
-            $runtime_features \
-            -p perry-runtime -p perry-runtime-static
-          cargo +nightly build --profile dist \
-            -Z build-std=core,std,panic_abort \
-            --target ${{ matrix.target }} \
-            -p perry-stdlib -p perry-stdlib-static -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
@@ -1510,8 +1320,8 @@ jobs:
   # ---------------------------------------------------------------------------
   create-release:
     needs: [preflight, build, build-cross]
-    # Strict by design: in tag-last mode a red Tier-3 cross leg blocks the tag
-    # too (nothing is public yet, so "fix or rerun-to-green, then the skipped
+    # Strict by design: in tag-last mode a red cross leg blocks the tag too
+    # (nothing is public yet, so "fix or rerun-to-green, then the skipped
     # downstream jobs rerun via `gh run rerun <id> --failed`" is cheap).
     if: >
       !cancelled() &&
@@ -1571,7 +1381,7 @@ jobs:
   # cut-release to the one create-release just made. Host archives are a hard
   # requirement; cross bundles are best-effort on the legacy paths (workers
   # rebuild from source when a bundle is missing), matching the old per-leg
-  # upload semantics where a red Tier-3 leg didn't sink the release.
+  # upload semantics where a red cross leg didn't sink the release.
   # ---------------------------------------------------------------------------
   publish-assets:
     needs: [preflight, build, build-cross, create-release]

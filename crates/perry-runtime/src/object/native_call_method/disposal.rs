@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 /// #4795: resolve `obj[Symbol.dispose]` / `obj[Symbol.asyncDispose]` for the

@@ -426,7 +426,7 @@ pub static PERRY_PER_OBJECT_LAYOUTS_ANY: std::sync::atomic::AtomicU32 =
 fn per_object_layouts_global_arm() {
     use std::sync::atomic::Ordering;
     PERRY_PER_OBJECT_LAYOUTS_ANY
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
             count.checked_add(1)
         })
         .expect("per-object layout thread count overflow");
@@ -443,7 +443,7 @@ fn per_object_layouts_global_disarm_with_hook(
 ) {
     use std::sync::atomic::Ordering;
     armed_threads
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
             count.checked_sub(1)
         })
         .expect("per-object layout thread count underflow");

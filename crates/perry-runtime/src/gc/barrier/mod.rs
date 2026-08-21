@@ -775,7 +775,7 @@ pub(super) fn incremental_mark_barrier_disable() {
     });
     if was_active {
         super::instruments::note_mark_barrier_disarmed();
-        let _ = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_update(
+        let _ = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.try_update(
             Ordering::SeqCst,
             Ordering::SeqCst,
             |count| count.checked_sub(1),
@@ -1038,7 +1038,7 @@ pub extern "C" fn js_gc_write_barriers_emitted(active: u32) {
     if active != 0 {
         GENERATED_WRITE_BARRIERS_EMITTED.fetch_add(1, Ordering::AcqRel);
     } else {
-        let _ = GENERATED_WRITE_BARRIERS_EMITTED.fetch_update(
+        let _ = GENERATED_WRITE_BARRIERS_EMITTED.try_update(
             Ordering::AcqRel,
             Ordering::Acquire,
             |count| count.checked_sub(1),

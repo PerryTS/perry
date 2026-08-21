@@ -1,5 +1,4 @@
 //! `Object.create`, `Object.getPrototypeOf`, and the globalThis-builtin lookup.
-use super::super::*;
 use super::*;
 
 /// Look up the canonical NaN-boxed value of a built-in constructor /

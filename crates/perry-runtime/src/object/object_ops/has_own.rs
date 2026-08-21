@@ -1,5 +1,4 @@
 //! `Object.is`, `Object.hasOwn`, and `Object.prototype.propertyIsEnumerable`.
-use super::super::*;
 use super::*;
 
 /// Object.is(a, b) — SameValue algorithm

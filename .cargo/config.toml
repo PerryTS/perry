@@ -1,10 +1,16 @@
 # Supply-chain soak for cargo's own dependency resolution — the same
 # soak-window rule the npm side applies via minimumReleaseAge /
 # min-release-age: crate versions younger than the window are skipped by
-# the resolver unless already in Cargo.lock. min-publish-age is an
-# [unstable] cargo feature, so these keys bite only under a nightly
-# toolchain; on perry's stable toolchain they are inert and the automated
-# window rides dependabot's cooldown (.github/dependabot.yml) instead.
+# the resolver unless already in Cargo.lock. min-publish-age is nightly-
+# only, which is why every workflow pins `dtolnay/rust-toolchain`'s
+# `toolchain:` input to a dated nightly (external-tools.json's `rust`
+# entry) instead of stable — this block is LIVE only on that pin.
+#
+# TEMPORARY: move to a stable pin once min-publish-age stabilizes —
+# targets Rust 1.100.0 (late September 2026), per
+# https://github.com/rust-lang/cargo/pull/17335 (open) and
+# https://github.com/rust-lang/cargo/issues/17009. Same condition
+# socket-wheelhouse's canonical rust-toolchain.toml is waiting on.
 # Managed by scripts/soak/soak.mts (`npm run soak` / `npm run soak:fix`).
 [unstable]
 min-publish-age = true

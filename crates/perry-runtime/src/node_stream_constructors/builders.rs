@@ -1,7 +1,6 @@
 //! node:stream — the `js_node_stream_*_new` / `*_subclass_init` constructors
 //! and `Readable.from` factory (split out of node_stream_constructors.rs for
 //! the 2000-line file-size gate, #1987).
-use super::super::*;
 use super::*;
 use crate::closure::ClosureHeader;
 use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};

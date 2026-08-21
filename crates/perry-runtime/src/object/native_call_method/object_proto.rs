@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {

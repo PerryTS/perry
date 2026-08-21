@@ -1,6 +1,5 @@
 //! Descriptor validation + throw helpers backing `Object.defineProperty` /
 //! `Object.create` / `Object.defineProperties` (moved out of `object_ops.rs`).
-use super::super::*;
 use super::*;
 /// Throw a `TypeError` with the given UTF-8 message bytes. Used by the
 /// `Object.defineProperty` / `Object.create` descriptor + invariant validation

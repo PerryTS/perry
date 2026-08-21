@@ -49,6 +49,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
       - uses: Swatinem/rust-cache@v2
         with:
@@ -199,6 +201,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
       - uses: Swatinem/rust-cache@v2
         with:

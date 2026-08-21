@@ -164,7 +164,7 @@ impl StackMapIndexStore {
         // is also the minimum loader recency each rebuild must preserve.
         let generation = self
             .next_generation
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
                 generation.checked_add(1)
             })
             .unwrap_or_else(|_| panic!("perry: stack-map rebuild generation overflow"))

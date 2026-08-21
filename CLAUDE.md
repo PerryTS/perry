@@ -172,7 +172,7 @@ Values cross threads via `SerializedValue` deep-copy. Each thread has independen
 
 ## Native UI (`perry/ui`)
 
-Declarative TypeScript compiles to AppKit/UIKit calls. Handle-based widget system (1-based i64 handles, NaN-boxed with POINTER_TAG). `--target ios-simulator`/`--target ios`/`--target tvos-simulator`/`--target tvos` for cross-compilation.
+Declarative TypeScript compiles to AppKit/UIKit calls. Handle-based widget system (1-based i64 handles, NaN-boxed with POINTER_TAG). `--target ios-simulator`/`--target ios`/`--target tvos-simulator`/`--target tvos` for cross-compilation. **`release-packages.yml` no longer builds or ships tvOS/visionOS/watchOS artifacts**: they're Rust Tier-3 (no prebuilt std, needed `-Z build-std`, still unstable), and that leg is dropped from the release workflow entirely. The compiler itself still supports them: `perry compile --target tvos-simulator` (etc.) auto-rebuilds via `cargo +nightly -Z build-std` using whatever nightly the caller has installed (`crates/perry/src/commands/compile/link/build_and_run.rs`, `crates/perry/src/commands/compile/optimized_libs/driver.rs`), and `test.yml` still exercises that path for tvOS-sim doc-tests.
 
 **To add a new widget** — change 4 places:
 1. Runtime: `crates/perry-ui-macos/src/widgets/` — create widget, `register_widget(view)`

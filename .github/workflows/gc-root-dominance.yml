@@ -217,6 +217,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       - uses: ./.github/actions/setup-llvm22
 
       # ★ The dependency-scale corpus needs the dependency.
@@ -499,6 +501,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'nightly-2026-08-20'
       # This also puts a matched LLVM 22 `opt` on disk and exports
       # LLVM_SYS_221_PREFIX, which is how the corpus script finds it. The
       # native corpus is `--trace llvm` output PLUS the production statepoint

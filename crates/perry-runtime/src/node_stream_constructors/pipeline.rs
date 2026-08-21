@@ -1,7 +1,6 @@
 //! node:stream — `Duplex.from`, `compose`, `finished`, `pipeline` and
 //! `duplexPair` (split out of node_stream_constructors.rs for the 2000-line
 //! file-size gate, #1987).
-use super::super::*;
 use super::*;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
