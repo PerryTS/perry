@@ -163,13 +163,23 @@ pub extern "C" fn js_put_value_set(
     let key_handle = scope.root_nanbox_f64(key);
     let value_handle = scope.root_nanbox_f64(value);
     let receiver_handle = scope.root_nanbox_f64(receiver);
-    let target = target_handle.get_nanbox_f64();
     let key = key_handle.get_nanbox_f64();
-    let value = value_handle.get_nanbox_f64();
-    let receiver = receiver_handle.get_nanbox_f64();
     let property_key_handle =
         scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(key) });
     let property_key = property_key_handle.get_nanbox_f64();
+    // #8495: read the operands AFTER `js_to_property_key`, never before it.
+    // ToPropertyKey runs user code (`toString`/`Symbol.toPrimitive`), which
+    // allocates and can evacuate. The handles above keep these values ALIVE,
+    // but binding them to plain `f64` locals first captures pre-collection
+    // addresses that the evacuation then leaves stale — rooting that the
+    // rest of the function never benefits from. The observable symptom is a
+    // stored value that reads back `undefined` one collection later
+    // (`o[heavyKey("k")] = payload()` in
+    // `gc_property_key_operand_rooting_6935`), i.e. exactly the #6935
+    // contract, re-broken by reading through the handles too early.
+    let target = target_handle.get_nanbox_f64();
+    let value = value_handle.get_nanbox_f64();
+    let receiver = receiver_handle.get_nanbox_f64();
 
     if lookup(target).is_none() {
         if set_integer_indexed_exotic(target, property_key, value) {
