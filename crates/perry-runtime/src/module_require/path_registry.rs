@@ -530,31 +530,34 @@ impl PathModuleRegistry {
     }
 }
 
-// Canonical path -> generated initializer address, shared by every heap in
-// the process. Holds only code addresses, so unlike the per-heap export table
-// it is not a GC root and needs no scanner.
-//
-// `per_test_global!` because `perry-runtime`'s tests share one process: two
-// tests registering DIFFERENT addresses for the same canonical path would
-// otherwise collide, and the second would be rejected by the idempotence
-// check below.
-// `Option` because `HashMap::new` is not const and this must also compile as
-// a plain `static` outside a test build.
-//
-// Plain `//`: a `///` here attaches to nothing the macro emits, so rustc drops
-// it and `-D warnings` (a required PR gate) rejects the build. The rationale
-// above is the point of the comment, so keep it — just not as rustdoc.
-per_test_global!(
-    static PATH_MODULE_INIT_ADDRS: std::sync::Mutex<
-        Option<std::collections::HashMap<String, usize>>,
-    > = std::sync::Mutex::new(None)
-);
+crate::perry_thread_local! {
+    /// Canonical path -> generated initializer address, per-heap like the
+    /// export table beside it. Holds only code addresses, so unlike that table
+    /// it is not a GC root and needs no scanner.
+    ///
+    /// An initializer address looks like a property of the program, and within
+    /// ONE program it is — but a host that loads several application libraries
+    /// into one process gets a separate copy of each module per library, at its
+    /// own code address, under the SAME baked canonical path. A process-wide
+    /// map then sees "same path, different address", refuses the second
+    /// library's registration as a duplicate, and that application's modules
+    /// never initialize. Measured: two Next apps in one Coop process, 115
+    /// rejections, the second app serving 500 while the first served 200.
+    ///
+    /// Every heap registers its own initializers as its library runs
+    /// `perry_module_init` on its own thread, so per-heap loses nothing.
+    ///
+    /// These are rustdoc rather than plain `//` because `perry_thread_local!`
+    /// passes `#[$attr]` through onto the static it emits. A `///` placed
+    /// BEFORE the macro invocation instead attaches to nothing, and `-D
+    /// warnings` (a required PR gate) then rejects the build.
+    static PATH_MODULE_INIT_ADDRS: std::cell::RefCell<
+        std::collections::HashMap<String, usize>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
 fn with_init_addrs<R>(f: impl FnOnce(&mut std::collections::HashMap<String, usize>) -> R) -> R {
-    let mut guard = PATH_MODULE_INIT_ADDRS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(guard.get_or_insert_with(std::collections::HashMap::new))
+    PATH_MODULE_INIT_ADDRS.with(|addrs| f(&mut addrs.borrow_mut()))
 }
 
 /// Idempotent. A second, DIFFERENT address for one canonical path is rejected
