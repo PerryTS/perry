@@ -28,6 +28,10 @@ pub(crate) fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) 
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
+pub(crate) fn cp_cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> CpFn {
+    unsafe { std::mem::transmute(f) }
+}
+#[allow(clippy::missing_transmute_annotations)]
 pub(crate) fn cp_cast4(f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
@@ -46,8 +50,9 @@ pub(crate) fn cp_register_arities() {
     crate::closure::js_register_closure_length(cp_method_dispose as *const u8, 0);
     js_register_closure_arity(cp_method_read as *const u8, 1);
     js_register_closure_arity(cp_method_pipe as *const u8, 1);
-    js_register_closure_arity(cp_method_write2 as *const u8, 2);
-    js_register_closure_arity(cp_method_stdin_end as *const u8, 1);
+    js_register_closure_arity(cp_method_stdin_write as *const u8, 3);
+    js_register_closure_arity(cp_method_stdin_end as *const u8, 3);
+    js_register_closure_arity(cp_stream_callback_thunk as *const u8, 0);
     // #3316: `send(message, sendHandle, options, callback)` — dispatch with 4
     // padded slots so the trailing callback is visible regardless of call-site
     // arity, and report `child.send.length === 4` like Node.
@@ -157,8 +162,8 @@ pub(crate) fn cp_build_writable() -> f64 {
         ("removeListener", cp_cast2(cp_method_remove_listener)),
         ("off", cp_cast2(cp_method_remove_listener)),
         ("emit", cp_cast2(cp_method_emit)),
-        ("write", cp_cast2(cp_method_write2)),
-        ("end", cp_cast1(cp_method_stdin_end)),
+        ("write", cp_cast3(cp_method_stdin_write)),
+        ("end", cp_cast3(cp_method_stdin_end)),
         ("destroy", cp_cast0(cp_method_this0)),
         ("cork", cp_cast0(cp_method_this0)),
         ("uncork", cp_cast0(cp_method_this0)),

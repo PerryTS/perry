@@ -272,19 +272,54 @@ pub(crate) extern "C" fn cp_pipe_end_thunk(closure: *const ClosureHeader) -> f64
     }
     cp_undefined()
 }
-/// `child.stdin.write(chunk[, encoding][, callback])` — #1934. The `this` is
-/// the stdin Writable; route the bytes to the live child's stdin via the
-/// reactor. Returns `true` (Node's `write` returns whether the buffer can take
-/// more — `true` for our synchronous pipe write).
-pub(crate) extern "C" fn cp_method_write2(
+/// Return the last callable argument from the two optional trailing stream
+/// slots (`write(chunk, cb)` / `write(chunk, encoding, cb)`, and the matching
+/// `end` overloads).
+fn cp_stream_callback(arg2: f64, arg3: f64) -> Option<f64> {
+    [arg3, arg2]
+        .into_iter()
+        .find(|value| !crate::fs::extract_closure_ptr(*value).is_null())
+}
+
+/// Defer a successful writable completion callback to the next event-loop
+/// turn. The wrapper closure roots the callback until delivery and invokes it
+/// with no arguments, so `callback(error)` observes `undefined` on success.
+fn cp_defer_stream_callback(callback: f64) {
+    let deferred = js_closure_alloc(cp_stream_callback_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(deferred, 0, callback.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+pub(crate) extern "C" fn cp_stream_callback_thunk(closure: *const ClosureHeader) -> f64 {
+    let callback = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let args: [f64; 0] = [];
+    unsafe {
+        let _ = js_native_call_value(callback, args.as_ptr(), 0);
+    }
+    cp_undefined()
+}
+
+/// `child.stdin.write(chunk[, encoding][, callback])` — #1934 / #8512. The
+/// `this` is the stdin Writable; route the bytes to the live child's stdin and
+/// complete the optional callback asynchronously. OpenCode's Effect
+/// `NodeSink.fromWritable` waits for this callback before sending the next LSP
+/// frame, so dropping it stalls long-running language servers.
+///
+/// Returns `true`: writes are synchronously drained into the OS pipe, so there
+/// is no buffered high-water mark that could require a later `drain` event.
+pub(crate) extern "C" fn cp_method_stdin_write(
     closure: *const ClosureHeader,
     chunk: f64,
-    _enc: f64,
+    arg2: f64,
+    arg3: f64,
 ) -> f64 {
     let this = cp_this(closure);
     if let Some(handle) = cp_handle_of(this) {
         let bytes = cp_value_to_bytes(chunk);
         reactor::cp_live_stdin_write(handle, &bytes);
+    }
+    if let Some(callback) = cp_stream_callback(arg2, arg3) {
+        cp_defer_stream_callback(callback);
     }
     TAG_TRUE_F64
 }
@@ -423,9 +458,15 @@ extern "C" fn cp_disconnect_emit_thunk(closure: *const ClosureHeader) -> f64 {
     cp_undefined()
 }
 
-/// `child.stdin.end([chunk])` — write the optional final chunk, then close the
-/// pipe so the child sees EOF (#1934). The `this` is the stdin Writable.
-pub(crate) extern "C" fn cp_method_stdin_end(closure: *const ClosureHeader, chunk: f64) -> f64 {
+/// `child.stdin.end([chunk][, encoding][, callback])` — write the optional
+/// final chunk, close the pipe so the child sees EOF, then complete the
+/// optional callback asynchronously (#1934 / #8512).
+pub(crate) extern "C" fn cp_method_stdin_end(
+    closure: *const ClosureHeader,
+    chunk: f64,
+    arg2: f64,
+    arg3: f64,
+) -> f64 {
     let this = cp_this(closure);
     if let Some(handle) = cp_handle_of(this) {
         // Optional final data chunk. Skip `undefined`, the `0.0` arg-padding
@@ -443,6 +484,11 @@ pub(crate) extern "C" fn cp_method_stdin_end(closure: *const ClosureHeader, chun
         reactor::cp_live_stdin_close(handle);
     }
     cp_set_field(this, b"writable", TAG_FALSE_F64);
+    if let Some(callback) = cp_stream_callback(arg2, arg3)
+        .or_else(|| (!crate::fs::extract_closure_ptr(chunk).is_null()).then_some(chunk))
+    {
+        cp_defer_stream_callback(callback);
+    }
     this
 }
 
