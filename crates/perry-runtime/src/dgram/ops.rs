@@ -133,6 +133,20 @@ pub(crate) fn create_socket_impl(args: &[f64]) -> f64 {
                 validate_option_buffer_size(size, "options.sendBufferSize").max(1.0),
             );
         }
+        if let Some(reuse_addr) = get_prop(options, "reuseAddr") {
+            set_hidden_value(
+                socket,
+                KEY_REUSE_ADDR,
+                bool_value(crate::value::js_is_truthy(reuse_addr) != 0),
+            );
+        }
+        if let Some(ipv6_only) = get_prop(options, "ipv6Only") {
+            set_hidden_value(
+                socket,
+                KEY_IPV6_ONLY,
+                bool_value(crate::value::js_is_truthy(ipv6_only) != 0),
+            );
+        }
         if let Some(block_list) = get_prop(options, "sendBlockList") {
             set_hidden_value(socket, KEY_SEND_BLOCK_LIST, block_list);
         }
@@ -503,10 +517,12 @@ pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) 
     let interface = args.get(1).copied().and_then(string_to_rust);
     let dropping = syscall == "dropMembership";
     let result = if let Some(group_v4) = parse_multicast_v4(&group) {
-        let iface = interface
-            .as_deref()
-            .and_then(|s| s.parse::<Ipv4Addr>().ok())
-            .unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let iface = match interface.as_deref() {
+            Some(value) => value
+                .parse::<Ipv4Addr>()
+                .unwrap_or_else(|_| throw_socket_errno(syscall, "EINVAL")),
+            None => Ipv4Addr::UNSPECIFIED,
+        };
         if dropping {
             udp.leave_multicast_v4(&group_v4, &iface)
         } else {
@@ -605,9 +621,12 @@ pub(crate) fn set_multicast_ttl_impl(socket: f64, args: &[f64]) -> f64 {
     }
     ensure_running(socket, "setMulticastTTL");
     if !deterministic() {
-        with_udp(socket, |udp| {
-            let _ = udp.set_multicast_ttl_v4(ttl as u32);
-        });
+        let result = live_udp(socket)
+            .ok_or(())
+            .and_then(|udp| udp.set_multicast_ttl_v4(ttl as u32).map_err(|_| ()));
+        if result.is_err() {
+            throw_socket_errno("setMulticastTTL", "EINVAL");
+        }
     }
     ttl
 }
@@ -617,9 +636,20 @@ pub(crate) fn set_multicast_loopback_impl(socket: f64, args: &[f64]) -> f64 {
     ensure_running(socket, "setMulticastLoopback");
     if !deterministic() {
         let flag = crate::value::js_is_truthy(arg) != 0;
-        with_udp(socket, |udp| {
-            let _ = udp.set_multicast_loop_v4(flag);
+        let is_v6 = string_eq(
+            get_hidden_value(socket, KEY_TYPE).unwrap_or_else(|| str_value("udp4")),
+            b"udp6",
+        );
+        let result = live_udp(socket).ok_or(()).and_then(|udp| {
+            if is_v6 {
+                udp.set_multicast_loop_v6(flag).map_err(|_| ())
+            } else {
+                udp.set_multicast_loop_v4(flag).map_err(|_| ())
+            }
         });
+        if result.is_err() {
+            throw_socket_errno("setMulticastLoopback", "EINVAL");
+        }
     }
     arg
 }
@@ -634,10 +664,16 @@ pub(crate) fn set_multicast_interface_impl(socket: f64, args: &[f64]) -> f64 {
     }
     ensure_running(socket, "setMulticastInterface");
     if !deterministic() {
-        if let Ok(iface) = interface_address.parse::<Ipv4Addr>() {
-            with_udp(socket, |udp| {
-                let _ = socket2::SockRef::from(udp).set_multicast_if_v4(&iface);
-            });
+        let iface = interface_address
+            .parse::<Ipv4Addr>()
+            .unwrap_or_else(|_| throw_socket_errno("setMulticastInterface", "EINVAL"));
+        let result = live_udp(socket).ok_or(()).and_then(|udp| {
+            socket2::SockRef::from(&*udp)
+                .set_multicast_if_v4(&iface)
+                .map_err(|_| ())
+        });
+        if result.is_err() {
+            throw_socket_errno("setMulticastInterface", "EINVAL");
         }
     }
     undefined_value()

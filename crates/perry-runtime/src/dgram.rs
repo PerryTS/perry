@@ -99,6 +99,8 @@ pub(crate) const KEY_REMOTE_FAMILY: &[u8] = b"__perryDgramRemoteFamily";
 pub(crate) const KEY_REMOTE_PORT: &[u8] = b"__perryDgramRemotePort";
 pub(crate) const KEY_RECV_BUFFER_SIZE: &[u8] = b"__perryDgramRecvBufferSize";
 pub(crate) const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
+pub(crate) const KEY_REUSE_ADDR: &[u8] = b"__perryDgramReuseAddr";
+pub(crate) const KEY_IPV6_ONLY: &[u8] = b"__perryDgramIpv6Only";
 pub(crate) const KEY_LOOKUP: &[u8] = b"__perryDgramLookup";
 pub(crate) const KEY_SEND_BLOCK_LIST: &[u8] = b"__perryDgramSendBlockList";
 pub(crate) const KEY_BIND_ATTEMPTED: &[u8] = b"__perryDgramBindAttempted";
@@ -472,6 +474,8 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
     set_hidden_value(socket, KEY_REMOTE_PORT, 0.0);
     set_hidden_value(socket, KEY_RECV_BUFFER_SIZE, 65536.0);
     set_hidden_value(socket, KEY_SEND_BUFFER_SIZE, 65536.0);
+    set_hidden_value(socket, KEY_REUSE_ADDR, bool_value(false));
+    set_hidden_value(socket, KEY_IPV6_ONLY, bool_value(false));
     for method in SOCKET_METHODS {
         js_object_set_field_by_name(
             obj,
