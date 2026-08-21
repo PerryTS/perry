@@ -1024,7 +1024,11 @@ mod path_module_registry_tests {
             .unwrap();
 
         assert_eq!(first, Some(0xA1));
-        assert_eq!(second, Some(0xB2), "the second heap got the first heap's value");
+        assert_eq!(
+            second,
+            Some(0xB2),
+            "the second heap got the first heap's value"
+        );
         MODULE_PATH_REGISTRY.with(|registry| registry.remove_for_test(KEY));
     }
 
