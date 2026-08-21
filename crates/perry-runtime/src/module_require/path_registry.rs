@@ -538,31 +538,35 @@ impl PathModuleRegistry {
 /// tests registering DIFFERENT addresses for the same canonical path would
 /// otherwise collide, and the second would be rejected by the idempotence
 /// check below.
+/// `Option` because `HashMap::new` is not const and this must also compile as
+/// a plain `static` outside a test build.
 per_test_global!(
-    static PATH_MODULE_INIT_ADDRS: std::sync::Mutex<std::collections::HashMap<String, usize>> =
-        std::sync::Mutex::new(std::collections::HashMap::new())
+    static PATH_MODULE_INIT_ADDRS: std::sync::Mutex<
+        Option<std::collections::HashMap<String, usize>>,
+    > = std::sync::Mutex::new(None)
 );
 
-fn init_addrs() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, usize>> {
-    PATH_MODULE_INIT_ADDRS
+fn with_init_addrs<R>(f: impl FnOnce(&mut std::collections::HashMap<String, usize>) -> R) -> R {
+    let mut guard = PATH_MODULE_INIT_ADDRS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(guard.get_or_insert_with(std::collections::HashMap::new))
 }
 
 /// Idempotent. A second, DIFFERENT address for one canonical path is rejected
 /// so an alias can never create a second logical module initialization.
 fn register_init_addr(key: &str, init_addr: usize) -> bool {
-    match init_addrs().entry(key.to_string()) {
+    with_init_addrs(|addrs| match addrs.entry(key.to_string()) {
         std::collections::hash_map::Entry::Occupied(slot) => *slot.get() == init_addr,
         std::collections::hash_map::Entry::Vacant(slot) => {
             slot.insert(init_addr);
             true
         }
-    }
+    })
 }
 
 fn lookup_init_addr(key: &str) -> Option<usize> {
-    init_addrs().get(key).copied()
+    with_init_addrs(|addrs| addrs.get(key).copied())
 }
 
 crate::perry_thread_local! {
