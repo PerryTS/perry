@@ -18,6 +18,15 @@
   entry; making the whole table per-heap instead left later heaps silently
   resolving modules to an empty `module.exports`.
 
+  Both the export table and the initializer-address map are per-heap. A
+  process-wide address map was tried and measured wrong: a host that loads
+  several application libraries gets its own copy of each module per library,
+  at its own code address, under the SAME baked canonical path, so the map saw
+  "same path, different address" and refused the second library as a duplicate.
+  Two Next.js applications in one Coop process produced 115 such rejections,
+  with the second application's modules never initializing (200 for the first,
+  500 for the second).
+
   Keyed by thread rather than by `AgentId`, deliberately: `CURRENT_AGENT` is
   itself a `thread_local!` defaulting to `PRIMARY_AGENT`, and an embedder's app
   thread is a plain `std::thread::spawn` that never calls `enter_worker_agent()`,
