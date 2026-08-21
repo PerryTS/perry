@@ -483,7 +483,15 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
     matches!(
         name,
         // Constructors (typeof === "function" in spec).
-        "Array"
+        "self"
+            | "postMessage"
+            | "addEventListener"
+            | "removeEventListener"
+            | "close"
+            | "onmessage"
+            | "onmessageerror"
+            | "onerror"
+            | "Array"
             | "Object"
             | "String"
             | "Number"
@@ -643,6 +651,10 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
             name,
             "globalThis"
                 | "global"
+                | "self"
+                | "onmessage"
+                | "onmessageerror"
+                | "onerror"
                 | "console"
                 | "Math"
                 | "JSON"

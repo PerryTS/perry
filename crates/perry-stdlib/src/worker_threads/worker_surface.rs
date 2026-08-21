@@ -101,6 +101,14 @@ pub extern "C" fn js_worker_threads_worker_terminate(receiver: i64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_worker_threads_worker_reload(receiver: i64) -> f64 {
+    let Some(worker_id) = worker_id_from_receiver(receiver) else {
+        return js_undefined();
+    };
+    worker_reload_by_id(worker_id)
+}
+
+#[no_mangle]
 pub extern "C" fn js_worker_threads_worker_ref(receiver: i64) -> f64 {
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
@@ -184,6 +192,11 @@ pub(super) fn worker_object(
     );
     set_object_field(
         obj,
+        "reload",
+        closure_value_with_worker_id(worker_reload as *const u8, 0, worker_id),
+    );
+    set_object_field(
+        obj,
         "ref",
         closure_value_with_worker_id(worker_ref as *const u8, 0, worker_id),
     );
@@ -217,7 +230,88 @@ pub(super) fn worker_object(
         "removeEventListener",
         closure_value_with_worker_id(worker_remove_event_listener as *const u8, 2, worker_id),
     );
+    set_object_field(obj, "onmessage", js_null());
+    set_object_field(obj, "onmessageerror", js_null());
+    set_object_field(obj, "onerror", js_null());
     obj
+}
+
+/// Install the browser/Bun worker-scope globals on this worker thread's own
+/// global object. This happens before the compiled worker entry runs, so strict
+/// assignments such as `onmessage = fn` target pre-existing properties.
+pub(super) fn install_web_worker_globals() {
+    let global_value = perry_runtime::object::js_get_global_this();
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let global_h = scope.root_nanbox_f64(global_value);
+    let global = || {
+        perry_runtime::value::js_nanbox_get_pointer(global_h.get_nanbox_f64())
+            as *mut perry_runtime::object::ObjectHeader
+    };
+    if global().is_null() {
+        return;
+    }
+    set_object_field(global(), "self", global_h.get_nanbox_f64());
+    let post_message_h =
+        scope.root_nanbox_f64(closure_value(web_worker_post_message as *const u8, 2));
+    set_object_field(global(), "postMessage", post_message_h.get_nanbox_f64());
+    let add_event_listener_h =
+        scope.root_nanbox_f64(closure_value(web_worker_add_event_listener as *const u8, 3));
+    set_object_field(
+        global(),
+        "addEventListener",
+        add_event_listener_h.get_nanbox_f64(),
+    );
+    let remove_event_listener_h = scope.root_nanbox_f64(closure_value(
+        web_worker_remove_event_listener as *const u8,
+        2,
+    ));
+    set_object_field(
+        global(),
+        "removeEventListener",
+        remove_event_listener_h.get_nanbox_f64(),
+    );
+    let close_h = scope.root_nanbox_f64(closure_value(web_worker_close as *const u8, 0));
+    set_object_field(global(), "close", close_h.get_nanbox_f64());
+    set_object_field(global(), "onmessage", js_null());
+    set_object_field(global(), "onmessageerror", js_null());
+    set_object_field(global(), "onerror", js_null());
+}
+
+pub(super) fn web_worker_global_handler(name: &str) -> Option<u64> {
+    let global_value = perry_runtime::object::js_get_global_this();
+    object_event_handler(global_value.to_bits(), name)
+}
+
+extern "C" fn web_worker_post_message(
+    _closure: *const ClosureHeader,
+    value: f64,
+    _transfer: f64,
+) -> f64 {
+    js_worker_threads_post_message(value)
+}
+
+extern "C" fn web_worker_add_event_listener(
+    _closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+    _options: f64,
+) -> f64 {
+    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
+    js_worker_threads_parent_port_event_add(event.to_bits() as i64, callback_ptr)
+}
+
+extern "C" fn web_worker_remove_event_listener(
+    _closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
+    js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
+}
+
+extern "C" fn web_worker_close(_closure: *const ClosureHeader) -> f64 {
+    CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(true));
+    js_undefined()
 }
 
 pub(super) fn worker_resource_limits_object(

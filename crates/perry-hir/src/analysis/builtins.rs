@@ -31,6 +31,16 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
     matches!(
         name,
         "globalThis"
+            // Web Worker scope aliases/functions. They are installed on the
+            // worker thread's global object before its compiled entry runs.
+            | "self"
+            | "postMessage"
+            | "addEventListener"
+            | "removeEventListener"
+            | "close"
+            | "onmessage"
+            | "onmessageerror"
+            | "onerror"
             // #4511: Node's `global` alias for the global object. Resolves to
             // `globalThis.global`, a self-reference installed in
             // `populate_global_this_builtins`.

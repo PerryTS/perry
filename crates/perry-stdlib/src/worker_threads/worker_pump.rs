@@ -19,6 +19,10 @@ pub(super) fn deliver_parent_port_message(message: &SerializedValue) {
     let value = f64::from_bits(bits);
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
+    let global_value = perry_runtime::object::js_get_global_this();
+    let global_h = scope.root_nanbox_f64(global_value);
+    let property_handler = worker_surface::web_worker_global_handler("onmessage")
+        .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
 
     if let Some(callback_ptr) = MESSAGE_CALLBACK.with(|cb| *cb.borrow()) {
         let closure = callback_ptr as *const ClosureHeader;
@@ -37,9 +41,20 @@ pub(super) fn deliver_parent_port_message(message: &SerializedValue) {
             })
             .collect::<Vec<_>>()
     });
-    if !event_cbs.is_empty() {
-        let event = event_object("message", 0, Some(value_h.get_nanbox_f64()));
+    if !event_cbs.is_empty() || property_handler.is_some() {
+        let event = event_object(
+            "message",
+            global_h.get_nanbox_f64().to_bits(),
+            Some(value_h.get_nanbox_f64()),
+        );
         let event_h = scope.root_nanbox_f64(event);
+        if let Some(callback_h) = property_handler {
+            call_callback1(
+                callback_h.get_nanbox_f64().to_bits(),
+                global_h.get_nanbox_f64().to_bits(),
+                event_h.get_nanbox_f64(),
+            );
+        }
         for callback_h in event_cbs {
             let callback_ptr =
                 perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
@@ -190,26 +205,31 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
 fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
     // Collect (callback, web_event) pairs, then invoke OUTSIDE the WORKERS lock —
     // a listener may re-enter postMessage / terminate, which needs the lock again.
-    let callbacks: Vec<(u64, bool)> = {
+    let (object_bits, callbacks): (u64, Vec<(u64, bool)>) = {
         let mut workers = WORKERS.lock().unwrap();
         let Some(worker) = workers.get_mut(&worker_id) else {
             return;
         };
-        let Some(listeners) = worker.listeners.get_mut(event) else {
-            return;
-        };
-        let callbacks = listeners
-            .iter()
-            .map(|listener| (listener.callback_bits, listener.web_event))
-            .collect::<Vec<_>>();
-        listeners.retain(|listener| !listener.once);
-        callbacks
+        let callbacks = worker
+            .listeners
+            .get_mut(event)
+            .map(|listeners| {
+                let callbacks = listeners
+                    .iter()
+                    .map(|listener| (listener.callback_bits, listener.web_event))
+                    .collect::<Vec<_>>();
+                listeners.retain(|listener| !listener.once);
+                callbacks
+            })
+            .unwrap_or_default();
+        (worker.object_bits, callbacks)
     };
 
     // Web-style `addEventListener` listeners receive a `MessageEvent` wrapper
     // (with `.data`) for "message" events; Node-style `on` listeners receive the
     // raw payload. Lazily build the event object only if a web listener exists.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let object_h = scope.root_nanbox_f64(f64::from_bits(object_bits));
     // Root the callbacks BEFORE allocating the `MessageEvent` (or any value the
     // listeners are called with): the allocation can trigger a moving GC, which
     // rewrites the canonical `WorkerListener.callback_bits` via the worker root
@@ -224,14 +244,33 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         })
         .collect::<Vec<_>>();
     let arg_handle = arg.map(|a| scope.root_nanbox_f64(a));
-    let needs_event = event == "message" && callbacks.iter().any(|(_, web)| *web);
+    let property_name = match event {
+        "message" => Some("onmessage"),
+        "error" => Some("onerror"),
+        "messageerror" => Some("onmessageerror"),
+        _ => None,
+    };
+    let property_handler = property_name
+        .and_then(|name| object_event_handler(object_h.get_nanbox_f64().to_bits(), name))
+        .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
+    let needs_event = property_handler.is_some() || callbacks.iter().any(|(_, web)| *web);
     let event_handle = if needs_event {
-        let data = arg_handle.as_ref().map(|h| h.get_nanbox_f64());
-        let ev = event_object("message", 0, data);
+        let data = (event == "message")
+            .then(|| arg_handle.as_ref().map(|h| h.get_nanbox_f64()))
+            .flatten();
+        let ev = event_object(event, object_h.get_nanbox_f64().to_bits(), data);
         Some(scope.root_nanbox_f64(ev))
     } else {
         None
     };
+
+    if let (Some(callback_h), Some(event_h)) = (property_handler, event_handle.as_ref()) {
+        call_callback1(
+            callback_h.get_nanbox_f64().to_bits(),
+            object_h.get_nanbox_f64().to_bits(),
+            event_h.get_nanbox_f64(),
+        );
+    }
 
     for (callback_h, web_event) in callbacks {
         let closure_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
@@ -239,7 +278,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
             continue;
         }
         let closure = closure_ptr as *const ClosureHeader;
-        let call_arg = if web_event && event == "message" {
+        let call_arg = if web_event {
             event_handle.as_ref().map(|h| h.get_nanbox_f64())
         } else {
             arg_handle.as_ref().map(|h| h.get_nanbox_f64())

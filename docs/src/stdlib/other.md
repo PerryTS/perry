@@ -160,10 +160,12 @@ try {
 
 ## worker_threads
 
-Partially recognized at HIR-lowering time (`parentPort` / `Worker` shapes)
-but full dispatch is incomplete. For data-parallel work today, prefer
-`parallelMap` / `parallelFilter` / `spawn` from `perry/thread`
-(see [Threading](../threading/overview.md)).
+Perry compiles statically resolvable worker entry files as separate native
+module entry functions. Both the Node `worker_threads` API and the Web/Bun
+global `Worker` shape use the same in-process worker runtime; worker source is
+never passed to a runtime JavaScript engine. For closure-oriented data-parallel
+work, `parallelMap` / `parallelFilter` / `spawn` from `perry/thread` remain the
+simpler interface (see [Threading](../threading/overview.md)).
 
 ```text
 import { Worker, parentPort, workerData } from "worker_threads";
@@ -181,6 +183,23 @@ if (parentPort) {
     console.log(msg.result); // 42
   });
 }
+```
+
+Web Worker module URLs are discovered relative to the importing source file:
+
+```typescript,no-test
+// main.ts
+const worker = new Worker(new URL("./worker.ts", import.meta.url), {
+  type: "module",
+});
+worker.onmessage = (event) => console.log(event.data);
+worker.postMessage({ value: 21 });
+
+// worker.ts
+onmessage = (event) => {
+  postMessage({ result: event.data.value * 2 });
+  close();
+};
 ```
 
 ## commander (CLI Parsing)

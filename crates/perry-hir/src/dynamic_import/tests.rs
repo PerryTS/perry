@@ -753,6 +753,22 @@ fn worker_new_visitor_descends_into_closure_bodies() {
 }
 
 #[test]
+fn resolve_web_worker_url_relative_to_import_meta() {
+    let expr = Expr::UrlNew {
+        url: Box::new(Expr::String("./rpc-worker.ts".to_string())),
+        // `import.meta.url` member access is folded to this literal during
+        // lowering (the older ImportMetaUrl variant is accepted too).
+        base: Some(Box::new(Expr::String(
+            "file:///project/src/main.ts".to_string(),
+        ))),
+    };
+    match resolve_import_path(&expr) {
+        Resolution::Set(v) => assert_eq!(v, vec!["./rpc-worker.ts"]),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
 fn reassigned_local_candidates_drop_mixed_dynamic_defs() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {

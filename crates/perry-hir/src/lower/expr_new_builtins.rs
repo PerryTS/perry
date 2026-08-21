@@ -119,6 +119,7 @@ pub(super) fn is_reified_global_builtin_constructor(name: &str) -> bool {
             | "MessageChannel"
             | "MessagePort"
             | "BroadcastChannel"
+            | "Worker"
             | "WebSocket"
             | "DisposableStack"
             | "AsyncDisposableStack"

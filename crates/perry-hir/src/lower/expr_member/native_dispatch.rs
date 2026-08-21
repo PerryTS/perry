@@ -574,11 +574,17 @@ pub(crate) fn is_worker_instance_value_property(prop: &str) -> bool {
             | "startHeapProfile"
             | "postMessage"
             | "terminate"
+            | "reload"
             | "ref"
             | "unref"
             | "on"
             | "once"
             | "off"
+            | "addEventListener"
+            | "removeEventListener"
+            | "onmessage"
+            | "onmessageerror"
+            | "onerror"
     )
 }
 

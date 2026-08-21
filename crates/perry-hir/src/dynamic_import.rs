@@ -1249,6 +1249,19 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
 ) -> Resolution {
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
+        // Web Worker entrypoints are conventionally written as
+        // `new Worker(new URL("./worker.ts", import.meta.url), ...)`. The URL
+        // object is only a runtime carrier for the module specifier; module
+        // collection must retain the relative input so the driver's normal
+        // lexical-base resolver finds the sibling source file.
+        Expr::UrlNew {
+            url,
+            base: Some(base),
+        } if matches!(base.as_ref(), Expr::ImportMetaUrl(_))
+            || matches!(base.as_ref(), Expr::String(base) if base.starts_with("file:")) =>
+        {
+            resolve_import_path_with_context(url, consts, param_literals, local_literals, visiting)
+        }
         // Template interpolation lowers through StringCoerce even when the
         // wrapped local has a finite string candidate set.
         Expr::StringCoerce(value) => resolve_import_path_with_context(

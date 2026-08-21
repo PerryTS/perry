@@ -608,15 +608,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
-            if class_name == "Worker"
-                && ctx
+            if class_name == "Worker" {
+                let imported_worker = ctx
                     .lookup_native_module("Worker")
                     .map(|(module_name, export_name)| {
                         is_worker_threads_module_name(module_name) && export_name == Some("Worker")
                     })
-                    .unwrap_or(false)
-            {
-                return lower_worker_new(ctx, new_expr);
+                    .unwrap_or(false);
+                // Bun and browsers expose Worker as a global constructor. The
+                // AOT representation is the same dedicated WorkerNew node used
+                // by node:worker_threads: collect_modules discovers and
+                // compiles its entry, and codegen passes the entry function to
+                // the in-process worker runtime. Preserve ordinary lexical
+                // shadowing (`class Worker {}` / a parameter named Worker).
+                if imported_worker || !shadowed_by_user_binding {
+                    return lower_worker_new(ctx, new_expr);
+                }
             }
 
             // #1677 `new Function(...)` handling, when `Function` is not

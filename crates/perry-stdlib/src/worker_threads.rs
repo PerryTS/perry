@@ -50,9 +50,10 @@ use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, Worker
 use worker_surface::{
     empty_object, js_worker_threads_worker_off, js_worker_threads_worker_on,
     js_worker_threads_worker_once, js_worker_threads_worker_post_message,
-    js_worker_threads_worker_ref, js_worker_threads_worker_terminate,
-    js_worker_threads_worker_unref, worker_id_from_receiver, worker_object, worker_profile_handle,
-    worker_readable_stream_object, worker_resource_limits_object,
+    js_worker_threads_worker_ref, js_worker_threads_worker_reload,
+    js_worker_threads_worker_terminate, js_worker_threads_worker_unref, worker_id_from_receiver,
+    worker_object, worker_profile_handle, worker_readable_stream_object,
+    worker_resource_limits_object,
 };
 
 // JSON functions are in perry-stdlib/src/framework/json.rs (behind http-server feature).
@@ -108,6 +109,10 @@ thread_local! {
     static CURRENT_THREAD_NAME: RefCell<String> = const { RefCell::new(String::new()) };
     /// Worker resourceLimits for the current in-process Worker.
     static CURRENT_RESOURCE_LIMITS: Cell<WorkerResourceLimits> = const { Cell::new(WorkerResourceLimits::node_default()) };
+    /// Set by the Web Worker `close()` global. Checked after entry startup and
+    /// after every delivered message so the worker exits without waiting for
+    /// another parent command.
+    static CURRENT_WORKER_CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Per-port state for a same-process MessageChannel (#3157). A `MessageChannel`
@@ -183,6 +188,7 @@ type WorkerEntry = extern "C" fn();
 
 enum WorkerCommand {
     Message(SerializedValue),
+    Reload,
     DirectMessage {
         message: SerializedValue,
         source_thread_id: u64,
@@ -193,6 +199,9 @@ enum WorkerCommand {
 
 struct WorkerRecord {
     sender: Sender<WorkerCommand>,
+    /// NaN-boxed Worker handle used as the target for property handlers such
+    /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
+    object_bits: u64,
     listeners: HashMap<String, Vec<WorkerListener>>,
     alive: bool,
     refed: bool,
@@ -273,6 +282,7 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
 fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     if let Ok(mut workers) = WORKERS.lock() {
         for worker in workers.values_mut() {
+            visitor.visit_nanbox_u64_slot(&mut worker.object_bits);
             for listeners in worker.listeners.values_mut() {
                 for listener in listeners {
                     visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
@@ -711,12 +721,17 @@ fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
     if !js.is_pointer() {
         return None;
     }
-    let obj = perry_runtime::value::js_nanbox_get_pointer(target)
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj = perry_runtime::value::js_nanbox_get_pointer(target_h.get_nanbox_f64())
         as *const perry_runtime::object::ObjectHeader;
     if obj.is_null() {
         return None;
     }
-    callback_bits_from_value(get_object_field(obj, name))
+    callback_bits_from_value(perry_runtime::object::js_object_get_field_by_name_f64(
+        obj, key,
+    ))
 }
 
 fn event_object(event_type: &str, target_bits: u64, data: Option<f64>) -> f64 {
@@ -871,6 +886,23 @@ extern "C" fn worker_post_message(closure: *const ClosureHeader, value: f64) -> 
 
 extern "C" fn worker_terminate(closure: *const ClosureHeader) -> f64 {
     worker_terminate_by_id(captured_worker_id(closure))
+}
+
+extern "C" fn worker_reload(closure: *const ClosureHeader) -> f64 {
+    worker_reload_by_id(captured_worker_id(closure))
+}
+
+fn worker_reload_by_id(worker_id: u64) -> f64 {
+    let sender = WORKERS
+        .lock()
+        .unwrap()
+        .get(&worker_id)
+        .filter(|worker| worker.alive)
+        .map(|worker| worker.sender.clone());
+    if let Some(sender) = sender {
+        let _ = sender.send(WorkerCommand::Reload);
+    }
+    js_undefined()
 }
 
 extern "C" fn worker_ref(closure: *const ClosureHeader) -> f64 {
@@ -1150,10 +1182,12 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         }
     };
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
+    let worker_obj = worker_object(worker_id, &options_state);
     WORKERS.lock().unwrap().insert(
         worker_id,
         WorkerRecord {
             sender: tx,
+            object_bits: object_value(worker_obj).to_bits(),
             listeners: HashMap::new(),
             alive: true,
             refed: true,
@@ -1168,40 +1202,58 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
         CURRENT_THREAD_NAME.with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
         CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
+        CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
+        worker_surface::install_web_worker_globals();
         push_parent_event(WorkerEvent::Online(worker_id));
 
         let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
         let mut exit_code = 0;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            entry();
-            // Keep the worker thread alive to service main→worker messages only
-            // if it registered a `message` consumer (Node-style `on` OR
-            // Web-style `addEventListener`). Otherwise the worker is done once
-            // its entry returns.
-            let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
-                || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty());
-            if !has_message_consumer {
-                return;
-            }
-            loop {
-                match rx.recv() {
-                    Ok(WorkerCommand::Message(message)) => {
-                        deliver_parent_port_message(&message);
+            'reload: loop {
+                entry();
+                if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                    return;
+                }
+                // Keep the worker thread alive to service main→worker messages
+                // only if it registered a Node-style, EventTarget-style, or
+                // property-style message consumer.
+                let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
+                    || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty())
+                    || worker_surface::web_worker_global_handler("onmessage").is_some();
+                if !has_message_consumer {
+                    return;
+                }
+                loop {
+                    match rx.recv() {
+                        Ok(WorkerCommand::Message(message)) => {
+                            deliver_parent_port_message(&message);
+                            if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                                return;
+                            }
+                        }
+                        Ok(WorkerCommand::Reload) => {
+                            MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+                            MESSAGE_EVENT_CALLBACKS.with(|cbs| cbs.borrow_mut().clear());
+                            CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+                            CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
+                            worker_surface::install_web_worker_globals();
+                            continue 'reload;
+                        }
+                        Ok(WorkerCommand::DirectMessage {
+                            message,
+                            source_thread_id,
+                            ack,
+                        }) => {
+                            let result =
+                                direct_message::deliver_worker_message(&message, source_thread_id);
+                            let _ = ack.send(result);
+                        }
+                        Ok(WorkerCommand::Terminate) => {
+                            exit_code = 1;
+                            break 'reload;
+                        }
+                        Err(_) => break 'reload,
                     }
-                    Ok(WorkerCommand::DirectMessage {
-                        message,
-                        source_thread_id,
-                        ack,
-                    }) => {
-                        let result =
-                            direct_message::deliver_worker_message(&message, source_thread_id);
-                        let _ = ack.send(result);
-                    }
-                    Ok(WorkerCommand::Terminate) => {
-                        exit_code = 1;
-                        break;
-                    }
-                    Err(_) => break,
                 }
             }
         }));
@@ -1217,7 +1269,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
     });
 
-    object_value(worker_object(worker_id, &options_state))
+    object_value(worker_obj)
 }
 
 /// worker_threads.setEnvironmentData(key, value)
@@ -1501,6 +1553,8 @@ static KEEP_WT_WORKER_REMOVE_EVENT_LISTENER: extern "C" fn(i64, f64, i64) -> f64
     worker_surface::js_worker_threads_worker_remove_event_listener;
 #[used]
 static KEEP_WT_WORKER_TERMINATE: extern "C" fn(i64) -> f64 = js_worker_threads_worker_terminate;
+#[used]
+static KEEP_WT_WORKER_RELOAD: extern "C" fn(i64) -> f64 = js_worker_threads_worker_reload;
 #[used]
 static KEEP_WT_WORKER_REF: extern "C" fn(i64) -> f64 = js_worker_threads_worker_ref;
 #[used]

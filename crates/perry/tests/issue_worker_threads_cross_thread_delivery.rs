@@ -157,3 +157,62 @@ for (let c = 0; c < cores; c++) {
     );
     assert_eq!(stdout, "workers 4 answer 7\ndone\n");
 }
+
+/// A source-file Web Worker discovered through the canonical module-URL
+/// spelling. Neither side imports `worker_threads`: construction, worker-scope
+/// globals, property handlers, reload, structured values, env, close, and
+/// terminate all use the browser/Bun surface while still compiling to native
+/// entry functions.
+#[test]
+fn global_web_worker_module_url_rpc_reload_and_close() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("web-worker.ts"),
+        r#"
+postMessage({ kind: "ready", token: process.env.WEB_WORKER_TOKEN });
+let propertyPayload = 0;
+onmessage = (ev: any) => {
+  propertyPayload = ev.data.payload.rpc;
+};
+const listener = (ev: any) => {
+  removeEventListener("message", listener);
+  postMessage({
+    kind: "reply",
+    payload: ev.data.payload,
+    propertyPayload,
+    nested: [1, { ok: true }],
+  });
+  close();
+};
+addEventListener("message", listener);
+"#,
+    )
+    .expect("write web worker");
+
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+setTimeout(() => { console.log("TIMEOUT"); process.exit(2); }, 8000);
+const worker = new Worker(new URL("./web-worker.ts", import.meta.url), {
+  type: "module",
+  env: { WEB_WORKER_TOKEN: "web-env" },
+});
+let ready = 0;
+worker.onmessage = (ev: any) => {
+  if (ev.data.kind === "ready") {
+    ready++;
+    console.log("ready", ready, ev.data.token);
+    if (ready === 1) worker.reload();
+    else worker.postMessage({ payload: { rpc: 8509 } });
+    return;
+  }
+  console.log("reply", ev.data.payload.rpc, ev.data.propertyPayload, ev.data.nested[1].ok);
+  worker.terminate().then(() => { console.log("done"); process.exit(0); });
+};
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "ready 1 web-env\nready 2 web-env\nreply 8509 8509 true\ndone\n"
+    );
+}

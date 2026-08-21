@@ -852,7 +852,9 @@ fn collect_module_one(
         }
     });
     let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
+    let mut saw_worker_new = false;
     perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
+        saw_worker_new = true;
         if let perry_hir::Expr::WorkerNew {
             paths,
             filename,
@@ -940,6 +942,14 @@ fn collect_module_one(
             }
         }
     });
+    // A global Web Worker has no `worker_threads` import to trigger stdlib
+    // linking. WorkerNew codegen still calls the same native worker runtime,
+    // so make that dependency explicit for every discovered constructor site.
+    if saw_worker_new {
+        ctx.needs_stdlib = true;
+        ctx.native_module_imports
+            .insert("worker_threads".to_string());
+    }
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
