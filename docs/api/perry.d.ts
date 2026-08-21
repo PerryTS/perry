@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2028 entries across 123 modules
+// Coverage: 2033 entries across 124 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3977,6 +3977,19 @@ declare module "tty" {
 declare module "tursodb" {
   /** stdlib */
   export function open(...args: any[]): any;
+}
+
+declare module "typescript" {
+  /** stdlib */
+  export const DiagnosticCategory: any;
+  /** stdlib */
+  export const ModuleKind: any;
+  /** stdlib */
+  export const ScriptTarget: any;
+  /** stdlib */
+  export function flattenDiagnosticMessageText(...args: any[]): any;
+  /** stdlib */
+  export function transpileModule(...args: any[]): any;
 }
 
 declare module "undici" {

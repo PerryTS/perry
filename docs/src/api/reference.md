@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2951 entries across 125 modules.
+Total: 2956 entries across 126 modules.
 
 ## Modules
 
@@ -119,6 +119,7 @@ Total: 2951 entries across 125 modules.
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
+- [`typescript`](#typescript)
 - [`undici`](#undici)
 - [`url`](#url)
 - [`util`](#util)
@@ -3604,6 +3605,19 @@ Total: 2951 entries across 125 modules.
 - `open` — module
 - `queryAll` — instance
 - `queryOne` — instance
+
+## `typescript`
+
+### Methods
+
+- `flattenDiagnosticMessageText` — module
+- `transpileModule` — module
+
+### Properties
+
+- `DiagnosticCategory`
+- `ModuleKind`
+- `ScriptTarget`
 
 ## `undici`
 
