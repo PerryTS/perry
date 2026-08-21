@@ -8,6 +8,14 @@
 use super::*;
 
 pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
+    // #8511: deliberately narrow TypeScript runtime compatibility. These are
+    // the only value exports audited in OpenCode Code Mode; strict manifest
+    // gating makes every other TypeScript compiler API fail explicitly.
+    method("typescript", "transpileModule", false, None),
+    method("typescript", "flattenDiagnosticMessageText", false, None),
+    property("typescript", "ScriptTarget"),
+    property("typescript", "ModuleKind"),
+    property("typescript", "DiagnosticCategory"),
     method_sig(
         "@parcel/watcher",
         "subscribe",

@@ -1175,3 +1175,48 @@ fn test_user_class_animate_method_is_not_hijacked_as_a_widget_call() {
          method call: {dump}"
     );
 }
+
+/// #8511: OpenCode's named imports from `typescript` must route to the native
+/// transpiler and fold the three compiler enums without loading the upstream
+/// TypeScript compiler namespace.
+#[test]
+fn typescript_transpile_subset_lowers_to_native_dispatch_and_enums() {
+    let source = r#"
+        import {
+            DiagnosticCategory,
+            ModuleKind,
+            ScriptTarget,
+            flattenDiagnosticMessageText,
+            transpileModule,
+        } from "typescript";
+
+        const result = transpileModule("const answer: number = 42", {
+            reportDiagnostics: true,
+            compilerOptions: {
+                target: ScriptTarget.ESNext,
+                module: ModuleKind.ESNext,
+            },
+        });
+        const error = result.diagnostics?.find(
+            (item: any) => item.category === DiagnosticCategory.Error,
+        );
+        if (error) console.log(flattenDiagnosticMessageText(error.messageText, "\n"));
+    "#;
+    let module = perry_parser::parse_typescript(source, "codemode.ts").expect("source parses");
+    let hir = super::lower_module(&module, "codemode", "codemode.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        dump.contains("module: \"typescript\"") && dump.contains("method: \"transpileModule\""),
+        "transpileModule must use TypeScript native dispatch: {dump}"
+    );
+    assert!(
+        dump.contains("enum_name: \"ScriptTarget\", member_name: \"ESNext\"")
+            && dump.contains("enum_name: \"ModuleKind\", member_name: \"ESNext\"")
+            && dump.contains("enum_name: \"DiagnosticCategory\", member_name: \"Error\""),
+        "TypeScript runtime enums must lower as HIR enum members: {dump}"
+    );
+    assert!(
+        dump.contains("method: \"flattenDiagnosticMessageText\""),
+        "diagnostic flattening must use TypeScript native dispatch: {dump}"
+    );
+}

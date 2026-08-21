@@ -624,6 +624,8 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     // node-forge PKI subset — RSA keygen, X.509 build/sign, PEM
     // (perry-ext-node-forge). Hyphenated package → underscored prefix.
     ("js_node_forge_", "node-forge"),
+    // Native runtime TypeScript transpilation subset (#8511).
+    ("js_typescript_", "typescript"),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.

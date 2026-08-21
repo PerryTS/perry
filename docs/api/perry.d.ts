@@ -3992,6 +3992,19 @@ declare module "tursodb" {
   export function open(...args: any[]): any;
 }
 
+declare module "typescript" {
+  /** stdlib */
+  export const DiagnosticCategory: any;
+  /** stdlib */
+  export const ModuleKind: any;
+  /** stdlib */
+  export const ScriptTarget: any;
+  /** stdlib */
+  export function flattenDiagnosticMessageText(...args: any[]): any;
+  /** stdlib */
+  export function transpileModule(...args: any[]): any;
+}
+
 declare module "undici" {
   /** stdlib */
   export class Agent { [key: string]: any; }

@@ -717,3 +717,19 @@ crate = "perry-ext-parcel-watcher"
 lib = "perry_ext_parcel_watcher"
 tracking = "#8513"
 alias-of = "@parcel/watcher"
+# `typescript` — only the runtime transpilation API audited for OpenCode Code
+# Mode. Perry uses SWC to erase TS/TSX syntax and emit JavaScript; it does not
+# compile or embed Microsoft's complete type checker/compiler bundle.
+[bindings.typescript]
+crate = "perry-ext-typescript"
+lib = "perry_ext_typescript"
+tracking = "#8511"
+compat = "partial"
+
+[bindings.typescript.upstream]
+version = "5.8.2"
+sha256 = "ef938a45323df5775664ea5d55e8bc0ab2027a40db1ff857bb957fe7bbaa4434"
+repo = "https://github.com/microsoft/TypeScript"
+ref = "beb69e4cdd61b1a0fd9ae21ae58bd4bd409d7217"
+ported-at = "5.8.2"
+date = "2026-08-21"

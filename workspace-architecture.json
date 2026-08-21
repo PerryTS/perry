@@ -278,6 +278,10 @@
       "category": "binding",
       "decision": "keep"
     },
+    "perry-ext-typescript": {
+      "category": "binding",
+      "decision": "externalize"
+    },
     "perry-ext-uuid": {
       "category": "binding",
       "decision": "externalize"
