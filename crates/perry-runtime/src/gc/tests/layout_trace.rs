@@ -158,13 +158,15 @@ fn test_layout_scan_trace_json_counts_pointer_slot_bytes() {
     )
     .expect("test requested GC trace capture");
     let child = crate::string::js_string_from_bytes(b"byte-child".as_ptr(), 10) as *mut u8;
-    let arr = crate::array::js_array_alloc_with_length(2);
+    let arr = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(arr, 0, 1.0);
     crate::array::js_array_set_f64(
         arr,
         1,
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
+    crate::array::js_array_set_f64(arr, 2, 2.0);
+    crate::array::js_array_set_f64(arr, 3, 3.0);
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -240,7 +242,7 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
 
     let child = crate::string::js_string_from_bytes(b"array-child".as_ptr(), 11) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
-    let arr = crate::array::js_array_alloc_with_length(3);
+    let arr = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(arr, 0, 1.0);
     crate::array::js_array_set_f64(
         arr,
@@ -248,8 +250,9 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     crate::array::js_array_set_f64(arr, 2, 3.0);
+    crate::array::js_array_set_f64(arr, 3, 4.0);
 
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -261,7 +264,7 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
     assert_eq!(test_trace_slot_reads(), 1);
 
     crate::array::js_array_set_f64(arr, 1, 2.0);
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(0));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(0));
 
     clear_marks();
     clear_mark_seeds();
@@ -284,14 +287,14 @@ fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
     let child0_h = unsafe { header_from_user_ptr(child0) };
     let child1_h = unsafe { header_from_user_ptr(child1) };
 
-    let arr = crate::array::js_array_alloc_with_length(2);
+    let arr = crate::array::js_array_alloc_with_length(4);
     // Store a pointer at index 0 -> SIDE_MASK + mask{0}.
     crate::array::js_array_set_f64(
         arr,
         0,
         f64::from_bits(STRING_TAG | (child0 as u64 & POINTER_MASK)),
     );
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
 
     // Reproduce the stale-state hazard: force POINTER_FREE while the mask{0}
     // entry is still present (`set_layout_state` only touches the state bits).
@@ -316,7 +319,7 @@ fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
             "recording a pointer into an existing mask must restore SIDE_MASK"
         );
     }
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 2), Some(2));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(2));
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();

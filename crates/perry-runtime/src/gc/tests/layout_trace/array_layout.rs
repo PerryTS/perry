@@ -52,25 +52,23 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
 
-    // Two elements, not one: a mask over a single-slot payload can skip
-    // nothing, so `layout_note_slot` now leaves such an array in the
-    // tag-checked `GC_LAYOUT_UNKNOWN` state and mints no mask to grow or
-    // transfer. Two slots is the smallest payload that still exercises the
-    // grow/transfer path this test is about.
-    let arr = crate::array::js_array_alloc_with_length(2);
+    // Use the first mask-bearing payload size. Smaller arrays deliberately
+    // stay in the tag-checked `GC_LAYOUT_UNKNOWN` state, so they have no mask
+    // for this grow/transfer test to exercise.
+    let arr = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(
         arr,
         0,
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     let grown = crate::array::js_array_grow(arr, 128);
-    assert_eq!(test_layout_pointer_slot_count(grown as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(grown as usize, 4), Some(1));
 
-    let moved = crate::array::js_array_alloc_with_length(2);
+    let moved = crate::array::js_array_alloc_with_length(4);
     unsafe {
         layout_transfer(grown as *mut u8, moved as *mut u8);
     }
-    assert_eq!(test_layout_pointer_slot_count(moved as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(moved as usize, 4), Some(1));
 
     clear_marks();
     clear_mark_seeds();
@@ -101,7 +99,7 @@ fn test_trace_array_uses_pointer_layout_mask() {
 
     let child = crate::string::js_string_from_bytes(b"array-child".as_ptr(), 11) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
-    let mixed = crate::array::js_array_alloc_with_length(3);
+    let mixed = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(mixed, 0, 1.0);
     crate::array::js_array_set_f64(
         mixed,
@@ -109,7 +107,8 @@ fn test_trace_array_uses_pointer_layout_mask() {
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     crate::array::js_array_set_f64(mixed, 2, 3.0);
-    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+    crate::array::js_array_set_f64(mixed, 3, 4.0);
+    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 4), Some(1));
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -190,12 +189,14 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     let child_header = unsafe { header_from_user_ptr(child) };
     let child_box = f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK));
 
-    let src = crate::array::js_array_alloc_with_length(2);
+    let src = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(src, 0, 1.0);
     crate::array::js_array_set_f64(src, 1, child_box);
+    crate::array::js_array_set_f64(src, 2, 2.0);
+    crate::array::js_array_set_f64(src, 3, 3.0);
 
     let cloned = crate::array::js_array_clone(src);
-    assert_eq!(test_layout_pointer_slot_count(cloned as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(cloned as usize, 4), Some(1));
     assert_array_root_trace_reads(cloned, 1);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
@@ -205,7 +206,7 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
 
     let concatenated = crate::array::js_array_concat(crate::array::js_array_alloc(0), src);
     assert_eq!(
-        test_layout_pointer_slot_count(concatenated as usize, 2),
+        test_layout_pointer_slot_count(concatenated as usize, 4),
         Some(1)
     );
     assert_array_root_trace_reads(concatenated, 1);
@@ -236,34 +237,34 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     let map = crate::map::js_map_set(map, 7.0, child_box);
     let entries = crate::map::js_map_entries(map);
     // One entry, so the outer array is single-slot and carries no mask for the
-    // same reason as the set above; the pair it holds is two slots and still
-    // does. Both are traced either way, which is what the reads assertion and
-    // the child's mark bit below check.
+    // same reason as the set above; the two-slot pair it holds also stays in
+    // the tag-checked scan regime. Both are traced either way, which is what
+    // the reads assertion and the child's mark bit below check.
     assert_eq!(test_layout_pointer_slot_count(entries as usize, 1), None);
     let pair_box = crate::array::js_array_get_f64(entries, 0);
     let pair = (pair_box.to_bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
-    assert_eq!(test_layout_pointer_slot_count(pair as usize, 2), Some(1));
-    assert_array_root_trace_reads(entries, 2);
+    assert_eq!(test_layout_pointer_slot_count(pair as usize, 2), None);
+    assert_array_root_trace_reads(entries, 3);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
     clear_marks();
     clear_mark_seeds();
 
-    // Two slots, so this still goes through the mask: clearing the last
+    // Four slots, so this still goes through the mask: clearing the last
     // pointer empties it and restores `GC_LAYOUT_POINTER_FREE`, which is the
     // transition being asserted. A single-slot array never mints a mask now,
     // and `GC_LAYOUT_UNKNOWN` is one-way — such an array keeps being scanned
     // after the pointer is overwritten. That costs one tag check on one slot,
     // which is the whole reason the mask was not worth minting for it.
-    let overwritten = crate::array::js_array_alloc_with_length(2);
+    let overwritten = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(overwritten, 0, child_box);
     assert_eq!(
-        test_layout_pointer_slot_count(overwritten as usize, 2),
+        test_layout_pointer_slot_count(overwritten as usize, 4),
         Some(1)
     );
     crate::array::js_array_set_f64(overwritten, 0, 99.0);
-    assert_numeric_array_trace_free(overwritten, 2);
+    assert_numeric_array_trace_free(overwritten, 4);
 
     clear_marks();
     clear_mark_seeds();

@@ -1268,22 +1268,22 @@ fn test_numeric_array_layout_length_and_delete_transitions() {
 
 #[test]
 fn test_numeric_array_layout_immutable_helpers_preserve_or_downgrade() {
-    let values = [10.0, 2.0, 30.0];
+    let values = [10.0, 2.0, 30.0, 40.0];
     let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
     assert_numeric_raw_values(src, &values);
 
     let reversed = js_array_to_reversed(src);
-    assert_numeric_raw_values(reversed, &[30.0, 2.0, 10.0]);
+    assert_numeric_raw_values(reversed, &[40.0, 30.0, 2.0, 10.0]);
 
     let sorted = js_array_to_sorted_default(src);
-    assert_numeric_raw_values(sorted, &[10.0, 2.0, 30.0]);
+    assert_numeric_raw_values(sorted, &[10.0, 2.0, 30.0, 40.0]);
 
     let numeric_replaced = js_array_with(src, 1.0, 99.0);
-    assert_numeric_raw_values(numeric_replaced, &[10.0, 99.0, 30.0]);
+    assert_numeric_raw_values(numeric_replaced, &[10.0, 99.0, 30.0, 40.0]);
 
     let insert = [7.0, 8.0];
     let spliced = js_array_to_spliced(src, 1.0, 1.0, insert.as_ptr(), insert.len() as u32);
-    assert_numeric_raw_values(spliced, &[10.0, 7.0, 8.0, 30.0]);
+    assert_numeric_raw_values(spliced, &[10.0, 7.0, 8.0, 30.0, 40.0]);
 
     let str_ptr = crate::string::js_string_from_bytes(b"immutable-mixed".as_ptr(), 15);
     let str_value =
@@ -1303,26 +1303,27 @@ fn test_numeric_array_layout_map_fast_path_downgrades_mapped_pointers() {
     arr = js_array_push_f64(arr, 1.0);
     arr = js_array_push_f64(arr, 2.0);
     arr = js_array_push_f64(arr, 3.0);
+    arr = js_array_push_f64(arr, 4.0);
     assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
 
     let callback = crate::closure::js_closure_alloc(test_map_to_string as *const u8, 0);
     let mapped = js_array_map(arr, callback);
 
-    assert_eq!(js_array_length(mapped), 3);
+    assert_eq!(js_array_length(mapped), 4);
     assert_eq!(
         js_array_is_numeric_f64_layout(mapped),
         0,
         "small map() results use a layout-only fast path and must still downgrade"
     );
     assert_eq!(
-        crate::gc::test_layout_pointer_slot_count(mapped as usize, 3),
-        Some(3)
+        crate::gc::test_layout_pointer_slot_count(mapped as usize, 4),
+        Some(4)
     );
 }
 
 #[test]
 fn test_numeric_array_layout_entries_outer_downgrades_inner_pairs_preserve() {
-    let values = [4.0, 5.0];
+    let values = [4.0, 5.0, 6.0, 7.0];
     let src = js_array_from_f64(values.as_ptr(), values.len() as u32);
     let entries = js_array_entries(src);
 

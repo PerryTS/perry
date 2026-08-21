@@ -332,7 +332,7 @@ fn force_materialize_numeric_lazy_array_preserves_raw_payload() {
 
 #[test]
 fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
-    let input = br#"[1,2,3]"#;
+    let input = br#"[1,2,3,4]"#;
     let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
     let lazy = with_built_tape(input, |tape| unsafe {
         alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
@@ -351,15 +351,15 @@ fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
     assert_eq!(
         reparse_materializations(),
         before + 1,
-        "1-of-3 cached is below the crossover, so this must reparse"
+        "1-of-4 cached is below the crossover, so this must reparse"
     );
 
-    // The reparse produces a RawF64-layout array for `[1,2,3]`; patching
+    // The reparse produces a RawF64-layout array for `[1,2,3,4]`; patching
     // a STRING into slot 1 has to downgrade it, or the tracer would skip
     // a live pointer in an array flagged pointer-free.
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
     assert_eq!(
-        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
         Some(1)
     );
 }

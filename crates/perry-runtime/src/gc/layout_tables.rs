@@ -327,7 +327,8 @@ pub(crate) fn per_object_layout_table_sizes() -> (usize, usize) {
 /// `is_empty()`"). At the bottom of the range the asymmetry is total rather
 /// than merely lopsided: over a **single** slot a mask cannot skip anything at
 /// all, because the tracer consults `layout_pointer_bearing_bits` on that one
-/// slot either way, so the entry is the mask's entire contribution.
+/// slot either way, so the entry is the mask's entire contribution. At two or
+/// three slots it can skip only one or two such checks.
 ///
 /// A tag check is exact at both mint sites: neither is reached for an object
 /// with an intact typed descriptor, so there are no raw-f64 slots whose bits a
@@ -354,30 +355,26 @@ pub(in crate::gc) fn layout_mask_min_slots() -> usize {
     }
 }
 
-/// Only single-slot payloads take the scan. This is deliberately the
-/// *provable* end of the range: at one slot the mask demonstrably skips
-/// nothing, so no judgement about tracing cost is being made.
+/// Payloads with up to three slots take the scan. At that size the mask can
+/// skip at most two exact tag checks, while one long-lived side-table entry
+/// arms address cleanup on every allocation in the program.
 ///
-/// Measured on the 19-benchmark corpus (quiet M1 mini, best-of-5, interleaved
-/// against the same binaries with the policy disabled):
+/// Measured on the 19-benchmark corpus (M1 mini, five shuffled interleaved
+/// repeats against the same binaries, medians):
 ///
-/// | bench | before | after |
-/// |---|--:|--:|
-/// | `interp` | 1.894 | **1.697** |
-/// | `iso_miss` | 2.371 | **2.157** |
-/// | `bench/mask_tax` | 0.1218 | **0.1049** |
-/// | `bench/mask_tax_nopointer` (control) | 0.0929 | 0.0929 |
+/// | bench | threshold 2 instructions | threshold 4 instructions | delta |
+/// |---|--:|--:|--:|
+/// | `interp` | 9,013,545,066 | 8,598,251,738 | **-4.61%** |
+/// | `iso_miss` | 12,494,387,198 | 12,489,410,538 | -0.04% |
 ///
-/// Every other benchmark — including the GC-heavy `tree`, `tree_wide`,
-/// `retain*`, `cycles`, `deeplist` — is unchanged within noise.
+/// Every other benchmark moved by less than 0.37%; `interp` peak RSS was
+/// byte-identical at 32,964,608 in both arms. Wall ranges overlapped on the
+/// contended host, so retired instructions are the primary signal.
 ///
-/// Raising it pays roughly twice as much and costs test churn, both measured:
-/// `9` and above gives `interp` 1.619 / `iso_miss` 2.046 with still no
-/// regression on the corpus, but 21 tests in this crate encode "a small mixed
-/// payload uses a mask" as a precondition (5 do at `2`, 11 at `3`, saturating
-/// at 21 from `9`). That is a contract change worth making on purpose rather
-/// than as a side effect of a perf patch.
-pub(in crate::gc) const DEFAULT_MASK_MIN_SLOTS: usize = 2;
+/// A current threshold sweep found the full `interp` win at `4`; higher values
+/// did not retire fewer instructions. Keeping the smallest winning threshold
+/// bounds the extra trace work and changes the fewest layout preconditions.
+pub(in crate::gc) const DEFAULT_MASK_MIN_SLOTS: usize = 4;
 
 /// True when either per-object side table may hold an entry. `false` is a
 /// proof of emptiness (see [`PER_OBJECT_LAYOUTS_NONEMPTY`]); `true` is only a

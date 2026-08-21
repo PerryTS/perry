@@ -107,13 +107,13 @@ unsafe fn slot_bits(obj: *mut crate::ObjectHeader, slot: usize) -> u64 {
 /// `js_gc_declare_typed_shape_layout` was never called. Not calling it IS the
 /// plant — that call is the thing #7834 removes.
 ///
-/// Three payload slots, because a payload below `layout_mask_min_slots()` makes
+/// Four payload slots, because a payload below `layout_mask_min_slots()` makes
 /// `layout_note_slot` decline the mask and take `GC_LAYOUT_UNKNOWN` instead;
 /// this test wants the `SIDE_MASK` arm.
 unsafe fn plant_baked_instance(shape_id: u32, packed_keys: &[u8]) -> *mut crate::ObjectHeader {
     let obj = crate::object::js_object_alloc_with_shape(
         shape_id,
-        3,
+        4,
         packed_keys.as_ptr(),
         packed_keys.len() as u32,
     );
@@ -174,7 +174,7 @@ unsafe fn plant_descriptor_backed_instance(
 #[test]
 fn a_descriptorless_bake_drops_its_intact_claim_on_the_generic_downgrade() {
     unsafe {
-        let obj = plant_baked_instance(0x8115_0001, b"x\0y\0z\0");
+        let obj = plant_baked_instance(0x8115_0001, b"x\0y\0z\0pad\0");
         let child = string_bits(young_leaf());
 
         crate::object::store_object_field_slot(obj, 0, child);
@@ -225,7 +225,7 @@ fn a_descriptorless_bake_drops_its_intact_claim_on_the_generic_downgrade() {
 #[test]
 fn the_inline_raw_f64_arm_must_not_read_a_pointer_slot_as_a_double() {
     unsafe {
-        let obj = plant_baked_instance(0x8115_0002, b"a\0b\0c\0");
+        let obj = plant_baked_instance(0x8115_0002, b"a\0b\0c\0pad\0");
         let child = string_bits(young_leaf());
         crate::object::store_object_field_slot(obj, 0, child);
         assert_eq!(
@@ -382,7 +382,7 @@ fn a_contradicting_store_still_downgrades_through_the_descriptor_path() {
 #[test]
 fn a_conforming_raw_f64_store_leaves_the_bake_intact() {
     unsafe {
-        let obj = plant_baked_instance(0x8115_0005, b"u\0v\0w\0");
+        let obj = plant_baked_instance(0x8115_0005, b"u\0v\0w\0pad\0");
 
         crate::object::store_object_field_slot(obj, 0, 3.5f64.to_bits());
         crate::object::store_object_field_slot(obj, 1, (-7.25f64).to_bits());
@@ -433,7 +433,7 @@ fn a_conforming_raw_f64_store_leaves_the_bake_intact() {
 #[test]
 fn the_bake_healed_itself_only_because_the_descriptor_probe_reads_the_same_bit() {
     unsafe {
-        let obj = plant_baked_instance(0x8115_0006, b"m\0n\0o\0");
+        let obj = plant_baked_instance(0x8115_0006, b"m\0n\0o\0pad\0");
 
         // The two questions disagree. That disagreement IS the #8115 state.
         assert!(
