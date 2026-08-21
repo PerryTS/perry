@@ -95,14 +95,21 @@ impl CommanderHandle {
 // ---------------------------------------------------------------------------
 // GC root scanning — pin user-supplied .action() closures across collections.
 
-static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn ensure_gc_scanner_registered() {
-    GC_REGISTERED.call_once(|| {
+    GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:commander",
             scan_commander_roots_mut,
         );
+        registered.set(true);
     });
 }
 

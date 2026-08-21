@@ -31,7 +31,7 @@ use perry_runtime::gc::{gc_register_mutable_root_scanner_named, RuntimeRootVisit
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, Once};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
 /// Cron job handle.
@@ -85,7 +85,10 @@ unsafe impl Send for CronTimer {}
 
 static CRON_TIMERS: StdMutex<Vec<CronTimer>> = StdMutex::new(Vec::new());
 static CRON_NEXT_TIMER_ID: StdMutex<i64> = StdMutex::new(1);
-static CRON_GC_REGISTERED: Once = Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static CRON_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Compute the next firing time for a cron schedule, or `None` if the
 /// schedule has no future occurrences (which would terminate the job).
@@ -98,11 +101,14 @@ fn next_cron_instant(schedule: &Schedule) -> Option<Instant> {
     Some(Instant::now() + std::time::Duration::from_millis(ms))
 }
 
-/// Register the cron GC root scanner exactly once. Safe to call from any
-/// `js_cron_*` entry point on the main thread.
+/// Register the cron GC root scanner once on each thread.
 fn ensure_gc_scanner_registered() {
-    CRON_GC_REGISTERED.call_once(|| {
+    CRON_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         gc_register_mutable_root_scanner_named("stdlib:cron", scan_cron_roots_mut);
+        registered.set(true);
     });
 }
 

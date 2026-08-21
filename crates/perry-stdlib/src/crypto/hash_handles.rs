@@ -1,7 +1,7 @@
 use super::*;
 use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader};
 use std::collections::HashMap;
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
 
 /// node validates the `data` arg of `hash.update`/`hmac.update` is a string
 /// or `Buffer`/`TypedArray`/`DataView` before touching it. Without this a
@@ -62,14 +62,21 @@ lazy_static::lazy_static! {
     static ref CRYPTO_STREAM_PENDING_EVENTS: Mutex<Vec<CryptoStreamEvent>> = Mutex::new(Vec::new());
 }
 
-static CRYPTO_STREAM_GC_REGISTERED: Once = Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static CRYPTO_STREAM_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn ensure_crypto_stream_gc_scanner() {
-    CRYPTO_STREAM_GC_REGISTERED.call_once(|| {
+    CRYPTO_STREAM_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:crypto-streams",
             scan_crypto_stream_roots,
         );
+        registered.set(true);
     });
 }
 

@@ -202,14 +202,21 @@ thread_local! {
 // borrow is ever held across an allocation that could re-enter this scanner.
 // ---------------------------------------------------------------------------
 
-static READLINE_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static READLINE_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn ensure_gc_scanner_registered() {
-    READLINE_GC_REGISTERED.call_once(|| {
+    READLINE_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:readline",
             scan_readline_roots_mut,
         );
+        registered.set(true);
     });
 }
 

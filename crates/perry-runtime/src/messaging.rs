@@ -5,9 +5,10 @@ use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader}
 use crate::object::{self, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 type MessageChannelFactory = extern "C" fn() -> f64;
@@ -156,15 +157,23 @@ struct PortState {
 }
 
 static PORT_STATES: Mutex<Option<HashMap<usize, PortState>>> = Mutex::new(None);
-static GC_SCANNER_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+crate::perry_thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static GC_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
 
 fn ensure_gc_scanner_registered() {
-    if !GC_SCANNER_REGISTERED.swap(true, Ordering::AcqRel) {
+    GC_SCANNER_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         crate::gc::gc_register_mutable_root_scanner_named(
             "messaging_ports",
             port_states_root_scanner_mut,
         );
-    }
+        registered.set(true);
+    });
 }
 
 /// Keep queued message values, `onmessage` handlers, listener closures, and the

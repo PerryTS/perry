@@ -11,7 +11,7 @@
 //! the primary-coordinated shared ephemeral port for `listen(0)` are tracked
 //! in #4962.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::{Once, OnceLock};
 
@@ -51,6 +51,8 @@ impl ClusterState {
 
 thread_local! {
     static CLUSTER_STATE: RefCell<ClusterState> = RefCell::new(ClusterState::new());
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static CLUSTER_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
 static CLUSTER_INIT: Once = Once::new();
@@ -600,8 +602,14 @@ pub extern "C" fn js_cluster_disconnect(callback: f64) -> f64 {
 }
 
 fn ensure_cluster_runtime() {
-    CLUSTER_INIT.call_once(|| {
+    CLUSTER_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         crate::gc::gc_register_mutable_root_scanner_named("node_cluster", cluster_root_scanner);
+        registered.set(true);
+    });
+    CLUSTER_INIT.call_once(|| {
         register_cluster_arities();
     });
 }

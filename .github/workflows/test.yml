@@ -410,6 +410,15 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #8530. Mutable-root scanner registries are thread-local, so guarding a
+      # registration call with a process-global Once/OnceLock/AtomicBool (or a
+      # mutex boolean) leaves every heap after the first without those roots.
+      - name: Thread-local GC scanner registration audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_scanner_latches.py --self-test
+          python3 scripts/check_gc_scanner_latches.py
+
       # #8174. A side table whose KEY is a raw heap address, REKEYED in place by
       # `visit_metadata_*` (rewritten if the object moved, deliberately not
       # marked), depends on `gc::dead_owner` dropping that key when the object

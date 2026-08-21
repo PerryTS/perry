@@ -296,19 +296,26 @@ pub struct EventEmitterHandle {
 unsafe impl Send for EventEmitterHandle {}
 unsafe impl Sync for EventEmitterHandle {}
 
-static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static EVENTS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Register the EventEmitter GC root scanner exactly once. User closures
+/// Register the EventEmitter GC root scanner once per thread. User closures
 /// passed to `emitter.on(event, cb)` live inside EventEmitterHandle
 /// values in the handle registry; without this scanner, a malloc-triggered
 /// GC between `.on(...)` and the next `.emit(...)` would sweep the
 /// closure — same root cause as issue #35 for net.Socket listeners.
 fn ensure_gc_scanner_registered() {
-    EVENTS_GC_REGISTERED.call_once(|| {
+    EVENTS_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:events",
             scan_events_roots_mut,
         );
+        registered.set(true);
     });
 }
 

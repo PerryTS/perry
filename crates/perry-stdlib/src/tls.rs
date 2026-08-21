@@ -49,8 +49,12 @@ static TLS_LISTENERS: OnceLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> =
 static TLS_ONCE_FLAGS: OnceLock<Mutex<HashMap<i64, HashMap<String, HashSet<i64>>>>> =
     OnceLock::new();
 static TLS_PENDING_EVENTS: OnceLock<Mutex<Vec<PendingTlsEvent>>> = OnceLock::new();
-static TLS_GC_REGISTERED: Once = Once::new();
 static RUSTLS_PROVIDER_INSTALLED: Once = Once::new();
+
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static TLS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 struct TlsServerState {
     shutdown_tx: Option<oneshot::Sender<()>>,
@@ -279,8 +283,12 @@ fn ensure_crypto_provider_installed() {
 }
 
 fn ensure_tls_gc_scanner_registered() {
-    TLS_GC_REGISTERED.call_once(|| {
+    TLS_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:tls", scan_tls_roots_mut);
+        registered.set(true);
     });
 }
 

@@ -71,10 +71,13 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(not(target_os = "ios"))]
-static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static WS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Register the ws GC root scanner exactly once. Safe to call from any
-/// ws FFI entry point on the main thread. Mirrors `net::ensure_gc_scanner_registered`
+/// Register the ws GC root scanner once on each thread. Mirrors
+/// `net::ensure_gc_scanner_registered`
 /// (issue #35) — user closures passed to `.on(event, cb)` are stored in
 /// WS_CLIENT_LISTENERS (for client sockets) or inside a WsServerHandle
 /// (for servers); neither is visible to the GC mark phase without this
@@ -83,8 +86,12 @@ static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 /// memory.
 #[cfg(not(target_os = "ios"))]
 fn ensure_gc_scanner_registered() {
-    WS_GC_REGISTERED.call_once(|| {
+    WS_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:ws", scan_ws_roots_mut);
+        registered.set(true);
     });
 }
 

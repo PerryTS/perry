@@ -17,7 +17,7 @@ use perry_runtime::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex, Once};
+use std::sync::{LazyLock, Mutex};
 
 /// Check if an f64 value represents a "real" success value.
 /// NaN-boxed tagged values (pointers, strings, int32, booleans, etc.) are valid results.
@@ -91,14 +91,21 @@ struct BackoffState {
 static STATES: LazyLock<Mutex<HashMap<u64, BackoffState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-static GC_REGISTERED: Once = Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn ensure_backoff_gc_scanner() {
-    GC_REGISTERED.call_once(|| {
+    GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:exponential-backoff",
             scan_backoff_roots,
         );
+        registered.set(true);
     });
 }
 

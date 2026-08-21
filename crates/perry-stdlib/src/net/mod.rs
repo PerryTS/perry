@@ -101,14 +101,19 @@ lazy_static::lazy_static! {
     static ref NEXT_NET_ID: Mutex<i64> = Mutex::new(1);
 }
 
-static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static NET_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Register the net GC root scanner exactly once. Safe to call from any
-/// `js_net_*` entry point on the main thread. Mirrors the pattern in
-/// `cron.rs::ensure_gc_scanner_registered`.
+/// Register the net GC root scanner once on each thread.
 fn ensure_gc_scanner_registered() {
-    NET_GC_REGISTERED.call_once(|| {
+    NET_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:net", scan_net_roots_mut);
+        registered.set(true);
     });
 }
 

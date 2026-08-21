@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{LazyLock, Mutex, Once};
+use std::sync::{LazyLock, Mutex};
 
 use perry_runtime::closure::ClosureHeader;
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
@@ -113,6 +113,10 @@ thread_local! {
     /// after every delivered message so the worker exits without waiting for
     /// another parent command.
     static CURRENT_WORKER_CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    // The mutable-root scanner registry is thread-local, so these latches must be too.
+    static ENVIRONMENT_DATA_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static WORKER_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static PARENT_PORT_EVENT_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Per-port state for a same-process MessageChannel (#3157). A `MessageChannel`
@@ -176,8 +180,6 @@ struct EventListener {
     once: bool,
 }
 
-static ENVIRONMENT_DATA_GC_REGISTERED: Once = Once::new();
-static WORKER_GC_REGISTERED: Once = Once::new();
 static NEXT_WORKER_ID: AtomicU64 = AtomicU64::new(1);
 static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -225,20 +227,28 @@ enum WorkerEvent {
 }
 
 fn ensure_environment_data_gc_scanner() {
-    ENVIRONMENT_DATA_GC_REGISTERED.call_once(|| {
+    ENVIRONMENT_DATA_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:worker_threads:environmentData",
             scan_environment_data_roots_mut,
         );
+        registered.set(true);
     });
 }
 
 fn ensure_worker_gc_scanner() {
-    WORKER_GC_REGISTERED.call_once(|| {
+    WORKER_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:worker_threads:workers",
             scan_worker_roots_mut,
         );
+        registered.set(true);
     });
 }
 
@@ -1464,14 +1474,16 @@ pub(super) fn js_worker_threads_parent_port_event_remove(event_ptr: i64, callbac
     parent_port_event_listener(event_ptr, callback, false)
 }
 
-static PARENT_PORT_EVENT_GC_REGISTERED: Once = Once::new();
-
 fn ensure_parent_port_event_gc_scanner() {
-    PARENT_PORT_EVENT_GC_REGISTERED.call_once(|| {
+    PARENT_PORT_EVENT_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:worker_threads:parentPortEventListeners",
             scan_parent_port_event_roots_mut,
         );
+        registered.set(true);
     });
 }
 

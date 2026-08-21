@@ -666,15 +666,22 @@ const ZLIB_STREAM_HANDLE_ID_START: i64 =
 const ZLIB_STREAM_HANDLE_ID_END: i64 =
     perry_runtime::value::addr_class::ZLIB_HANDLE_BAND_END as i64;
 
-static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static ZLIB_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Register the zlib-stream GC root scanner once. Listener closures
+/// Register the zlib-stream GC root scanner once per thread. Listener closures
 /// (`s.on('data', cb)`) are only referenced from `ZLIB_LISTENERS`; without
 /// rooting them a GC between `.on()` and the deferred dispatch would free the
 /// closure body (the same hazard net.Socket guards against — issue #35).
 fn ensure_zlib_gc_scanner() {
-    ZLIB_GC_REGISTERED.call_once(|| {
+    ZLIB_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:zlib", scan_zlib_roots);
+        registered.set(true);
     });
 }
 

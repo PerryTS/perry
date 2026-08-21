@@ -113,13 +113,19 @@ impl FetchRootVisitor for FfiFetchRootVisitor {
     }
 }
 
-static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
-/// Register the Fetch root scanner exactly once. Called from every site that
+/// Register the Fetch root scanner once on each thread. Called from every site that
 /// stores a heap value into one of the registries, before the store, so the
 /// value is reachable from the first collection after it lands.
 pub(super) fn ensure_gc_registered() {
-    GC_REGISTERED.call_once(|| {
+    GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         const SOURCE: &[u8] = b"stdlib:fetch";
         unsafe {
             perry_ffi_gc_register_mutable_root_scanner_named(
@@ -129,6 +135,7 @@ pub(super) fn ensure_gc_registered() {
                 scan_fetch_roots_ffi,
             );
         }
+        registered.set(true);
     });
 }
 

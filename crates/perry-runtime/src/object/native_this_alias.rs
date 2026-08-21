@@ -66,9 +66,22 @@ fn object_addr_of(value: f64) -> usize {
 crate::perry_thread_local! {
     static ALIAS_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static ALIASES: RefCell<Vec<AliasEntry>> = const { RefCell::new(Vec::new()) };
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
-static SCANNER_REGISTERED: std::sync::Once = std::sync::Once::new();
+fn ensure_scanner_registered() {
+    SCANNER_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
+        crate::gc::gc_register_mutable_root_scanner_named(
+            "runtime:native-this-alias",
+            scan_alias_roots,
+        );
+        registered.set(true);
+    });
+}
 
 fn scan_alias_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ALIASES.with(|a| {
@@ -142,12 +155,7 @@ pub(crate) fn maybe_alias_explicit_this_construction(callee: f64, this_arg: f64,
         return;
     }
 
-    SCANNER_REGISTERED.call_once(|| {
-        crate::gc::gc_register_mutable_root_scanner_named(
-            "runtime:native-this-alias",
-            scan_alias_roots,
-        );
-    });
+    ensure_scanner_registered();
     ALIASES.with(|a| {
         let mut aliases = a.borrow_mut();
         if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {
@@ -236,12 +244,7 @@ unsafe fn construct_native_server_with_this(module: &str, this_val: f64, a0: f64
         && super::is_valid_obj_ptr(obj_addr as *const u8)
         && !crate::closure::is_closure_ptr(obj_addr)
     {
-        SCANNER_REGISTERED.call_once(|| {
-            crate::gc::gc_register_mutable_root_scanner_named(
-                "runtime:native-this-alias",
-                scan_alias_roots,
-            );
-        });
+        ensure_scanner_registered();
         ALIASES.with(|a| {
             let mut aliases = a.borrow_mut();
             if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {

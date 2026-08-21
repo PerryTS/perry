@@ -99,20 +99,25 @@ impl DomainHandle {
     }
 }
 
-static DOMAIN_GC_REGISTERED: Once = Once::new();
 static DOMAIN_WRAPPERS_REGISTERED: Once = Once::new();
 
 thread_local! {
     static ACTIVE_DOMAINS: RefCell<Vec<Handle>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_DOMAINS_TOUCHED: Cell<bool> = const { Cell::new(false) };
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static DOMAIN_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn ensure_gc_scanner_registered() {
-    DOMAIN_GC_REGISTERED.call_once(|| {
+    DOMAIN_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         perry_runtime::gc::gc_register_mutable_root_scanner_named(
             "stdlib:domain",
             scan_domain_roots_mut,
         );
+        registered.set(true);
     });
 }
 

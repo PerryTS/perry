@@ -78,13 +78,21 @@ impl StreamRootVisitor for FfiStreamRootVisitor {
     }
 }
 
-static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+static CALLBACKS_REGISTERED: std::sync::Once = std::sync::Once::new();
+
+thread_local! {
+    // The mutable-root scanner registry is thread-local, so this latch must be too.
+    static GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Register through the stable C ABI so a separately packaged stdlib installs
-/// its scanner in the process-wide runtime provider, not in fallback Rust glue
-/// that may also be present in the stdlib image.
+/// its scanner in the current thread's runtime registry, not in fallback Rust
+/// glue that may also be present in the stdlib image.
 pub(super) fn ensure_gc_registered() {
-    GC_REGISTERED.call_once(|| {
+    GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
         const SOURCE: &[u8] = b"stdlib:streams";
         unsafe {
             perry_ffi_gc_register_mutable_root_scanner_named(
@@ -94,13 +102,14 @@ pub(super) fn ensure_gc_registered() {
                 scan_stream_roots_ffi,
             );
         }
-        unsafe {
-            provider_js_register_stream_consumer_callbacks(
-                js_readable_stream_get_reader,
-                js_reader_read,
-            );
-            provider_js_register_stream_expando_set(expando::stream_expando_set_hook);
-        }
+        registered.set(true);
+    });
+    CALLBACKS_REGISTERED.call_once(|| unsafe {
+        provider_js_register_stream_consumer_callbacks(
+            js_readable_stream_get_reader,
+            js_reader_read,
+        );
+        provider_js_register_stream_expando_set(expando::stream_expando_set_hook);
     });
 }
 
