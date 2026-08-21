@@ -623,7 +623,7 @@ fn is_intrinsic_promise_resolve(resolve_fn: f64) -> bool {
 /// elements and `v8.promiseHooks` can be armed from it.
 #[inline]
 fn promise_lifecycle_observed() -> bool {
-    crate::v8::promise_hooks_active() || crate::async_hooks::hooks_active()
+    crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active()
 }
 
 /// The element's resolved promise, when it is a plain native `Promise` whose

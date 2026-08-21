@@ -174,7 +174,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         let promise = js_promise_new();
         // When lifecycle hooks are active, go through the real resolve path so
         // `settled`/`before`/`after` fire (instead of poking the state field).
-        if crate::v8::promise_hooks_active() || crate::async_hooks::hooks_active() {
+        if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
             js_promise_resolve(promise, value);
             return promise;
         }

@@ -34,3 +34,26 @@ const disabledHook = createHook({
 Promise.resolve("disabled");
 disabledHook.disable();
 console.log("trackPromises false init count:", disabledCount);
+
+let mixedTrackedCount = 0;
+let mixedSuppressedCount = 0;
+const mixedTrackedHook = createHook({
+  init(_asyncId, type) {
+    if (type === "PROMISE") mixedTrackedCount++;
+  },
+  trackPromises: true,
+}).enable();
+const mixedSuppressedHook = createHook({
+  init(_asyncId, type) {
+    if (type === "PROMISE") mixedSuppressedCount++;
+  },
+  trackPromises: false,
+}).enable();
+Promise.resolve("mixed");
+mixedTrackedHook.disable();
+mixedSuppressedHook.disable();
+console.log(
+  "trackPromises mixed init counts:",
+  mixedTrackedCount,
+  mixedSuppressedCount,
+);

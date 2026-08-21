@@ -29,10 +29,10 @@ const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 // gets an id > 1 — observable through `executionAsyncId()` inside its
 // callback (#789).
 //
-// #7680: `NEXT_ASYNC_ID` and `HOOKS_ACTIVE` (with `HOOKS` / `RESOURCES` /
+// #7680: `NEXT_ASYNC_ID`, `HOOKS_ACTIVE`, and `PROMISE_HOOKS_ACTIVE` (with `HOOKS` / `RESOURCES` /
 // `GC_DESTROY_QUEUE` / `NEXT_CONTEXT_SNAPSHOT_ID` / `CONTEXT_SNAPSHOTS` /
 // `ASYNC_WRAP_PROVIDERS` below) are `per_test_global!`: `reset_for_tests()`
-// clears all eight from whatever thread runs it, and before this fix that
+// clears all nine from whatever thread runs it, and before this fix that
 // thread could be any of four disjoint lock domains (this module's own
 // private `TEST_LOCK`, `AsyncHookRuntimeTestGuard`'s private
 // `ASYNC_HOOK_RUNTIME_TEST_LOCK`, the GC guards' shared lock via
@@ -48,6 +48,7 @@ const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 per_test_global! {
     static NEXT_ASYNC_ID: AtomicU64 = AtomicU64::new(2);
     pub static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    static PROMISE_HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +124,7 @@ impl HookCallbacks {
 struct HookRecord {
     callbacks: HookCallbacks,
     enabled: bool,
+    track_promises: bool,
 }
 
 // #7680: see the `NEXT_ASYNC_ID` / `HOOKS_ACTIVE` comment above — these six
@@ -180,6 +182,12 @@ pub struct AsyncResourceHandle {
 #[inline(always)]
 pub fn hooks_active() -> bool {
     HOOKS_ACTIVE.load(Ordering::Relaxed) != 0
+}
+
+/// Whether any enabled `AsyncHook` opted into Promise lifecycle tracking.
+#[inline(always)]
+pub fn promise_hooks_active() -> bool {
+    PROMISE_HOOKS_ACTIVE.load(Ordering::Relaxed) != 0
 }
 
 #[inline]
@@ -389,7 +397,7 @@ fn validate_hook_member(value: f64, member: &str) -> *const ClosureHeader {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_ASYNC_CALLBACK")
 }
 
-fn callbacks_from_options(options: f64) -> HookCallbacks {
+fn callbacks_from_options(options: f64) -> (HookCallbacks, bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options);
     let mut callbacks = HookCallbacks::empty();
@@ -401,24 +409,50 @@ fn callbacks_from_options(options: f64) -> HookCallbacks {
         options_handle.get_nanbox_f64(),
         b"promiseResolve",
     ));
+    // Node reads `trackPromises` after the five callback properties. Missing
+    // means true; a present value must be a boolean.
+    let track_promises = scope.root_nanbox_f64(object_field(
+        options_handle.get_nanbox_f64(),
+        b"trackPromises",
+    ));
     callbacks.init = validate_hook_member(init.get_nanbox_f64(), "init");
     callbacks.before = validate_hook_member(before.get_nanbox_f64(), "before");
     callbacks.after = validate_hook_member(after.get_nanbox_f64(), "after");
     callbacks.destroy = validate_hook_member(destroy.get_nanbox_f64(), "destroy");
     callbacks.promise_resolve =
         validate_hook_member(promise_resolve.get_nanbox_f64(), "promiseResolve");
-    callbacks
+    let track_promises_value = track_promises.get_nanbox_f64();
+    let track_promises_kind = JSValue::from_bits(track_promises_value.to_bits());
+    let track_promises = if track_promises_kind.is_undefined() {
+        true
+    } else if track_promises_kind.is_bool() {
+        track_promises_kind.as_bool()
+    } else {
+        let message = format!(
+            "The \"trackPromises\" argument must be of type boolean. Received {}",
+            crate::fs::validate::describe_received(track_promises_value)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    };
+    if !track_promises && !callbacks.promise_resolve.is_null() {
+        crate::fs::validate::throw_type_error_with_code(
+            "The argument 'trackPromises' must not be false when promiseResolve is enabled. Received false",
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    (callbacks, track_promises)
 }
 
 #[no_mangle]
 pub extern "C" fn js_async_hooks_create_hook(options: f64) -> i64 {
     validate_create_hook_options(options);
-    let callbacks = callbacks_from_options(options);
+    let (callbacks, track_promises) = callbacks_from_options(options);
     let mut hooks = HOOKS.lock().unwrap();
     let index = hooks.len();
     hooks.push(HookRecord {
         callbacks,
         enabled: false,
+        track_promises,
     });
     let handle = Box::into_raw(Box::new(AsyncHookHandle { index })) as i64;
     ASYNC_HOOK_HANDLES.lock().unwrap().insert(handle);
@@ -453,6 +487,9 @@ pub extern "C" fn js_async_hook_enable(handle: i64) -> i64 {
     if let Some(record) = hooks.get_mut(hook.index) {
         if !record.enabled && record.callbacks.has_any() {
             HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
+            if record.track_promises {
+                PROMISE_HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
+            }
         }
         record.enabled = true;
     }
@@ -469,13 +506,16 @@ pub extern "C" fn js_async_hook_disable(handle: i64) -> i64 {
     if let Some(record) = hooks.get_mut(hook.index) {
         if record.enabled && record.callbacks.has_any() {
             HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+            if record.track_promises {
+                PROMISE_HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+            }
         }
         record.enabled = false;
     }
     handle
 }
 
-fn enabled_callbacks() -> Vec<HookCallbacks> {
+fn enabled_callbacks(is_promise: bool) -> Vec<HookCallbacks> {
     if !hooks_active() {
         return Vec::new();
     }
@@ -483,12 +523,16 @@ fn enabled_callbacks() -> Vec<HookCallbacks> {
         .lock()
         .unwrap()
         .iter()
-        .filter(|hook| hook.enabled)
+        .filter(|hook| hook.enabled && (!is_promise || hook.track_promises))
         .map(|hook| hook.callbacks)
         .collect()
 }
 
-fn with_hook_callbacks(phase: HookPhase, mut f: impl FnMut(*const ClosureHeader)) {
+fn with_hook_callbacks(
+    phase: HookPhase,
+    is_promise: bool,
+    mut f: impl FnMut(*const ClosureHeader),
+) {
     if !hooks_active() {
         return;
     }
@@ -497,7 +541,7 @@ fn with_hook_callbacks(phase: HookPhase, mut f: impl FnMut(*const ClosureHeader)
             return;
         }
         guard.set(true);
-        let callbacks = enabled_callbacks();
+        let callbacks = enabled_callbacks(is_promise);
 
         // Hook membership is snapshotted once per lifecycle phase: disabling
         // a hook from another hook callback must not remove it from the phase
@@ -569,7 +613,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
     let resource_handle = scope.root_nanbox_f64(resource);
     let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);
     let type_value_handle = scope.root_nanbox_f64(box_string(type_ptr as *const u8));
-    with_hook_callbacks(HookPhase::Init, |callback| {
+    with_hook_callbacks(HookPhase::Init, type_name == "PROMISE", |callback| {
         js_closure_call4(
             callback,
             async_id as f64,
@@ -580,7 +624,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
     });
 }
 
-pub fn before(async_id: u64, trigger_async_id: u64) {
+fn before_with_kind(async_id: u64, trigger_async_id: u64, is_promise: bool) {
     if async_id == 0 {
         return;
     }
@@ -591,16 +635,24 @@ pub fn before(async_id: u64, trigger_async_id: u64) {
     });
     CURRENT_EXECUTION_ID.with(|c| c.set(async_id));
     CURRENT_TRIGGER_ID.with(|c| c.set(trigger_async_id));
-    with_hook_callbacks(HookPhase::Before, |callback| {
+    with_hook_callbacks(HookPhase::Before, is_promise, |callback| {
         js_closure_call1(callback, async_id as f64);
     });
 }
 
-pub fn after(async_id: u64) {
+pub fn before(async_id: u64, trigger_async_id: u64) {
+    before_with_kind(async_id, trigger_async_id, false);
+}
+
+pub fn before_promise(async_id: u64, trigger_async_id: u64) {
+    before_with_kind(async_id, trigger_async_id, true);
+}
+
+fn after_with_kind(async_id: u64, is_promise: bool) {
     if async_id == 0 {
         return;
     }
-    with_hook_callbacks(HookPhase::After, |callback| {
+    with_hook_callbacks(HookPhase::After, is_promise, |callback| {
         js_closure_call1(callback, async_id as f64);
     });
     let prev = EXECUTION_STACK
@@ -608,6 +660,14 @@ pub fn after(async_id: u64) {
         .unwrap_or((0, 0));
     CURRENT_EXECUTION_ID.with(|c| c.set(prev.0));
     CURRENT_TRIGGER_ID.with(|c| c.set(prev.1));
+}
+
+pub fn after(async_id: u64) {
+    after_with_kind(async_id, false);
+}
+
+pub fn after_promise(async_id: u64) {
+    after_with_kind(async_id, true);
 }
 
 /// Throw-unwind counterpart of [`after`]: restore the execution/trigger ids
@@ -626,12 +686,12 @@ pub fn promise_resolve(async_id: u64) {
     if async_id == 0 {
         return;
     }
-    with_hook_callbacks(HookPhase::PromiseResolve, |callback| {
+    with_hook_callbacks(HookPhase::PromiseResolve, true, |callback| {
         js_closure_call1(callback, async_id as f64);
     });
 }
 
-pub fn destroy(async_id: u64) {
+fn destroy_with_kind(async_id: u64, is_promise: bool) {
     if async_id == 0 {
         return;
     }
@@ -649,10 +709,18 @@ pub fn destroy(async_id: u64) {
     if !should_emit {
         return;
     }
-    with_hook_callbacks(HookPhase::Destroy, |callback| {
+    with_hook_callbacks(HookPhase::Destroy, is_promise, |callback| {
         js_closure_call1(callback, async_id as f64);
     });
     RESOURCES.lock().unwrap().remove(&async_id);
+}
+
+pub fn destroy(async_id: u64) {
+    destroy_with_kind(async_id, false);
+}
+
+pub fn destroy_promise(async_id: u64) {
+    destroy_with_kind(async_id, true);
 }
 
 pub fn enqueue_gc_destroy(async_id: u64) {
@@ -1449,6 +1517,7 @@ pub fn reset_for_tests() {
     CONTEXT_SNAPSHOTS.lock().unwrap().clear();
     ASYNC_WRAP_PROVIDERS.store(0, Ordering::Relaxed);
     HOOKS_ACTIVE.store(0, Ordering::Relaxed);
+    PROMISE_HOOKS_ACTIVE.store(0, Ordering::Relaxed);
     NEXT_ASYNC_ID.store(2, Ordering::Relaxed);
     NEXT_CONTEXT_SNAPSHOT_ID.store(1, Ordering::Relaxed);
     CURRENT_EXECUTION_ID.with(|c| c.set(0));
@@ -1469,8 +1538,10 @@ pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader
             promise_resolve: callback,
         },
         enabled: true,
+        track_promises: true,
     });
     HOOKS_ACTIVE.store(1, Ordering::Relaxed);
+    PROMISE_HOOKS_ACTIVE.store(1, Ordering::Relaxed);
     RESOURCES.lock().unwrap().insert(
         1,
         ResourceMeta {
@@ -1531,6 +1602,43 @@ mod tests {
         assert_eq!(execution_async_id_u64(), ids.async_id);
         after(ids.async_id);
         assert_eq!(execution_async_id_u64(), 0);
+    }
+
+    #[test]
+    fn track_promises_filters_hooks_and_activity() {
+        reset_for_tests();
+        let mut callbacks = HookCallbacks::empty();
+        callbacks.init = std::ptr::NonNull::<ClosureHeader>::dangling().as_ptr();
+        HOOKS.lock().unwrap().extend([
+            HookRecord {
+                callbacks,
+                enabled: false,
+                track_promises: false,
+            },
+            HookRecord {
+                callbacks,
+                enabled: false,
+                track_promises: true,
+            },
+        ]);
+        let suppressed = AsyncHookHandle { index: 0 };
+        let tracked = AsyncHookHandle { index: 1 };
+
+        js_async_hook_enable(&suppressed as *const AsyncHookHandle as i64);
+        assert!(hooks_active());
+        assert!(!promise_hooks_active());
+
+        js_async_hook_enable(&tracked as *const AsyncHookHandle as i64);
+        assert!(promise_hooks_active());
+        assert_eq!(enabled_callbacks(false).len(), 2);
+        assert_eq!(enabled_callbacks(true).len(), 1);
+
+        js_async_hook_disable(&tracked as *const AsyncHookHandle as i64);
+        assert!(hooks_active());
+        assert!(!promise_hooks_active());
+        js_async_hook_disable(&suppressed as *const AsyncHookHandle as i64);
+        assert!(!hooks_active());
+        reset_for_tests();
     }
 
     /// #7680: plants the #7672 shape directly rather than relying on a

@@ -452,7 +452,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         // the captured value so `after()` needs no live promise.
                         let async_id = (*promise).async_id;
                         let trigger_async_id = (*promise).trigger_async_id;
-                        crate::async_hooks::before(async_id, trigger_async_id);
+                        crate::async_hooks::before_promise(async_id, trigger_async_id);
                         crate::v8::promise_hook_before(promise);
                         // #7497: re-read BOTH from their handles — the two calls
                         // above allocate.
@@ -471,7 +471,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         let next = next_handle.get_raw_mut_ptr::<Promise>();
                         crate::v8::promise_hook_after(promise);
-                        crate::async_hooks::after(async_id);
+                        crate::async_hooks::after_promise(async_id);
                         if let Some(t) = t1 {
                             MT_TIME_NS_CALLBACK
                                 .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -883,7 +883,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     } else {
                         unsafe { (*next).trigger_async_id }
                     };
-                    crate::async_hooks::before(step_async_id, step_trigger_id);
+                    crate::async_hooks::before_promise(step_async_id, step_trigger_id);
                     crate::v8::promise_hook_before(next);
                     // #7497: re-read both across the two calls above.
                     let result = call_async_step_direct(
@@ -910,7 +910,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // pops the execution-id stack using the captured id.
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
-                    crate::async_hooks::after(step_async_id);
+                    crate::async_hooks::after_promise(step_async_id);
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                     let t2 = if prof {

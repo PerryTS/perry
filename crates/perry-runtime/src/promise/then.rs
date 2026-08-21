@@ -67,7 +67,7 @@ pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
 
 fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
-    let async_hooks_active = crate::async_hooks::hooks_active();
+    let async_hooks_active = crate::async_hooks::promise_hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
     let raw = if lifecycle_hooks_active || force_malloc {
         crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
@@ -243,7 +243,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
     // sets the flag so the immediately-following wait returns at once.
     crate::event_pump::js_notify_main_thread();
     unsafe {
-        crate::async_hooks::destroy((*promise).async_id);
+        crate::async_hooks::destroy_promise((*promise).async_id);
     }
 }
 
@@ -462,7 +462,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
     // Issue #84: see js_promise_resolve — same wake reasoning.
     crate::event_pump::js_notify_main_thread();
     unsafe {
-        crate::async_hooks::destroy((*promise).async_id);
+        crate::async_hooks::destroy_promise((*promise).async_id);
     }
 }
 

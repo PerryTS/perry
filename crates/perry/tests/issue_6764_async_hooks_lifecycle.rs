@@ -93,6 +93,41 @@ fn assert_repeating_timer_uses_one_async_resource_until_clear() {
     );
 }
 
+fn assert_track_promises_selects_promise_lifecycle_per_hook() {
+    let output = compile_and_run(include_str!(
+        "../../../test-parity/node-suite/async_hooks/hooks/track-promises.ts"
+    ));
+    assert_eq!(
+        output,
+        concat!(
+            "trackPromises default resource: true\n",
+            "trackPromises true init count: 1\n",
+            "trackPromises false init count: 0\n",
+            "trackPromises mixed init counts: 1 0\n",
+        )
+    );
+}
+
+fn assert_track_promises_validation_matches_node() {
+    let output = compile_and_run(include_str!(
+        "../../../test-parity/node-suite/async_hooks/validation/track-promises.ts"
+    ));
+    assert_eq!(
+        output,
+        concat!(
+            "trackPromises 0 TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises null TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises 1 TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises NaN TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises symbol TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises function TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises test TypeError ERR_INVALID_ARG_TYPE\n",
+            "trackPromises false promiseResolve TypeError ERR_INVALID_ARG_VALUE\n",
+            "trackPromises booleans: object object\n",
+        )
+    );
+}
+
 #[test]
 fn async_hooks_lifecycle_regressions() {
     // Keep these compiles sequential. The compiler's auto-optimized runtime
@@ -101,4 +136,6 @@ fn async_hooks_lifecycle_regressions() {
     assert_multiple_hook_callbacks_survive_allocating_siblings();
     assert_scheduler_resources_preserve_identity_execution_and_trigger_chain();
     assert_repeating_timer_uses_one_async_resource_until_clear();
+    assert_track_promises_selects_promise_lifecycle_per_hook();
+    assert_track_promises_validation_matches_node();
 }
