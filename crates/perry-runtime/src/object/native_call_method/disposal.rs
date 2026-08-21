@@ -29,9 +29,13 @@ pub(super) unsafe fn try_symbol_dispose_dispatch(
         let method = crate::symbol::js_object_get_symbol_property(object, sym_f64);
         let mjsv = JSValue::from_bits(method.to_bits());
         if method.to_bits() != crate::value::TAG_UNDEFINED && !mjsv.is_null() && mjsv.is_pointer() {
-            let prev = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+            // #8495: root the displaced receiver across the call below — the
+            // replace has already overwritten the cell, so this is the frame's only
+            // copy and the restore would otherwise publish a pre-move address.
+            let prev_scope = crate::gc::RuntimeHandleScope::new();
+            let prev_h = prev_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
             let result = crate::closure::js_native_call_value(method, args_ptr, args_len);
-            IMPLICIT_THIS.with(|c| c.set(prev));
+            IMPLICIT_THIS.with(|c| c.set(prev_h.get_nanbox_u64()));
             return Some(result);
         }
     }

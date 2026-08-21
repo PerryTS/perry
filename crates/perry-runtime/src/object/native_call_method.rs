@@ -691,9 +691,13 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                 crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
             if !fv.is_undefined() && !fv.is_null() {
-                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                // #8495: root the displaced receiver across the call below — the
+                // replace has already overwritten the cell, so this is the frame's only
+                // copy and the restore would otherwise publish a pre-move address.
+                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
                 let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
-                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
         }
@@ -812,9 +816,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
         field
     };
 
-    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+    // #8495: the displaced receiver must be ROOTED across the call. The
+    // `replace` has already overwritten the cell, so this is the only copy the
+    // frame holds; an evacuating collection inside the callee moves it and the
+    // restore would publish a pre-move address back INTO the scanned cell.
+    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+    let prev_this_h =
+        prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
     let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
-    IMPLICIT_THIS.with(|c| c.set(prev_this));
+    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
 }
 
@@ -1470,7 +1480,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     dyn_val.to_bits(),
                     f64::from_bits(object().to_bits()),
                 );
-                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
+                // #8495: root the displaced receiver across the call below — the
+                // replace has already overwritten the cell, so this is the frame's only
+                // copy and the restore would otherwise publish a pre-move address.
+                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object().to_bits())));
                 // #7803: `clone_closure_rebind_this` above ALLOCATES, so the
                 // caller's raw `args_ptr` buffer holds pre-move addresses from
                 // here on. `arg_handles` is what the collector rewrites; the
@@ -1483,7 +1497,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     call_args.as_ptr(),
                     call_args.len(),
                 );
-                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
             // `fn.length()` / `fn.name()` — the own slots hold a number /
@@ -1618,13 +1632,17 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         // canonical class-method value reads its receiver from IMPLICIT_THIS via
         // `canonical_bound_method_receiver` (#6699 routes a proxy receiver
         // through there).
-        let prev_this = IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+        // #8495: root the displaced receiver across the call below — the
+        // replace has already overwritten the cell, so this is the frame's only
+        // copy and the restore would otherwise publish a pre-move address.
+        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+        let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())));
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
             args.as_ptr(),
             args.len(),
         );
-        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         return result;
     }
 
@@ -1795,10 +1813,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     dyn_val.to_bits(),
                     f64::from_bits(recv_bits),
                 );
-                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                // #8495: root the displaced receiver across the call below — the
+                // replace has already overwritten the cell, so this is the frame's only
+                // copy and the restore would otherwise publish a pre-move address.
+                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv_bits)));
                 let result =
                     crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
-                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
             let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
@@ -1934,13 +1956,17 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         field_val.bits(),
                         f64::from_bits(jsval().bits()),
                     );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval().bits()));
+                    // #8495: root the displaced receiver across the call below — the
+                    // replace has already overwritten the cell, so this is the frame's only
+                    // copy and the restore would otherwise publish a pre-move address.
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval().bits())));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args_ptr,
                         args_len,
                     );
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }
             }
@@ -1957,13 +1983,17 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         field_val.bits(),
                         f64::from_bits(jsval().bits()),
                     );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval().bits()));
+                    // #8495: root the displaced receiver across the call below — the
+                    // replace has already overwritten the cell, so this is the frame's only
+                    // copy and the restore would otherwise publish a pre-move address.
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval().bits())));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args_ptr,
                         args_len,
                     );
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }
             }
@@ -2285,10 +2315,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, method_name) {
                 let candidate = f64::from_bits(bits);
                 if crate::collection_iter::is_callable(candidate) {
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
+                    // #8495: root the displaced receiver across the call below — the
+                    // replace has already overwritten the cell, so this is the frame's only
+                    // copy and the restore would otherwise publish a pre-move address.
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object().to_bits())));
                     let result =
                         crate::closure::js_native_call_value(candidate, args_ptr, args_len);
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }
             }

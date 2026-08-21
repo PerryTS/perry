@@ -727,9 +727,13 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // walks the parent chain and drops its read lock before returning, so the
     // invoked body may re-take the registry lock without deadlocking (wall-37).
     if let Some(method_value) = super::class_registry::lookup_prototype_method(parent_cid, name) {
-        let prev_this = super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits()));
+        // #8495: root the displaced receiver across the call below — the
+        // replace has already overwritten the cell, so this is the frame's only
+        // copy and the restore would otherwise publish a pre-move address.
+        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+        let prev_this_h = prev_this_scope.root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
         let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
-        super::IMPLICIT_THIS.with(|c| c.set(prev_this));
+        super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         return result;
     }
     // #6316: the parent chain is real (an intermediate user class) but bottoms
@@ -774,9 +778,13 @@ unsafe fn call_displaced_native_base_method(
     // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver
     // through `this_value(closure)`, which falls back to IMPLICIT_THIS when the
     // capture is undefined (the prototype-installed form).
-    let prev_this = super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits()));
+    // #8495: root the displaced receiver across the call below — the
+    // replace has already overwritten the cell, so this is the frame's only
+    // copy and the restore would otherwise publish a pre-move address.
+    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+    let prev_this_h = prev_this_scope.root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
     let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
-    super::IMPLICIT_THIS.with(|c| c.set(prev_this));
+    super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
 }
 

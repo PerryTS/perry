@@ -215,10 +215,14 @@ pub(super) unsafe fn dispatch_handle(
                     let stored_ptr = crate::value::js_nanbox_get_pointer(stored) as usize;
                     if crate::closure::is_closure_ptr(stored_ptr) {
                         let recv_bits = jsval.bits();
-                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                        // #8495: root the displaced receiver across the call below — the
+                        // replace has already overwritten the cell, so this is the frame's only
+                        // copy and the restore would otherwise publish a pre-move address.
+                        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                        let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv_bits)));
                         let result =
                             crate::closure::js_native_call_value(stored, args_ptr, args_len);
-                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                         return Some(result);
                     }
                 }
@@ -937,13 +941,17 @@ pub(super) unsafe fn dispatch_handle(
                                 // RegExpRouter.match (imported function
                                 // assigned as a class field) hit this.
                                 let recv_bits = jsval.bits();
-                                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                                // #8495: root the displaced receiver across the call below — the
+                                // replace has already overwritten the cell, so this is the frame's only
+                                // copy and the restore would otherwise publish a pre-move address.
+                                let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                                let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv_bits)));
                                 let result = crate::closure::js_native_call_value(
                                     f64::from_bits(field_val.bits()),
                                     args_ptr,
                                     args_len,
                                 );
-                                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                                 return Some(result);
                             }
                         }
@@ -1130,13 +1138,17 @@ pub(super) unsafe fn dispatch_handle(
                             field_bits,
                             f64::from_bits(jsval.bits()),
                         );
-                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                        // #8495: root the displaced receiver across the call below — the
+                        // replace has already overwritten the cell, so this is the frame's only
+                        // copy and the restore would otherwise publish a pre-move address.
+                        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                        let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval.bits())));
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
                             args_ptr,
                             args_len,
                         );
-                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                         return Some(result);
                     }
                     None => {}
@@ -1192,13 +1204,17 @@ pub(super) unsafe fn dispatch_handle(
                             field_val.bits(),
                             f64::from_bits(jsval.bits()),
                         );
-                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                        // #8495: root the displaced receiver across the call below — the
+                        // replace has already overwritten the cell, so this is the frame's only
+                        // copy and the restore would otherwise publish a pre-move address.
+                        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                        let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval.bits())));
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
                             args_ptr,
                             args_len,
                         );
-                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                         return Some(result);
                     }
                 }
@@ -1210,10 +1226,14 @@ pub(super) unsafe fn dispatch_handle(
                 // only exists in `CLASS_PROTOTYPE_METHODS`. Bind `this`
                 // to the receiver and call the stored closure.
                 if let Some(method_value) = lookup_prototype_method(class_id, method_name) {
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    // #8495: root the displaced receiver across the call below — the
+                    // replace has already overwritten the cell, so this is the frame's only
+                    // copy and the restore would otherwise publish a pre-move address.
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval.bits())));
                     let result =
                         crate::closure::js_native_call_value(method_value, args_ptr, args_len);
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return Some(result);
                 }
             }
