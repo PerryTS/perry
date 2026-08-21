@@ -79,7 +79,7 @@ pub use replace_expand::{
     js_string_replace_regex_named,
 };
 #[cfg(feature = "regex-engine")]
-use replace_fn::call_replace_callback;
+use replace_fn::{call_replace_callback, copy_replace_source, finish_replace_bytes};
 pub use replace_fn::{
     js_string_replace_all_string, js_string_replace_all_string_fn, js_string_replace_string,
     js_string_replace_string_fn,
@@ -1318,7 +1318,7 @@ unsafe fn replace_regex_str_fancy(
         last_end = full_match.end();
     }
     result.push_str(&str_data[last_end..]);
-    js_string_from_str(&result)
+    finish_replace_bytes(result.as_bytes())
 }
 
 /// string.replace(regex, replacement) -> string
@@ -1342,7 +1342,7 @@ pub extern "C" fn js_string_replace_regex(
 
     if !is_valid_regex_ptr(re) {
         // If regex is null, return original string
-        return js_string_from_str(str_data);
+        return copy_replace_source(s);
     }
 
     unsafe {
@@ -1374,7 +1374,7 @@ pub extern "C" fn js_string_replace_regex(
                 .to_string()
         };
 
-        js_string_from_str(&result)
+        finish_replace_bytes(result.as_bytes())
     }
 }
 
@@ -1390,9 +1390,8 @@ pub extern "C" fn js_string_replace_all_regex(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(str_data);
+        return copy_replace_source(s);
     }
 
     ensure_replace_all_regex_global(re);

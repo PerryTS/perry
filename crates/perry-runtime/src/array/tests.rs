@@ -50,8 +50,8 @@ fn boxed_pointer(ptr: *mut u8) -> f64 {
     crate::value::js_nanbox_pointer(ptr as i64)
 }
 
-fn string_value(ptr: *mut crate::StringHeader) -> f64 {
-    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
+fn string_value(ptr: *const crate::StringHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr.cast_mut()).bits())
 }
 
 #[test]
@@ -1644,6 +1644,82 @@ fn join_accepts_heap_string_tagged_elements() {
         let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "alpha|beta");
+    }
+}
+
+#[test]
+fn join_preserves_wtf8_and_canonicalizes_boundaries() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let high = scope.root_string_ptr(crate::string::js_string_from_wtf8_bytes(
+            [0xED, 0xA0, 0xBD].as_ptr(),
+            3,
+        ));
+        let low = scope.root_string_ptr(crate::string::js_string_from_wtf8_bytes(
+            [0xED, 0xB8, 0x80].as_ptr(),
+            3,
+        ));
+        let mut arr = js_array_alloc(3);
+        arr = high.with_const_ptr(|high: *const crate::string::StringHeader| {
+            js_array_push_f64(arr, string_value(high))
+        });
+        arr = js_array_push_f64(arr, f64::from_bits(crate::value::TAG_HOLE));
+        arr = low.with_const_ptr(|low: *const crate::string::StringHeader| {
+            js_array_push_f64(arr, string_value(low))
+        });
+
+        let arr = scope.root_raw_const_ptr(arr);
+        let empty = scope.root_string_ptr(crate::string::js_string_from_bytes(ptr::null(), 0));
+        let result = arr.with_const_ptr(|arr: *const ArrayHeader| {
+            empty.with_const_ptr(|empty: *const crate::string::StringHeader| {
+                js_array_join(arr, empty)
+            })
+        });
+        let bytes = std::slice::from_raw_parts(
+            crate::string::string_data(result),
+            (*result).byte_len as usize,
+        );
+        assert_eq!(bytes, "😀".as_bytes());
+        assert_eq!((*result).utf16_len, 2);
+        assert_eq!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
+    }
+}
+
+#[test]
+fn join_keeps_separated_lone_surrogates_flagged() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let high = scope.root_string_ptr(crate::string::js_string_from_wtf8_bytes(
+            [0xED, 0xA0, 0xBD].as_ptr(),
+            3,
+        ));
+        let low = scope.root_string_ptr(crate::string::js_string_from_wtf8_bytes(
+            [0xED, 0xB8, 0x80].as_ptr(),
+            3,
+        ));
+        let mut arr = js_array_alloc(2);
+        arr = high.with_const_ptr(|high: *const crate::string::StringHeader| {
+            js_array_push_f64(arr, string_value(high))
+        });
+        arr = low.with_const_ptr(|low: *const crate::string::StringHeader| {
+            js_array_push_f64(arr, string_value(low))
+        });
+        let arr = scope.root_raw_const_ptr(arr);
+        let separator =
+            scope.root_string_ptr(crate::string::js_string_from_bytes(b"|".as_ptr(), 1));
+        let result = arr.with_const_ptr(|arr: *const ArrayHeader| {
+            separator.with_const_ptr(|separator: *const crate::string::StringHeader| {
+                js_array_join(arr, separator)
+            })
+        });
+        assert_eq!((*result).utf16_len, 3);
+        assert_ne!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
     }
 }
 

@@ -34,13 +34,6 @@ pub extern "C" fn js_string_pad_fill(value: f64) -> *mut StringHeader {
 #[used]
 static KEEP_PAD_FILL: extern "C" fn(f64) -> *mut StringHeader = js_string_pad_fill;
 
-/// Maximum string length Perry/V8 supports as a single `String`. This
-/// mirrors the value Node v25 reports via `buffer.constants.MAX_STRING_LENGTH`
-/// (536_870_888 = `(1 << 29) - 24` on this V8 build). `padStart`/`padEnd`
-/// throw `RangeError: Invalid string length` when the requested length
-/// exceeds this, instead of silently capping. (#2786 / #2880)
-const MAX_STRING_LENGTH: usize = 536_870_888;
-
 /// ToLength coercion (ECMA-262 §7.1.21) for `padStart`/`padEnd`'s target
 /// length: NaN/negative → 0, fractional values truncate, `+Infinity` →
 /// `2^53 - 1`. Per the spec's `StringPad`, ToLength itself never throws —
@@ -191,18 +184,12 @@ fn finish_pad_result(
         bytes.extend_from_slice(str_data.as_bytes());
         bytes.extend_from_slice(pad_chunk);
     }
-    if pad_has_lone_surrogate || receiver_has_lone_surrogate {
+    let result = if pad_has_lone_surrogate || receiver_has_lone_surrogate {
         js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
     } else {
         js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
-    }
-}
-
-fn throw_invalid_string_length() -> ! {
-    let message = "Invalid string length";
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    };
+    super::concat::canonicalize_surrogate_pairs(result)
 }
 
 /// Pad the start of a string to reach target length (in UTF-16 code units).
@@ -316,7 +303,7 @@ pub extern "C" fn js_string_repeat(s: *const StringHeader, count_value: f64) -> 
     //     *post-collection* address back out of the handle.
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_root = scope.root_string_ptr(s);
-    let (count_number, s) = receiver_root
+    let (count_number, _) = receiver_root
         .across_const::<StringHeader, _>(|| crate::builtins::js_number_coerce(count_value));
 
     let count_integer = to_integer_or_infinity(count_number);
@@ -331,16 +318,58 @@ pub extern "C" fn js_string_repeat(s: *const StringHeader, count_value: f64) -> 
     if count_integer == 0.0 {
         return js_string_from_bytes("".as_ptr(), 0);
     }
-    let str_data = string_as_str(s);
-    if str_data.is_empty() {
+    let (source_byte_len, source_utf16_len, source_flags) =
+        receiver_root.with_const_ptr(|s_before: *const StringHeader| unsafe {
+            (
+                (*s_before).byte_len as usize,
+                (*s_before).utf16_len as usize,
+                (*s_before).flags,
+            )
+        });
+    if source_byte_len == 0 {
         return js_string_from_bytes("".as_ptr(), 0);
     }
 
+    if count_integer > usize::MAX as f64 {
+        throw_invalid_string_length();
+    }
     let count = count_integer as usize;
-    let result = str_data.repeat(count);
-    let ret = js_string_from_bytes(result.as_ptr(), result.len() as u32);
-    std::hint::black_box(&result);
-    ret
+    let result_utf16_len = source_utf16_len
+        .checked_mul(count)
+        .unwrap_or_else(|| throw_invalid_string_length());
+    let result_byte_len = source_byte_len
+        .checked_mul(count)
+        .unwrap_or_else(|| throw_invalid_string_length());
+    if result_utf16_len > MAX_STRING_LENGTH || result_byte_len > u32::MAX as usize {
+        throw_invalid_string_length();
+    }
+
+    let (result, result_data) = string_storage_alloc(result_byte_len as u32);
+    unsafe {
+        init_string_header(
+            result,
+            result_utf16_len as u32,
+            result_byte_len as u32,
+            result_byte_len as u32,
+            0,
+            source_flags,
+        );
+
+        // The allocation above can move `s`; only now re-read its address.
+        receiver_root.with_const_ptr(|s_now: *const StringHeader| {
+            ptr::copy_nonoverlapping(string_data(s_now), result_data, source_byte_len);
+        });
+
+        // Grow from the already-written destination prefix. This takes O(log n)
+        // bulk copies rather than one tiny memcpy per repetition.
+        let mut written = source_byte_len;
+        while written < result_byte_len {
+            let chunk = written.min(result_byte_len - written);
+            ptr::copy_nonoverlapping(result_data, result_data.add(written), chunk);
+            written += chunk;
+        }
+    }
+    super::concat::canonicalize_surrogate_pairs(result)
 }
 
 fn to_integer_or_infinity(value: f64) -> f64 {
@@ -436,5 +465,69 @@ mod decode_wtf8_tests {
         // matters), so just assert the call returns a bounded result.
         assert!(decode_wtf8_units(&[0xF0, 0x9F, 0x98]).len() <= 3);
         assert!(decode_wtf8_units(&[0xE2, 0x82]).len() <= 2);
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+
+    fn wtf8(bytes: &[u8]) -> *mut StringHeader {
+        js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    fn payload(s: *const StringHeader) -> Vec<u8> {
+        unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize).to_vec() }
+    }
+
+    #[test]
+    fn repeat_writes_exact_payload_and_preserves_lone_surrogate_flag() {
+        let source = wtf8(&[0xED, 0xA0, 0xBD]); // lone high surrogate D83D
+        let result = js_string_repeat(source, 3.0);
+        assert_eq!(
+            payload(result),
+            [0xED, 0xA0, 0xBD, 0xED, 0xA0, 0xBD, 0xED, 0xA0, 0xBD]
+        );
+        unsafe {
+            assert_eq!((*result).utf16_len, 3);
+            assert_ne!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+    }
+
+    #[test]
+    fn pad_boundaries_canonicalize_surrogate_pairs() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let high = scope.root_string_ptr(wtf8(&[0xED, 0xA0, 0xBD]));
+        let low = scope.root_string_ptr(wtf8(&[0xED, 0xB8, 0x80]));
+
+        let start = low.with_const_ptr(|low: *const StringHeader| {
+            high.with_const_ptr(|high: *const StringHeader| js_string_pad_start(low, 2.0, high))
+        });
+        assert_eq!(payload(start), "😀".as_bytes());
+        unsafe {
+            assert_eq!((*start).utf16_len, 2);
+            assert_eq!((*start).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+
+        let end = high.with_const_ptr(|high: *const StringHeader| {
+            low.with_const_ptr(|low: *const StringHeader| js_string_pad_end(high, 2.0, low))
+        });
+        assert_eq!(payload(end), "😀".as_bytes());
+        unsafe {
+            assert_eq!((*end).utf16_len, 2);
+            assert_eq!((*end).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+    }
+
+    #[test]
+    fn pad_cycles_and_truncates_by_utf16_units() {
+        let source = js_string_from_str("x");
+        let pad = js_string_from_str("😀a"); // three UTF-16 units
+        let result = js_string_pad_start(source, 6.0, pad);
+        assert_eq!(string_as_str(result), "😀a😀x");
+        unsafe {
+            assert_eq!((*result).utf16_len, 6);
+            assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
     }
 }

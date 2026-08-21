@@ -606,6 +606,18 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     (ptr, data)
 }
 
+/// Maximum number of UTF-16 code units in one Perry string. Mirrors V8's
+/// `buffer.constants.MAX_STRING_LENGTH` on the Node version Perry targets.
+pub(crate) const MAX_STRING_LENGTH: usize = 536_870_888;
+
+/// Throw the common V8-compatible error used by exact-size string builders.
+pub(crate) fn throw_invalid_string_length() -> ! {
+    let message = "Invalid string length";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// [`string_storage_alloc`] with **no collection point**: `Some` means the
 /// bytes came out of the nursery block that was already open, so nothing on
 /// the heap moved and any raw string pointer the caller read *before* this
@@ -872,6 +884,42 @@ pub(crate) fn compute_utf16_len_wtf8(bytes: &[u8]) -> u32 {
         }
     }
     count
+}
+
+/// Finalize bytes accumulated by a Rust-side string builder. Unlike
+/// [`js_string_from_bytes`], this derives the lone-surrogate flag while it
+/// counts UTF-16 units, then canonicalizes any high/low pair created at a
+/// builder boundary. The input must be owned outside the GC heap so it stays
+/// valid across the destination allocation.
+pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
+    let len = u32::try_from(bytes.len()).unwrap_or_else(|_| throw_invalid_string_length());
+    if bytes.iter().all(|&byte| byte < 0x80) {
+        if bytes.len() > MAX_STRING_LENGTH {
+            throw_invalid_string_length();
+        }
+        return js_string_from_ascii_bytes(bytes.as_ptr(), len);
+    }
+
+    let mut utf16_len = 0u32;
+    let mut has_lone_surrogate = false;
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let (advance, units, code_point) = wtf8_step(bytes, offset);
+        utf16_len = utf16_len.saturating_add(units as u32);
+        has_lone_surrogate |= units == 1 && (0xD800..=0xDFFF).contains(&code_point);
+        offset = (offset + advance).min(bytes.len());
+    }
+    if utf16_len as usize > MAX_STRING_LENGTH {
+        throw_invalid_string_length();
+    }
+
+    let flags = if has_lone_surrogate {
+        STRING_FLAG_HAS_LONE_SURROGATES
+    } else {
+        0
+    };
+    let result = js_string_from_bytes_known_utf16(bytes.as_ptr(), len, utf16_len, flags);
+    concat::canonicalize_surrogate_pairs(result)
 }
 
 /// Internal helper: Create a StringHeader from a Rust &str

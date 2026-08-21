@@ -22,6 +22,103 @@ pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> Strin
     }
 }
 
+#[derive(Clone, Copy)]
+enum Utf16StringUnit {
+    Source { start: usize, len: usize },
+    InlineSurrogate([u8; 3]),
+}
+
+#[inline]
+fn encode_wtf8_surrogate(unit: u16) -> [u8; 3] {
+    [
+        0xE0 | ((unit >> 12) as u8),
+        0x80 | (((unit >> 6) & 0x3F) as u8),
+        0x80 | ((unit & 0x3F) as u8),
+    ]
+}
+
+/// Snapshot a Perry UTF-8/WTF-8 payload as JavaScript UTF-16 units. Astral
+/// UTF-8 sequences become two WTF-8 surrogate halves so an empty search string
+/// can match between them, as ECMAScript requires.
+fn snapshot_utf16_units(bytes: &[u8]) -> Vec<Utf16StringUnit> {
+    let mut units = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, utf16_units, code_point) = crate::string::wtf8_step(bytes, i);
+        let end = (i + advance).min(bytes.len());
+        if utf16_units == 2 && code_point >= 0x10000 {
+            let astral = code_point - 0x10000;
+            units.push(Utf16StringUnit::InlineSurrogate(encode_wtf8_surrogate(
+                0xD800 + (astral >> 10) as u16,
+            )));
+            units.push(Utf16StringUnit::InlineSurrogate(encode_wtf8_surrogate(
+                0xDC00 + (astral & 0x3FF) as u16,
+            )));
+        } else if utf16_units == 1 {
+            units.push(Utf16StringUnit::Source {
+                start: i,
+                len: end - i,
+            });
+        }
+        i = end;
+    }
+    units
+}
+
+fn append_utf16_units(out: &mut Vec<u8>, source: &[u8], units: &[Utf16StringUnit]) {
+    for unit in units {
+        match unit {
+            Utf16StringUnit::Source { start, len } => {
+                out.extend_from_slice(&source[*start..*start + *len]);
+            }
+            Utf16StringUnit::InlineSurrogate(bytes) => out.extend_from_slice(bytes),
+        }
+    }
+}
+
+/// Expand one replacement template for an empty string-pattern match at a
+/// UTF-16 boundary. In particular, `$\`` and `$'` select unit ranges rather
+/// than UTF-8 byte/Unicode-scalar ranges.
+fn append_empty_pattern_replacement(
+    out: &mut Vec<u8>,
+    replacement: &[u8],
+    source: &[u8],
+    units: &[Utf16StringUnit],
+    position: usize,
+) {
+    let mut i = 0usize;
+    while i < replacement.len() {
+        if replacement[i] != b'$' || i + 1 == replacement.len() {
+            out.push(replacement[i]);
+            i += 1;
+            continue;
+        }
+        match replacement[i + 1] {
+            b'$' => out.push(b'$'),
+            b'&' => {}
+            b'`' => append_utf16_units(out, source, &units[..position]),
+            b'\'' => append_utf16_units(out, source, &units[position..]),
+            _ => {
+                out.push(b'$');
+                i += 1;
+                continue;
+            }
+        }
+        i += 2;
+    }
+}
+
+pub(super) fn finish_replace_bytes(bytes: &[u8]) -> *mut StringHeader {
+    let result = crate::string::js_string_from_builder_bytes(bytes);
+    std::hint::black_box(bytes);
+    result
+}
+
+pub(super) fn copy_replace_source(s: *const StringHeader) -> *mut StringHeader {
+    let (byte_len, utf16_len, flags) = unsafe { ((*s).byte_len, (*s).utf16_len, (*s).flags) };
+    crate::string::string_copy_range(s, 0, byte_len, utf16_len, flags)
+}
+
 /// Invoke a string-pattern replacer callback with `(matched, offset, whole)`.
 ///
 /// `matched` must be an OWNED (or static) Rust string — never a slice of a GC
@@ -80,16 +177,17 @@ pub extern "C" fn js_string_replace_string_fn(
         if pattern_str.is_empty() {
             let replacement =
                 call_string_replace_callback(callback_handle.get_nanbox_f64(), "", 0, &s_handle);
-            let str_data = cur_str();
-            let mut result = String::with_capacity(replacement.len() + str_data.len());
-            result.push_str(&replacement);
-            result.push_str(str_data);
-            return js_string_from_str(&result);
+            let source = cur_str().as_bytes();
+            let mut result = Vec::with_capacity(replacement.len() + source.len());
+            result.extend_from_slice(replacement.as_bytes());
+            result.extend_from_slice(source);
+            return finish_replace_bytes(&result);
         }
 
         let str_data = cur_str();
         let Some(byte_idx) = str_data.find(pattern_str.as_str()) else {
-            return js_string_from_str(str_data);
+            return s_handle
+                .with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
         };
         let char_offset = super::utf16::byte_index_to_utf16_index(str_data, byte_idx);
         let replacement = call_string_replace_callback(
@@ -104,7 +202,7 @@ pub extern "C" fn js_string_replace_string_fn(
         result.push_str(&str_data[..byte_idx]);
         result.push_str(&replacement);
         result.push_str(&str_data[byte_idx + pattern_str.len()..]);
-        js_string_from_str(&result)
+        finish_replace_bytes(result.as_bytes())
     }
 }
 
@@ -139,29 +237,29 @@ pub extern "C" fn js_string_replace_all_string_fn(
 
     unsafe {
         if pattern_str.is_empty() {
-            // Owned char snapshot: the old code iterated `str_data.chars()`
-            // while the callback ran between steps — a stale borrow across
-            // user code.
-            let chars: Vec<char> = cur_str().chars().collect();
-            let mut result = String::new();
-            result.push_str(&call_string_replace_callback(
-                callback_handle.get_nanbox_f64(),
-                "",
-                0,
-                &s_handle,
-            ));
-            let mut offset = 0usize;
-            for ch in chars {
-                result.push(ch);
-                offset += 1;
-                result.push_str(&call_string_replace_callback(
-                    callback_handle.get_nanbox_f64(),
-                    "",
-                    offset,
-                    &s_handle,
-                ));
+            // Owned byte/unit snapshot: callbacks may move the subject, and JS
+            // empty-pattern matches occur at UTF-16 (not Unicode scalar)
+            // boundaries, including between an astral surrogate pair.
+            let source = cur_str().as_bytes().to_vec();
+            let units = snapshot_utf16_units(&source);
+            let mut result = Vec::with_capacity(source.len());
+            result.extend_from_slice(
+                call_string_replace_callback(callback_handle.get_nanbox_f64(), "", 0, &s_handle)
+                    .as_bytes(),
+            );
+            for (index, unit) in units.iter().enumerate() {
+                append_utf16_units(&mut result, &source, std::slice::from_ref(unit));
+                result.extend_from_slice(
+                    call_string_replace_callback(
+                        callback_handle.get_nanbox_f64(),
+                        "",
+                        index + 1,
+                        &s_handle,
+                    )
+                    .as_bytes(),
+                );
             }
-            return js_string_from_str(&result);
+            return finish_replace_bytes(&result);
         }
 
         // Precompute every match position (byte index + char offset) before
@@ -185,7 +283,8 @@ pub extern "C" fn js_string_replace_all_string_fn(
                 .collect()
         };
         if matches.is_empty() {
-            return js_string_from_str(cur_str());
+            return s_handle
+                .with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
         }
         let mut result = String::new();
         let mut last_end = 0usize;
@@ -202,7 +301,7 @@ pub extern "C" fn js_string_replace_all_string_fn(
             last_end = byte_idx + pattern_str.len();
         }
         result.push_str(&cur_str()[last_end..]);
-        js_string_from_str(&result)
+        finish_replace_bytes(result.as_bytes())
     }
 }
 
@@ -274,11 +373,20 @@ pub extern "C" fn js_string_replace_string(
         "undefined"
     };
 
+    if pattern_str.is_empty() {
+        let source = str_data.as_bytes();
+        let units = snapshot_utf16_units(source);
+        let mut result = Vec::with_capacity(source.len().saturating_add(repl_str.len()));
+        append_empty_pattern_replacement(&mut result, repl_str.as_bytes(), source, &units, 0);
+        append_utf16_units(&mut result, source, &units);
+        return finish_replace_bytes(&result);
+    }
+
     // String.replace with a string pattern only replaces the first occurrence.
     // Fast path: a replacement with no `$` needs no substitution.
-    if !repl_str.contains('$') || pattern_str.is_empty() {
+    if !repl_str.contains('$') {
         let result = str_data.replacen(pattern_str, repl_str, 1);
-        return js_string_from_str(&result);
+        return finish_replace_bytes(result.as_bytes());
     }
     let result = match str_data.find(pattern_str) {
         Some(pos) => {
@@ -291,7 +399,7 @@ pub extern "C" fn js_string_replace_string(
         }
         None => str_data.to_string(),
     };
-    js_string_from_str(&result)
+    finish_replace_bytes(result.as_bytes())
 }
 
 /// Replace ALL occurrences with a simple string pattern (not regex)
@@ -318,12 +426,34 @@ pub extern "C" fn js_string_replace_all_string(
         "undefined"
     };
 
-    // Fast path: a replacement with no `$` (or an empty pattern, whose
-    // between-every-char match positions are left to Rust's `replace`) needs
-    // no `$$`/`$&`/`` $` ``/`$'` substitution.
-    if !repl_str.contains('$') || pattern_str.is_empty() {
+    if pattern_str.is_empty() {
+        let source = str_data.as_bytes();
+        let units = snapshot_utf16_units(source);
+        let insertion_count = units.len().saturating_add(1);
+        let mut result = Vec::with_capacity(
+            source
+                .len()
+                .saturating_add(repl_str.len().saturating_mul(insertion_count)),
+        );
+        for position in 0..=units.len() {
+            append_empty_pattern_replacement(
+                &mut result,
+                repl_str.as_bytes(),
+                source,
+                &units,
+                position,
+            );
+            if position < units.len() {
+                append_utf16_units(&mut result, source, std::slice::from_ref(&units[position]));
+            }
+        }
+        return finish_replace_bytes(&result);
+    }
+
+    // Fast path: a replacement with no `$` needs no substitution.
+    if !repl_str.contains('$') {
         let result = str_data.replace(pattern_str, repl_str);
-        return js_string_from_str(&result);
+        return finish_replace_bytes(result.as_bytes());
     }
     let mut result = String::with_capacity(str_data.len());
     let mut last = 0;
@@ -335,7 +465,7 @@ pub extern "C" fn js_string_replace_all_string(
         last = pos + m.len();
     }
     result.push_str(&str_data[last..]);
-    js_string_from_str(&result)
+    finish_replace_bytes(result.as_bytes())
 }
 
 /// `replaceValue` whose function-ness is only knowable at RUNTIME (a closure
