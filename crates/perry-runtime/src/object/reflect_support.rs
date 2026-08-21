@@ -245,11 +245,28 @@ fn reflect_bool(b: bool) -> f64 {
 /// reporting success as a NaN-boxed boolean. Shared by `crate::proxy`'s
 /// `Reflect.defineProperty` entry point (both the no-trap and direct paths).
 pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
+    // #8507: each exotic probe below may coerce `key`, which can run user JS
+    // and evacuate all three operands. A helper's private handle scope keeps
+    // its arguments current only for that helper; when it returns
+    // `NotTypedArray` / `None`, the copies in this caller would still name
+    // from-space. Keep one caller-owned set of roots and re-read it before
+    // every subsequent operation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_heap_word_u64(obj.to_bits());
+    let key_handle = scope.root_nanbox_f64(key);
+    let descriptor_handle = scope.root_nanbox_f64(descriptor);
+
     // TypedArrays are Integer-Indexed exotic objects: a canonical numeric index
     // key returns true/false here rather than going through the ordinary object
     // machinery (which would mishandle in-bounds element writes and treats the
     // view as non-extensible).
-    match unsafe { super::typed_array_define_own_property(obj, key, descriptor) } {
+    match unsafe {
+        super::typed_array_define_own_property(
+            f64::from_bits(obj_handle.get_heap_word_u64()),
+            key_handle.get_nanbox_f64(),
+            descriptor_handle.get_nanbox_f64(),
+        )
+    } {
         super::TypedArrayDefineOutcome::Defined => return reflect_bool(true),
         super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
         super::TypedArrayDefineOutcome::NotTypedArray => {}
@@ -258,22 +275,38 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     // reports success/failure as a boolean here rather than throwing — bypass
     // the generic non-configurable pre-check below, which would mishandle the
     // (non-configurable but writable) `length` property.
-    if let Some(ok) = unsafe { super::array_length_reflect_define(obj, key, descriptor) } {
+    if let Some(ok) = unsafe {
+        super::array_length_reflect_define(
+            f64::from_bits(obj_handle.get_heap_word_u64()),
+            key_handle.get_nanbox_f64(),
+            descriptor_handle.get_nanbox_f64(),
+        )
+    } {
         return reflect_bool(ok);
     }
-    let has_own = obj_value_has_own_key(obj, key);
+    let has_own = obj_value_has_own_key(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+    );
     // Redefining a non-configurable existing property fails.
     if has_own {
-        if let Some((_writable, configurable)) = obj_value_attrs(obj, key) {
+        if let Some((_writable, configurable)) = obj_value_attrs(
+            f64::from_bits(obj_handle.get_heap_word_u64()),
+            key_handle.get_nanbox_f64(),
+        ) {
             if !configurable {
                 return reflect_bool(false);
             }
         }
-    } else if obj_value_no_extend(obj) {
+    } else if obj_value_no_extend(f64::from_bits(obj_handle.get_heap_word_u64())) {
         // Defining a brand-new property on a non-extensible object fails.
         return reflect_bool(false);
     }
-    super::js_object_define_property(obj, key, descriptor);
+    super::js_object_define_property(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+        descriptor_handle.get_nanbox_f64(),
+    );
     reflect_bool(true)
 }
 

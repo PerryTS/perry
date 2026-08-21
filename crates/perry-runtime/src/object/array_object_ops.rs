@@ -165,28 +165,33 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     obj: *mut ObjectHeader,
     descriptor_value: f64,
 ) -> bool {
-    let desc_ptr = extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() {
+    // #8507: every descriptor-field name below is allocated in the GC heap,
+    // and the value's ToNumber hooks may run user JS. Keep both the array and
+    // descriptor rooted for the whole algorithm; helper-local roots cannot
+    // refresh raw copies held by this caller between field probes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let desc_handle = scope.root_nanbox_f64(descriptor_value);
+    let current_desc = || extract_obj_ptr(desc_handle.get_nanbox_f64());
+    if current_desc().is_null() {
         return true;
     }
     // A customized `length` (e.g. writable:false) gates the raw numeric
     // fast paths — see OBJ_FLAG_ARRAY_DESCRIPTORS in define_array_property.
     // Set here too so the `Reflect.defineProperty` entry point is covered.
     {
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let gc = gc_header_for(obj);
         (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
     }
-    // #7548: `obj` may be a pre-grow forwarding stub. `old_len` below drives
-    // the shrink walk, so it must come from the array's current home.
-    let arr = array_header_mut(obj);
 
     let read_present = |name: &[u8]| -> bool {
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        own_key_present(desc_ptr, k)
+        own_key_present(current_desc(), k)
     };
     let read_bool = |name: &[u8]| -> bool {
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
+        let v = js_object_get_field_by_name(current_desc() as *const ObjectHeader, k);
         crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0
     };
 
@@ -208,10 +213,16 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // mutation (e.g. flipping `writable` to false) is honored.
     let new_len: Option<u32> = if has_value {
         let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-        let value_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+        let value_field =
+            js_object_get_field_by_name(current_desc() as *const ObjectHeader, value_key);
         let value = f64::from_bits(value_field.bits());
-        let uint = to_uint32(crate::builtins::js_number_coerce(value));
-        let number = crate::builtins::js_number_coerce(value);
+        // ArraySetLength coerces the same value twice. The first conversion can
+        // evacuate an object-valued operand, so the second must re-read it.
+        let value_handle = scope.root_nanbox_f64(value);
+        let uint = to_uint32(crate::builtins::js_number_coerce(
+            value_handle.get_nanbox_f64(),
+        ));
+        let number = crate::builtins::js_number_coerce(value_handle.get_nanbox_f64());
         // SameValueZero(newLen, numberLen): a fractional / out-of-range length
         // is a RangeError.
         if (uint as f64) != number {
@@ -222,10 +233,16 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
         None
     };
 
+    // #7548: `obj` may be a pre-grow forwarding stub. `old_len` below drives
+    // the shrink walk, so it must come from the array's current home. Re-read
+    // after every descriptor allocation and user coercion above (#8507).
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let arr = array_header_mut(obj);
+    let owner = obj as usize;
     let old_len = (*arr).length;
     // `length` is non-configurable, non-enumerable; writable defaults to true
     // until explicitly set otherwise via the side table.
-    let cur_writable = super::get_property_attrs(obj as usize, "length")
+    let cur_writable = super::get_property_attrs(owner, "length")
         .map(|a| a.writable())
         .unwrap_or(true);
 
@@ -268,7 +285,7 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
             while i > n {
                 i -= 1;
                 let key = i.to_string();
-                let configurable = super::get_property_attrs(obj as usize, &key)
+                let configurable = super::get_property_attrs(owner, &key)
                     .map(|a| a.configurable())
                     .unwrap_or(true);
                 if !configurable {
@@ -282,7 +299,7 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
             let mut j = old_len;
             while j > target {
                 j -= 1;
-                super::clear_property_attrs(obj as usize, &j.to_string());
+                super::clear_property_attrs(owner, &j.to_string());
             }
             crate::array::js_array_set_length(arr, target as f64);
         } else {
@@ -294,13 +311,13 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
         // rejected (the property becomes non-writable; only the truncation
         // partially failed).
         super::set_property_attrs(
-            obj as usize,
+            owner,
             "length".to_string(),
             PropertyAttrs::new(false, false, false),
         );
     } else if has_writable {
         super::set_property_attrs(
-            obj as usize,
+            owner,
             "length".to_string(),
             PropertyAttrs::new(new_writable, false, false),
         );

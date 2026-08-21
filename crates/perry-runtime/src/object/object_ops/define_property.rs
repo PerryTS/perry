@@ -430,15 +430,23 @@ pub extern "C" fn js_object_define_property(
         // handles truncates the outer container's newest entries (see
         // `gc::RootedValues`' module docs), so the arms below share this one.
         let scope = crate::gc::RuntimeHandleScope::new();
+        // #8507: root the three entry operands before descriptor validation and
+        // the TypedArray exotic probe. The latter can coerce an object key and
+        // then return `NotTypedArray`; its private roots keep the operands live
+        // only inside that helper, so the caller must re-read its own roots
+        // before continuing into the expando/closure/ordinary paths.
+        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let desc_handle = scope.root_nanbox_f64(descriptor_value);
+        let key_handle = scope.root_nanbox_f64(key_value);
         // #6748 follow-up: decode the descriptor's 6 fields in ONE pass when it
         // is a plain default-prototype object (the overwhelming majority) —
         // the per-field `desc_has_field`/`desc_read_field` helpers each cost a
         // key-string alloc plus a HasProperty/[[Get]] walk. `None` keeps the
         // spec-general per-field path everywhere below.
-        let desc_view = try_decode_descriptor(&scope, descriptor_value);
+        let desc_view = try_decode_descriptor(&scope, desc_handle.get_nanbox_f64());
         match &desc_view {
             Some(v) => validate_property_descriptor_view(v),
-            None => validate_property_descriptor(descriptor_value),
+            None => validate_property_descriptor(desc_handle.get_nanbox_f64()),
         }
 
         // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
@@ -446,17 +454,25 @@ pub extern "C" fn js_object_define_property(
         // either write the element or reject with a TypeError).
         if !receiver_plain_object {
             match super::super::typed_array_define_own_property(
-                obj_value,
-                key_value,
-                descriptor_value,
+                f64::from_bits(obj_value_handle.get_heap_word_u64()),
+                key_handle.get_nanbox_f64(),
+                desc_handle.get_nanbox_f64(),
             ) {
-                super::super::TypedArrayDefineOutcome::Defined => return obj_value,
+                super::super::TypedArrayDefineOutcome::Defined => {
+                    return f64::from_bits(obj_value_handle.get_heap_word_u64());
+                }
                 super::super::TypedArrayDefineOutcome::Rejected => {
                     throw_object_type_error(b"Cannot redefine property")
                 }
                 super::super::TypedArrayDefineOutcome::NotTypedArray => {}
             }
         }
+
+        // Everything below must start from the post-probe addresses. The
+        // ordinary arm keeps re-reading these same handles via `across!`.
+        let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let descriptor_value = desc_handle.get_nanbox_f64();
+        let key_value = key_handle.get_nanbox_f64();
 
         // Date / RegExp / Error instances are exotic cells, not
         // `ObjectHeader`s — the ordinary define path below would bit-cast
@@ -1013,13 +1029,6 @@ pub extern "C" fn js_object_define_property(
         // runs the call FIRST and rebinds every one from its root afterwards,
         // so a pre-collection address is never nameable.
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
-        let desc_handle = scope.root_nanbox_f64(descriptor_value);
-        // `key_value` is rooted too: the non-indexable fallback far below
-        // passes it RAW into `obj_value_has_own_key`, which re-coerces it. An
-        // object / BigInt key evacuated by the coercion on the next line would
-        // be dereferenced again there.
-        let key_handle = scope.root_nanbox_f64(key_value);
         let (key_str, mut obj) = obj_handle
             .across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
         let mut obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());

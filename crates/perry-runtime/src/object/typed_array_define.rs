@@ -113,7 +113,13 @@ fn is_valid_integer_index(index: f64, length: u32) -> bool {
 
 /// Is the descriptor's `name` field present and falsy (`{ name: false }`)?
 unsafe fn field_present_and_false(desc: *mut ObjectHeader, name: &[u8]) -> bool {
+    // #8507: allocating the field-name string can evacuate the descriptor
+    // before the following keys-array walk. Re-read it from a root after the
+    // allocation rather than dereferencing the incoming raw pointer.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_raw_mut_ptr(desc);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let desc = desc_handle.get_raw_mut_ptr::<ObjectHeader>();
     if !own_key_present(desc, key) {
         return false;
     }
@@ -123,8 +129,10 @@ unsafe fn field_present_and_false(desc: *mut ObjectHeader, name: &[u8]) -> bool 
 
 /// Is the descriptor's `name` field present (regardless of value)?
 unsafe fn field_present(desc: *mut ObjectHeader, name: &[u8]) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_raw_mut_ptr(desc);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    own_key_present(desc, key)
+    own_key_present(desc_handle.get_raw_mut_ptr::<ObjectHeader>(), key)
 }
 
 /// If `key_value` is a String key that is a CanonicalNumericIndexString, return
@@ -219,16 +227,18 @@ pub(crate) unsafe fn typed_array_define_own_property(
         // Symbol / non-string / non-canonical key → ordinary define handles it.
         return TypedArrayDefineOutcome::NotTypedArray;
     };
-    let descriptor_value = desc_handle.get_nanbox_f64();
-
     // Canonical numeric index → integer-indexed branch. From here every path
     // returns Rejected or Defined; we never fall back to ordinary define.
     if !is_valid_integer_index(numeric_index, length) {
         return TypedArrayDefineOutcome::Rejected;
     }
 
-    let desc = extract_obj_ptr(descriptor_value);
-    if desc.is_null() {
+    // Every descriptor-field probe below allocates, so derive the raw pointer
+    // from the existing descriptor root at each use. The helper-local roots
+    // keep an individual probe safe; this outer root carries the updated
+    // address from one probe to the next (#8507).
+    let desc = || extract_obj_ptr(desc_handle.get_nanbox_f64());
+    if desc().is_null() {
         // Descriptor isn't ObjectHeader-backed; nothing constrains the index, so
         // accept with no element write (matches an all-default data descriptor).
         return TypedArrayDefineOutcome::Defined;
@@ -236,24 +246,24 @@ pub(crate) unsafe fn typed_array_define_own_property(
 
     // A valid integer index requires a configurable, enumerable, writable data
     // descriptor. Any field that contradicts that rejects the definition.
-    if field_present_and_false(desc, b"configurable") {
+    if field_present_and_false(desc(), b"configurable") {
         return TypedArrayDefineOutcome::Rejected;
     }
-    if field_present_and_false(desc, b"enumerable") {
+    if field_present_and_false(desc(), b"enumerable") {
         return TypedArrayDefineOutcome::Rejected;
     }
-    if field_present(desc, b"get") || field_present(desc, b"set") {
+    if field_present(desc(), b"get") || field_present(desc(), b"set") {
         return TypedArrayDefineOutcome::Rejected; // accessor descriptor
     }
-    if field_present_and_false(desc, b"writable") {
+    if field_present_and_false(desc(), b"writable") {
         return TypedArrayDefineOutcome::Rejected;
     }
 
     // If the descriptor carries a value, perform IntegerIndexedElementSet. The
     // ToNumber coercion may run user `valueOf` (and throw) before the write.
     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    if own_key_present(desc, value_key) {
-        let value_field = js_object_get_field_by_name(desc as *const ObjectHeader, value_key);
+    if own_key_present(desc(), value_key) {
+        let value_field = js_object_get_field_by_name(desc() as *const ObjectHeader, value_key);
         let value = f64::from_bits(value_field.bits());
         // Object values coerce via OrdinaryToPrimitive(number) first, running a
         // user `valueOf`/`toString` (which may throw). The resulting primitive is
