@@ -27,6 +27,10 @@ fn function_ir<'a>(ir: &'a str, marker: &str) -> &'a str {
     &ir[start..end]
 }
 
+fn root_slots(ir: &str) -> usize {
+    ir.matches("alloca ptr addrspace(1)").count() + ir.matches("@js_shadow_slot_bind(").count()
+}
+
 #[test]
 fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     let payload = Type::Object(ObjectType {
@@ -240,6 +244,94 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     assert!(init.contains("@perry_fn_number_array_guard_ts__encipher("));
     assert!(!specialized.contains("js_dynamic_bitxor"));
     assert!(generic.contains("js_dynamic_bitxor"));
+}
+
+#[test]
+fn numeric_by_construction_local_drops_specialized_clone_root() {
+    let encipher = Function {
+        id: 1,
+        name: "encipher".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 10,
+            name: "table".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Void,
+        body: vec![
+            Stmt::Let {
+                id: 11,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::While {
+                condition: Expr::Bool(false),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    11,
+                    Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(10)),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                ))],
+            },
+            Stmt::Return(None),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("numeric_local_root.ts");
+    module.functions.push(encipher);
+    module.init.extend([
+        Stmt::Let {
+            id: 20,
+            name: "table".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::TypedArrayNew {
+                kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+                arg: Some(Box::new(Expr::Integer(4))),
+            }),
+        },
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![Expr::LocalGet(20)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    ]);
+
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let specialized = function_ir(&ir, "encipher$spec_ta4x4(");
+    let generic = function_ir(&ir, "@perry_fn_numeric_local_root_ts__encipher(");
+
+    assert_eq!(
+        root_slots(specialized),
+        0,
+        "the specialized typed-array proof makes every value of n non-pointer:\n{specialized}"
+    );
+    assert_eq!(
+        root_slots(generic),
+        2,
+        "the annotation-agnostic fallback must retain roots for both the receiver and n:\n{generic}"
+    );
 }
 
 #[test]

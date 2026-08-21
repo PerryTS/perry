@@ -549,7 +549,7 @@ pub(super) fn compile_function(
     // populate the frame with live values; today the slots stay
     // zero (the tracer doesn't consume them yet — Phase A ship
     // criterion is "shadow stack is built but not yet consumed").
-    let shadow_slot_map = if precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
@@ -559,9 +559,6 @@ pub(super) fn compile_function(
     } else {
         std::collections::HashMap::new()
     };
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
-
     // Small leaf functions (≤ 8 statements) get alwaysinline so LLVM
     // exposes their operations to the caller's optimizer context — critical
     // for vectorizing clamp helpers and similar patterns. Excluded:
@@ -863,6 +860,21 @@ pub(super) fn compile_function(
         &spec_i32_params,
         &spec_numeric_params,
     );
+
+    // A Number-by-construction local cannot ever hold a GC pointer, so it
+    // must not pay the root-slot protocol on every assignment.  The shadow
+    // map is initially conservative because it is built before the
+    // specialization-aware fact graph: an `any` local initialized from a
+    // guarded numeric array (and then updated only by numeric expressions)
+    // therefore receives a slot even though the later whole-write proof has
+    // established that every one of its values is either a Number or the
+    // non-pointer `undefined` seed.  Drop those redundant entries before
+    // statement lowering.  `enable_shadow_frame` deliberately retains the
+    // original upper-bound size, so the remaining preassigned slot indices
+    // stay valid even when filtering leaves holes.
+    shadow_slot_map.retain(|id, _| !native_facts.number_by_construction_locals().contains(id));
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     if let Some(plan) = spec_entry {
         // `--opt-report` (#6952): the spec-ABI win, recorded at the same site
