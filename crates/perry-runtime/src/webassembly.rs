@@ -673,11 +673,13 @@ fn memory_buffer_value(memory: f64) -> f64 {
         return nanbox_undefined();
     }
     let key = scope.root_string_ptr(named_key(b"buffer"));
-    crate::object::js_object_get_field_by_name_f64(
-        JSValue::from_bits(memory.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::object::ObjectHeader>(),
-        key.get_raw_const_ptr::<crate::string::StringHeader>(),
-    )
+    key.with_const_ptr(|key: *const crate::string::StringHeader| {
+        crate::object::js_object_get_field_by_name_f64(
+            JSValue::from_bits(memory.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::object::ObjectHeader>(),
+            key,
+        )
+    })
 }
 
 fn sync_memory_to_wasm(inst: *mut c_void, memory: f64) {
@@ -932,11 +934,13 @@ fn table_values(table: f64) -> f64 {
         return nanbox_undefined();
     }
     let key = scope.root_string_ptr(named_key(b"__wasmValues"));
-    crate::object::js_object_get_field_by_name_f64(
-        JSValue::from_bits(table.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::object::ObjectHeader>(),
-        key.get_raw_const_ptr::<crate::string::StringHeader>(),
-    )
+    key.with_const_ptr(|key: *const crate::string::StringHeader| {
+        crate::object::js_object_get_field_by_name_f64(
+            JSValue::from_bits(table.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::object::ObjectHeader>(),
+            key,
+        )
+    })
 }
 
 extern "C" fn js_wasm_table_get(closure: *const crate::closure::ClosureHeader, index: f64) -> f64 {
@@ -1056,16 +1060,25 @@ fn make_table_method(
     let name = scope.root_nanbox_f64(name);
     let table = scope.root_nanbox_f64(table);
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 3));
-    let closure_ptr = closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
-    if closure_ptr.is_null() {
+    if closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| closure.is_null()) {
         return nanbox_undefined();
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
-    crate::closure::js_closure_set_capture_f64(closure_ptr, 0, inst as usize as f64);
-    crate::closure::js_closure_set_capture_f64(closure_ptr, 1, name.get_nanbox_f64());
-    crate::closure::js_closure_set_capture_f64(closure_ptr, 2, table.get_nanbox_f64());
-    crate::object::set_bound_native_closure_name(closure_ptr, display_name);
-    crate::value::js_nanbox_pointer(closure_ptr as i64)
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(closure, 0, inst as usize as f64)
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(closure, 1, name.get_nanbox_f64())
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(closure, 2, table.get_nanbox_f64())
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::object::set_bound_native_closure_name(closure, display_name)
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 fn make_export_table(inst: *mut c_void, name: &[u8]) -> f64 {
@@ -1131,11 +1144,9 @@ fn make_instance_value(module: *mut c_void, inst: *mut c_void, imports: f64, rec
         ));
         copy_instance_memory(inst, buffer.get_nanbox_f64());
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-        let object = object_set(
-            object.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-            b"buffer",
-            buffer.get_nanbox_f64(),
-        );
+        let object = object.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+            object_set(object, b"buffer", buffer.get_nanbox_f64())
+        });
         scope.root_nanbox_f64(object_value(object))
     };
     // `new WebAssembly.Instance(...)` arrives with a receiver whose
