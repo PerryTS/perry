@@ -57,6 +57,14 @@ What it does
      by an identity-pinned ratchet instead of per-holder verdicts. See
      "The frontier tier" below.
 
+   Perry's custom TLS macro is also a deliberate fourth rule: every
+   `perry_thread_local!` / `crate::perry_thread_local!` declaration in the core
+   crates that rules A/B do not already recognize is enumerated as rule T. The
+   macro accepts arbitrary crate-local types, so treating an unfamiliar type as
+   safe would recreate the blind spot this census exists to close. Rule-T
+   holders use the same identity-pinned ratchet as the UI frontier until each
+   stored type has a researched verdict.
+
 2. **Compute coverage** rather than trusting names. The registered scanner set
    is read from every `gc_register_*root_scanner*(...)` call site; a call graph
    over all `fn` bodies in every scanned crate is walked from those roots to
@@ -75,8 +83,8 @@ What it does
    (a stale exemption is how these gates rot — same rule as
    `scripts/gc_root_dominance_allowlist.json`).
 
-The frontier tier
------------------
+The identity-pinned frontier
+----------------------------
 
 The `perry-ui*` crates hold hundreds of NaN-boxed callback tables
 (`BUTTON_CALLBACKS: RefCell<HashMap<usize, f64>>` × every widget × eight
@@ -101,6 +109,15 @@ A frontier entry is a precisely-named piece of debt, not a verdict. When a UI
 crate gains real scanner coverage, its holders read as covered, their entries
 go stale, and the deletion is the receipt.
 
+The same ratchet also carries otherwise-unclassified core declarations inside
+`perry_thread_local!`. Unlike a plain `static` declaration, each of these is a
+known state-holding TLS slot even when its type is a crate-local struct that
+rules A/B cannot resolve (`PathModuleRegistry`, `ExceptionState`, and
+`YogaNode` are real examples). A newly declared slot therefore fails until it
+is covered or deliberately pinned. More importantly, a currently covered slot
+is absent from the baseline, so deleting the scanner that reaches it makes it a
+NEW frontier holder and turns the gate red.
+
 How it fails
 ------------
 
@@ -108,7 +125,7 @@ How it fails
 * an inventory entry that no longer matches a declaration -> exit 1
 * an `open_gap` or `unverified` verdict -> exit 1; old-page relocation ships
   enabled, so a known or unevaluated movable-address holder cannot be exempted
-* a frontier holder not in the pinned `frontier` list -> exit 1 (ratchet up)
+* a frontier/rule-T holder not in the pinned `frontier` list -> exit 1 (ratchet up)
 * a `frontier` entry matching no holder -> exit 1 (ratchet down / stale)
 * fewer than MIN_HOLDERS declarations matched -> exit 2, because a regex that
   stopped matching would otherwise report a clean, empty, green run
@@ -332,6 +349,12 @@ DECL = re.compile(
     r"(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*(?P<type>.*)$"
 )
 
+# Perry's hot-TLS macro accepts the same declaration syntax as
+# `thread_local!`, but a declaration may name an opaque crate-local type that
+# core rules A/B cannot see through. `declarations_in_perry_tls` makes the
+# macro boundary explicit instead of relying on DECL's context-free match.
+PERRY_TLS_BLOCK = re.compile(r"(?m)^[ \t]*(?:crate::)?perry_thread_local!\s*\{")
+
 MAX_SCANNER_DEPTH = 3
 
 # Floors. Each is a "the extraction still works" assertion, not a budget.
@@ -499,6 +522,40 @@ def declarations(rel: str, text: str) -> list[tuple[str, int, str]]:
             continue
         out.append((match.group("name"), first_line, " ".join(joined[:cut].split())))
     return out
+
+
+def declarations_in_perry_tls(text: str) -> set[tuple[str, int]]:
+    """Return (name, line) for declarations inside Perry TLS macro blocks.
+
+    Brace matching runs on comment/string-stripped source, so braces in docs
+    and initializers cannot terminate a block early. Both the exported and
+    `crate::` spellings are accepted; the declaration syntax inside is the
+    same as `thread_local!`.
+    """
+    code = strip_comments(text)
+    found: set[tuple[str, int]] = set()
+    for match in PERRY_TLS_BLOCK.finditer(code):
+        open_at = code.find("{", match.start(), match.end())
+        if open_at < 0:
+            continue
+        depth = 0
+        close_at = -1
+        for index in range(open_at, len(code)):
+            char = code[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    close_at = index
+                    break
+        if close_at < 0:
+            continue
+        open_line = code.count("\n", 0, open_at) + 1
+        block_body = code[open_at + 1 : close_at]
+        for name, block_line, _type_text in declarations("", block_body):
+            found.add((name, open_line + block_line - 1))
+    return found
 
 
 def holder_is_candidate(name: str, type_text: str, allocating_context: str) -> str | None:
@@ -755,7 +812,7 @@ def ffi_holder_is_candidate(
     return None
 
 
-def scan(root: Path) -> tuple[list[dict], int]:
+def scan(root: Path) -> tuple[list[dict], int, set[str]]:
     tiered = tiered_source_files(root)
     tier_of: dict[Path, str] = {path: tier for path, tier in tiered}
     texts: dict[Path, str] = {}
@@ -909,6 +966,9 @@ def scan(root: Path) -> tuple[list[dict], int]:
     for path, text in texts.items():
         rel = repo_relative(path, root)
         tier = tier_of[path]
+        perry_tls_declarations = (
+            declarations_in_perry_tls(text) if tier == "core" else set()
+        )
         bodies_here = function_bodies(text)
         covered_text = reachable_text_by_file.get(path, "")
         if tier == "core":
@@ -928,6 +988,8 @@ def scan(root: Path) -> tuple[list[dict], int]:
         for name, lineno, type_text in declarations(rel, text):
             if tier == "core":
                 rule = holder_is_candidate(name, type_text, allocating_context)
+                if rule is None and (name, lineno) in perry_tls_declarations:
+                    rule = "T"
             else:
                 rule = ffi_holder_is_candidate(name, type_text, type_index, closure_context)
             if rule is None:
@@ -941,11 +1003,12 @@ def scan(root: Path) -> tuple[list[dict], int]:
                     "type": type_text[:160],
                     "rule": rule,
                     "tier": tier,
+                    "ratchet": tier == "frontier" or rule == "T",
                     "covered": covered,
                 }
             )
     holders.sort(key=lambda h: (h["file"], h["line"]))
-    return holders, len(seeds)
+    return holders, len(seeds), seeds
 
 
 # The verdict vocabulary. An entry outside it is a typo or an invention, and
@@ -977,26 +1040,39 @@ def load_frontier(path: Path) -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8")).get("frontier", [])
 
 
-def apply_frontier(holders: list[dict], frontier: list[dict]) -> tuple[list[dict], list[dict]]:
+def apply_frontier(
+    holders: list[dict],
+    frontier: list[dict],
+    registered_scanners: set[str] | None = None,
+) -> tuple[list[dict], list[dict]]:
     """(new_unpinned, stale_entries) for the frontier ratchet.
 
     A COVERED frontier holder must not be pinned either — coverage is the fix,
     and the deletion of its entry is the receipt (same rule as the gated
-    inventory).
+    inventory). An uncovered declaration whose scanner lives in another file
+    may pin that scanner's exact registered name; deleting the registration
+    then invalidates the pin instead of silently leaving it matched.
     """
-    pinned = {(entry["file"], entry["name"]) for entry in frontier}
+    pinned = {(entry["file"], entry["name"]): entry for entry in frontier}
     used: set[tuple[str, str]] = set()
     unpinned: list[dict] = []
     for holder in holders:
-        if holder["tier"] != "frontier":
+        if not holder.get("ratchet", holder.get("tier") == "frontier"):
             continue
         key = (holder["file"], holder["name"])
         if holder["covered"]:
             continue
-        if key in pinned:
-            used.add(key)
-        else:
+        entry = pinned.get(key)
+        required_scanner = (entry or {}).get("scanner")
+        scanner_is_live = (
+            not required_scanner
+            or registered_scanners is None
+            or required_scanner in registered_scanners
+        )
+        if entry is None or not scanner_is_live:
             unpinned.append(holder)
+        else:
+            used.add(key)
     stale = [e for e in frontier if (e["file"], e["name"]) not in used]
     return unpinned, stale
 
@@ -1058,7 +1134,7 @@ def apply_inventory(
     used: set[tuple[str, str]] = set()
     unclassified: list[dict] = []
     for holder in holders:
-        if holder.get("tier", "core") == "frontier":
+        if holder.get("ratchet", holder.get("tier", "core") == "frontier"):
             continue  # ratcheted by apply_frontier, not verdict-gated
         if holder["covered"]:
             continue
@@ -1084,7 +1160,7 @@ def state_struct_field_count(root: Path) -> int:
 
 
 def report(root: Path, quiet: bool = False) -> int:
-    holders, registered_count = scan(root)
+    holders, registered_count, registered_scanners = scan(root)
     if len(holders) < MIN_HOLDERS:
         print(
             f"gc_runtime_root_holders: matched only {len(holders)} holder "
@@ -1118,19 +1194,20 @@ def report(root: Path, quiet: bool = False) -> int:
     unclassified, stale = apply_inventory(holders, inventory)
     malformed = inventory_problems(inventory)
     frontier = load_frontier(INVENTORY_PATH)
-    frontier_new, frontier_stale = apply_frontier(holders, frontier)
+    frontier_new, frontier_stale = apply_frontier(
+        holders, frontier, registered_scanners
+    )
 
     status = 0
     if frontier_new:
         status = 1
         print(
-            "\ngc_runtime_root_holders: NEW frontier (perry-ui*) holders not pinned in\n"
-            "the inventory's `frontier` list. The UI callback-table debt is ratcheted:\n"
-            "it may only shrink. Either register a scanner that reaches the new holder\n"
-            "(see the ext crates' `gc_register_mutable_root_scanner_named` pattern) or,\n"
-            "if this really is new platform surface, pin it deliberately — with the\n"
-            "understanding that a NaN-boxed callback parked there is invisible to the\n"
-            "collector until a scanner exists.\n",
+            "\ngc_runtime_root_holders: NEW identity-ratcheted holders not pinned in\n"
+            "the inventory's `frontier` list. This covers perry-ui* callback tables\n"
+            "and otherwise-unclassified core `perry_thread_local!` declarations.\n"
+            "Register a scanner that reaches the holder, record a researched verdict\n"
+            "where the gated rules apply, or pin existing debt deliberately — with the\n"
+            "understanding that a pinned entry is not a GC-safety verdict.\n",
             file=sys.stderr,
         )
         for holder in frontier_new:
@@ -1192,10 +1269,10 @@ def report(root: Path, quiet: bool = False) -> int:
 
     if status == 0 and not quiet:
         covered = sum(1 for h in holders if h["covered"])
-        frontier_count = sum(1 for h in holders if h["tier"] == "frontier")
+        frontier_count = sum(1 for h in holders if h.get("ratchet"))
         print(
             f"gc_runtime_root_holders: OK — {len(holders)} holder declarations "
-            f"scanned ({frontier_count} frontier), {covered} reached by a registered "
+            f"scanned ({frontier_count} identity-ratcheted), {covered} reached by a registered "
             f"scanner, {len(inventory)} classified in the inventory, "
             f"{len(frontier)} pinned on the frontier ratchet "
             f"({registered_count} registered scanners)."
@@ -1208,14 +1285,14 @@ def report(root: Path, quiet: bool = False) -> int:
             "(growth-floor only); core-crate integer tables in files that "
             f"never call an allocator (rule B's limit); and the "
             f"{len(frontier)} pinned frontier holders, which are ENUMERATED "
-            "and RATCHETED but scanned by nothing — a callback parked there "
-            "is invisible to the collector."
+            "and RATCHETED but scanned by nothing — a value parked there may "
+            "still be invisible to the collector."
         )
     return status
 
 
 def print_list(root: Path) -> int:
-    holders, registered_count = scan(root)
+    holders, registered_count, _registered_scanners = scan(root)
     print(f"# {len(holders)} candidate holders, {registered_count} registered scanners")
     for holder in holders:
         flag = "COVERED  " if holder["covered"] else "UNCOVERED"
@@ -1245,10 +1322,15 @@ pub fn gc_init() {
     "crates/perry-runtime/src/thing.rs": """
 static COVERED_DIRECT: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
 static COVERED_VIA_ACCESSOR: Mutex<Option<Vec<*mut ClosureHeader>>> = Mutex::new(None);
+struct CoveredOpaqueTls { value: f64 }
+crate::perry_thread_local! {
+    static COVERED_OPAQUE_TLS: CoveredOpaqueTls = CoveredOpaqueTls { value: 0.0 };
+}
 fn accessor() -> &'static Mutex<Option<Vec<*mut ClosureHeader>>> { &COVERED_VIA_ACCESSOR }
 pub fn scan_thing_roots_mut(v: &mut V) {
     for p in COVERED_DIRECT.borrow_mut().iter_mut() { v.visit(p); }
     for p in accessor().lock().unwrap().iter_mut() { v.visit(p); }
+    COVERED_OPAQUE_TLS.with(|slot| v.visit(&mut slot.value));
     let _ = js_object_alloc(0, 0);
 }
 """,
@@ -1257,6 +1339,10 @@ pub fn scan_thing_roots_mut(v: &mut V) {
     "crates/perry-runtime/src/leak.rs": """
 static UNCOVERED_TYPED: Cell<*mut ArrayHeader> = Cell::new(std::ptr::null_mut());
 static UNCOVERED_INT: Cell<f64> = Cell::new(0.0);
+struct OpaqueTls { value: String }
+perry_thread_local! {
+    static UNCOVERED_OPAQUE_TLS: OpaqueTls = OpaqueTls { value: String::new() };
+}
 fn populate() { let o = js_object_alloc(0, 0); UNCOVERED_INT.set(o as f64); }
 """,
     "crates/perry-runtime/src/other.rs": """
@@ -1397,7 +1483,7 @@ def _scan_tree(extra: dict[str, str] | None = None) -> list[dict]:
             # fixtures are ASCII today, so this is the latent half — the read
             # side of the same shape is what took `windows-build` down.
             path.write_text(body, encoding="utf-8", newline="")
-        holders, _ = scan(root)
+        holders, _registered_count, _registered_scanners = scan(root)
         return holders
 
 
@@ -1444,6 +1530,12 @@ def self_test() -> int:
         "reached through one hop of accessor indirection — the cp_live_lock() shape",
     )
     expect(
+        "crates/perry-runtime/src/thing.rs",
+        "COVERED_OPAQUE_TLS",
+        True,
+        "crate::perry_thread_local! declaration with a type opaque to rules A/B",
+    )
+    expect(
         "crates/perry-runtime/src/leak.rs",
         "UNCOVERED_TYPED",
         False,
@@ -1455,6 +1547,20 @@ def self_test() -> int:
         False,
         "rule B: Cell<f64> in a file that allocates — the CACHED_ENV shape",
     )
+    expect(
+        "crates/perry-runtime/src/leak.rs",
+        "UNCOVERED_OPAQUE_TLS",
+        False,
+        "unqualified perry_thread_local! declaration with an opaque type",
+    )
+    if by_key.get(
+        ("crates/perry-runtime/src/thing.rs", "COVERED_OPAQUE_TLS"), {}
+    ).get("rule") != "T":
+        failures.append("qualified Perry TLS declaration was not classified by rule T")
+    if by_key.get(
+        ("crates/perry-runtime/src/leak.rs", "UNCOVERED_OPAQUE_TLS"), {}
+    ).get("rule") != "T":
+        failures.append("unqualified Perry TLS declaration was not classified by rule T")
     expect(
         "crates/perry-runtime/src/collide.rs",
         "REGISTRY",
@@ -1559,15 +1665,15 @@ def self_test() -> int:
     )
 
     # --- frontier ratchet red paths ----------------------------------------
-    planted_frontier = [h for h in holders if h["tier"] == "frontier"]
-    if len(planted_frontier) < 2:
-        failures.append("expected at least two planted frontier holders")
+    planted_frontier = [h for h in holders if h.get("ratchet") and not h["covered"]]
+    if len(planted_frontier) < 3:
+        failures.append("expected planted UI and Perry-TLS frontier holders")
     unpinned, _stale = apply_frontier(holders, [])
     if len(unpinned) != len(planted_frontier):
         failures.append(
             f"apply_frontier with an EMPTY baseline reported {len(unpinned)} "
-            f"unpinned of {len(planted_frontier)} frontier holders — a new UI "
-            f"holder could land silently"
+            f"unpinned of {len(planted_frontier)} frontier holders — new UI "
+            f"or Perry-TLS debt could land silently"
         )
     exact_baseline = [
         {"file": h["file"], "name": h["name"]} for h in planted_frontier
@@ -1587,12 +1693,58 @@ def self_test() -> int:
             "a frontier entry matching no holder was NOT reported stale — "
             "the ratchet could not shrink"
         )
+    scanner_pinned = [
+        dict(entry, scanner="scan_external_tls_roots_mut")
+        if entry["name"] == "UNCOVERED_OPAQUE_TLS"
+        else entry
+        for entry in exact_baseline
+    ]
+    live, stale = apply_frontier(
+        holders, scanner_pinned, {"scan_external_tls_roots_mut"}
+    )
+    if live or stale:
+        failures.append("a live cross-file scanner did not satisfy its frontier pin")
+    dead, stale = apply_frontier(holders, scanner_pinned, set())
+    if not any(h["name"] == "UNCOVERED_OPAQUE_TLS" for h in dead) or not any(
+        e["name"] == "UNCOVERED_OPAQUE_TLS" for e in stale
+    ):
+        failures.append("deleting a cross-file scanner did not invalidate its pin")
+
+    # A covered rule-T holder is deliberately absent from the baseline. If its
+    # scanner registration disappears, it becomes new debt and MUST go red —
+    # this is issue #8544's MODULE_PATH_REGISTRY failure direction.
+    covered_tls = next(
+        (
+            h
+            for h in holders
+            if h.get("ratchet") and h["covered"] and h["rule"] == "T"
+        ),
+        None,
+    )
+    if covered_tls is None:
+        failures.append("expected a covered rule-T holder in the self-test tree")
+    else:
+        scanner_deleted = [dict(h) for h in holders]
+        for holder in scanner_deleted:
+            if (
+                holder["file"] == covered_tls["file"]
+                and holder["name"] == covered_tls["name"]
+            ):
+                holder["covered"] = False
+        newly_uncovered, _stale = apply_frontier(scanner_deleted, exact_baseline)
+        if not any(
+            h["file"] == covered_tls["file"] and h["name"] == covered_tls["name"]
+            for h in newly_uncovered
+        ):
+            failures.append(
+                "deleting a rule-T holder's scanner did not turn the ratchet red"
+            )
 
     # Classification is only half of it — the VERDICT machinery has to go red.
     # An empty inventory must leave every uncovered GATED holder unclassified
-    # (frontier holders are the ratchet's subject, not the inventory's)…
+    # (frontier/rule-T holders are the ratchet's subject, not the inventory's)…
     unclassified, _stale = apply_inventory(holders, [])
-    uncovered = [h for h in holders if not h["covered"] and h["tier"] != "frontier"]
+    uncovered = [h for h in holders if not h["covered"] and not h.get("ratchet")]
     if len(unclassified) != len(uncovered) or not uncovered:
         failures.append(
             f"apply_inventory with an EMPTY inventory reported {len(unclassified)} "
@@ -1638,14 +1790,18 @@ def self_test() -> int:
 
     # And the inventory itself must be honest about the real tree.
     inventory = load_inventory(INVENTORY_PATH)
-    real_holders, _ = scan(REPO_ROOT)
+    real_holders, _registered_count, real_registered_scanners = scan(REPO_ROOT)
     _unclassified, stale = apply_inventory(real_holders, inventory)
     if stale:
         failures.append(
             "inventory has %d stale entr(y|ies): %s"
             % (len(stale), ", ".join(f"{e['file']}:{e['name']}" for e in stale))
         )
-    _unpinned, frontier_stale = apply_frontier(real_holders, load_frontier(INVENTORY_PATH))
+    _unpinned, frontier_stale = apply_frontier(
+        real_holders,
+        load_frontier(INVENTORY_PATH),
+        real_registered_scanners,
+    )
     if frontier_stale:
         failures.append(
             "frontier list has %d stale entr(y|ies): %s"

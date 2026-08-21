@@ -443,8 +443,621 @@
       "why": "A timeOrigin-relative millisecond timestamp (or the -1 'loop has not started' sentinel) reported as nodeTiming.loopStart, and the gate eventLoopUtilization() reads before reporting anything but zeros. An f64 time value, never an address."
     }
   ],
-  "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates (see the census docstring, 'The frontier tier'). Each entry is a static/thread_local that CAN hold a NaN-boxed JS callback and that no registered scanner reaches. These are not verdicts: most of these tables really do park user closures (BUTTON_CALLBACKS et al) and registering per-crate scanners is the fix. The list may only shrink: a new UI holder fails lint until pinned deliberately, and a fixed (covered) holder fails until its entry is deleted. Covered frontier holders must NOT be pinned.",
+  "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, 'The identity-pinned frontier'). Entries are debt baselines, not verdicts. A new uncovered holder fails until deliberately pinned, and a fixed holder fails until its stale entry is deleted. An optional scanner names cross-file coverage and must remain registered; deleting that registration invalidates the pin and fails the gate. Covered same-file holders must NOT be pinned.",
   "frontier": [
+    {
+      "file": "crates/perry-runtime/src/array/element_shape.rs",
+      "name": "ELEMENT_SHAPES"
+    },
+    {
+      "file": "crates/perry-runtime/src/array/iterator.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "ASYNC_BOX_ACTIVATION_FREE_HEAD"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "ASYNC_PENDING_RELEASES"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "ASYNC_RELEASED_CELLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOOL_BOX_FREE_HEAD"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOOL_BOX_PTR_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOOL_BOX_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOOL_BOX_RELEASE_QUARANTINE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOX_FREE_HEAD"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOX_PTR_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOX_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "BOX_RELEASE_QUARANTINE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "I32_BOX_FREE_HEAD"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "I32_BOX_PTR_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "I32_BOX_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "I32_BOX_RELEASE_QUARANTINE"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "NEXT_ASYNC_BOX_ACTIVATION_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/box.rs",
+      "name": "TDZ_SUPPRESS_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/detach.rs",
+      "name": "DETACHED_BUFFER_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "ASYMMETRIC_KEY_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/view.rs",
+      "name": "BACKING_TO_VIEWS"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/view.rs",
+      "name": "VIEW_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/box_captures.rs",
+      "name": "BOX_CAPTURE_COUNTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/box_captures.rs",
+      "name": "CLOSURE_BOX_CELLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
+      "name": "IN_FN_PROTO_FALLBACK"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_ARITY_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_ARROW_FUNCTION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_ASYNC_FUNCTION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_GENERATOR_FUNCTION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_LENGTH_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_REST_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_STRICT_FUNCTION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "DISPATCH_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "DISPATCH_RECENT"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/interp.rs",
+      "name": "NODE_FN_IDS"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/interp.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/forwarding.rs",
+      "name": "REFUSALS_BY_WALK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/forwarding.rs",
+      "name": "REFUSED_FORWARDING_SOURCES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/forwarding.rs",
+      "name": "REFUSED_FORWARDING_TARGETS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/forwarding.rs",
+      "name": "REPORTED_SOURCES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/forwarding.rs",
+      "name": "REPORTED_TARGETS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/full_trace.rs",
+      "name": "FULL_TRACE_ACTIVE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/pin.rs",
+      "name": "NATIVE_ROOT_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "FFI_MUTABLE_ROOT_SCANNERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "FFI_NAMED_MUTABLE_ROOT_SCANNERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "FFI_ROOT_SCANNERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "GLOBAL_ROOTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "MUTABLE_ROOT_SCANNERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "ROOT_SCANNERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots.rs",
+      "name": "RUNTIME_HANDLE_STACK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots/stack_maps.rs",
+      "name": "LAST_REWRITE_WALK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots/stack_maps_walker_agreement.rs",
+      "name": "PROBE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/scanner_profile.rs",
+      "name": "PROFILE_ENABLED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/scanner_profile.rs",
+      "name": "SCANNER_PROFILE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/schedule.rs",
+      "name": "SAFEPOINT_COUNTER"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/schedule.rs",
+      "name": "SCHEDULE_NEXT_CANDIDATE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_INDEX"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_PTR_INDEX"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_STRING_INDEX"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "TEST_FORCE_HELPER_GC"
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require/path_registry.rs",
+      "name": "MODULE_PATH_REGISTRY",
+      "scanner": "scan_module_path_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require/path_registry.rs",
+      "name": "PATH_MODULE_INIT_ADDRS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/async_generator_queue.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/dispatch.rs",
+      "name": "OBJ_DISPATCH_IC"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/dispatch.rs",
+      "name": "VTABLE_IC"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/prototype_methods.rs",
+      "name": "CLASS_PROTOTYPE_METHODS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DECL_PROTOTYPE_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DELETED_KEYS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DYNAMIC_PARENT_VALUE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_PARENT_CLOSURES"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_PROTOTYPE_METHOD_NONENUM"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_PROTOTYPE_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_SYMBOL_ACCESSORS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_SYMBOL_METHODS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "FUNCTION_CLASS_IDS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/collection_proto_thunks.rs",
+      "name": "BUILTIN_MAP_SET_VALUE_BITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/collection_proto_thunks.rs",
+      "name": "BUILTIN_SET_ADD_VALUE_BITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/field_ops.rs",
+      "name": "WARN_NULL_PTR_STATE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/instanceof.rs",
+      "name": "SUPPRESS_INSTANCEOF_RHS_THROW"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_DYNAMIC_PROPS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_PROTOTYPE_METHOD_VALUES"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_STATIC_DEFINED_ATTRS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "FS_CONSTANTS_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "GENERATOR_INTRINSIC_PROTO_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "GENERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "HTTP_METHODS_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "LOCAL_STORAGE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OS_CONSTANTS_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OS_CONSTANTS_DLOPEN_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OS_CONSTANTS_ERRNO_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OS_CONSTANTS_PRIORITY_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OS_CONSTANTS_SIGNALS_CACHE_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "SESSION_STORAGE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "TYPED_ARRAY_INTRINSIC_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "HANDLE_PROPERTY_BIND_REENTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
+      "name": "ALIAS_ACTIVE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/prop_plan.rs",
+      "name": "READ_PLAN_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/prop_plan.rs",
+      "name": "STORE_PLAN_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks/resource_timing.rs",
+      "name": "RESOURCE_TIMING_BUFFER_SIZE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/async_step.rs",
+      "name": "TRACE_ASYNC_AWAITED"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/async_step.rs",
+      "name": "TRACE_ASYNC_ON"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/async_step.rs",
+      "name": "TRACE_ASYNC_SEQ"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/combinators.rs",
+      "name": "DONE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/combinators.rs",
+      "name": "SCHEDULED_RESOLVES"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "CURRENT_MICROTASK_CALLBACK"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "CURRENT_MICROTASK_NEXT"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "CURRENT_MICROTASK_PROMISE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "ESM_EVAL_CHECKPOINT_PENDING"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "MICROTASK_RUN_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "ASYNC_BOX_EXECUTION_REFS"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "ASYNC_STEP_GUARD"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "INLINE_TRAP"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "ITER_RESULT_DONE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "ITER_RESULT_VALUE_I1"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "ITER_RESULT_VALUE_I32"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "MICROTASK_PREV_CONTEXTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "PROMISE_CONTEXTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/mod.rs",
+      "name": "TASK_QUEUE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/rejection.rs",
+      "name": "PROCESSING_REJECTIONS"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/spec_combinators.rs",
+      "name": "ARITY_REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/then.rs",
+      "name": "DONE"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/then_probe.rs",
+      "name": "ADMISSIBLE_MEMO"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/then_probe.rs",
+      "name": "PROTO_VERDICT"
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/then_probe.rs",
+      "name": "VERDICT_IN_FLIGHT"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "FANCY_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "LAST_EXEC_INDEX"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REGEX_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "TEST_FORCE_HELPER_GC"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "FRESH_SYMBOL_DESCRIPTIONS"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "PROBE_CONST"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "PROBE_EXPR"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "PROBE_SECOND"
+    },
+    {
+      "file": "crates/perry-runtime/src/typedarray/mod.rs",
+      "name": "TYPED_ARRAY_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/typedarray/mod.rs",
+      "name": "TYPED_ARRAY_SHARED_BACKING"
+    },
+    {
+      "file": "crates/perry-runtime/src/typedarray_props.rs",
+      "name": "TYPED_ARRAY_NO_EXTEND"
+    },
+    {
+      "file": "crates/perry-runtime/src/value/to_string.rs",
+      "name": "SKIP_TO_PRIMITIVE_ONESHOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/value/to_string.rs",
+      "name": "TO_PRIMITIVE_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/yoga.rs",
+      "name": "GC_SCANNER_REGISTERED"
+    },
     {
       "file": "crates/perry-ui-android/src/app.rs",
       "name": "ON_ACTIVATE_CALLBACK"
