@@ -33,7 +33,8 @@ pub(super) unsafe fn try_symbol_dispose_dispatch(
             // replace has already overwritten the cell, so this is the frame's only
             // copy and the restore would otherwise publish a pre-move address.
             let prev_scope = crate::gc::RuntimeHandleScope::new();
-            let prev_h = prev_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
+            let prev_h =
+                prev_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
             let result = crate::closure::js_native_call_value(method, args_ptr, args_len);
             IMPLICIT_THIS.with(|c| c.set(prev_h.get_nanbox_u64()));
             return Some(result);

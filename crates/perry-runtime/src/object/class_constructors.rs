@@ -731,7 +731,8 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         // replace has already overwritten the cell, so this is the frame's only
         // copy and the restore would otherwise publish a pre-move address.
         let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-        let prev_this_h = prev_this_scope.root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
+        let prev_this_h = prev_this_scope
+            .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
         let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
         super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         return result;
@@ -782,7 +783,8 @@ unsafe fn call_displaced_native_base_method(
     // replace has already overwritten the cell, so this is the frame's only
     // copy and the restore would otherwise publish a pre-move address.
     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-    let prev_this_h = prev_this_scope.root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
+    let prev_this_h = prev_this_scope
+        .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
     let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
     super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
