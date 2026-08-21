@@ -268,7 +268,10 @@ When the wasmi host is linked, `new WebAssembly.Module(bytes)` and the
 synchronous `new WebAssembly.Instance(module, imports)` constructor execute
 real modules in Perry's numeric function/import subset. This includes WASM
 bytes exposed through the embedded `import ... with { type: "file" }` loader;
-tables, globals, non-function imports, reference values, and streaming remain
+the JS-visible `memory.buffer` is synchronized before and after calls,
+numeric multi-value results use the standard array shape, and exported
+`externref` tables support `get`, `set`, and `grow`. Imported tables/memories,
+globals, general reference-valued function signatures, and streaming remain
 outside that subset.
 
 Two spellings, two paths:
