@@ -506,6 +506,24 @@ crate::perry_thread_local! {
     /// collector. One table per runtime thread keeps every entry's referent in
     /// the same heap as the scanner that rewrites it, which is what lets a
     /// single process host more than one Perry application.
+    ///
+    /// Keyed by THREAD, not by [`crate::agent::AgentId`], even though #6294
+    /// established agent tagging for the cross-thread queues. The two are
+    /// keyed differently on purpose:
+    ///
+    /// - An agent tags *queued work* so a drain can tell whose pointers it may
+    ///   touch. A thread with no agent of its own resolves to `PRIMARY_AGENT`
+    ///   because it is a pump acting for the primary heap.
+    /// - This table instead holds pointers into an *arena*, and the arena is
+    ///   itself a `thread_local!` (`thread.rs`). Thread is therefore exactly
+    ///   the domain those pointers live and die in.
+    ///
+    /// The distinction is load-bearing for embedders: a Coop app thread is a
+    /// plain `std::thread::spawn`, not a `perry/thread` worker, so it never
+    /// calls `enter_worker_agent()` and every such thread resolves to
+    /// `PRIMARY_AGENT`. Agent-keying would hand all of a host's apps one
+    /// shared table — the bug this replaced, minus the guard that used to make
+    /// it loud.
     pub(super) static MODULE_PATH_REGISTRY: PathModuleRegistry = PathModuleRegistry::default();
 }
 
