@@ -79,6 +79,12 @@ merges a day. That is 1.5–2× total capacity, so:
   days, so **every one of the last 12 merges was an admin bypass** with `lint` and
   `cargo-test` still queued.
 
+The always-red required-gate incident was tracked in
+[#8092](https://github.com/PerryTS/perry/issues/8092). #8087 restored `lint`,
+#8095 made the textual and native LLVM paths record the same stable ELF source
+identity so `cargo-test` could pass on Linux, and #8187 replaced the fragmented
+required-context list with the single `pr-gate` fan-in described above.
+
 Two specific costs dominated:
 
 - `conformance-smoke` was 8 shards × ~60 min = **480 job-minutes per push**, and 96 %
