@@ -29,6 +29,19 @@ pub(crate) fn lower_new_member_native(
             (peel_new_callee(member.obj.as_ref()), &member.prop)
         {
             let obj_name = obj_ident.sym.as_ref();
+            if obj_name == "Bun"
+                && prop_ident.sym.as_ref() == "Glob"
+                && !ctx.shadows_unqualified_global("Bun")
+                && ctx.lookup_native_module("Bun").is_none()
+            {
+                return Ok(Some(Expr::NativeMethodCall {
+                    module: "bun".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "Glob".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                }));
+            }
             if let Some(class_name) =
                 global_member_constructor_name(ctx, obj_name, prop_ident.sym.as_ref())
             {

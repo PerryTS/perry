@@ -192,6 +192,95 @@ stdout ret: 10
     assert_eq!(stdout, expected);
 }
 
+/// #8514: binary reads and file: URL paths are part of the maintained
+/// OpenCode BunFile contract, rather than export-shape-only compatibility.
+#[test]
+fn bun_file_url_bytes_and_invalid_path_errors() {
+    let stdout = compile_and_run(
+        r#"
+async function main() {
+  const path = process.cwd() + "/binary data.bin";
+  const url = new URL("file://" + path.replace(" ", "%20"));
+  await Bun.write(url, new Uint8Array([0, 127, 128, 255]));
+  const file = Bun.file(url);
+  const bytes = await file.bytes();
+  console.log(file.name.endsWith("binary data.bin"), bytes.constructor.name, bytes.length);
+  console.log(bytes[0], bytes[1], bytes[2], bytes[3]);
+  try {
+    Bun.file(null as any);
+  } catch (error: any) {
+    console.log(error.name, error.message.includes("file path"));
+  }
+}
+main();
+"#,
+    );
+    assert_eq!(stdout, "true Uint8Array 4\n0 127 128 255\nTypeError true\n");
+}
+
+/// #8514: Bun.Glob is used by the pinned OpenCode build/tooling graph. Cover
+/// both iterator forms, scan options, ignore filtering, dotfiles, matching,
+/// and slash-normalized relative output against a real directory tree.
+#[test]
+fn bun_glob_scan_iteration_options_and_ignores() {
+    let stdout = compile_and_run(
+        r#"
+import { mkdirSync } from "node:fs";
+
+async function main() {
+  const cwd = process.cwd() + "/glob-root";
+  mkdirSync(cwd + "/sub/deep", { recursive: true });
+  mkdirSync(cwd + "/empty", { recursive: true });
+  await Bun.write(cwd + "/a.ts", "a");
+  await Bun.write(cwd + "/.hidden.ts", "h");
+  await Bun.write(cwd + "/sub/b.ts", "b");
+  await Bun.write(cwd + "/sub/.dot.ts", "d");
+  await Bun.write(cwd + "/sub/c.js", "c");
+  await Bun.write(cwd + "/sub/deep/z.ts", "z");
+
+  const glob = new Bun.Glob("**/*.ts");
+  console.log("match", glob.match("sub/b.ts"), glob.match("sub/c.js"));
+  console.log("sync", JSON.stringify([...glob.scanSync({ cwd })].sort()));
+  console.log("dot", JSON.stringify([...glob.scanSync({ cwd, dot: true })].sort()));
+  console.log("ignore", JSON.stringify([...glob.scanSync({ cwd, ignore: ["sub/**"] })].sort()));
+  console.log("absolute", [...glob.scanSync({ cwd, absolute: true })].every((x) => x.startsWith(cwd + "/")));
+  console.log("dirs", [...new Bun.Glob("**").scanSync({ cwd, onlyFiles: false })].includes("sub/deep"));
+  const sync = glob.scanSync(cwd);
+  console.log("next", JSON.stringify(sync.next()));
+  const asyncItems: string[] = [];
+  for await (const item of glob.scan({ cwd })) asyncItems.push(item);
+  console.log("async", JSON.stringify(asyncItems.sort()));
+}
+main();
+"#,
+    );
+    let expected = "\
+match true false
+sync [\"a.ts\",\"sub/b.ts\",\"sub/deep/z.ts\"]
+dot [\".hidden.ts\",\"a.ts\",\"sub/.dot.ts\",\"sub/b.ts\",\"sub/deep/z.ts\"]
+ignore [\"a.ts\"]
+absolute true
+dirs true
+next {\"value\":\"a.ts\",\"done\":false}
+async [\"a.ts\",\"sub/b.ts\",\"sub/deep/z.ts\"]
+";
+    assert_eq!(stdout, expected);
+}
+
+#[test]
+fn unsupported_bun_calls_fail_explicitly() {
+    let stdout = compile_and_run(
+        r#"
+try {
+  Bun.serve({ port: 0 });
+} catch (error: any) {
+  console.log(error.name, error.message);
+}
+"#,
+    );
+    assert_eq!(stdout, "Error Bun.serve is not supported by Perry\n");
+}
+
 #[test]
 fn bun_stdin_text_reads_all() {
     let dir = tempfile::tempdir().expect("tempdir");

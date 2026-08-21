@@ -48,6 +48,24 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
+        method: "Glob",
+        class_filter: None,
+        runtime: "js_bun_glob_new",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
+        method: "unsupported",
+        class_filter: None,
+        runtime: "js_bun_unsupported",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // Module-level aliases with node:url semantics (issue table:
     // `import { pathToFileURL, fileURLToPath } from "bun"`).
     NativeModSig {

@@ -264,6 +264,8 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
         ("bun", "file") => crate::bun_compat::js_bun_file(arg(0)),
         ("bun", "write") => crate::bun_compat::js_bun_write(arg(0), arg(1)),
+        ("bun", "Glob") => crate::bun_compat::js_bun_glob_new(arg(0)),
+        ("bun", "unsupported") => crate::bun_compat::js_bun_unsupported(arg(0)),
         ("bun", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("bun", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
         _ => f64::from_bits(JSValue::undefined().bits()),

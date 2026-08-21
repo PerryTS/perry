@@ -27,6 +27,7 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"matchAll\"")
         || hir_debug.contains("property: \"glob\"")
         || hir_debug.contains("property: \"globSync\"")
+        || hir_debug.contains("method: \"Glob\"")
 }
 
 /// zlib per-codec cherry-pick (stdlib cherry-pick): a `node:zlib` import
@@ -574,6 +575,9 @@ mod tests {
         ));
         assert!(debug_hir_uses_regex(
             r#"NativeMethodCall { module: String("path.win32"), method: String("matchesGlob"), args: [] }"#
+        ));
+        assert!(debug_hir_uses_regex(
+            r#"NativeMethodCall { module: "bun", method: "Glob", args: [] }"#
         ));
     }
 

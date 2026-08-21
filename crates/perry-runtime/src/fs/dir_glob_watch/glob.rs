@@ -53,6 +53,16 @@ struct FsGlobOptions {
 }
 
 #[cfg(feature = "regex-engine")]
+struct BunGlobOptions {
+    cwd_actual: String,
+    only_files: bool,
+    dot: bool,
+    absolute: bool,
+    follow_symlinks: bool,
+    ignore_patterns: Vec<GlobExcludeRegex>,
+}
+
+#[cfg(feature = "regex-engine")]
 struct GlobCandidate {
     actual_path: String,
     kind: DirentKind,
@@ -332,6 +342,84 @@ fn glob_options_from_value_result(options_value: f64) -> Result<FsGlobOptions, f
         follow_symlinks,
         exclude_patterns,
         exclude_fn,
+    })
+}
+
+#[cfg(feature = "regex-engine")]
+fn bun_glob_cwd_result(options_value: f64) -> Result<String, f64> {
+    if is_nullish(options_value) {
+        return Ok(current_dir_slashes());
+    }
+    if let Some(cwd) = decode_string_value(options_value) {
+        return Ok(absolutize_slash(&cwd));
+    }
+    if let Some(err) = validate::object_options_type_error_value("options", options_value) {
+        return Err(err);
+    }
+    unsafe {
+        let Some(cwd) = options_field_value(options_value, b"cwd") else {
+            return Ok(current_dir_slashes());
+        };
+        let cwd = f64::from_bits(cwd.bits());
+        if is_nullish(cwd) {
+            return Ok(current_dir_slashes());
+        }
+        let Some(cwd) = decode_string_value(cwd) else {
+            return Err(glob_pattern_string_error("options.cwd", cwd));
+        };
+        Ok(absolutize_slash(&cwd))
+    }
+}
+
+#[cfg(feature = "regex-engine")]
+fn bun_ignore_patterns_result(options_value: f64) -> Result<Vec<GlobExcludeRegex>, f64> {
+    if is_nullish(options_value) || decode_string_value(options_value).is_some() {
+        return Ok(Vec::new());
+    }
+    let ignore_value = unsafe {
+        options_field_value(options_value, b"ignore")
+            .or_else(|| options_field_value(options_value, b"exclude"))
+    };
+    let Some(ignore_value) = ignore_value else {
+        return Ok(Vec::new());
+    };
+    let ignore_value = f64::from_bits(ignore_value.bits());
+    if is_nullish(ignore_value) {
+        return Ok(Vec::new());
+    }
+    let patterns = glob_patterns_from_value_result(ignore_value)?;
+    Ok(patterns
+        .into_iter()
+        .filter_map(|pattern| glob_regex_from_pattern(&pattern))
+        .collect())
+}
+
+#[cfg(feature = "regex-engine")]
+fn bun_glob_options_from_value_result(options_value: f64) -> Result<BunGlobOptions, f64> {
+    let cwd_actual = bun_glob_cwd_result(options_value)?;
+    let is_object = !is_nullish(options_value) && decode_string_value(options_value).is_none();
+    let (only_files, dot, absolute, follow_symlinks) = if is_object {
+        unsafe {
+            let only_files = options_field_value(options_value, b"onlyFiles")
+                .map(|v| crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                .unwrap_or(true);
+            (
+                only_files,
+                options_bool_field(options_value, b"dot"),
+                options_bool_field(options_value, b"absolute"),
+                options_bool_field(options_value, b"followSymlinks"),
+            )
+        }
+    } else {
+        (true, false, false, false)
+    };
+    Ok(BunGlobOptions {
+        cwd_actual,
+        only_files,
+        dot,
+        absolute,
+        follow_symlinks,
+        ignore_patterns: bun_ignore_patterns_result(options_value)?,
     })
 }
 
@@ -678,6 +766,130 @@ pub(crate) fn run_fs_glob_result(pattern_value: f64, options_value: f64) -> Resu
         matches: matches.into_values().collect(),
         with_file_types: options.with_file_types,
     })
+}
+
+#[cfg(feature = "regex-engine")]
+fn bun_path_is_hidden(path: &str) -> bool {
+    path.split('/')
+        .any(|part| part.starts_with('.') && part != "." && part != ".." && !part.is_empty())
+}
+
+/// Bun.Glob's scanner over Perry's native glob walker. Bun differs from
+/// node:fs glob in three observable defaults: files-only, hidden paths off,
+/// and relative slash-normalized output. `ignore`/`exclude` are accepted as a
+/// compatibility extension for OpenCode tooling; unknown scan options remain
+/// harmless, matching Bun's option parsing.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn run_bun_glob_result(
+    pattern_value: f64,
+    options_value: f64,
+) -> Result<FsGlobRun, f64> {
+    let Some(pattern) = decode_string_value(pattern_value) else {
+        return Err(glob_pattern_string_error("pattern", pattern_value));
+    };
+    let pattern = normalize_slashes(&pattern);
+    let options = bun_glob_options_from_value_result(options_value)?;
+    let Some(re) = glob_regex_from_pattern(&pattern) else {
+        return Ok(FsGlobRun {
+            matches: Vec::new(),
+            with_file_types: false,
+        });
+    };
+    let pattern_is_absolute = Path::new(&pattern).is_absolute();
+    let root = glob_search_root(&pattern);
+    let root_actual = if pattern_is_absolute {
+        root
+    } else {
+        join_slash(&options.cwd_actual, &root)
+    };
+    let mut candidates = Vec::new();
+    walk_paths_for_glob(
+        Path::new(&root_actual),
+        options.follow_symlinks,
+        &mut candidates,
+    );
+    let pattern_mentions_hidden = pattern
+        .split('/')
+        .any(|part| part.starts_with('.') && part != "." && part != "..");
+    let mut matches: BTreeMap<String, FsGlobMatch> = BTreeMap::new();
+    for candidate in &candidates {
+        if options.only_files && !candidate.kind.is_file() {
+            continue;
+        }
+        let relative = relative_to_base(&candidate.actual_path, &options.cwd_actual);
+        let target = if pattern_is_absolute {
+            candidate.actual_path.clone()
+        } else {
+            relative.clone()
+        };
+        if !options.dot && !pattern_mentions_hidden && bun_path_is_hidden(&relative) {
+            continue;
+        }
+        if !re.is_match(&target).unwrap_or(false) {
+            continue;
+        }
+        if options
+            .ignore_patterns
+            .iter()
+            .any(|ignore| ignore.is_match(&relative).unwrap_or(false))
+        {
+            continue;
+        }
+        let Some(mut entry) = glob_match_from_candidate(
+            candidate,
+            pattern_is_absolute || options.absolute,
+            &FsGlobOptions {
+                cwd_actual: options.cwd_actual.clone(),
+                cwd_display: ".".to_string(),
+                with_file_types: false,
+                follow_symlinks: options.follow_symlinks,
+                exclude_patterns: Vec::new(),
+                exclude_fn: None,
+            },
+        ) else {
+            continue;
+        };
+        if options.absolute && !pattern_is_absolute {
+            entry.output = normalize_slashes(&candidate.actual_path);
+        }
+        matches.entry(entry.output.clone()).or_insert(entry);
+    }
+    Ok(FsGlobRun {
+        matches: matches.into_values().collect(),
+        with_file_types: false,
+    })
+}
+
+#[cfg(not(feature = "regex-engine"))]
+pub(crate) fn run_bun_glob_result(
+    pattern_value: f64,
+    _options_value: f64,
+) -> Result<FsGlobRun, f64> {
+    glob_patterns_from_value_result(pattern_value)?;
+    Ok(FsGlobRun {
+        matches: Vec::new(),
+        with_file_types: false,
+    })
+}
+
+#[cfg(feature = "regex-engine")]
+pub(crate) fn bun_glob_matches(pattern_value: f64, path_value: f64) -> Result<bool, f64> {
+    let Some(pattern) = decode_string_value(pattern_value) else {
+        return Err(glob_pattern_string_error("pattern", pattern_value));
+    };
+    let Some(path) = decode_string_value(path_value) else {
+        return Err(glob_pattern_string_error("path", path_value));
+    };
+    Ok(glob_regex_from_pattern(&normalize_slashes(&pattern))
+        .map(|re| re.is_match(&normalize_slashes(&path)).unwrap_or(false))
+        .unwrap_or(false))
+}
+
+#[cfg(not(feature = "regex-engine"))]
+pub(crate) fn bun_glob_matches(pattern_value: f64, path_value: f64) -> Result<bool, f64> {
+    glob_patterns_from_value_result(pattern_value)?;
+    glob_patterns_from_value_result(path_value)?;
+    Ok(false)
 }
 
 /// Regex engine gated off: `fs.glob*` matching is built on the regex engine, so

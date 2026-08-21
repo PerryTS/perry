@@ -72,7 +72,8 @@ pub(super) fn try_module_static_methods(
                 if obj_ident.sym.as_ref() == "Bun"
                     && ctx.lookup_local("Bun").is_none()
                     && ctx.lookup_native_module("Bun").is_none()
-                    && matches!(
+                {
+                    if matches!(
                         method_ident.sym.as_ref(),
                         "stringWidth"
                             | "hash"
@@ -80,15 +81,25 @@ pub(super) fn try_module_static_methods(
                             | "write"
                             | "pathToFileURL"
                             | "fileURLToPath"
-                    )
-                {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    ) {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "bun".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: method_ident.sym.as_ref().to_string(),
+                            args,
+                        }));
+                    }
+
+                    let mut sequence = args;
+                    sequence.push(Expr::NativeMethodCall {
                         module: "bun".to_string(),
                         class_name: None,
                         object: None,
-                        method: method_ident.sym.as_ref().to_string(),
-                        args,
-                    }));
+                        method: "unsupported".to_string(),
+                        args: vec![Expr::String(method_ident.sym.as_ref().to_string())],
+                    });
+                    return Ok(Ok(Expr::Sequence(sequence)));
                 }
             }
         }

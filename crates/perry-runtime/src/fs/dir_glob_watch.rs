@@ -19,14 +19,16 @@ pub(crate) use opendir::js_fs_opendir_value_with_path;
 // Re-export the glob machinery: the `#[no_mangle]` FFI sync symbols are `pub`,
 // while the run/value helpers and match types are consumed by the `watch`
 // sibling (glob iterator) and stay `pub(crate)`.
-pub(crate) use glob::{glob_entry_value, run_fs_glob_result, FsGlobMatch};
+pub(crate) use glob::{
+    bun_glob_matches, glob_entry_value, run_bun_glob_result, run_fs_glob_result, FsGlobMatch,
+};
 pub use glob::{js_fs_glob_sync, js_fs_glob_sync_options};
 
 // Re-export the watch/watchFile entry points + GC scanner + the shared promise
 // helpers used across the `fs` module (fd_ops.rs, filehandle.rs, etc.).
 pub(crate) use watch::{
-    js_fs_promises_glob_iterator, promise_rejected_fs, promise_undefined_fs, promise_value_fs,
-    scan_fs_watcher_roots_mut,
+    js_bun_glob_async_iterator, js_bun_glob_sync_iterator, js_fs_promises_glob_iterator,
+    promise_rejected_fs, promise_undefined_fs, promise_value_fs, scan_fs_watcher_roots_mut,
 };
 pub use watch::{js_fs_promises_watch, js_fs_unwatch_file, js_fs_watch, js_fs_watch_file};
 

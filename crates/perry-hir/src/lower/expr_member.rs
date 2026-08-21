@@ -325,6 +325,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         | "hash"
                         | "file"
                         | "write"
+                        | "Glob"
                         | "pathToFileURL"
                         | "fileURLToPath"
                 ) {

@@ -1050,6 +1050,48 @@ extern "C" fn glob_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
+extern "C" fn bun_glob_sync_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+    let id = js_closure_get_capture_f64(closure, 0) as usize;
+    let action = GLOB_ITERATORS.with(|iterators| {
+        let mut iterators = iterators.borrow_mut();
+        let Some(state) = iterators.get_mut(&id) else {
+            return GlobNextAction::Done;
+        };
+        if let Some(reason) = state.validation_error.take() {
+            state.closed = true;
+            return GlobNextAction::Reject(reason);
+        }
+        if state.closed || state.index >= state.entries.len() {
+            state.closed = true;
+            return GlobNextAction::Done;
+        }
+        let entry = state.entries[state.index].clone();
+        state.index += 1;
+        GlobNextAction::Entry(entry, state.with_file_types)
+    });
+    match action {
+        GlobNextAction::Done => iterator_result(undefined_value(), true),
+        GlobNextAction::Reject(reason) => crate::exception::js_throw(reason),
+        GlobNextAction::Entry(entry, with_file_types) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(glob_entry_value(&entry, with_file_types));
+            iterator_result(value.get_nanbox_f64(), false)
+        }
+    }
+}
+
+extern "C" fn bun_glob_sync_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+    let id = js_closure_get_capture_f64(closure, 0) as usize;
+    GLOB_ITERATORS.with(|iterators| {
+        iterators.borrow_mut().remove(&id);
+    });
+    iterator_result(undefined_value(), true)
+}
+
+extern "C" fn bun_glob_sync_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+    js_closure_get_capture_f64(closure, 1)
+}
+
 extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = PROMISE_WATCHERS.with(|watchers| {
@@ -1126,6 +1168,9 @@ fn ensure_watch_method_arities() {
         js_register_closure_arity(glob_iterator_next_impl as *const u8, 0);
         js_register_closure_arity(glob_iterator_return_impl as *const u8, 0);
         js_register_closure_arity(glob_iterator_self_impl as *const u8, 0);
+        js_register_closure_arity(bun_glob_sync_iterator_next_impl as *const u8, 0);
+        js_register_closure_arity(bun_glob_sync_iterator_return_impl as *const u8, 0);
+        js_register_closure_arity(bun_glob_sync_iterator_self_impl as *const u8, 0);
     });
 }
 
@@ -1281,6 +1326,43 @@ fn build_glob_iterator_object(id: usize) -> f64 {
     self_value
 }
 
+fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
+    ensure_watch_method_arities();
+    let obj = crate::object::js_object_alloc(0, 3);
+    let self_value = boxed_ptr(obj as *const u8);
+    set_named_field(
+        obj,
+        b"next",
+        method_value(
+            bun_glob_sync_iterator_next_impl as *const u8,
+            id,
+            self_value,
+        ),
+    );
+    set_named_field(
+        obj,
+        b"return",
+        method_value(
+            bun_glob_sync_iterator_return_impl as *const u8,
+            id,
+            self_value,
+        ),
+    );
+    let iterator = crate::symbol::well_known_symbol("iterator");
+    if !iterator.is_null() {
+        let symbol_value = boxed_ptr(iterator as *const u8);
+        let method = method_value(
+            bun_glob_sync_iterator_self_impl as *const u8,
+            id,
+            self_value,
+        );
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(self_value, symbol_value, method);
+        }
+    }
+    self_value
+}
+
 pub(crate) fn js_fs_promises_glob_iterator(pattern_value: f64, options_value: f64) -> f64 {
     let (entries, with_file_types, validation_error) =
         match run_fs_glob_result(pattern_value, options_value) {
@@ -1301,6 +1383,49 @@ pub(crate) fn js_fs_promises_glob_iterator(pattern_value: f64, options_value: f6
         );
     });
     build_glob_iterator_object(id)
+}
+
+pub(crate) fn js_bun_glob_async_iterator(pattern_value: f64, options_value: f64) -> f64 {
+    let (entries, with_file_types, validation_error) =
+        match run_bun_glob_result(pattern_value, options_value) {
+            Ok(run) => (run.matches, run.with_file_types, None),
+            Err(err) => (Vec::new(), false, Some(err)),
+        };
+    let id = next_glob_iterator_id();
+    GLOB_ITERATORS.with(|iterators| {
+        iterators.borrow_mut().insert(
+            id,
+            GlobIteratorState {
+                entries,
+                index: 0,
+                with_file_types,
+                closed: false,
+                validation_error,
+            },
+        );
+    });
+    build_glob_iterator_object(id)
+}
+
+pub(crate) fn js_bun_glob_sync_iterator(pattern_value: f64, options_value: f64) -> f64 {
+    let run = match run_bun_glob_result(pattern_value, options_value) {
+        Ok(run) => run,
+        Err(err) => crate::exception::js_throw(err),
+    };
+    let id = next_glob_iterator_id();
+    GLOB_ITERATORS.with(|iterators| {
+        iterators.borrow_mut().insert(
+            id,
+            GlobIteratorState {
+                entries: run.matches,
+                index: 0,
+                with_file_types: run.with_file_types,
+                closed: false,
+                validation_error: None,
+            },
+        );
+    });
+    build_bun_glob_sync_iterator_object(id)
 }
 
 fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {

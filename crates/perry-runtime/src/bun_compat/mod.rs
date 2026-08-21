@@ -20,6 +20,7 @@
 //! - `Bun.hash` is Zig-std Wyhash (see `wyhash.rs`) returning a BigInt, so
 //!   `.toString(16)` cache keys match bun-run installs.
 
+mod glob;
 mod string_width;
 mod width_tables;
 mod wyhash;
@@ -35,6 +36,7 @@ use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{js_jsvalue_to_string, JSValue};
 use std::io::{Read, Write};
 
+pub use glob::js_bun_glob_new;
 pub use string_width::bun_string_width;
 pub use wyhash::wyhash;
 
@@ -98,6 +100,16 @@ fn is_string_value(value: f64) -> bool {
     js.is_string() || js.is_short_string()
 }
 
+fn bun_path_from_value(value: f64) -> Result<String, f64> {
+    if let Some(path) = unsafe { crate::fs::decode_path_value(value) } {
+        return Ok(path);
+    }
+    let message = b"Expected file path string, Uint8Array, or file: URL";
+    let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(message);
+    Err(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+}
+
 fn heap_ptr_from_value(value: f64) -> Option<usize> {
     let js = JSValue::from_bits(value.to_bits());
     if !js.is_pointer() {
@@ -135,6 +147,13 @@ fn bound_method0(func: extern "C" fn(*const ClosureHeader) -> f64, capture: f64)
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
+fn bound_method1(func: extern "C" fn(*const ClosureHeader, f64) -> f64, capture: f64) -> f64 {
+    js_register_closure_arity(func as *const u8, 1);
+    let closure = js_closure_alloc(func as *const u8, 1);
+    js_closure_set_capture_f64(closure, 0, capture);
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
 fn captured(closure: *const ClosureHeader) -> f64 {
     js_closure_get_capture_f64(closure, 0)
 }
@@ -147,22 +166,14 @@ fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
     if is_string_value(value) {
         return Ok(value_to_string(value).into_bytes());
     }
-    if let Some(addr) = heap_ptr_from_value(value) {
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const crate::typedarray::TypedArrayHeader;
-            if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(ta) } {
-                return Ok(bytes.to_vec());
-            }
-        }
-        if crate::buffer::is_array_buffer(addr) {
-            let buf = addr as *const crate::buffer::BufferHeader;
-            unsafe {
-                let len = (*buf).length as usize;
-                let data =
-                    (buf as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-                return Ok(std::slice::from_raw_parts(data, len).to_vec());
-            }
-        }
+    let mut binary_len = 0u32;
+    let binary_ptr = unsafe {
+        crate::buffer::js_value_buffer_or_typedarray_data(value, &mut binary_len as *mut u32)
+    };
+    if !binary_ptr.is_null() {
+        return Ok(unsafe { std::slice::from_raw_parts(binary_ptr, binary_len as usize) }.to_vec());
+    }
+    if heap_ptr_from_value(value).is_some() {
         if let Some(path_value) = object_field(value, BUN_FILE_PATH_KEY) {
             let path = value_to_string(path_value);
             return std::fs::read(&path)
@@ -298,6 +309,14 @@ extern "C" fn bun_file_array_buffer(closure: *const ClosureHeader) -> f64 {
     }
 }
 
+extern "C" fn bun_file_bytes(closure: *const ClosureHeader) -> f64 {
+    let path = value_to_string(captured(closure));
+    match read_file_or_reject(&path) {
+        Ok(bytes) => promise_value(uint8_array_from_bytes(&bytes)),
+        Err(err) => promise_rejected(err),
+    }
+}
+
 extern "C" fn bun_file_exists(closure: *const ClosureHeader) -> f64 {
     let path = value_to_string(captured(closure));
     promise_value(bool_value(
@@ -325,13 +344,28 @@ fn array_buffer_from_bytes(bytes: &[u8]) -> f64 {
     f64::from_bits(JSValue::pointer(buf as *const u8).bits())
 }
 
+fn uint8_array_from_bytes(bytes: &[u8]) -> f64 {
+    let buffer = crate::buffer::js_uint8array_alloc(bytes.len() as i32);
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            crate::buffer::buffer_data_mut(buffer),
+            bytes.len(),
+        );
+    }
+    f64::from_bits(JSValue::pointer(buffer as *const u8).bits())
+}
+
 /// `Bun.file(path)` — BunFile-like lazy handle.
 #[no_mangle]
 pub extern "C" fn js_bun_file(path: f64) -> f64 {
-    let path_string = value_to_string(path);
+    let path_string = match bun_path_from_value(path) {
+        Ok(path) => path,
+        Err(error) => crate::exception::js_throw(error),
+    };
     let path_value = boxed_str(path_string.as_bytes());
 
-    let obj = js_object_alloc(0, 8);
+    let obj = js_object_alloc(0, 9);
     set_field(obj, BUN_FILE_PATH_KEY, path_value);
     set_field(obj, b"name", path_value);
     let size = std::fs::metadata(&path_string)
@@ -350,6 +384,7 @@ pub extern "C" fn js_bun_file(path: f64) -> f64 {
         b"arrayBuffer",
         bound_method0(bun_file_array_buffer, path_value),
     );
+    set_field(obj, b"bytes", bound_method0(bun_file_bytes, path_value));
     set_field(obj, b"exists", bound_method0(bun_file_exists, path_value));
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
@@ -387,10 +422,10 @@ pub extern "C" fn js_bun_write(dest: f64, data: f64) -> f64 {
     }
 
     // Path (string) or BunFile destination.
-    let path = if is_string_value(dest) {
-        value_to_string(dest)
-    } else if let Some(path_value) = object_field(dest, BUN_FILE_PATH_KEY) {
+    let path = if let Some(path_value) = object_field(dest, BUN_FILE_PATH_KEY) {
         value_to_string(path_value)
+    } else if let Ok(path) = bun_path_from_value(dest) {
+        path
     } else {
         let msg = b"Bun.write: destination must be a path, BunFile, or Bun.stdout/stderr";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
@@ -473,4 +508,36 @@ pub extern "C" fn js_bun_stdout() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_bun_stderr() -> f64 {
     bun_std_out_like(2.0)
+}
+
+/// Explicit failure for Bun surfaces outside Perry's maintained compatibility
+/// target. Direct `Bun.<member>(...)` calls lower here instead of degrading to
+/// an opaque "value is not a function" error.
+#[no_mangle]
+pub extern "C-unwind" fn js_bun_unsupported(member: f64) -> f64 {
+    let member = value_to_string(member);
+    let message = format!("Bun.{member} is not supported by Perry");
+    let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_error_new_with_message(message);
+    crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_bytes_preserves_uint8array_binary_data() {
+        let expected = [0, 127, 128, 255];
+        let buffer = crate::buffer::js_uint8array_alloc(expected.len() as i32);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                expected.as_ptr(),
+                crate::buffer::buffer_data_mut(buffer),
+                expected.len(),
+            );
+        }
+        let value = f64::from_bits(JSValue::pointer(buffer as *const u8).bits());
+        assert_eq!(payload_bytes(value).unwrap(), expected);
+    }
 }

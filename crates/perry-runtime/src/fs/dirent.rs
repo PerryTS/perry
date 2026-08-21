@@ -38,6 +38,11 @@ impl DirentKind {
             is_socket: dirent_is_socket(ft),
         }
     }
+
+    #[cfg(feature = "regex-engine")]
+    pub(crate) fn is_file(self) -> bool {
+        self.is_file
+    }
 }
 
 #[cfg(unix)]
