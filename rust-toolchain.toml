@@ -1,0 +1,19 @@
+# Pinned to match the `toolchain:` input every CI workflow passes to
+# dtolnay/rust-toolchain (#8550). Keep the three in sync: this file,
+# those workflows, and `external-tools.json`'s `rust` entry.
+#
+# Why a dated nightly rather than stable: `.cargo/config.toml` sets
+# `[unstable] min-publish-age`, cargo's dependency-resolution soak gate,
+# which is nightly-only (rust-lang/cargo#17009). On stable, cargo silently
+# ignores it with `warning: ignoring registry.global-min-publish-age
+# without -Zmin-publish-age`, so the soak gate is inert.
+#
+# Why this file has to exist as well as the workflow inputs: those inputs
+# only govern jobs that go through the action. Nothing else does — a
+# contributor's `cargo build`, a bisect, a hand-built release artifact, or
+# any script invoking cargo directly. `perry-runtime` uses the
+# `float_algebraic` methods, so without this file those builds fail with
+# E0658 while CI stays green.
+[toolchain]
+channel = "nightly-2026-08-20"
+components = ["rustfmt", "clippy"]
