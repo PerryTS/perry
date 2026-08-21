@@ -249,11 +249,24 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     // key returns true/false here rather than going through the ordinary object
     // machinery (which would mishandle in-bounds element writes and treats the
     // view as non-extensible).
+    // #8507: the probe below coerces the key inside `canonical_index_for_key`,
+    // which runs a user `toString` and can evacuate. Root the three operands
+    // above it and re-read them after, or everything below names pre-move
+    // addresses: a stale `key` makes `obj_value_has_own_key` answer false, so
+    // the non-configurable guard is skipped and a redefine that must fail is
+    // accepted, and the define files the value under "[object Object]".
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_root = scope.root_heap_word_u64(obj.to_bits());
+    let key_root = scope.root_nanbox_f64(key);
+    let desc_root = scope.root_nanbox_f64(descriptor);
     match unsafe { super::typed_array_define_own_property(obj, key, descriptor) } {
         super::TypedArrayDefineOutcome::Defined => return reflect_bool(true),
         super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
         super::TypedArrayDefineOutcome::NotTypedArray => {}
     }
+    let obj = f64::from_bits(obj_root.get_heap_word_u64());
+    let key = key_root.get_nanbox_f64();
+    let descriptor = desc_root.get_nanbox_f64();
     // The array exotic `[[DefineOwnProperty]]` for `length` (ArraySetLength)
     // reports success/failure as a boolean here rather than throwing — bypass
     // the generic non-configurable pre-check below, which would mishandle the
@@ -261,19 +274,32 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     if let Some(ok) = unsafe { super::array_length_reflect_define(obj, key, descriptor) } {
         return reflect_bool(ok);
     }
-    let has_own = obj_value_has_own_key(obj, key);
+    let obj = f64::from_bits(obj_root.get_heap_word_u64());
+    // #8507: `obj_value_has_own_key`, `obj_value_attrs` and
+    // `array_length_reflect_define` each RE-COERCE the key (running the user
+    // `toString` again) and can evacuate, so the operands must be re-read from
+    // their roots between the probes. A stale `key` here makes the own-key
+    // probe answer false, which skips the non-configurable guard below and
+    // accepts a redefine that must fail.
+    let has_own = obj_value_has_own_key(obj, key_root.get_nanbox_f64());
+    let obj = f64::from_bits(obj_root.get_heap_word_u64());
     // Redefining a non-configurable existing property fails.
     if has_own {
-        if let Some((_writable, configurable)) = obj_value_attrs(obj, key) {
+        let attrs = obj_value_attrs(obj, key_root.get_nanbox_f64());
+        if let Some((_writable, configurable)) = attrs {
             if !configurable {
                 return reflect_bool(false);
             }
         }
-    } else if obj_value_no_extend(obj) {
+    } else if obj_value_no_extend(f64::from_bits(obj_root.get_heap_word_u64())) {
         // Defining a brand-new property on a non-extensible object fails.
         return reflect_bool(false);
     }
-    super::js_object_define_property(obj, key, descriptor);
+    super::js_object_define_property(
+        f64::from_bits(obj_root.get_heap_word_u64()),
+        key_root.get_nanbox_f64(),
+        desc_root.get_nanbox_f64(),
+    );
     reflect_bool(true)
 }
 

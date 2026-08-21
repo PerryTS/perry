@@ -430,6 +430,19 @@ pub extern "C" fn js_object_define_property(
         // handles truncates the outer container's newest entries (see
         // `gc::RootedValues`' module docs), so the arms below share this one.
         let scope = crate::gc::RuntimeHandleScope::new();
+        // #8507: root the three NaN-boxed operands HERE, above the typed-array
+        // probe below. That probe coerces the key inside
+        // `canonical_index_for_key`, which runs a user `toString` and can
+        // evacuate — so by the time the ordinary arms further down coerce the
+        // key again, the raw parameter names a pre-move address. A moved key
+        // object still parses as an object at its old address, but its own
+        // `toString` is no longer reachable there, so the second coercion
+        // silently falls back to `Object.prototype.toString` and the property is
+        // filed under "[object Object]". Rooting at the later coercion is too
+        // late; the move has already happened by then.
+        let obj_root = scope.root_heap_word_u64(obj_value.to_bits());
+        let key_root = scope.root_nanbox_f64(key_value);
+        let desc_root = scope.root_nanbox_f64(descriptor_value);
         // #6748 follow-up: decode the descriptor's 6 fields in ONE pass when it
         // is a plain default-prototype object (the overwhelming majority) —
         // the per-field `desc_has_field`/`desc_read_field` helpers each cost a
@@ -457,6 +470,11 @@ pub extern "C" fn js_object_define_property(
                 super::super::TypedArrayDefineOutcome::NotTypedArray => {}
             }
         }
+        // #8507: the probe above coerced the key through user JS, so every
+        // operand below must come from its root, not from the parameters.
+        let obj_value = f64::from_bits(obj_root.get_heap_word_u64());
+        let key_value = key_root.get_nanbox_f64();
+        let descriptor_value = desc_root.get_nanbox_f64();
 
         // Date / RegExp / Error instances are exotic cells, not
         // `ObjectHeader`s — the ordinary define path below would bit-cast
