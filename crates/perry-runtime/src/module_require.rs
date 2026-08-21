@@ -1021,7 +1021,12 @@ pub fn scan_module_path_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     // No owner gate: the table is per-heap, so the collector running this
     // scanner is by construction the one that owns every pointer in it. A
     // gate here would leave every heap but the first one unscanned.
-    MODULE_PATH_REGISTRY.with(|registry| registry.scan_roots(visitor));
+    //
+    // `try_with`, not `with`: a Coop app thread tears down its heap when the
+    // deployment stops, and a scanner that ran during that teardown would
+    // panic on the destroyed thread-local. A destroyed table holds no live
+    // pointer worth rewriting, so reporting is the whole handling.
+    let _ = MODULE_PATH_REGISTRY.try_with(|registry| registry.scan_roots(visitor));
 }
 
 #[cfg(test)]

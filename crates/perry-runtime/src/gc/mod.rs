@@ -828,7 +828,7 @@ pub fn gc_init() {
     );
     reg_scanner!(crate::promise::scan_native_async_completion_roots_mut);
     // Runtime path-module exports and cached initialization errors live in a
-    // provider-owned Rust registry, so moving GC must mark and rewrite them.
+    // per-heap Rust registry, so moving GC must mark and rewrite them.
     reg_scanner!(crate::module_require::scan_module_path_roots_mut);
     reg_budgeted_scanner!(
         promise_mutable_root_scanner,

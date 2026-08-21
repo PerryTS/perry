@@ -898,6 +898,36 @@ mod path_module_registry_tests {
         });
     }
 
+    /// The Coop shape: many apps in one process load the SAME module path.
+    /// Each heap must run its own initializer and get its own exports, with
+    /// no thread refused and no initializer skipped as already-done.
+    #[test]
+    fn every_heap_runs_its_own_initializer_for_the_same_path() {
+        const KEY: &str = "/shared-bundle-path.js";
+        fn init_on_this_heap(marker: u64) -> Option<u64> {
+            MODULE_PATH_REGISTRY.with(|registry| {
+                assert!(registry.register_init(KEY.into(), 0x2000));
+                let ran = std::cell::Cell::new(false);
+                let outcome = registry.require_with(KEY, &|_addr| {
+                    ran.set(true);
+                    assert!(registry.register_final_exports(KEY.into(), marker));
+                    Ok(())
+                });
+                assert!(ran.get(), "this heap's initializer must actually run");
+                outcome.expect("no heap may be refused ownership")
+            })
+        }
+
+        let first = init_on_this_heap(0xA1);
+        let second = std::thread::spawn(|| init_on_this_heap(0xB2))
+            .join()
+            .unwrap();
+
+        assert_eq!(first, Some(0xA1));
+        assert_eq!(second, Some(0xB2), "the second heap got the first heap's value");
+        MODULE_PATH_REGISTRY.with(|registry| registry.remove_for_test(KEY));
+    }
+
     #[test]
     fn undefined_export_is_present_and_distinct_from_a_miss() {
         let registry = PathModuleRegistry::default();
