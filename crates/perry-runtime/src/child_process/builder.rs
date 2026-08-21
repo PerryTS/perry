@@ -28,6 +28,7 @@ pub(crate) fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) 
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
+/// Erase a three-argument native method to the common child-process method ABI.
 pub(crate) fn cp_cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }

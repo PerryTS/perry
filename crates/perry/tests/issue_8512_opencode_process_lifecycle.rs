@@ -30,8 +30,9 @@ async function completion(register: (done: () => void) => void): Promise<boolean
 }
 
 async function main() {
-  const child = spawn("sh", ["-c", 'printf "%s:%s\\n" "$PWD" "$OPENCODE_LSP"; cat'], {
-    cwd: process.cwd(),
+  const childCwd = process.env.OPENCODE_CHILD_CWD as string;
+  const child = spawn("sh", ["-c", 'printf "%s\\n%s\\n" "$PWD" "$OPENCODE_LSP"; cat'], {
+    cwd: childCwd,
     env: { PATH: process.env.PATH, OPENCODE_LSP: "ready" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -53,7 +54,8 @@ async function main() {
   console.log("ENCODED_WRITE_CB_ASYNC:" + encodedWriteAsync);
   console.log("END_CB_ASYNC:" + endAsync);
   console.log("EXIT:" + result.code + ":" + result.signal);
-  console.log("ENV:" + stdout.includes(":ready\n"));
+  console.log("CWD:" + stdout.startsWith(childCwd + "\n"));
+  console.log("ENV:" + stdout.includes("\nready\n"));
   console.log("FRAMES:" + stdout.includes("frame-one\nframe-two\n"));
 }
 
@@ -65,6 +67,9 @@ fn opencode_lsp_writable_callbacks_complete() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
+    let child_cwd = dir.path().join("child-cwd");
+    std::fs::create_dir(&child_cwd).expect("create distinct child cwd");
+    let child_cwd = std::fs::canonicalize(child_cwd).expect("canonicalize child cwd");
     std::fs::write(&entry, FIXTURE).expect("write fixture");
 
     let compile = Command::new(perry_bin())
@@ -87,6 +92,7 @@ fn opencode_lsp_writable_callbacks_complete() {
     // failure.
     let mut child = Command::new(&output)
         .current_dir(dir.path())
+        .env("OPENCODE_CHILD_CWD", &child_cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -132,6 +138,7 @@ fn opencode_lsp_writable_callbacks_complete() {
         "ENCODED_WRITE_CB_ASYNC:true",
         "END_CB_ASYNC:true",
         "EXIT:0:null",
+        "CWD:true",
         "ENV:true",
         "FRAMES:true",
     ] {

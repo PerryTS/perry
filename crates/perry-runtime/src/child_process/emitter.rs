@@ -285,11 +285,19 @@ fn cp_stream_callback(arg2: f64, arg3: f64) -> Option<f64> {
 /// turn. The wrapper closure roots the callback until delivery and invokes it
 /// with no arguments, so `callback(error)` observes `undefined` on success.
 fn cp_defer_stream_callback(callback: f64) {
-    let deferred = js_closure_alloc(cp_stream_callback_thunk as *const u8, 1);
-    js_closure_set_capture_ptr(deferred, 0, callback.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let deferred =
+        scope.root_raw_mut_ptr(js_closure_alloc(cp_stream_callback_thunk as *const u8, 1));
+    deferred.with_mut_ptr(|deferred: *mut ClosureHeader| {
+        js_closure_set_capture_ptr(deferred, 0, callback.get_nanbox_f64().to_bits() as i64);
+    });
+    deferred.with_mut_ptr(|deferred: *mut ClosureHeader| {
+        crate::timer::js_set_immediate_callback(deferred as i64);
+    });
 }
 
+/// Deliver a deferred child-stdin completion callback captured in slot zero.
 pub(crate) extern "C" fn cp_stream_callback_thunk(closure: *const ClosureHeader) -> f64 {
     let callback = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let args: [f64; 0] = [];
