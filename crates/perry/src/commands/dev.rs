@@ -295,6 +295,7 @@ fn build_once(
         output_type: "executable".to_string(),
         bundle_extensions: None,
         embed: Vec::new(),
+        asset_module: Vec::new(),
         type_check: false,
         minify: false,
         features: None,

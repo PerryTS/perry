@@ -40,7 +40,7 @@ fn subpath_exports_do_not_fall_back_to_src_index() {
         &importer,
         root,
         &compile_packages,
-        &HashMap::new(),
+        &BTreeSet::new(),
     )
     .expect("resolve pkg/feature");
 

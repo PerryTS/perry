@@ -171,6 +171,15 @@ These boundaries assign DNS resolver behavior to `dns`, socket distribution to
 
 ## Verification
 
+### #8515 multicast additions
+
+Three host-network fixtures extend the portable floor to 42/57: reusable
+shared-port binds with prompt close/rebind, IPv4 multicast loopback delivery
+with explicit join/drop membership, and AsyncLocalStorage propagation through
+UDP message callbacks. The multicast fixture uses the loopback interface and
+an ephemeral port so it exercises the OS multicast path without depending on
+LAN topology or occupying mDNS port 5353.
+
 ```text
 NODE_BIN=/private/tmp/node-v26.5.0-bin/bin/node \
 python3 scripts/node_suite_run.py "$PWD/target/release/perry" "$PWD" dgram

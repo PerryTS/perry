@@ -317,10 +317,10 @@ url = { version = "2", optional = true }
 # style. resolv-conf reads the system nameserver list from /etc/resolv.conf.
 hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
 resolv-conf = "0.7"
-# #4911: real node:dgram UDP sockets. std::net::UdpSocket covers bind/send/recv
-# + the common multicast/broadcast/TTL options; socket2 borrows the same fd
-# (SockRef) for the few std lacks — set_multicast_if and source-specific
-# membership — so those are real rather than silent no-ops.
+# #4911/#8515: real node:dgram UDP sockets. socket2 creates sockets so reuse
+# and IPv6-only options are applied before bind; std::net::UdpSocket then drives
+# send/recv and the common multicast/broadcast/TTL options. SockRef covers the
+# remaining multicast-interface and source-specific membership controls.
 socket2 = { workspace = true, features = ["all"] }
 # mimalloc is declared 64-bit-only below (see the target_pointer_width section) —
 # on arm64_32/ILP32 it is neither used nor compiled.

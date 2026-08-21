@@ -29,7 +29,7 @@
 
 use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -131,9 +131,9 @@ mod bun_store_tests;
 #[cfg(test)]
 mod declaration_map_source_tests;
 #[cfg(test)]
-mod dedup_version_tests;
-#[cfg(test)]
 mod extension_resolution_tests;
+#[cfg(test)]
+mod package_instance_tests;
 #[cfg(test)]
 mod tests;
 
@@ -190,83 +190,6 @@ pub(super) fn extract_compile_package_dir(
         .ancestors()
         .find(|candidate| is_compile_package_dir(candidate, package_name))
         .map(Path::to_path_buf)
-}
-
-/// Read a package directory's declared `version`, if it has a readable
-/// `package.json` with a string `version` field.
-fn package_json_version(package_dir: &Path) -> Option<String> {
-    let raw = fs::read_to_string(package_dir.join("package.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("version")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
-/// Whether `chosen` is a *different* copy from `found` with a *different*
-/// declared version. Identical versions are a genuine duplicate install and
-/// collapsing them is intended; differing versions mean the build silently
-/// dropped one of them.
-pub(super) fn dedup_collapses_distinct_versions(chosen: &Path, found: &Path) -> bool {
-    if chosen == found {
-        return false;
-    }
-    match (package_json_version(chosen), package_json_version(found)) {
-        (Some(a), Some(b)) => a != b,
-        // A copy with no readable version can't be proven distinct; stay
-        // quiet rather than warning on every unversioned local link.
-        _ => false,
-    }
-}
-
-/// The copy plain Node resolution would have picked for `package_name` as
-/// imported from `importer_path`: the nearest ancestor `node_modules` that
-/// holds the package. Perry's compile-package path deliberately searches the
-/// project root first instead (see `search_paths` in `resolve_import`), so
-/// the two can disagree.
-pub(super) fn node_nearest_package_dir(
-    package_name: &str,
-    importer_path: &Path,
-) -> Option<PathBuf> {
-    let start = importer_path.parent().unwrap_or(importer_path);
-    ancestor_node_modules_dirs(start)
-        .into_iter()
-        .map(|node_modules| node_modules.join(package_name))
-        .find(|candidate| candidate.is_dir())
-}
-
-/// Warn, at most once per package, when the compile-package resolution path
-/// hands an importer a different *version* than Node would have. Covers both
-/// the root-first search order and the `compile_package_dirs` first-found
-/// dedup, since `chosen` is the directory actually used.
-fn warn_on_version_shadowed_resolution(package_name: &str, chosen: &Path, importer_path: &Path) {
-    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    let Some(nearest) = node_nearest_package_dir(package_name, importer_path) else {
-        return;
-    };
-    if !dedup_collapses_distinct_versions(chosen, &nearest) {
-        return;
-    }
-    let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
-    let Ok(mut warned) = warned.lock() else {
-        return;
-    };
-    if !warned.insert(package_name.to_string()) {
-        return;
-    }
-    let chosen_version = package_json_version(chosen).unwrap_or_else(|| "?".to_string());
-    let nearest_version = package_json_version(&nearest).unwrap_or_else(|| "?".to_string());
-    eprintln!(
-        "  warning: `{package_name}` is installed at two different versions and \
-         Perry compiles ONE copy per package name. `{importer}` gets \
-         {chosen_version} (from {chosen}); Node would have given it \
-         {nearest_version} (from {nearest}). Deduplicate the dependency (npm \
-         dedupe / a package override), or list the package explicitly in \
-         `perry.compilePackages` only where you want it compiled.",
-        importer = importer_path.display(),
-        chosen = chosen.display(),
-        nearest = nearest.display(),
-    );
 }
 
 /// Check if a file path is inside a package listed in compile_packages
@@ -1432,7 +1355,7 @@ pub(super) fn resolve_import(
     importer_path: &Path,
     project_root: &Path,
     compile_packages: &HashSet<String>,
-    compile_package_dirs: &HashMap<String, PathBuf>,
+    compile_package_dirs: &BTreeSet<PathBuf>,
 ) -> Option<(PathBuf, ModuleKind)> {
     // Check if it's a native Rust stdlib module. Refs #665: when the user has
     // explicitly opted the package into `perry.compilePackages`, they want
@@ -1509,7 +1432,7 @@ pub(super) fn resolve_import(
             // dependent file never enters `ctx.native_modules`, and importing
             // modules see `imported_classes=[]` for symbols re-exported from it.
             let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
-                || compile_package_dirs.values().any(|dir| {
+                || compile_package_dirs.iter().any(|dir| {
                     if canonical.starts_with(dir) {
                         let relative = canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
                         !relative.to_string_lossy().contains("node_modules/")
@@ -1554,14 +1477,12 @@ pub(super) fn resolve_import(
     // Handle node_modules (bare specifiers)
     let (package_name, subpath) = parse_package_specifier(import_source);
 
-    // For compile_packages, search project root first to prefer ESM versions
-    // over nested CJS copies (e.g., @solana/web3.js/node_modules/bs58 is CJS,
-    // but the top-level node_modules/bs58 has ESM support)
-    let search_paths = if compile_packages.contains(&package_name) {
-        [Some(project_root), importer_path.parent()]
-    } else {
-        [importer_path.parent(), Some(project_root)]
-    };
+    // Bare package imports are importer-relative. Start at the importing
+    // module and walk its ancestors exactly as Node/Bun do; the project root
+    // remains an additive fallback for lexical/canonical path edge cases.
+    // A compilePackages opt-in controls how the resolved copy is compiled, not
+    // which installed copy wins resolution.
+    let search_paths = [importer_path.parent(), Some(project_root)];
 
     for start in search_paths.iter().flatten() {
         for node_modules in ancestor_node_modules_dirs(start) {
@@ -1583,40 +1504,23 @@ pub(super) fn resolve_import(
             }
             // Packages listed in perry.compilePackages are compiled natively
             if compile_packages.contains(&package_name) {
-                // Deduplicate: if we've already resolved this package from a
-                // different node_modules location, use the first-found directory
-                // to avoid duplicate symbols from identical package copies
-                let effective_dir = compile_package_dirs
-                    .get(&package_name)
-                    .unwrap_or(&package_dir);
-                // #7137 follow-up. Two mechanisms route this import away from
-                // the copy Node would have used: the root-first `search_paths`
-                // order just above (chosen for compile packages so a top-level
-                // ESM copy beats a nested CJS one), and this first-found
-                // `compile_package_dirs` dedup. Both were narrow while
-                // `compile_packages` held only hand-listed names — opting a
-                // package in was a deliberate act. The auto-compile default
-                // puts the WHOLE reachable graph in that set, so both now apply
-                // to every bare specifier in the project, and a tree carrying
-                // two majors of one package silently gets one of them. Report
-                // it when the versions actually differ.
-                warn_on_version_shadowed_resolution(&package_name, effective_dir, importer_path);
                 // Prefer TypeScript source over compiled JS
                 if let Some(src_entry) =
-                    resolve_package_source_entry(effective_dir, subpath.as_deref())
+                    resolve_package_source_entry(&package_dir, subpath.as_deref())
                 {
                     return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                 }
                 // Fall back to normal resolution but still mark as NativeCompiled
                 if let Some(fallback_entry) =
-                    resolve_package_entry(effective_dir, subpath.as_deref())
+                    resolve_package_entry(&package_dir, subpath.as_deref())
                 {
                     return Some((
                         fallback_entry.canonicalize().ok()?,
                         ModuleKind::NativeCompiled,
                     ));
                 }
-                // If effective_dir failed (shouldn't happen), try the local dir
+                // The entry resolved above is the same package instance and is
+                // kept as the final fallback for unusual package metadata.
                 return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
             }
             // For other node_modules packages, classify by file
@@ -1704,7 +1608,7 @@ pub(super) fn resolve_import(
     if let Some(canonical) = tsconfig_paths::resolve_tsconfig_paths(import_source, importer_path) {
         let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
             || compile_package_dirs
-                .values()
+                .iter()
                 .any(|dir| canonical.starts_with(dir));
         let in_node_modules = canonical.to_string_lossy().contains("node_modules");
         let kind = if is_js_file(&canonical) && !in_compile_pkg && in_node_modules {
@@ -1822,6 +1726,9 @@ pub(super) fn cached_resolve_import(
     importer_path: &Path,
     ctx: &mut CompilationContext,
 ) -> Option<(PathBuf, ModuleKind)> {
+    if let Some(generated) = ctx.generated_asset_modules.get(import_source) {
+        return Some((generated.source_path.clone(), ModuleKind::NativeCompiled));
+    }
     let importer_dir = importer_path
         .parent()
         .unwrap_or(importer_path)

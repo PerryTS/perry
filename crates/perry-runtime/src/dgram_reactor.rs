@@ -31,6 +31,9 @@ struct LiveSocket {
     socket_bits: u64,
     udp: Arc<UdpSocket>,
     closing: Arc<AtomicBool>,
+    recv_thread: Option<std::thread::JoinHandle<()>>,
+    /// AsyncLocalStorage context active when the UDP handle was bound.
+    context: crate::async_context::AsyncContextSnapshot,
     /// Whether this socket holds the event loop open (`ref`'d). `unref()`
     /// clears it; `ref()` sets it.
     refed: bool,
@@ -68,6 +71,8 @@ pub(crate) fn register(socket_bits: u64, udp: Arc<UdpSocket>) -> u64 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let closing = Arc::new(AtomicBool::new(false));
     let _ = udp.set_read_timeout(Some(RECV_POLL));
+    let context = crate::async_context::capture_context();
+    let recv_thread = spawn_recv(id, udp.clone(), closing.clone());
     {
         let mut guard = live_lock();
         guard.get_or_insert_with(HashMap::new).insert(
@@ -76,17 +81,22 @@ pub(crate) fn register(socket_bits: u64, udp: Arc<UdpSocket>) -> u64 {
                 socket_bits,
                 udp: udp.clone(),
                 closing: closing.clone(),
+                recv_thread: Some(recv_thread),
+                context,
                 refed: true,
             },
         );
     }
     LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     REFED_COUNT.fetch_add(1, Ordering::SeqCst);
-    spawn_recv(id, udp, closing);
     id
 }
 
-fn spawn_recv(id: u64, udp: Arc<UdpSocket>, closing: Arc<AtomicBool>) {
+fn spawn_recv(
+    id: u64,
+    udp: Arc<UdpSocket>,
+    closing: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; RECV_CAP];
         loop {
@@ -112,7 +122,7 @@ fn spawn_recv(id: u64, udp: Arc<UdpSocket>, closing: Arc<AtomicBool>) {
                 },
             }
         }
-    });
+    })
 }
 
 /// Recover the live `UdpSocket` for `id` (set/used by `dgram.rs` methods).
@@ -129,13 +139,29 @@ pub(crate) fn unregister(id: u64) {
         let mut guard = live_lock();
         guard.as_mut().and_then(|map| map.remove(&id))
     };
-    if let Some(ls) = removed {
+    if let Some(mut ls) = removed {
         ls.closing.store(true, Ordering::Release);
+        wake_receiver(&ls.udp);
+        if let Some(thread) = ls.recv_thread.take() {
+            let _ = thread.join();
+        }
         LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
         if ls.refed {
             REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
         }
     }
+}
+
+fn wake_receiver(udp: &UdpSocket) {
+    let Ok(local) = udp.local_addr() else {
+        return;
+    };
+    let wake = if local.is_ipv4() {
+        SocketAddr::from(([127, 0, 0, 1], local.port()))
+    } else {
+        SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], local.port()))
+    };
+    let _ = udp.send_to(&[], wake);
 }
 
 /// `socket.ref()` / `socket.unref()` — toggle whether this socket holds the
@@ -163,13 +189,14 @@ pub(crate) fn pump() {
     let datagrams = std::mem::take(&mut *queue_lock());
     for datagram in datagrams {
         // The socket may have been closed between recv and pump; skip if gone.
-        let socket_bits = {
+        let live = {
             let guard = live_lock();
-            guard
-                .as_ref()
-                .and_then(|map| map.get(&datagram.id).map(|ls| ls.socket_bits))
+            guard.as_ref().and_then(|map| {
+                map.get(&datagram.id)
+                    .map(|ls| (ls.socket_bits, ls.context.clone()))
+            })
         };
-        let Some(socket_bits) = socket_bits else {
+        let Some((socket_bits, context)) = live else {
             continue;
         };
         let family = if datagram.src.is_ipv4() {
@@ -177,6 +204,10 @@ pub(crate) fn pump() {
         } else {
             "IPv6"
         };
+        let previous = crate::async_context::enter_context(&context);
+        crate::async_context::push_context_guard(
+            crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
+        );
         crate::dgram::dgram_emit_message(
             socket_bits,
             &datagram.data,
@@ -184,6 +215,9 @@ pub(crate) fn pump() {
             datagram.src.port(),
             family,
         );
+        if let Some(action) = crate::async_context::pop_context_guard() {
+            crate::async_context::apply_context_guard(action);
+        }
     }
 }
 
@@ -202,6 +236,7 @@ pub(crate) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     if let Some(map) = live_lock().as_mut() {
         for ls in map.values_mut() {
             visitor.visit_nanbox_u64_slot(&mut ls.socket_bits);
+            crate::async_context::scan_snapshot_roots_mut(&mut ls.context, visitor);
         }
     }
 }

@@ -10,6 +10,8 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 
 pub(crate) fn allocate_port(registry: &mut DgramRegistry, address: &str) -> u16 {
@@ -273,7 +275,29 @@ pub(crate) fn resolve_send_addr(address: &str, port: u16) -> Result<SocketAddr, 
 /// returns the error value for the caller to emit as `'error'`.
 pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64> {
     let address = normalize_address(address, socket);
-    let udp = match UdpSocket::bind((address.as_str(), port)) {
+    let is_v6 = string_eq(
+        get_hidden_value(socket, KEY_TYPE).unwrap_or_else(|| str_value("udp4")),
+        b"udp6",
+    );
+    let socket_addr = match (address.as_str(), port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addresses| addresses.find(|candidate| candidate.is_ipv6() == is_v6))
+    {
+        Some(address) => address,
+        None => {
+            return Err(socket_error_value(
+                &format!("bind EADDRNOTAVAIL {address}:{port}"),
+                "EADDRNOTAVAIL",
+                "bind",
+            ));
+        }
+    };
+    let udp = match open_udp_socket(
+        socket_addr,
+        is_truthy_hidden(socket, KEY_REUSE_ADDR),
+        is_v6 && is_truthy_hidden(socket, KEY_IPV6_ONLY),
+    ) {
         Ok(udp) => udp,
         Err(err) => {
             return Err(socket_error_value(
@@ -298,6 +322,51 @@ pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64
     set_hidden_value(socket, KEY_PORT, actual_port as f64);
     set_hidden_value(socket, KEY_BOUND, bool_value(true));
     Ok(())
+}
+
+fn open_udp_socket(
+    address: SocketAddr,
+    reuse_addr: bool,
+    ipv6_only: bool,
+) -> std::io::Result<UdpSocket> {
+    let domain = if address.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    if reuse_addr {
+        configure_reuse_addr(&socket)?;
+    }
+    if address.is_ipv6() && ipv6_only {
+        socket.set_only_v6(true)?;
+    }
+    socket.bind(&SockAddr::from(address))?;
+    Ok(socket.into())
+}
+
+// libuv's UV_UDP_REUSEADDR uses SO_REUSEPORT on Apple/BSD because those
+// kernels give it the multicast port-sharing semantics Node expects. Linux
+// uses SO_REUSEADDR; SO_REUSEPORT there load-balances instead.
+fn configure_reuse_addr(socket: &Socket) -> std::io::Result<()> {
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        socket.set_reuse_port(true)
+    }
+    #[cfg(not(any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    {
+        socket.set_reuse_address(true)
+    }
 }
 
 /// Real `send()`: transmit over the OS socket. Errors go to the callback when

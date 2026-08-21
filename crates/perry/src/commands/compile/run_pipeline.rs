@@ -542,6 +542,11 @@ pub fn run_with_parse_cache(
     let skip_codegen = args.no_codegen || codegen_steps::skip_from_env();
     codegen_steps::run_codegen_steps(&ctx, skip_codegen, format)?;
 
+    // Reproduce bundler-injected file-map modules (for example OpenCode's
+    // `opencode-web-ui.gen.ts`) after upstream preparation has populated the
+    // asset directory and before the import graph is resolved.
+    asset_modules::generate(&args.asset_module, &mut ctx, format)?;
+
     // #1681 (Phase 3 of #1677): self-hosted build-time `precompile(...)`.
     // If this is the capture subprocess, enter capture mode; otherwise, when
     // the entry uses `precompile(`, compile+run it via Perry itself (no node,
@@ -2578,7 +2583,7 @@ pub fn run_with_parse_cache(
                             // with MODULE_NOT_FOUND even though it was compiled.
                             || ctx
                                 .compile_package_dirs
-                                .values()
+                                .iter()
                                 .any(|dir| p.starts_with(dir))
                     })
                     .map(|(p, m)| {
@@ -5711,6 +5716,21 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Resolve every explicit and graph-discovered asset before the no-link
+    // return so diagnostics and the provenance manifest are available for
+    // compile-only workflows too.
+    let mut embedded_assets = embed::resolve_embedded_assets(&args.embed, &ctx.cache_root)?;
+    for (name, path) in &ctx.embedded_assets {
+        if !embedded_assets
+            .iter()
+            .any(|(existing_name, _)| existing_name == name)
+        {
+            embedded_assets.push((name.clone(), path.clone()));
+        }
+    }
+    embedded_assets.sort_by(|a, b| a.0.cmp(&b.0));
+    asset_manifest::write(&ctx, &embedded_assets, format)?;
+
     if args.no_link {
         let codegen_cache_stats = if object_cache.is_enabled() {
             Some((
@@ -5741,21 +5761,6 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    let mut embedded_assets = embed::resolve_embedded_assets(&args.embed, &ctx.cache_root)?;
-    // `{ type: "file" }` imports are discovered while walking the module graph
-    // and already carry their virtual registry names. Merge those automatic
-    // assets with explicit `--embed`/config matches before generating the one
-    // registration object. A path can be named explicitly and imported; keep
-    // both names because user code may address either virtual path.
-    for (name, path) in &ctx.embedded_assets {
-        if !embedded_assets
-            .iter()
-            .any(|(existing_name, _)| existing_name == name)
-        {
-            embedded_assets.push((name.clone(), path.clone()));
-        }
-    }
-    embedded_assets.sort_by(|a, b| a.0.cmp(&b.0));
     if !embedded_assets.is_empty() {
         if let Some(obj) =
             embed::generate_embedded_asset_object(&embedded_assets, &object_output_dir)?

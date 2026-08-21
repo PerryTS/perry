@@ -33,7 +33,7 @@ fn package_root_for_compile_package(
     path: &std::path::Path,
 ) -> Option<PathBuf> {
     ctx.compile_package_dirs
-        .values()
+        .iter()
         .filter(|dir| path.starts_with(dir))
         .max_by_key(|dir| dir.components().count())
         .cloned()

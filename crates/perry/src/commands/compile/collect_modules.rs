@@ -120,8 +120,12 @@ fn file_loader_import_sources(module: &swc_ecma_ast::Module) -> HashSet<String> 
 }
 
 /// Produce a stable virtual asset name without leaking an absolute source path.
-fn imported_file_asset_name(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
+fn imported_file_asset_name(path: &Path, project_root: &Path) -> String {
+    // Hash the source identity relative to the package root whenever possible.
+    // Hashing the canonical absolute path made otherwise identical builds in
+    // two checkout directories expose different `$perryfs` handles.
+    let identity = path.strip_prefix(project_root).unwrap_or(path);
+    let normalized = identity.to_string_lossy().replace('\\', "/");
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in normalized.as_bytes() {
         hash ^= u64::from(*byte);
@@ -132,6 +136,13 @@ fn imported_file_asset_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("asset.bin");
     format!("__perry_imports/{hash:016x}/{filename}")
+}
+
+fn looks_like_generated_module(specifier: &str) -> bool {
+    let filename = specifier.rsplit('/').next().unwrap_or(specifier);
+    filename.contains(".gen.")
+        || filename.contains(".generated.")
+        || filename.starts_with("generated-")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -182,7 +193,7 @@ fn collect_module_one(
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = ctx.aot_discovered_modules.contains(&canonical)
         || (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
-        || ctx.compile_package_dirs.values().any(|dir| {
+        || ctx.compile_package_dirs.iter().any(|dir| {
             if canonical.starts_with(dir) {
                 // Exclude nested node_modules/ inside the compiled package
                 // (e.g., @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js)
@@ -330,7 +341,11 @@ fn collect_module_one(
     } else if is_wasm {
         let bytes = fs::read(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
-        let asset_name = imported_file_asset_name(&canonical);
+        let asset_name = ctx
+            .file_loader_asset_names
+            .get(&canonical)
+            .cloned()
+            .unwrap_or_else(|| imported_file_asset_name(&canonical, &ctx.cache_root));
         if !ctx
             .embedded_assets
             .iter()
@@ -349,7 +364,12 @@ fn collect_module_one(
     };
     // JSON module import: turn the data file into a native ESM module whose
     // default export is the parsed value.
-    let raw_source = if is_json {
+    let raw_source = if imported_file_asset.is_some() || is_wasm {
+        // The explicit file loader (and the wasm adapter above) already
+        // synthesized executable TypeScript. Extension-based JSON/text
+        // loaders must not reinterpret that generated source as asset bytes.
+        raw_source
+    } else if is_json {
         synthesize_json_module(&raw_source, &canonical)?
     } else if is_text_asset {
         // #5223: text-asset import. The file's contents are exposed verbatim as
@@ -1236,7 +1256,11 @@ fn collect_module_one(
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
             if uses_file_loader {
-                let name = imported_file_asset_name(&resolved_path);
+                let name = ctx
+                    .file_loader_asset_names
+                    .get(&resolved_path)
+                    .cloned()
+                    .unwrap_or_else(|| imported_file_asset_name(&resolved_path, &ctx.cache_root));
                 ctx.file_loader_asset_paths.insert(resolved_path.clone());
                 if !ctx
                     .embedded_assets
@@ -1267,26 +1291,25 @@ fn collect_module_one(
 
             match kind {
                 ModuleKind::NativeCompiled => {
-                    // Record compile package directory for dedup (first-found wins).
-                    // When the same package exists in multiple nested node_modules/,
-                    // we always resolve to the first-found copy to avoid duplicate symbols.
+                    // Record every resolved compile-package root. Package
+                    // identity is the canonical root, not the package name:
+                    // nested versions remain distinct while two symlinks to
+                    // the same physical copy canonicalize together.
                     let module_name = &import.source;
                     if !module_name.starts_with('.') && !module_name.starts_with('/') {
                         let (pkg_name, _) = parse_package_specifier(module_name);
-                        if ctx.compile_packages.contains(&pkg_name)
-                            && !ctx.compile_package_dirs.contains_key(&pkg_name)
-                        {
+                        if ctx.compile_packages.contains(&pkg_name) {
                             if let Some(pkg_dir) =
                                 extract_compile_package_dir(&resolved_path, &pkg_name)
                             {
-                                ctx.compile_package_dirs.insert(pkg_name, pkg_dir);
+                                ctx.compile_package_dirs.insert(pkg_dir);
                             } else {
                                 // Symlinked local package: canonical path is outside node_modules.
                                 // Walk up from resolved_path to find the package root (dir with package.json).
                                 let mut dir = resolved_path.parent();
                                 while let Some(d) = dir {
                                     if d.join("package.json").exists() {
-                                        ctx.compile_package_dirs.insert(pkg_name, d.to_path_buf());
+                                        ctx.compile_package_dirs.insert(d.to_path_buf());
                                         break;
                                     }
                                     dir = d.parent();
@@ -1498,6 +1521,22 @@ fn collect_module_one(
             }
         } else {
             // Could not resolve - might be a Node.js builtin or missing module
+            // Generated inputs must fail at collection time. Continuing with
+            // an empty binding makes a stale/missing preparation step look
+            // like a runtime application bug (OpenCode's injected
+            // `opencode-web-ui.gen.ts` was the motivating case).
+            if looks_like_generated_module(&import.source) {
+                return Err(anyhow::anyhow!(
+                    "Could not resolve generated module `{source}` imported by {filename} ({path}).\n\
+                     Perry will not compile with a missing or stale generated input. Run the upstream preparation command first.\n\
+                     If this module is a directory-to-file map, retry with:\n  \
+                       --asset-module '{source}=<asset-directory>'\n\
+                     For other generators, declare the command in package.json under `perry.codegen` and ensure it writes this module.",
+                    source = import.source,
+                    filename = filename,
+                    path = canonical.display(),
+                ));
+            }
             // Issue #629: hard-error on namespace imports (`import * as X from ...`)
             // for unresolved modules. Pre-fix the codegen catch-all produced a
             // typeof-"object" empty-namespace stub; property access cleanly read

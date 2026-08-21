@@ -500,6 +500,102 @@ fn collect_compile_package(
     .map(|_| ())
 }
 
+fn collect_with_package_policy(
+    root: &std::path::Path,
+    entry: &std::path::Path,
+    compile_packages: &[&str],
+    allow_compile_packages: &[&str],
+) -> anyhow::Result<CompilationContext> {
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.compile_packages
+        .extend(compile_packages.iter().map(|name| (*name).to_string()));
+    ctx.allow_compile_packages.extend(
+        allow_compile_packages
+            .iter()
+            .map(|name| (*name).to_string()),
+    );
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry.to_path_buf(),
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )?;
+    Ok(ctx)
+}
+
+#[test]
+fn statically_reachable_trusted_js_package_is_aot_compiled_without_route_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = write_compile_package_fixture(
+        root,
+        "reachable-js",
+        r#",
+  "exports": {
+    ".": {
+      "node": "./lib/index.js",
+      "default": "./lib/browser.js"
+    }
+  }"#,
+    );
+    let package = root.join("node_modules/reachable-js/lib");
+    let package_entry = package.join("index.js");
+    let helper = package.join("helper.cjs");
+    let browser_decoy = package.join("browser.js");
+    std::fs::write(&helper, "exports.value = 42;\n").expect("write CJS helper");
+    std::fs::write(&browser_decoy, "throw new Error('wrong condition');\n")
+        .expect("write condition decoy");
+    std::fs::write(
+        &package_entry,
+        "exports.value = require('./helper.cjs').value;\n",
+    )
+    .expect("write package entry");
+
+    // Model a host that retains a small explicit compilePackages list while
+    // trusting the reachable dependency graph. Before #8518, the wildcard
+    // allow was ignored for routing and reachable-js landed in js_modules.
+    let ctx = collect_with_package_policy(root, &entry, &["some-eager-package"], &["*"])
+        .expect("collect trusted reachable JS");
+    let canonical_entry = package_entry.canonicalize().unwrap();
+    let canonical_helper = helper.canonicalize().unwrap();
+    let canonical_browser_decoy = browser_decoy.canonicalize().unwrap();
+
+    assert!(ctx.aot_discovered_modules.contains(&canonical_entry));
+    assert!(ctx.aot_discovered_modules.contains(&canonical_helper));
+    assert!(ctx.native_modules.contains_key(&canonical_entry));
+    assert!(ctx.native_modules.contains_key(&canonical_helper));
+    assert!(!ctx.native_modules.contains_key(&canonical_browser_decoy));
+    assert!(ctx.js_modules.is_empty());
+}
+
+#[test]
+fn statically_reachable_untrusted_js_package_keeps_runtime_refusal_routing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = write_compile_package_fixture(root, "untrusted-js", "");
+    let package_entry = root.join("node_modules/untrusted-js/lib/index.js");
+
+    let ctx = collect_with_package_policy(root, &entry, &["trusted-only"], &["trusted-only"])
+        .expect("collect graph through the refusal classification");
+    let canonical_entry = package_entry.canonicalize().unwrap();
+
+    assert!(!ctx.aot_discovered_modules.contains(&canonical_entry));
+    assert!(!ctx.native_modules.contains_key(&canonical_entry));
+    assert!(ctx
+        .js_modules
+        .contains_key(&canonical_entry.to_string_lossy().to_string()));
+}
+
 fn guard_compile_package(
     root: &std::path::Path,
     package_name: &str,
@@ -508,7 +604,6 @@ fn guard_compile_package(
     let mut ctx = CompilationContext::new(root.to_path_buf());
     ctx.compile_packages.insert(package_name.to_string());
     ctx.compile_package_dirs.insert(
-        package_name.to_string(),
         root.join("node_modules")
             .join(package_name)
             .canonicalize()
@@ -588,6 +683,49 @@ console.log(tone);
     assert!(name.starts_with("__perry_imports/"));
     assert!(name.ends_with("/tone.mp3"));
     assert!(ctx.native_modules.contains_key(&canonical_asset));
+}
+
+#[test]
+fn missing_generated_module_fails_with_preparation_remediation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        r#"
+export async function load() {
+  return import("opencode-web-ui.gen.ts");
+}
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Json, 0);
+    let error = collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Json,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Could not resolve generated module"),
+        "{error}"
+    );
+    assert!(error.contains("upstream preparation command"), "{error}");
+    assert!(error.contains("--asset-module"), "{error}");
+    assert!(error.contains("perry.codegen"), "{error}");
 }
 
 #[test]

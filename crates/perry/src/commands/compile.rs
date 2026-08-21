@@ -13,6 +13,8 @@ pub(crate) mod android_target;
 mod app_metadata;
 mod apple_codesign;
 mod apple_info_plist;
+mod asset_manifest;
+mod asset_modules;
 mod audit_manifest;
 mod bootstrap;
 mod build_cache;
