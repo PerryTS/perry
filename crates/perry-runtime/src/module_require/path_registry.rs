@@ -140,6 +140,15 @@ impl PathModuleRegistry {
     /// idempotent. A second address for the same canonical file is rejected so
     /// an alias can never create a second logical module initialization.
     pub(super) fn register_init(&self, key: String, init_addr: usize) -> bool {
+        // The address is a property of the PROGRAM, not of any heap: codegen
+        // emits one `<prefix>__init` per canonical path and registers it once,
+        // on whichever thread runs module init first. Every later heap needs
+        // that same address to be able to initialize the module for itself, so
+        // it lives in a process-global map. It is a code pointer, never a JS
+        // value, so no collector has any interest in it.
+        if !register_init_addr(&key, init_addr) {
+            return false;
+        }
         let mut state = self.lock();
         let entry = state.entries.entry(key).or_insert_with(|| PathModuleEntry {
             init_addr: None,
@@ -147,10 +156,30 @@ impl PathModuleRegistry {
             status: PathModuleStatus::Registered,
             active_claim: None,
         });
-        if let Some(existing) = entry.init_addr {
-            return existing == init_addr;
-        }
         entry.init_addr = Some(init_addr);
+        true
+    }
+
+    /// Adopt the program-wide initializer for `key` into THIS heap's table.
+    /// A heap that has never required the path has no entry for it, but the
+    /// initializer exists process-wide; without this a second heap silently
+    /// resolves the module to an empty `module.exports`.
+    fn adopt_registered_init(&self, state: &mut PathModuleState, key: &str) -> bool {
+        if state.entries.contains_key(key) {
+            return true;
+        }
+        let Some(init_addr) = lookup_init_addr(key) else {
+            return false;
+        };
+        state.entries.insert(
+            key.to_string(),
+            PathModuleEntry {
+                init_addr: Some(init_addr),
+                exports: None,
+                status: PathModuleStatus::Registered,
+                active_claim: None,
+            },
+        );
         true
     }
 
@@ -354,6 +383,9 @@ impl PathModuleRegistry {
         let current = std::thread::current().id();
         let init_addr = loop {
             let mut state = self.lock();
+            if !self.adopt_registered_init(&mut state, key) {
+                return Ok(None);
+            }
             let Some(entry) = state.entries.get_mut(key) else {
                 return Ok(None);
             };
@@ -496,6 +528,41 @@ impl PathModuleRegistry {
     pub(super) fn remove_for_test(&self, key: &str) {
         self.lock().entries.remove(key);
     }
+}
+
+/// Canonical path -> generated initializer address, shared by every heap in
+/// the process. Holds only code addresses, so unlike the per-heap export table
+/// it is not a GC root and needs no scanner.
+///
+/// `per_test_global!` because `perry-runtime`'s tests share one process: two
+/// tests registering DIFFERENT addresses for the same canonical path would
+/// otherwise collide, and the second would be rejected by the idempotence
+/// check below.
+per_test_global!(
+    static PATH_MODULE_INIT_ADDRS: std::sync::Mutex<std::collections::HashMap<String, usize>> =
+        std::sync::Mutex::new(std::collections::HashMap::new())
+);
+
+fn init_addrs() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, usize>> {
+    PATH_MODULE_INIT_ADDRS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Idempotent. A second, DIFFERENT address for one canonical path is rejected
+/// so an alias can never create a second logical module initialization.
+fn register_init_addr(key: &str, init_addr: usize) -> bool {
+    match init_addrs().entry(key.to_string()) {
+        std::collections::hash_map::Entry::Occupied(slot) => *slot.get() == init_addr,
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(init_addr);
+            true
+        }
+    }
+}
+
+fn lookup_init_addr(key: &str) -> Option<usize> {
+    init_addrs().get(key).copied()
 }
 
 crate::perry_thread_local! {
@@ -923,8 +990,19 @@ mod path_module_registry_tests {
     fn every_heap_runs_its_own_initializer_for_the_same_path() {
         const KEY: &str = "/shared-bundle-path.js";
         fn init_on_this_heap(marker: u64) -> Option<u64> {
+            // Seeds only the process-wide ADDRESS, never an entry, so the
+            // require below has to reach `adopt_registered_init` — the path a
+            // second heap actually takes. Calling `register_init` here instead
+            // would insert the entry directly and skip the very code under
+            // test; an earlier version of this test did exactly that and so
+            // could not see that a second heap had no initializer to run.
+            //
+            // Seeding per thread is a TEST-BUILD requirement, not a
+            // production one: `per_test_global!` expands to a per-thread
+            // instance under `cfg(test)`, whereas the shipped static is one
+            // process-wide map that codegen fills once at startup.
+            assert!(register_init_addr(KEY, 0x2000));
             MODULE_PATH_REGISTRY.with(|registry| {
-                assert!(registry.register_init(KEY.into(), 0x2000));
                 let ran = std::cell::Cell::new(false);
                 let outcome = registry.require_with(KEY, &|_addr| {
                     ran.set(true);
