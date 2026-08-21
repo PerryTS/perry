@@ -12,11 +12,15 @@
 // programs that load the runtime via dlopen / FFI without a static
 // reference, but the common case needs nothing.
 //
-// **Two call shapes work, identically.** Pick whichever reads better:
+// Supported instantiation shapes include:
 //
 //   const inst = WebAssembly.instantiate(bytes);
 //   inst.exports.add(2, 3);                       // standard JS shape
 //   WebAssembly.callExport(inst, "add", 2, 3);    // Perry helper
+//
+//   const module = new WebAssembly.Module(bytes);
+//   const syncInst = new WebAssembly.Instance(module, imports);
+//   syncInst.exports.add(2, 3);                    // wasm-bindgen Node shape
 //
 // The standard `inst.exports.<method>(...)` shape is recognised
 // syntactically — the local must be tagged at compile time as a wasm

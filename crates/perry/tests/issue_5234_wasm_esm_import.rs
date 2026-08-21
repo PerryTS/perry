@@ -77,6 +77,9 @@ import * as wasmNamespace from "./add.wasm";
 import { call as importedCall } from "./imported.wasm";
 import { throughGlue } from "./glue";
 import memoryDefault, { memory } from "./memory.wasm";
+import addWasmPath from "./file-add.wasm" with { type: "file" };
+import importedWasmPath from "./file-imported.wasm" with { type: "file" };
+import { readFileSync } from "node:fs";
 
 console.log("namespace=" + wasmNamespace.add(2, 3));
 console.log("named=" + add(7, 8));
@@ -85,6 +88,19 @@ console.log("imported=" + importedCall(41));
 console.log("circular=" + throughGlue(8));
 console.log("memory=" + memory.buffer.byteLength);
 console.log("defaultMemory=" + memoryDefault.memory.buffer.byteLength);
+
+// #8508: wasm-bindgen's Node loader compiles file-backed bytes first, then
+// synchronously constructs an Instance with its glue imports object.
+const fileModule = new WebAssembly.Module(readFileSync(addWasmPath));
+const fileInstance = new WebAssembly.Instance(fileModule);
+console.log("fileInstance=" + fileInstance.exports.add(9, 12));
+
+const importedModule = new WebAssembly.Module(readFileSync(importedWasmPath));
+const importedInstance = new WebAssembly.Instance(importedModule, {
+    "./glue": { inc: (value: number) => value + 1 },
+});
+console.log("fileImported=" + importedInstance.exports.call(20));
+console.log("instanceLength=" + WebAssembly.Instance.length);
 "#;
 
 const GLUE_FIXTURE: &str = r#"
@@ -105,8 +121,11 @@ fn write_fixture(root: &std::path::Path) {
         .decode(ADD_WASM_BASE64)
         .expect("decode add.wasm");
     assert_eq!(bytes.len(), 41);
-    std::fs::write(root.join("add.wasm"), bytes).expect("write add.wasm");
+    std::fs::write(root.join("add.wasm"), &bytes).expect("write add.wasm");
     std::fs::write(root.join("imported.wasm"), IMPORTED_WASM).expect("write imported.wasm");
+    std::fs::write(root.join("file-add.wasm"), bytes).expect("write file add.wasm");
+    std::fs::write(root.join("file-imported.wasm"), IMPORTED_WASM)
+        .expect("write file imported.wasm");
     std::fs::write(root.join("memory.wasm"), MEMORY_WASM).expect("write memory.wasm");
     std::fs::write(root.join("glue.ts"), GLUE_FIXTURE).expect("write glue.ts");
     std::fs::write(root.join("main.ts"), MAIN_FIXTURE).expect("write main.ts");
@@ -162,4 +181,7 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
     assert!(stdout.contains("circular=9"), "stdout:\n{stdout}");
     assert!(stdout.contains("memory=65536"), "stdout:\n{stdout}");
     assert!(stdout.contains("defaultMemory=65536"), "stdout:\n{stdout}");
+    assert!(stdout.contains("fileInstance=21"), "stdout:\n{stdout}");
+    assert!(stdout.contains("fileImported=21"), "stdout:\n{stdout}");
+    assert!(stdout.contains("instanceLength=1"), "stdout:\n{stdout}");
 }

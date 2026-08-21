@@ -817,7 +817,7 @@ fn make_export_function(
     crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
 
-fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) -> f64 {
+fn make_instance_value(module: *mut c_void, inst: *mut c_void, imports: f64, receiver: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let imports = scope.root_nanbox_f64(imports);
     let memory_len = unsafe { perry_wasm_host_instance_memory_len(inst) };
@@ -829,7 +829,18 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) ->
         copy_instance_memory(inst, value);
         value
     });
-    let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    // `new WebAssembly.Instance(...)` arrives with a receiver whose
+    // [[Prototype]] was already linked to `WebAssembly.Instance.prototype` by
+    // the generic construct path. Populate that object in place so
+    // `instanceof WebAssembly.Instance` keeps working. The static
+    // `WebAssembly.instantiate(...)` path passes `undefined` and gets a fresh
+    // ordinary wrapper instead.
+    let receiver_value = JSValue::from_bits(receiver.to_bits());
+    let instance = scope.root_nanbox_f64(if receiver_value.is_pointer() {
+        receiver
+    } else {
+        object_value(crate::object::js_object_alloc(0, 0))
+    });
     let exports = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let exports_len = unsafe { perry_wasm_host_module_exports_len(module) };
     for index in 0..exports_len {
@@ -850,7 +861,7 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) ->
                 name,
                 unsafe { perry_wasm_host_module_export_func_arity(module, index) },
                 memory_buffer.get_nanbox_f64(),
-                object_value(instance.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
+                instance.get_nanbox_f64(),
                 imports.get_nanbox_f64(),
             ),
             WASM_EXTERN_KIND_MEMORY => {
@@ -870,12 +881,27 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) ->
         );
         exports.set_raw_mut_ptr(exports_ptr);
     }
+    let instance_ptr = JSValue::from_bits(instance.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
     let instance_ptr = object_set(
-        instance.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        instance_ptr,
         b"exports",
         object_value(exports.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
     );
-    instance.set_raw_mut_ptr(instance_ptr);
+    instance.set_nanbox_f64(object_value(instance_ptr));
+
+    instance.get_nanbox_f64()
+}
+
+fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(make_instance_value(
+        module,
+        inst,
+        imports,
+        nanbox_undefined(),
+    ));
 
     let result = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let module_value = scope.root_nanbox_f64(make_module_object(module));
@@ -886,10 +912,56 @@ fn make_instance_result(module: *mut c_void, inst: *mut c_void, imports: f64) ->
     let result_ptr = object_set(
         result.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
         b"instance",
-        object_value(instance.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
+        instance.get_nanbox_f64(),
     );
     result.set_raw_mut_ptr(result_ptr);
     result.with_mut_ptr(|r: *mut crate::object::ObjectHeader| object_value(r))
+}
+
+/// `new WebAssembly.Instance(module, imports?)` — synchronously instantiate a
+/// previously compiled module. This is the shape emitted by wasm-bindgen's
+/// Node glue (including `@silvia-odwyer/photon-node`). Unlike the async
+/// `WebAssembly.instantiate(bytes, imports)` API, constructor failures throw a
+/// `TypeError`/`LinkError` directly.
+#[no_mangle]
+pub extern "C" fn js_webassembly_instance_new(
+    module_jsval: f64,
+    imports_jsval: f64,
+    receiver_jsval: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let module_value = scope.root_nanbox_f64(module_jsval);
+    let imports = scope.root_nanbox_f64(imports_jsval);
+    let receiver = scope.root_nanbox_f64(receiver_jsval);
+    let Some(module) = extract_module_handle(module_value.get_nanbox_f64()) else {
+        crate::exception::js_throw(wasm_type_error_value(
+            "WebAssembly.Instance(): first argument must be a WebAssembly.Module",
+        ));
+    };
+
+    let mut err: *mut c_char = std::ptr::null_mut();
+    let inst = unsafe {
+        perry_wasm_host_instance_new(
+            module,
+            Some(call_wasm_import),
+            imports.get_nanbox_f64().to_bits(),
+            &mut err,
+        )
+    };
+    if inst.is_null() {
+        crate::exception::js_throw(wasm_error_value_from_host(
+            b"LinkError",
+            err,
+            "WebAssembly.Instance(): instantiation failed",
+        ));
+    }
+
+    make_instance_value(
+        module,
+        inst,
+        imports.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    )
 }
 
 /// `WebAssembly.instantiate(bytes, imports?)` returns the standard instance

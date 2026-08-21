@@ -31,9 +31,10 @@
 //!
 //! When the runtime is built with the `wasm-host` cargo feature (the opt-in
 //! `--enable-wasm-runtime` wasmi path, issue #76), `validate` / `compile` /
-//! `instantiate` and the `Module` constructor + metadata statics route to the
-//! real host shims in `crate::webassembly` instead. The streaming entry
-//! points still reject (no `Response`-driven compile in the host MVP).
+//! `instantiate`, the `Module` constructor + metadata statics, and the
+//! synchronous `Instance(module, imports)` constructor route to the real host
+//! shims in `crate::webassembly` instead. The streaming entry points still
+//! reject (no `Response`-driven compile in the host MVP).
 //!
 //! NOTE: the statically-recognized spellings (`WebAssembly.compile(bytes)`
 //! etc. written literally against the global) lower to dedicated HIR
@@ -494,12 +495,25 @@ extern "C" fn webassembly_module_ctor_thunk(
 
 extern "C" fn webassembly_instance_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _module: f64,
+    module: f64,
+    imports: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Instance");
     }
-    crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"));
+    #[cfg(feature = "wasm-host")]
+    {
+        crate::webassembly::js_webassembly_instance_new(
+            module,
+            imports,
+            crate::object::js_implicit_this_get(),
+        )
+    }
+    #[cfg(not(feature = "wasm-host"))]
+    {
+        let _ = (module, imports);
+        crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"));
+    }
 }
 
 extern "C" fn webassembly_table_ctor_thunk(
@@ -821,6 +835,10 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         "Instance",
         webassembly_instance_ctor_thunk as *const u8,
     );
+    // The optional imports object is a real second call argument, while the
+    // standard constructor metadata remains `WebAssembly.Instance.length ===
+    // 1`. Keep the dispatch arity separate from the public length.
+    crate::closure::js_register_closure_arity(webassembly_instance_ctor_thunk as *const u8, 2);
     install_webassembly_proto_data(instance_ctor, "exports", undefined());
 
     let memory_ctor = install_webassembly_constructor(
