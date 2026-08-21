@@ -21,7 +21,8 @@ pub(super) mod native_profile_import;
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
 pub(crate) use namespace::lower_namespace_as_class;
 use native_default_import::{
-    is_cjs_style_native_default_import, node_submodule_default_export_key,
+    canonicalize_native_import_source, is_cjs_style_native_default_import,
+    node_submodule_default_export_key,
 };
 
 pub(crate) fn lower_module_decl(
@@ -34,15 +35,7 @@ pub(crate) fn lower_module_decl(
             // Get the source module path
             let raw_source = import_decl.src.value.as_str().unwrap_or("").to_string();
             // Normalize "node:" prefix (e.g., "node:async_hooks" -> "async_hooks")
-            let source = raw_source
-                .strip_prefix("node:")
-                .unwrap_or(&raw_source)
-                .to_string();
-            let source = if source.starts_with("@parcel/watcher-") {
-                "@parcel/watcher".to_string()
-            } else {
-                source
-            };
+            let source = canonicalize_native_import_source(&raw_source);
 
             if raw_source.starts_with("node:") && source == "punycode.ucs2" {
                 crate::lower_bail!(

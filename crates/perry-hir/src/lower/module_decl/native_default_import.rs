@@ -1,6 +1,15 @@
 //! Native/CJS-style default-import classification helpers — extracted from
 //! `lower/module_decl.rs` (pure mechanical split, no logic changes).
 
+pub(crate) fn canonicalize_native_import_source(raw_source: &str) -> String {
+    let source = raw_source.strip_prefix("node:").unwrap_or(raw_source);
+    if source.starts_with("@parcel/watcher-") {
+        "@parcel/watcher".to_string()
+    } else {
+        source.to_string()
+    }
+}
+
 pub(crate) fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,

@@ -45,6 +45,8 @@ mod wrap;
 #[cfg(test)]
 mod issue_6585_tests;
 #[cfg(test)]
+mod parcel_watcher_tests;
+#[cfg(test)]
 mod preamble_canary_tests;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
