@@ -17,7 +17,7 @@
   fallback bodies therefore retain their conservative slots when the guarded
   input proof is unavailable.
 
-  On current `main` (8d837df22) with the 20-row #8496 corpus
+  On `main` at measurement time (8d837df22) with the 20-row #8496 corpus
   (`PERRY_NO_AUTO_OPTIMIZE=1`, release compiler and matching runtime archives,
   `/usr/bin/time -l`, interleaved medians of 5), `typed_array` retires 56.013 B
   instructions instead of 56.669 B (-1.16%). Peak RSS is 5.489 MB instead of
