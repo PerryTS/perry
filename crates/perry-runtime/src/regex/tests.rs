@@ -5,6 +5,16 @@ fn make_string(s: &str) -> *mut StringHeader {
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
+fn make_wtf8(bytes: &[u8]) -> *mut StringHeader {
+    crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+fn string_payload(s: *const StringHeader) -> Vec<u8> {
+    unsafe {
+        std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize).to_vec()
+    }
+}
+
 #[test]
 fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -109,6 +119,78 @@ fn js_replacement_named_group_gate() {
         expand_js_replacement("[$<missing>]", &caps2, subj2, true),
         "[]"
     );
+}
+
+#[test]
+fn literal_replace_expands_every_subject_token() {
+    let result = js_string_replace_all_string(
+        make_string("abcabc"),
+        make_string("abc"),
+        make_string("$`<$&>$'"),
+    );
+    assert_eq!(string_as_str(result), "<abc>abcabc<abc>");
+}
+
+#[test]
+fn literal_replace_all_empty_pattern_splits_astral_utf16_units() {
+    let result = js_string_replace_all_string(make_string("😀"), make_string(""), make_string("|"));
+    assert_eq!(
+        string_payload(result),
+        [b'|', 0xED, 0xA0, 0xBD, b'|', 0xED, 0xB8, 0x80, b'|']
+    );
+    unsafe {
+        assert_eq!((*result).utf16_len, 5);
+        assert_ne!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
+    }
+}
+
+#[test]
+fn literal_replace_canonicalizes_a_new_surrogate_boundary() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let low = scope.root_string_ptr(make_wtf8(&[0xED, 0xB8, 0x80]));
+    let high = scope.root_string_ptr(make_wtf8(&[0xED, 0xA0, 0xBD]));
+    let empty = scope.root_string_ptr(make_string(""));
+    let result = low.with_const_ptr(|low: *const StringHeader| {
+        empty.with_const_ptr(|empty: *const StringHeader| {
+            high.with_const_ptr(|high: *const StringHeader| {
+                js_string_replace_string(low, empty, high)
+            })
+        })
+    });
+    assert_eq!(string_payload(result), "😀".as_bytes());
+    unsafe {
+        assert_eq!((*result).utf16_len, 2);
+        assert_eq!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
+    }
+}
+
+#[test]
+fn literal_replace_nonempty_pattern_preserves_wtf8_boundaries() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_string_ptr(make_wtf8(&[0xED, 0xA0, 0xBD, b'X']));
+    let pattern = scope.root_string_ptr(make_string("X"));
+    let replacement = scope.root_string_ptr(make_wtf8(&[0xED, 0xB8, 0x80]));
+    let result = source.with_const_ptr(|source: *const StringHeader| {
+        pattern.with_const_ptr(|pattern: *const StringHeader| {
+            replacement.with_const_ptr(|replacement: *const StringHeader| {
+                js_string_replace_string(source, pattern, replacement)
+            })
+        })
+    });
+    assert_eq!(string_payload(result), "😀".as_bytes());
+    unsafe {
+        assert_eq!((*result).utf16_len, 2);
+        assert_eq!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
+    }
 }
 
 // ---- #4797: fancy-regex fallback wired through every operation ----
@@ -255,6 +337,34 @@ fn test_string_replace_global() {
     let result = js_string_replace_regex(test_str, re, replacement);
 
     assert_eq!(string_as_str(result), "hell0 w0rld");
+}
+
+#[test]
+fn regex_replace_preserves_and_canonicalizes_wtf8_boundaries() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("X"));
+    let flags = scope.root_string_ptr(make_string(""));
+    let re = pattern.with_const_ptr(|pattern: *const StringHeader| {
+        flags.with_const_ptr(|flags: *const StringHeader| js_regexp_new(pattern, flags))
+    });
+    let re = scope.root_raw_const_ptr(re);
+    let source = scope.root_string_ptr(make_wtf8(&[0xED, 0xA0, 0xBD, b'X']));
+    let replacement = scope.root_string_ptr(make_wtf8(&[0xED, 0xB8, 0x80]));
+    let result = source.with_const_ptr(|source: *const StringHeader| {
+        re.with_const_ptr(|re: *const RegExpHeader| {
+            replacement.with_const_ptr(|replacement: *const StringHeader| {
+                js_string_replace_regex(source, re, replacement)
+            })
+        })
+    });
+    assert_eq!(string_payload(result), "😀".as_bytes());
+    unsafe {
+        assert_eq!((*result).utf16_len, 2);
+        assert_eq!(
+            (*result).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,
+            0
+        );
+    }
 }
 
 #[test]

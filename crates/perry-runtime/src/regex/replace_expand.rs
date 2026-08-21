@@ -3,6 +3,7 @@
 //! `expand_js_replacement` (ECMAScript `$`-pattern expansion) and
 //! `replace_regex_fn_fancy` (the fancy-regex callback-replace fallback).
 
+use super::replace_fn::{copy_replace_source, finish_replace_bytes};
 use super::*;
 
 /// of `String.prototype.replace` special patterns that the Rust `regex`
@@ -147,7 +148,7 @@ unsafe fn replace_fn_run_matches(
 ) -> *mut StringHeader {
     let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
     if matches.is_empty() {
-        return js_string_from_str(cur_str());
+        return s_handle.with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
     }
     let outer = crate::gc::RuntimeHandleScope::new();
     let closure_handle = outer.root_raw_const_ptr(closure_ptr);
@@ -216,7 +217,7 @@ unsafe fn replace_fn_run_matches(
     }
 
     result.push_str(&cur_str()[last_end..]);
-    js_string_from_str(&result)
+    finish_replace_bytes(result.as_bytes())
 }
 
 /// Fancy-regex fallback for `js_string_replace_regex_fn`: used when the pattern
@@ -293,7 +294,7 @@ pub extern "C" fn js_string_replace_regex_fn(
     let s_handle = scope.root_string_ptr(s);
 
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(string_as_str(s));
+        return s_handle.with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
     }
 
     unsafe {
@@ -304,7 +305,8 @@ pub extern "C" fn js_string_replace_regex_fn(
         let closure_ptr =
             crate::value::js_nanbox_get_pointer(callback) as *const crate::closure::ClosureHeader;
         if closure_ptr.is_null() {
-            return js_string_from_str(string_as_str(s));
+            return s_handle
+                .with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
         }
 
         // If the `regex` crate couldn't compile this pattern (lookahead,
@@ -373,9 +375,8 @@ pub extern "C" fn js_string_replace_all_regex_fn(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(str_data);
+        return copy_replace_source(s);
     }
 
     ensure_replace_all_regex_global(re);
@@ -401,7 +402,7 @@ pub extern "C" fn js_string_replace_regex_named(
     };
 
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(str_data);
+        return copy_replace_source(s);
     }
 
     // Check if replacement contains $<name> patterns
@@ -437,7 +438,7 @@ pub extern "C" fn js_string_replace_regex_named(
         };
 
         if captures_list.is_empty() {
-            return js_string_from_str(str_data);
+            return copy_replace_source(s);
         }
 
         for caps in &captures_list {
@@ -457,7 +458,7 @@ pub extern "C" fn js_string_replace_regex_named(
         }
 
         result.push_str(&str_data[last_end..]);
-        js_string_from_str(&result)
+        finish_replace_bytes(result.as_bytes())
     }
 }
 
@@ -472,9 +473,8 @@ pub extern "C" fn js_string_replace_all_regex_named(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(str_data);
+        return copy_replace_source(s);
     }
 
     ensure_replace_all_regex_global(re);
