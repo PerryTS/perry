@@ -19,3 +19,7 @@ Every one of these is a *correct* rooting pattern that simply reads out of the h
 Debt drops 984 → 974, below the previous baseline, and the baseline is re-locked at the lower number so the improvement cannot silently erode. `--self-test` passes, so the checker can still fail.
 
 Verified: `gc_string_coerce_property_key_rooting_6943` (3/3) and `gc_property_key_operand_rooting_6935` (3/3) both green against a release build of this tree, and `cargo fmt --all -- --check` is clean.
+
+**Also: `collect_modules.rs` had crossed the 2000-line file cap.**
+
+`lint` on `main` had a second, independent failure: `crates/perry/src/commands/compile/collect_modules.rs` reached 2009 lines against the 2000-line ceiling `scripts/check_file_size.sh` enforces. The three small pure helpers at the top (`file_loader_import_sources`, `imported_file_asset_name`, `looks_like_generated_module`) move to a sibling `collect_modules_helpers.rs` and are re-imported by name, which is the recipe the script itself prints. They share no state with the collection walk, so the split is behaviour-free; the file lands at 1950 lines.

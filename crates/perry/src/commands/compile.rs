@@ -26,6 +26,7 @@ mod bundle_ios;
 pub(crate) mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod collect_modules_helpers;
 mod compressed_libs;
 mod embed;
 mod env_fold;
