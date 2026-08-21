@@ -1,0 +1,1 @@
+Tooling: harden the `StringHeader` payload-access ratchet against `byte_add` and signed-offset pointer arithmetic, and make its self-test exercise crate discovery, per-crate attribution, and stale-baseline failure end to end (#8429).
