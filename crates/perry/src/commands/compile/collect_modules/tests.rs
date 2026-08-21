@@ -591,6 +591,49 @@ console.log(tone);
 }
 
 #[test]
+fn missing_generated_module_fails_with_preparation_remediation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        r#"
+export async function load() {
+  return import("opencode-web-ui.gen.ts");
+}
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Json, 0);
+    let error = collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Json,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Could not resolve generated module"),
+        "{error}"
+    );
+    assert!(error.contains("upstream preparation command"), "{error}");
+    assert!(error.contains("--asset-module"), "{error}");
+    assert!(error.contains("perry.codegen"), "{error}");
+}
+
+#[test]
 fn wildcard_preflight_skips_node_native_addon_package() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();

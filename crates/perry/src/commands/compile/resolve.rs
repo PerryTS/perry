@@ -1822,6 +1822,9 @@ pub(super) fn cached_resolve_import(
     importer_path: &Path,
     ctx: &mut CompilationContext,
 ) -> Option<(PathBuf, ModuleKind)> {
+    if let Some(generated) = ctx.generated_asset_modules.get(import_source) {
+        return Some((generated.source_path.clone(), ModuleKind::NativeCompiled));
+    }
     let importer_dir = importer_path
         .parent()
         .unwrap_or(importer_path)

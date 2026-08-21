@@ -163,6 +163,13 @@ pub struct CompileArgs {
     #[arg(long)]
     pub embed: Vec<String>,
 
+    /// Generate a deterministic TypeScript module that maps asset-relative
+    /// names to Bun-compatible `{ type: "file" }` imports. The value is
+    /// `<module-specifier>=<asset-directory>`; paths are relative to the
+    /// nearest package.json/perry.toml project root. Repeatable.
+    #[arg(long, value_name = "SPECIFIER=DIR")]
+    pub asset_module: Vec<String>,
+
     /// Enable type checking via tsgo (Microsoft's native TypeScript checker).
     /// Resolves cross-file types, interfaces, and generics for better optimization.
     /// Requires: npm install -g @typescript/native-preview
@@ -554,6 +561,17 @@ pub struct CodegenStep {
     pub command: String,
 }
 
+/// One virtual generated module produced by `--asset-module` before graph
+/// collection. The source lives in Perry's cache; its imported assets retain
+/// their original source paths and stable packaged handles.
+#[derive(Debug, Clone)]
+pub struct GeneratedAssetModule {
+    pub source_path: PathBuf,
+    pub logical_path: PathBuf,
+    pub asset_root: PathBuf,
+    pub assets: Vec<(String, PathBuf)>,
+}
+
 /// Compilation context tracking all modules
 pub struct CompilationContext {
     /// Native TypeScript modules to compile
@@ -639,6 +657,12 @@ pub struct CompilationContext {
     /// automatic wasm imports also register bytes there but must still lower
     /// their executable adapter on a later metadata pass.
     pub file_loader_asset_paths: HashSet<PathBuf>,
+    /// Stable `$perryfs` names chosen for generated asset-module members.
+    /// These are keyed by canonical source path so the ordinary file-loader
+    /// collection path can reuse them without knowing how the import arose.
+    pub file_loader_asset_names: HashMap<PathBuf, String>,
+    /// Bare module specifier -> generated source and provenance.
+    pub generated_asset_modules: BTreeMap<String, GeneratedAssetModule>,
     /// #1681 (Phase 3 of #1677): true when this is the build-time capture
     /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
     /// emit their build-time value instead of substituting. Re-installed on
@@ -1126,6 +1150,8 @@ impl CompilationContext {
             aot_discovered_modules: HashSet::new(),
             embedded_assets: Vec::new(),
             file_loader_asset_paths: HashSet::new(),
+            file_loader_asset_names: HashMap::new(),
+            generated_asset_modules: BTreeMap::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),
             fast_math: false,

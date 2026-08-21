@@ -131,6 +131,15 @@ pub(super) fn cached_resolve_import_with_lexical_base(
     canonical_importer_path: &Path,
     ctx: &mut CompilationContext,
 ) -> Option<ResolvedImport> {
+    // Virtual asset modules live in Perry's cache, but their deterministic
+    // source is authored as though the module existed at the package root.
+    // Resolve relative file-loader edges from that logical path rather than
+    // from `<cache>/generated-asset-modules/`.
+    if let Some(logical_path) = ctx.generated_asset_modules.values().find_map(|generated| {
+        (generated.source_path == canonical_importer_path).then(|| generated.logical_path.clone())
+    }) {
+        return cached_resolve_import_from_base(import_source, &logical_path, ctx);
+    }
     // Module collection keys and reads use canonical paths, but source text
     // relative specifiers are written against the importer path the user
     // compiled. On platforms where /tmp is a symlink, resolving imports from

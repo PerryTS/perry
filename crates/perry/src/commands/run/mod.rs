@@ -207,6 +207,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         output_type: "executable".to_string(),
         bundle_extensions: None,
         embed: Vec::new(),
+        asset_module: Vec::new(),
         type_check: args.type_check,
         minify: target.as_deref() == Some("web"),
         features: None,

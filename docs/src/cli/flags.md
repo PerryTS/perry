@@ -62,6 +62,7 @@ executable so it runs with no external files on disk (#5731).
 | Flag | Description |
 |------|-------------|
 | `--embed <pattern>` | Embed a file, directory, or `*`/`**` glob (relative to the project root). Repeatable. Merged with `perry.embed` (package.json) and `[compile] embed` (perry.toml). |
+| `--asset-module <specifier=dir>` | Generate a virtual module whose default export maps every file below `dir` to a stable `$perryfs` handle. Repeatable; source maps are excluded. |
 
 ```bash
 vite build
@@ -94,6 +95,32 @@ and bind the default import to its `$perryfs` path:
 ```typescript,no-test
 import sound from "./sound.mp3" with { type: "file" };
 ```
+
+Some build pipelines inject a generated module rather than writing it into the
+source checkout. Reproduce that file-map step with `--asset-module`. Perry
+sorts the directory walk, preserves each `{ type: "file" }` edge, and keeps the
+generated source in its cache rather than modifying the checkout.
+
+For the pinned OpenCode source graph, build the upstream web UI first, then
+compile from `packages/opencode`'s package root:
+
+```bash
+bun run --cwd packages/app build
+perry compile packages/opencode/src/index.ts \
+  --asset-module 'opencode-web-ui.gen.ts=../app/dist' \
+  -o opencode
+```
+
+The first command is the upstream preparation step; Perry reproduces only the
+deterministic `opencode-web-ui.gen.ts` file map. A missing/empty `dist` or a
+missing generated import fails with a remediation message instead of becoming
+an unresolved-import warning. Run the preparation command for every source
+revision so the generated inputs cannot be stale.
+
+Every compile also writes `<cache-dir>/assets.json`, a deterministic report of
+text, JSON, file-loader, WASM, and explicitly embedded assets. It records the
+packaged handle, project-relative source origin, byte size, SHA-256 digest, and
+the generating asset module where applicable.
 
 > **Note**
 > `node:fs` consults the embedded registry *before* disk, and a bare

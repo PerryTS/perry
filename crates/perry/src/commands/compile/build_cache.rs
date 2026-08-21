@@ -689,6 +689,12 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.bundle_extensions.is_some() {
         return Err("bundle-extensions".to_string());
     }
+    // Asset modules are generated from directory contents before collection.
+    // Keep the build-level cache conservative until its manifest fingerprints
+    // those directories; object/link caches still apply within the build.
+    if !args.asset_module.is_empty() {
+        return Err("asset-module".to_string());
+    }
     if args.enable_wasm_runtime {
         return Err("wasm-runtime".to_string());
     }

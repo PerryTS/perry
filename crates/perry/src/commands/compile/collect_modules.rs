@@ -120,8 +120,12 @@ fn file_loader_import_sources(module: &swc_ecma_ast::Module) -> HashSet<String> 
 }
 
 /// Produce a stable virtual asset name without leaking an absolute source path.
-fn imported_file_asset_name(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
+fn imported_file_asset_name(path: &Path, project_root: &Path) -> String {
+    // Hash the source identity relative to the package root whenever possible.
+    // Hashing the canonical absolute path made otherwise identical builds in
+    // two checkout directories expose different `$perryfs` handles.
+    let identity = path.strip_prefix(project_root).unwrap_or(path);
+    let normalized = identity.to_string_lossy().replace('\\', "/");
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in normalized.as_bytes() {
         hash ^= u64::from(*byte);
@@ -132,6 +136,13 @@ fn imported_file_asset_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("asset.bin");
     format!("__perry_imports/{hash:016x}/{filename}")
+}
+
+fn looks_like_generated_module(specifier: &str) -> bool {
+    let filename = specifier.rsplit('/').next().unwrap_or(specifier);
+    filename.contains(".gen.")
+        || filename.contains(".generated.")
+        || filename.starts_with("generated-")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -330,7 +341,11 @@ fn collect_module_one(
     } else if is_wasm {
         let bytes = fs::read(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
-        let asset_name = imported_file_asset_name(&canonical);
+        let asset_name = ctx
+            .file_loader_asset_names
+            .get(&canonical)
+            .cloned()
+            .unwrap_or_else(|| imported_file_asset_name(&canonical, &ctx.cache_root));
         if !ctx
             .embedded_assets
             .iter()
@@ -349,7 +364,12 @@ fn collect_module_one(
     };
     // JSON module import: turn the data file into a native ESM module whose
     // default export is the parsed value.
-    let raw_source = if is_json {
+    let raw_source = if imported_file_asset.is_some() || is_wasm {
+        // The explicit file loader (and the wasm adapter above) already
+        // synthesized executable TypeScript. Extension-based JSON/text
+        // loaders must not reinterpret that generated source as asset bytes.
+        raw_source
+    } else if is_json {
         synthesize_json_module(&raw_source, &canonical)?
     } else if is_text_asset {
         // #5223: text-asset import. The file's contents are exposed verbatim as
@@ -1226,7 +1246,11 @@ fn collect_module_one(
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
             if uses_file_loader {
-                let name = imported_file_asset_name(&resolved_path);
+                let name = ctx
+                    .file_loader_asset_names
+                    .get(&resolved_path)
+                    .cloned()
+                    .unwrap_or_else(|| imported_file_asset_name(&resolved_path, &ctx.cache_root));
                 ctx.file_loader_asset_paths.insert(resolved_path.clone());
                 if !ctx
                     .embedded_assets
@@ -1488,6 +1512,22 @@ fn collect_module_one(
             }
         } else {
             // Could not resolve - might be a Node.js builtin or missing module
+            // Generated inputs must fail at collection time. Continuing with
+            // an empty binding makes a stale/missing preparation step look
+            // like a runtime application bug (OpenCode's injected
+            // `opencode-web-ui.gen.ts` was the motivating case).
+            if looks_like_generated_module(&import.source) {
+                return Err(anyhow::anyhow!(
+                    "Could not resolve generated module `{source}` imported by {filename} ({path}).\n\
+                     Perry will not compile with a missing or stale generated input. Run the upstream preparation command first.\n\
+                     If this module is a directory-to-file map, retry with:\n  \
+                       --asset-module '{source}=<asset-directory>'\n\
+                     For other generators, declare the command in package.json under `perry.codegen` and ensure it writes this module.",
+                    source = import.source,
+                    filename = filename,
+                    path = canonical.display(),
+                ));
+            }
             // Issue #629: hard-error on namespace imports (`import * as X from ...`)
             // for unresolved modules. Pre-fix the codegen catch-all produced a
             // typeof-"object" empty-namespace stub; property access cleanly read
