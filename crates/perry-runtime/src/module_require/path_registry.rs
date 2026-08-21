@@ -118,10 +118,6 @@ impl PathModuleState {
 pub(super) struct PathModuleRegistry {
     state: std::sync::Mutex<PathModuleState>,
     ready: std::sync::Condvar,
-    /// Perry heaps and mutable-root scanners are thread-local. The provider
-    /// registry is process-global for app-dylib symbol resolution, but its JS
-    /// values must remain confined to the one runtime thread that owns them.
-    runtime_owner: std::sync::OnceLock<std::thread::ThreadId>,
 }
 
 impl Default for PathModuleRegistry {
@@ -129,7 +125,6 @@ impl Default for PathModuleRegistry {
         Self {
             state: std::sync::Mutex::new(PathModuleState::default()),
             ready: std::sync::Condvar::new(),
-            runtime_owner: std::sync::OnceLock::new(),
         }
     }
 }
@@ -139,17 +134,6 @@ impl PathModuleRegistry {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    pub(super) fn bind_runtime_owner(&self) -> bool {
-        let current = std::thread::current().id();
-        self.runtime_owner.get_or_init(|| current) == &current
-    }
-
-    pub(super) fn is_runtime_owner(&self) -> bool {
-        self.runtime_owner
-            .get()
-            .is_some_and(|owner| *owner == std::thread::current().id())
     }
 
     /// Register one canonical path -> initializer mapping. The same mapping is
@@ -514,8 +498,16 @@ impl PathModuleRegistry {
     }
 }
 
-pub(super) static MODULE_PATH_REGISTRY: std::sync::LazyLock<PathModuleRegistry> =
-    std::sync::LazyLock::new(PathModuleRegistry::default);
+crate::perry_thread_local! {
+    /// Per-heap, not per-process. `PathModuleEntry::exports` holds NaN-boxed
+    /// pointers into the arena of the thread that produced them, and both the
+    /// arena and the mutable-root scanners are thread-local — so a
+    /// process-global table would hand one heap's pointer to another heap's
+    /// collector. One table per runtime thread keeps every entry's referent in
+    /// the same heap as the scanner that rewrites it, which is what lets a
+    /// single process host more than one Perry application.
+    pub(super) static MODULE_PATH_REGISTRY: PathModuleRegistry = PathModuleRegistry::default();
+}
 
 #[cfg(test)]
 mod path_module_registry_tests {
@@ -877,18 +869,33 @@ mod path_module_registry_tests {
         );
     }
 
+    /// Each runtime thread owns its own table. An entry published on one
+    /// thread must be invisible to another: `exports` is a NaN-boxed pointer
+    /// into the publishing thread's arena, and only that thread's scanner
+    /// rewrites it. This is what lets one process host several Perry apps.
     #[test]
-    fn provider_registry_binds_to_one_runtime_thread() {
-        let registry = Arc::new(PathModuleRegistry::default());
-        assert!(registry.bind_runtime_owner());
-        assert!(registry.is_runtime_owner());
-        let worker_registry = Arc::clone(&registry);
-        assert!(
-            !std::thread::spawn(move || worker_registry.bind_runtime_owner())
-                .join()
-                .unwrap()
+    fn path_registry_is_per_heap_not_per_process() {
+        const KEY: &str = "/per-heap-isolation-fixture.js";
+        MODULE_PATH_REGISTRY.with(|registry| {
+            assert!(registry.register_final_exports(KEY.into(), 0xD1));
+            assert_eq!(registry.published_exports(KEY), Some(0xD1));
+        });
+
+        let seen_by_second_heap = std::thread::spawn(|| {
+            MODULE_PATH_REGISTRY.with(|registry| registry.published_exports(KEY))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            seen_by_second_heap, None,
+            "a second heap must not observe the first heap's exports pointer"
         );
-        assert!(registry.is_runtime_owner());
+
+        // The publishing thread still sees its own entry: isolation, not loss.
+        MODULE_PATH_REGISTRY.with(|registry| {
+            assert_eq!(registry.published_exports(KEY), Some(0xD1));
+            registry.remove_for_test(KEY);
+        });
     }
 
     #[test]

@@ -408,7 +408,7 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
 fn registered_path_module_value(path: &str) -> Option<f64> {
     let key = canonicalize_module_path(path);
     MODULE_PATH_REGISTRY
-        .published_exports(&key)
+        .with(|registry| registry.published_exports(&key))
         .map(f64::from_bits)
 }
 
@@ -806,16 +806,6 @@ crate::perry_thread_local! {
     static PENDING_REQUIRE_PARENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-fn require_path_module_runtime_owner(operation: &str) {
-    if MODULE_PATH_REGISTRY.bind_runtime_owner() {
-        return;
-    }
-    let message = format!(
-        "Perry path-module {operation} must run on the runtime thread that owns the JavaScript heap"
-    );
-    crate::fs::validate::throw_error_with_code(&message, "ERR_PERRY_PATH_MODULE_THREAD")
-}
-
 fn canonicalize_module_path(path: &str) -> String {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
@@ -832,11 +822,10 @@ fn canonicalize_module_path(path: &str) -> String {
 /// initializer (from `ptrtoint` of the symbol).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i64, init_addr: i64) {
-    require_path_module_runtime_owner("initializer registration");
     let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
     let path = String::from_utf8_lossy(slice).into_owned();
     let key = canonicalize_module_path(&path);
-    if !MODULE_PATH_REGISTRY.register_init(key.clone(), init_addr as usize) {
+    if !MODULE_PATH_REGISTRY.with(|r| r.register_init(key.clone(), init_addr as usize)) {
         eprintln!("perry: rejected duplicate path-module initializer for canonical path {key}");
     }
 }
@@ -847,10 +836,9 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 /// generated initializer to complete.
 #[no_mangle]
 pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
-    require_path_module_runtime_owner("partial-export publication");
     let path = value_to_string(path_value, "path");
     let key = canonicalize_module_path(&path);
-    if !MODULE_PATH_REGISTRY.register_partial_exports(key, exports.to_bits()) {
+    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial_exports(key, exports.to_bits())) {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module partial exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",
@@ -892,12 +880,13 @@ pub extern "C" fn js_link_path_module_parent(record: f64) {
 /// [`MODULE_PATH_REGISTRY`].
 #[no_mangle]
 pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
-    require_path_module_runtime_owner("final-export publication");
     let scope = crate::gc::RuntimeHandleScope::new();
     let exports = scope.root_nanbox_f64(exports);
     let path = value_to_string(path_value, "path");
     let key = canonicalize_module_path(&path);
-    if !MODULE_PATH_REGISTRY.register_final_exports(key, exports.get_nanbox_f64().to_bits()) {
+    if !MODULE_PATH_REGISTRY
+        .with(|r| r.register_final_exports(key, exports.get_nanbox_f64().to_bits()))
+    {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module final exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",
@@ -916,17 +905,18 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
-    let boundary = MODULE_PATH_REGISTRY.begin_module_boundary();
+    let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
     let outcome = crate::exception::js_call_catching(|| {
         init_fn();
         undefined()
     });
     match outcome {
         Ok(_) => {
-            MODULE_PATH_REGISTRY.finish_module_boundary(boundary, None);
+            MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, None));
         }
         Err(error) => {
-            MODULE_PATH_REGISTRY.finish_module_boundary(boundary, Some(error.to_bits()));
+            MODULE_PATH_REGISTRY
+                .with(|r| r.finish_module_boundary(boundary, Some(error.to_bits())));
             crate::exception::js_throw(error)
         }
     }
@@ -966,7 +956,7 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
-    MODULE_PATH_REGISTRY.require_with(key, &run_path_initializer)
+    MODULE_PATH_REGISTRY.with(|r| r.require_with(key, &run_path_initializer))
 }
 
 /// Codegen FFI: resolve a runtime `require(absolutePath.js)` to an AOT module.
@@ -974,7 +964,6 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
-    require_path_module_runtime_owner("require");
     let path = value_to_string(path_value, "id");
     let key = canonicalize_module_path(&path);
     match require_path_key(&key) {
@@ -1014,34 +1003,35 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
 /// returned value is undefined to distinguish that value from a registry miss.
 #[no_mangle]
 pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
-    require_path_module_runtime_owner("presence lookup");
     let path = value_to_string(path_value, "id");
     let key = canonicalize_module_path(&path);
-    let found = MODULE_PATH_REGISTRY.has_exports(&key)
-        || directory_module_candidates(&key)
-            .into_iter()
-            .map(|candidate| canonicalize_module_path(&candidate))
-            .any(|candidate| MODULE_PATH_REGISTRY.has_exports(&candidate));
+    let found = MODULE_PATH_REGISTRY.with(|registry| {
+        registry.has_exports(&key)
+            || directory_module_candidates(&key)
+                .into_iter()
+                .map(|candidate| canonicalize_module_path(&candidate))
+                .any(|candidate| registry.has_exports(&candidate))
+    });
     f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
 }
 
 /// Keep path-registry exports and cached exception values alive and rewrite
 /// them when a copying collection moves their referents.
 pub fn scan_module_path_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if MODULE_PATH_REGISTRY.is_runtime_owner() {
-        MODULE_PATH_REGISTRY.scan_roots(visitor);
-    }
+    // No owner gate: the table is per-heap, so the collector running this
+    // scanner is by construction the one that owns every pointer in it. A
+    // gate here would leave every heap but the first one unscanned.
+    MODULE_PATH_REGISTRY.with(|registry| registry.scan_roots(visitor));
 }
 
 #[cfg(test)]
 pub(crate) fn test_store_path_module_root(key: &str, value_bits: u64) {
-    assert!(MODULE_PATH_REGISTRY.bind_runtime_owner());
-    assert!(MODULE_PATH_REGISTRY.register_final_exports(key.to_string(), value_bits));
+    assert!(MODULE_PATH_REGISTRY.with(|r| r.register_final_exports(key.to_string(), value_bits)));
 }
 
 #[cfg(test)]
 pub(crate) fn test_remove_path_module_root(key: &str) {
-    MODULE_PATH_REGISTRY.remove_for_test(key);
+    MODULE_PATH_REGISTRY.with(|r| r.remove_for_test(key));
 }
 
 /// Node-style `require.resolve` fallback for package-subpath specifiers that
