@@ -346,6 +346,13 @@ fn compute_object_cache_key_with_env(
         "update_config",
         opts.app_metadata.update_config.as_deref().unwrap_or(""),
     );
+    // The entry path is baked into `main` and changes `process.argv[1]`.
+    // Without it, moving an otherwise-identical project could reuse an entry
+    // object containing the old checkout's source path.
+    h.field(
+        "entry_source_path",
+        opts.app_metadata.entry_source_path.as_deref().unwrap_or(""),
+    );
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)

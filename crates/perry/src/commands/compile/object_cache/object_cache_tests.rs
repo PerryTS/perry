@@ -377,6 +377,18 @@ fn key_stable_for_nested_type_hashmap_order() {
 }
 
 #[test]
+fn key_changes_with_embedded_entry_source_path() {
+    let mut a = empty_opts();
+    let mut b = empty_opts();
+    a.app_metadata.entry_source_path = Some("/checkout-a/src/main.ts".to_string());
+    b.app_metadata.entry_source_path = Some("/checkout-b/src/main.ts".to_string());
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
+}
+
+#[test]
 fn key_changes_with_imported_class_signature() {
     let mut a = empty_opts();
     let mut b = empty_opts();

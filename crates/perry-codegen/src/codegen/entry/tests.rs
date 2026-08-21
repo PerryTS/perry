@@ -96,6 +96,13 @@ fn emitted_ir(output_type: &str) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn emitted_process_entry_ir(output_type: &str) -> String {
+    let mut opts = entry_opts(output_type);
+    opts.app_metadata.entry_source_path = Some("/tmp/perry/repro.ts".to_string());
+    String::from_utf8(compile_module(&empty_module(), opts).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
+
 fn emitted_path_init_ir(output_type: &str) -> String {
     let mut opts = entry_opts(output_type);
     opts.non_entry_module_prefixes = vec!["lazy_chunk_js".to_string()];
@@ -196,6 +203,25 @@ fn dylib_entry_does_not_release_process_owned_collection_storage() {
     assert!(
         !ir.contains("call void @js_gc_release_current_thread_collection_side_allocations()"),
         "a library return is not a process-exit boundary"
+    );
+}
+
+#[test]
+fn executable_seeds_process_argv_script_path_but_dylib_does_not() {
+    let executable_ir = emitted_process_entry_ir("executable");
+    assert!(
+        executable_ir.contains("call void @js_set_process_entry_path("),
+        "executable entry must seed process.argv[1]\n{executable_ir}"
+    );
+    assert!(
+        executable_ir.contains("/tmp/perry/repro.ts"),
+        "executable entry must embed the canonical source path\n{executable_ir}"
+    );
+
+    let dylib_ir = emitted_process_entry_ir("dylib");
+    assert!(
+        !dylib_ir.contains("call void @js_set_process_entry_path("),
+        "a library initializer must not replace its host process argv\n{dylib_ir}"
     );
 }
 

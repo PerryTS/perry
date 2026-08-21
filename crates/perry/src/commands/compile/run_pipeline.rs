@@ -4512,7 +4512,14 @@ pub fn run_with_parse_cache(
                 i18n_table: i18n_snapshot.clone(),
                 fast_math: ctx.fast_math,
                 fp_contract_mode: ctx.fp_contract_mode,
-                app_metadata: ctx.app_metadata.clone(),
+                app_metadata: perry_codegen::AppMetadata {
+                    entry_source_path: if is_entry && args.output_type == "executable" {
+                        Some(path.to_string_lossy().into_owned())
+                    } else {
+                        None
+                    },
+                    ..ctx.app_metadata.clone()
+                },
                 // Issue #100: namespace_entries empty unless this
                 // module is a dynamic-import target; the consumer-side
                 // dispatch map is empty unless this module performs

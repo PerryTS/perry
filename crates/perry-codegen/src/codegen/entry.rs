@@ -395,6 +395,22 @@ pub(super) fn compile_module_entry(
                 .filter(|s| !s.is_empty())
                 .map(|blob| llmod.add_string_constant(blob))
         };
+        // Perry executables have no separate runtime script argument, so the
+        // compiler embeds the canonical entry module path and gives it to the
+        // runtime before user/module initialization. This preserves argv[0]
+        // as the executable while making argv[1] the TypeScript entry path,
+        // as Node/Bun code (including the canonical direct-execution guard)
+        // expects.
+        let process_entry_path: Option<(String, usize)> = if is_dylib {
+            None
+        } else {
+            cross_module
+                .app_metadata
+                .entry_source_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .map(|path| llmod.add_string_constant(path))
+        };
         // i18n startup init: when the project configures `[i18n]`, bake the
         // configured locale-code list (and the optional `[i18n.currencies]`
         // map) into `main`'s prelude as a single `perry_i18n_init` call —
@@ -492,6 +508,14 @@ pub(super) fn compile_module_entry(
         let _ = main.create_block("entry");
         {
             let blk = main.block_mut(0).unwrap();
+            if let Some((const_name, byte_len)) = process_entry_path.as_ref() {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                blk.call_void(
+                    "js_set_process_entry_path",
+                    &[(PTR, path_ptr.as_str()), (I32, len_str.as_str())],
+                );
+            }
             blk.call_void("js_gc_init", &[]);
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);

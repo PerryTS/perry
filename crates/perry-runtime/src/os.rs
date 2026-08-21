@@ -561,6 +561,21 @@ pub extern "C" fn js_process_cwd() -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+static PROCESS_ENTRY_PATH: OnceLock<String> = OnceLock::new();
+
+/// Seed the source entry used for `process.argv[1]` in a compiled executable.
+/// Generated `main` calls this before any module initialization.
+#[no_mangle]
+pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
+    if ptr.is_null() {
+        return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    if let Ok(path) = std::str::from_utf8(bytes) {
+        let _ = PROCESS_ENTRY_PATH.set(path.to_owned());
+    }
+}
+
 /// Get command line arguments as an array of strings
 /// Returns: string[] (array of NaN-boxed string pointers)
 #[no_mangle]
@@ -570,10 +585,11 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
 
     let args: Vec<String> = std::env::args().collect();
     // Match Node.js behavior: argv[0] = binary path (like node path),
-    // argv[1] = binary path again (like script path), argv[2+] = user args.
+    // argv[1] = source entry path (like script path), argv[2+] = user args.
     // Node.js: ["/usr/bin/node", "/path/to/script.js", ...user_args]
-    // Compiled: ["/path/to/binary", ...user_args]
-    // We insert the binary path twice to shift user args to index 2+.
+    // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
+    // If an older/foreign codegen does not seed the entry path, retain the
+    // historical binary-path fallback while keeping user args at index 2+.
     let arr = js_array_alloc((args.len() + 1) as u32);
 
     let mut result = arr;
@@ -583,8 +599,13 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
         let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         let nanboxed = js_nanbox_string(str_ptr as i64);
         result = js_array_push_f64(result, nanboxed);
-        // argv[1]: binary path again (mimics script path)
-        let str_ptr2 = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        // argv[1]: compiler-seeded source entry path.
+        let entry_path = PROCESS_ENTRY_PATH
+            .get()
+            .map(String::as_str)
+            .unwrap_or(binary_path);
+        let entry_bytes = entry_path.as_bytes();
+        let str_ptr2 = js_string_from_bytes(entry_bytes.as_ptr(), entry_bytes.len() as u32);
         let nanboxed2 = js_nanbox_string(str_ptr2 as i64);
         result = js_array_push_f64(result, nanboxed2);
     }

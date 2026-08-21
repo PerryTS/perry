@@ -27,6 +27,11 @@ pub struct AppMetadata {
     /// binary that configures no updates is byte-identical to one built before
     /// this existed, and `entry.rs`'s absence test asserts it.
     pub update_config: Option<String>,
+    /// Canonical path of the TypeScript entry module. The CLI supplies this
+    /// only for executable entry modules so generated `main` can seed
+    /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
+    /// It is compiler metadata rather than a user-configurable manifest field.
+    pub entry_source_path: Option<String>,
 }
 
 impl Default for AppMetadata {
@@ -37,6 +42,7 @@ impl Default for AppMetadata {
             bundle_id: "com.perry.app".to_string(),
             app_group: None,
             update_config: None,
+            entry_source_path: None,
         }
     }
 }
