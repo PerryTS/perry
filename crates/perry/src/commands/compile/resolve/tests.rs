@@ -1450,7 +1450,7 @@ mod module_spec_tests {
 #[cfg(test)]
 mod declaration_sidecar_tests {
     use super::*;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     mod compile_package;
 
@@ -1511,7 +1511,7 @@ mod declaration_sidecar_tests {
             &importer,
             root,
             &HashSet::new(),
-            &HashMap::new(),
+            &BTreeSet::new(),
         )
         .expect("resolve typed-js");
 
@@ -1544,7 +1544,7 @@ mod declaration_sidecar_tests {
             &importer,
             root,
             &compile_packages,
-            &HashMap::new(),
+            &BTreeSet::new(),
         )
         .expect("resolve typed-js");
 
@@ -1644,7 +1644,7 @@ mod declaration_sidecar_tests {
 /// (ink's `<Text dimColor>` rendered `[object Object]`).
 mod subpath_imports_tests {
     use super::super::{resolve_import, ModuleKind};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeSet, HashSet};
     use std::path::PathBuf;
 
     fn write_chalk_like_package(root: &std::path::Path) -> PathBuf {
@@ -1694,7 +1694,7 @@ mod subpath_imports_tests {
         let importer = pkg.join("source/index.js");
 
         let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
-        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+        let compile_package_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
         let (resolved, kind) = resolve_import(
             "#ansi-styles",
@@ -1722,7 +1722,7 @@ mod subpath_imports_tests {
         let importer = pkg.join("source/index.js");
 
         let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
-        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+        let compile_package_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
         let (resolved, _) = resolve_import(
             "#supports-color",
@@ -1749,7 +1749,7 @@ mod subpath_imports_tests {
         let importer = pkg.join("source/index.js");
 
         assert!(
-            resolve_import("#nope", &importer, root, &HashSet::new(), &HashMap::new(),).is_none(),
+            resolve_import("#nope", &importer, root, &HashSet::new(), &BTreeSet::new(),).is_none(),
             "a `#` specifier missing from the imports map must not resolve"
         );
     }

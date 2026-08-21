@@ -186,7 +186,10 @@ Configured in `package.json`:
 ```json
 { "perry": { "compilePackages": ["@noble/curves", "@noble/hashes"] } }
 ```
-First-resolved directory cached in `compile_package_dirs`; subsequent imports redirect to the same copy (dedup).
+Bare imports resolve from the importer outward, matching Node/Bun. Every canonical
+package root reached through `compilePackages` is tracked as a separate instance,
+so nested versions compile with distinct module/symbol identities; multiple links
+to the same physical root still deduplicate by canonical path.
 
 ## Known Limitations
 

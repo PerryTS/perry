@@ -182,7 +182,7 @@ fn collect_module_one(
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = ctx.aot_discovered_modules.contains(&canonical)
         || (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
-        || ctx.compile_package_dirs.values().any(|dir| {
+        || ctx.compile_package_dirs.iter().any(|dir| {
             if canonical.starts_with(dir) {
                 // Exclude nested node_modules/ inside the compiled package
                 // (e.g., @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js)
@@ -1257,26 +1257,25 @@ fn collect_module_one(
 
             match kind {
                 ModuleKind::NativeCompiled => {
-                    // Record compile package directory for dedup (first-found wins).
-                    // When the same package exists in multiple nested node_modules/,
-                    // we always resolve to the first-found copy to avoid duplicate symbols.
+                    // Record every resolved compile-package root. Package
+                    // identity is the canonical root, not the package name:
+                    // nested versions remain distinct while two symlinks to
+                    // the same physical copy canonicalize together.
                     let module_name = &import.source;
                     if !module_name.starts_with('.') && !module_name.starts_with('/') {
                         let (pkg_name, _) = parse_package_specifier(module_name);
-                        if ctx.compile_packages.contains(&pkg_name)
-                            && !ctx.compile_package_dirs.contains_key(&pkg_name)
-                        {
+                        if ctx.compile_packages.contains(&pkg_name) {
                             if let Some(pkg_dir) =
                                 extract_compile_package_dir(&resolved_path, &pkg_name)
                             {
-                                ctx.compile_package_dirs.insert(pkg_name, pkg_dir);
+                                ctx.compile_package_dirs.insert(pkg_dir);
                             } else {
                                 // Symlinked local package: canonical path is outside node_modules.
                                 // Walk up from resolved_path to find the package root (dir with package.json).
                                 let mut dir = resolved_path.parent();
                                 while let Some(d) = dir {
                                     if d.join("package.json").exists() {
-                                        ctx.compile_package_dirs.insert(pkg_name, d.to_path_buf());
+                                        ctx.compile_package_dirs.insert(d.to_path_buf());
                                         break;
                                     }
                                     dir = d.parent();

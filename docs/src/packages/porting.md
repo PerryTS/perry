@@ -70,7 +70,7 @@ In your project's `package.json`:
 }
 ```
 
-This is what tells Perry to pull the package into the native compile instead of routing it through a JavaScript runtime. See [Project Configuration](../getting-started/project-config.md#compilepackages) for the full semantics — including how first-resolved directories get cached so transitive copies dedup.
+This is what tells Perry to pull the package into the native compile instead of routing it through a JavaScript runtime. See [Project Configuration](../getting-started/project-config.md#compilepackages) for the full semantics. Package resolution remains importer-relative: nested installations compile as separate module instances, while links that canonicalize to the same physical package root share one instance.
 
 ### 2. Try compiling
 

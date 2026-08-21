@@ -2578,7 +2578,7 @@ pub fn run_with_parse_cache(
                             // with MODULE_NOT_FOUND even though it was compiled.
                             || ctx
                                 .compile_package_dirs
-                                .values()
+                                .iter()
                                 .any(|dir| p.starts_with(dir))
                     })
                     .map(|(p, m)| {

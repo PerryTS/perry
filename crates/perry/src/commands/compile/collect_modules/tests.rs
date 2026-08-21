@@ -508,7 +508,6 @@ fn guard_compile_package(
     let mut ctx = CompilationContext::new(root.to_path_buf());
     ctx.compile_packages.insert(package_name.to_string());
     ctx.compile_package_dirs.insert(
-        package_name.to_string(),
         root.join("node_modules")
             .join(package_name)
             .canonicalize()

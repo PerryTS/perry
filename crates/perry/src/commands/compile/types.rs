@@ -666,8 +666,10 @@ pub struct CompilationContext {
     /// from `perry.toml` + CLI overrides and reused by every codegen
     /// backend so native, JS and arkts agree byte-for-byte.
     pub app_metadata: perry_codegen::AppMetadata,
-    /// First-resolved directory for each compile package (deduplication across nested node_modules)
-    pub compile_package_dirs: HashMap<String, PathBuf>,
+    /// Canonical roots of every resolved compile-package instance. A sorted
+    /// set keeps cache/native-addon classification deterministic while allowing
+    /// nested installations of the same package name to remain distinct.
+    pub compile_package_dirs: BTreeSet<PathBuf>,
     /// Compile package roots already checked for unsupported Node native addon markers.
     pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
@@ -1131,7 +1133,7 @@ impl CompilationContext {
             fast_math: false,
             fp_contract_mode: perry_codegen::FpContractMode::Off,
             app_metadata: perry_codegen::AppMetadata::default(),
-            compile_package_dirs: HashMap::new(),
+            compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
