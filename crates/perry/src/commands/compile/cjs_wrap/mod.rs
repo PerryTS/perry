@@ -54,9 +54,11 @@ use extract_exports::{
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
     module_reexport_specs,
 };
+// #8547: the stdlib-link decision needs the literal `require()` specifiers.
+pub(crate) use extract_requires::extract_require_specifiers;
 use extract_requires::{
-    extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
-    function_local_specs, identifier_is_declared_binding, identifier_is_reassigned,
+    extract_export_star_specs, extract_require_aliases_with_ranges, function_local_specs,
+    identifier_is_declared_binding, identifier_is_reassigned,
 };
 use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,

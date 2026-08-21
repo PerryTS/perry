@@ -17,11 +17,29 @@ fn workspace_root() -> PathBuf {
         .expect("canonicalize workspace root")
 }
 
-fn target_debug_dir() -> PathBuf {
+/// Dedicated target dir for this suite's `wasm-host`-enabled runtime.
+///
+/// #8547: this test is the only thing in the workspace that builds
+/// `perry-runtime` with `perry-runtime/wasm-host`. Built into the SHARED
+/// `target/debug`, it replaces `libperry_runtime.a` with one that compiles
+/// `webassembly.rs` in — and that archive carries undefined references to
+/// `perry_wasm_host_*`, which only `libperry_wasm_host.a` satisfies and which a
+/// runtime-only link line does not include. Every other suite in the same
+/// `cargo test --workspace` job that links runtime-only against that archive
+/// then fails at link time (`issue_5247_property_read_source_location` was the
+/// casualty). Isolating the build mirrors what the compiler's own no-auto path
+/// already does for exactly this reason — see `build_wasm_host_runtime` in
+/// `optimized_libs/no_auto.rs`, whose dedicated `target/perry-wasm-host-runtime`
+/// exists so "the prebuilt libperry_runtime.a is not clobbered".
+fn wasm_host_target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
+        .join("perry-wasm-host-test")
+}
+
+fn target_debug_dir() -> PathBuf {
+    wasm_host_target_dir().join("debug")
 }
 
 fn ensure_runtime_archives() {
@@ -30,6 +48,7 @@ fn ensure_runtime_archives() {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let runtime_build = Command::new(&cargo)
             .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", wasm_host_target_dir())
             .arg("build")
             .arg("-p")
             .arg("perry-runtime-static")
