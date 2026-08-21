@@ -623,13 +623,6 @@ pub extern "C" fn js_object_get_field_ic_miss(
     if (obj as usize) < 0x10000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // When accessors are active anywhere in the program, skip the cache
-    // entirely: the PIC fast path does a direct field load that bypasses
-    // getter dispatch, so any object that uses defineProperty / get / set
-    // would silently return the raw slot value instead of calling the
-    // getter. The slow path through js_object_get_field_by_name handles
-    // accessors correctly.
-    let can_cache = !crate::state::state().descriptors.accessors_in_use.get();
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
         // crate::object::object_keys_array(obj) — otherwise an Array/String/Buffer/etc. receiver
@@ -668,11 +661,16 @@ pub extern "C" fn js_object_get_field_ic_miss(
         let is_regular = shape.is_some_and(|shape| {
             shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
         });
-        // Gate-neutral builtin accessors deliberately leave the process-wide
-        // accessor latch clear. Their owner bit must still block this PIC:
-        // its generated hit path is a raw slot load and would otherwise turn
-        // `Set.prototype.size` into `undefined` instead of invoking the getter.
-        if can_cache && is_regular && !has_own_descriptors {
+        // Descriptor-bearing receivers must not prime this PIC: its generated
+        // hit path is a raw slot load and would bypass their getter / property
+        // semantics. This per-object bit replaces the old process-wide
+        // `accessors_in_use` gate. `note_descriptor_target` sets the bit and
+        // transitions the receiver's ShapeId before an installed descriptor is
+        // observable, while unrelated accessors cannot affect an own data
+        // property on this receiver. The emitted hit path independently checks
+        // the same bit, so both cache population and cache use fail closed.
+        // Gate-neutral builtin accessors set the owner bit as well.
+        if is_regular && !has_own_descriptors {
             let Some(shape) = shape else {
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
@@ -1291,6 +1289,71 @@ mod poly_pic_tests {
 
 #[cfg(test)]
 mod c3c_pic_tests {
+    /// Installing an accessor on one object must not permanently disable every
+    /// property-read PIC in the process. Descriptor ownership is recorded on
+    /// the owning object's GC header, so a different descriptor-free object's
+    /// own data field remains safe to cache.
+    #[test]
+    fn unrelated_accessor_does_not_poison_plain_receiver_pic() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let unrelated = crate::object::js_object_alloc(0, 1);
+        crate::object::set_accessor_descriptor(
+            unrelated as usize,
+            "pic_unrelated_accessor".to_string(),
+            crate::object::AccessorDescriptor::default(),
+        );
+        assert!(
+            crate::state::state().descriptors.accessors_in_use.get(),
+            "test premise: the process-wide accessor latch is active"
+        );
+
+        let obj = crate::object::js_object_alloc(0, 8);
+        let key_bytes = b"pic_plain_data";
+        let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+        let mut cache = [0i64; super::PIC_CACHE_WORDS];
+        assert_eq!(
+            super::js_object_get_field_ic_miss(obj, key, &mut cache),
+            42.0
+        );
+        assert_ne!(
+            cache[0], 0,
+            "an accessor owned by an unrelated object must not prevent this \
+             descriptor-free receiver from priming its read PIC"
+        );
+        assert_eq!(cache[1], 0, "the first own data field lives in slot 0");
+    }
+
+    /// The receiver-local half of the proof: an accessor-bearing object must
+    /// keep taking descriptor-aware lookup and must never seed a raw-slot hit.
+    #[test]
+    fn accessor_bearing_receiver_does_not_prime_plain_data_pic() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let obj = crate::object::js_object_alloc(0, 8);
+        let key_bytes = b"pic_guarded_data";
+        let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, 17.0);
+        crate::object::set_accessor_descriptor(
+            obj as usize,
+            "pic_guarded_data".to_string(),
+            crate::object::AccessorDescriptor::default(),
+        );
+
+        let mut cache = [0i64; super::PIC_CACHE_WORDS];
+        let via_pic = super::js_object_get_field_ic_miss(obj, key, &mut cache);
+        let via_ladder = super::js_object_get_field_by_name_f64(obj, key);
+        assert_eq!(
+            via_pic.to_bits(),
+            via_ladder.to_bits(),
+            "the miss path must preserve this receiver's accessor semantics"
+        );
+        assert_eq!(
+            cache[0], 0,
+            "an accessor-bearing receiver must not prime a raw-slot PIC"
+        );
+    }
+
     /// A class instance primes the same authoritative ShapeId token that the
     /// emitted guard reads from the receiver.
     #[test]
