@@ -704,6 +704,10 @@
       "name": "TEST_FORCE_HELPER_GC"
     },
     {
+      "file": "crates/perry-runtime/src/messaging.rs",
+      "name": "GC_SCANNER_REGISTERED"
+    },
+    {
       "file": "crates/perry-runtime/src/module_require/path_registry.rs",
       "name": "MODULE_PATH_REGISTRY",
       "scanner": "scan_module_path_roots_mut"
@@ -891,6 +895,10 @@
     {
       "file": "crates/perry-runtime/src/object/native_this_alias.rs",
       "name": "ALIAS_ACTIVE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
+      "name": "SCANNER_REGISTERED"
     },
     {
       "file": "crates/perry-runtime/src/object/prop_plan.rs",
