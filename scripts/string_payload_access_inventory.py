@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,9 +34,11 @@ DEFAULT_BASELINE = REPO_ROOT / "scripts" / "string_payload_access_baseline.txt"
 RULES = ("inline-offset", "reader-helper")
 
 INLINE_OFFSET_RE = re.compile(
-    r"(?:\.(?:add|wrapping_add)\s*\(\s*|\+\s*)"
+    r"(?:\.(?:add|wrapping_add|byte_add|wrapping_byte_add|offset|wrapping_offset)"
+    r"\s*\(\s*|\+\s*)"
     r"(?:(?:std|core)::mem::)?size_of\s*::\s*<\s*"
-    r"(?:[A-Za-z_][A-Za-z0-9_]*::)*StringHeader\s*>\s*\(\s*\)",
+    r"(?:[A-Za-z_][A-Za-z0-9_]*::)*StringHeader\s*>\s*\(\s*\)"
+    r"(?:\s+as\s+(?:usize|isize))?",
     re.MULTILINE,
 )
 FUNCTION_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)[^;{]*\{", re.MULTILINE)
@@ -311,6 +314,22 @@ unsafe fn copied_reader(ptr: *const perry_runtime::StringHeader) -> &'static str
         "synthetic copy-pasted reader helper was not detected exactly once",
     )
 
+    alternate_offsets = r'''
+unsafe fn alternate_offsets(ptr: *const u8) {
+    let _ = ptr.byte_add(core::mem::size_of::<StringHeader>());
+    let _ = ptr.wrapping_byte_add(size_of::<crate::StringHeader>());
+    let _ = ptr.offset(std::mem::size_of::<perry_runtime::StringHeader>() as isize);
+    let _ = ptr.wrapping_offset(size_of::<StringHeader>() as isize);
+}
+'''
+    alternate_findings = scan_text(
+        "synthetic-crate", "crates/synthetic-crate/src/alternate.rs", alternate_offsets
+    )
+    expect(
+        sum(f.rule == "inline-offset" for f in alternate_findings) == 4,
+        "alternate raw-pointer payload offsets were not all detected",
+    )
+
     clean = r'''
 fn sanctioned(ptr: *const perry_runtime::StringHeader) -> Vec<u8> {
     unsafe { perry_runtime::string::OwnedStringBytes::copy_from_header(ptr) }
@@ -324,6 +343,35 @@ const EXAMPLE: &str = ".add(std::mem::size_of::<StringHeader>())";
         not scan_text("synthetic-crate", "crates/synthetic-crate/src/lib.rs", clean),
         "sanctioned access, comments, or strings produced a finding",
     )
+
+    # Exercise crate discovery and the ratchet end to end. This prevents the
+    # scanner's regex unit tests from staying green if workspace traversal or
+    # per-crate attribution is accidentally broken.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        crate_dir = temp_root / "crates" / "synthetic-crate"
+        source = crate_dir / "src" / "lib.rs"
+        source.parent.mkdir(parents=True)
+        (crate_dir / "Cargo.toml").write_text(
+            '[package]\nname = "synthetic-crate"\nversion = "0.0.0"\n',
+            encoding="utf-8",
+        )
+        source.write_text(planted, encoding="utf-8")
+        discovered, files_scanned = collect_inventory(temp_root)
+        expect(files_scanned == 1, "synthetic crate source was not scanned exactly once")
+        expect(
+            counts_for(discovered) == counts_for(findings),
+            "filesystem inventory disagreed with direct source scanning",
+        )
+
+        planted_baseline = dict(counts_for(discovered))
+        source.write_text(clean, encoding="utf-8")
+        removed, _ = collect_inventory(temp_root)
+        regressions, stale = compare_counts(counts_for(removed), planted_baseline)
+        expect(
+            not regressions and bool(stale),
+            "removing a planted offender did not make its baseline fail stale",
+        )
 
     actual = counts_for(findings)
     regressions, stale = compare_counts(actual, {})
