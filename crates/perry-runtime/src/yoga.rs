@@ -11,11 +11,12 @@
 //! constants (`YGEnums.ts`).
 //!
 //! Nodes are plain integer handles (an `f64` id, not a tagged pointer) into
-//! a per-process registry. `calculateLayout` builds a fresh `TaffyTree` from
+//! a per-thread registry. `calculateLayout` builds a fresh `TaffyTree` from
 //! the registry, runs the solver (calling stored JS measure callbacks for
 //! leaf text nodes), and writes the relative computed `Layout` back onto each
 //! node for `getComputed*` to read — mirroring how `tui/layout.rs` works.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -115,38 +116,46 @@ impl YogaNode {
     }
 }
 
-static YOGA_NODES: Mutex<Option<HashMap<u32, YogaNode>>> = Mutex::new(None);
+thread_local! {
+    static YOGA_NODES: RefCell<Option<HashMap<u32, YogaNode>>> = const { RefCell::new(None) };
+    // The GC scanner registry is also thread-local, so this latch must be
+    // per-thread: every JS worker that creates yoga nodes needs its own entry.
+    static GC_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
 static YOGA_NEXT_ID: Mutex<u32> = Mutex::new(1);
-static GC_SCANNER_REGISTERED: Mutex<bool> = Mutex::new(false);
 
 fn with_nodes<R, F: FnOnce(&mut HashMap<u32, YogaNode>) -> R>(f: F) -> R {
     ensure_gc_scanner_registered();
-    let mut guard = crate::gc::lock_gc_root_registry(&YOGA_NODES);
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    f(guard.as_mut().unwrap())
+    YOGA_NODES.with(|nodes| {
+        let mut nodes = nodes.borrow_mut();
+        if nodes.is_none() {
+            *nodes = Some(HashMap::new());
+        }
+        f(nodes.as_mut().unwrap())
+    })
 }
 
 fn ensure_gc_scanner_registered() {
-    let mut reg = GC_SCANNER_REGISTERED.lock().unwrap();
-    if !*reg {
-        crate::gc::gc_register_mutable_root_scanner_named("perry_yoga", yoga_root_scanner);
-        *reg = true;
-    }
+    GC_SCANNER_REGISTERED.with(|registered| {
+        if !registered.get() {
+            crate::gc::gc_register_mutable_root_scanner_named("perry_yoga", yoga_root_scanner);
+            registered.set(true);
+        }
+    });
 }
 
 /// Keep stored measure callbacks alive across GC between `setMeasureFunc`
 /// and `calculateLayout`.
 fn yoga_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut guard = crate::gc::lock_gc_root_registry(&YOGA_NODES);
-    if let Some(map) = guard.as_mut() {
-        for node in map.values_mut() {
-            if (node.measure.to_bits() & !POINTER_MASK) == POINTER_TAG {
-                visitor.visit_nanbox_f64_slot(&mut node.measure);
+    YOGA_NODES.with(|nodes| {
+        if let Some(map) = nodes.borrow_mut().as_mut() {
+            for node in map.values_mut() {
+                if (node.measure.to_bits() & !POINTER_MASK) == POINTER_TAG {
+                    visitor.visit_nanbox_f64_slot(&mut node.measure);
+                }
             }
         }
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -240,23 +249,23 @@ fn map_flex_direction(v: u32) -> FlexDirection {
 
 fn map_justify(v: u32) -> Option<JustifyContent> {
     Some(match v {
-        0 => JustifyContent::FlexStart,
-        1 => JustifyContent::Center,
-        2 => JustifyContent::FlexEnd,
-        3 => JustifyContent::SpaceBetween,
-        4 => JustifyContent::SpaceAround,
-        5 => JustifyContent::SpaceEvenly,
+        0 => JustifyContent::FLEX_START,
+        1 => JustifyContent::CENTER,
+        2 => JustifyContent::FLEX_END,
+        3 => JustifyContent::SPACE_BETWEEN,
+        4 => JustifyContent::SPACE_AROUND,
+        5 => JustifyContent::SPACE_EVENLY,
         _ => return None,
     })
 }
 
 fn map_align(v: u32) -> Option<AlignItems> {
     Some(match v {
-        1 => AlignItems::FlexStart,
-        2 => AlignItems::Center,
-        3 => AlignItems::FlexEnd,
-        4 => AlignItems::Stretch,
-        5 => AlignItems::Baseline,
+        1 => AlignItems::FLEX_START,
+        2 => AlignItems::CENTER,
+        3 => AlignItems::FLEX_END,
+        4 => AlignItems::STRETCH,
+        5 => AlignItems::BASELINE,
         // 0 = Auto; 6/7/8 (space-*) aren't valid for align-items in taffy.
         _ => return None,
     })
@@ -264,13 +273,13 @@ fn map_align(v: u32) -> Option<AlignItems> {
 
 fn map_align_content(v: u32) -> Option<AlignContent> {
     Some(match v {
-        1 => AlignContent::FlexStart,
-        2 => AlignContent::Center,
-        3 => AlignContent::FlexEnd,
-        4 => AlignContent::Stretch,
-        6 => AlignContent::SpaceBetween,
-        7 => AlignContent::SpaceAround,
-        8 => AlignContent::SpaceEvenly,
+        1 => AlignContent::FLEX_START,
+        2 => AlignContent::CENTER,
+        3 => AlignContent::FLEX_END,
+        4 => AlignContent::STRETCH,
+        6 => AlignContent::SPACE_BETWEEN,
+        7 => AlignContent::SPACE_AROUND,
+        8 => AlignContent::SPACE_EVENLY,
         _ => return None,
     })
 }
@@ -738,3 +747,56 @@ keep!(KEEP_YOGA_10: extern "C" fn(f64, f64, f64) -> f64 = js_yoga_set_enum);
 keep!(KEEP_YOGA_11: extern "C" fn(f64, f64, f64, f64) -> f64 = js_yoga_calculate_layout);
 keep!(KEEP_YOGA_12: extern "C" fn(f64, f64) -> f64 = js_yoga_get_computed);
 keep!(KEEP_YOGA_13: extern "C" fn(f64, f64, f64) -> f64 = js_yoga_get_computed_edge);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use taffy::AlignmentSafety;
+
+    #[test]
+    fn alignment_mappings_keep_yogas_unsafe_overflow_behavior() {
+        for alignment in [
+            map_justify(0),
+            map_justify(1),
+            map_justify(2),
+            map_justify(3),
+            map_justify(4),
+            map_justify(5),
+            map_align_content(1),
+            map_align_content(2),
+            map_align_content(3),
+            map_align_content(4),
+            map_align_content(6),
+            map_align_content(7),
+            map_align_content(8),
+        ] {
+            assert_eq!(alignment.unwrap().safety, AlignmentSafety::Unsafe);
+        }
+
+        for alignment in [
+            map_align(1),
+            map_align(2),
+            map_align(3),
+            map_align(4),
+            map_align(5),
+        ] {
+            assert_eq!(alignment.unwrap().safety, AlignmentSafety::Unsafe);
+        }
+    }
+
+    #[test]
+    fn yoga_registry_and_gc_registration_are_per_thread() {
+        fn exercise_thread(id: u32) {
+            GC_SCANNER_REGISTERED.with(|registered| assert!(!registered.get()));
+            with_nodes(|nodes| {
+                assert!(nodes.is_empty());
+                nodes.insert(id, YogaNode::new());
+            });
+            GC_SCANNER_REGISTERED.with(|registered| assert!(registered.get()));
+            with_nodes(|nodes| assert_eq!(nodes.len(), 1));
+        }
+
+        std::thread::spawn(|| exercise_thread(1)).join().unwrap();
+        std::thread::spawn(|| exercise_thread(2)).join().unwrap();
+    }
+}

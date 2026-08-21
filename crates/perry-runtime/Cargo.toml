@@ -263,7 +263,7 @@ rand = "0.10"
 regex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
-taffy = { version = "0.7", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+taffy = { version = "0.13", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 fancy-regex = { version = "0.18", optional = true }
 itoa.workspace = true
 ryu.workspace = true
