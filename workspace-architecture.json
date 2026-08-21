@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 78,
+    "workspace_members": 79,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -66,7 +66,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 31,
+      "externalize": 32,
       "keep": 42,
       "merge": 1,
       "remove": 1,
@@ -273,6 +273,10 @@
     "perry-ext-streams": {
       "category": "binding",
       "decision": "keep"
+    },
+    "perry-ext-typescript": {
+      "category": "binding",
+      "decision": "externalize"
     },
     "perry-ext-uuid": {
       "category": "binding",

@@ -212,6 +212,26 @@ fn crypto_unknown_method_is_rejected() {
     );
 }
 
+/// #8511: Perry intentionally exposes only the TypeScript runtime surface
+/// audited for OpenCode Code Mode. Other compiler APIs must keep using the
+/// ordinary strict manifest refusal rather than silently behaving as stubs.
+#[test]
+fn typescript_compiler_api_outside_native_subset_is_rejected() {
+    let result = lower_result_strict(
+        r#"
+        import { createProgram } from "typescript";
+        createProgram([]);
+    "#,
+    );
+    let error = result.expect_err("typescript.createProgram must be outside the native subset");
+    assert!(
+        error.contains("typescript")
+            && error.contains("createProgram")
+            && error.contains("does not provide an export named"),
+        "unexpected strict manifest error: {error}"
+    );
+}
+
 /// #5245: the default (non-strict) mode defers a recognized-but-unimplemented
 /// API call to a throw-on-reach runtime error instead of failing the build,
 /// rather than the historical hard `#463` refusal. `process.binding('buffer')`

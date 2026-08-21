@@ -48,6 +48,7 @@ members = [
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
     "crates/perry-ext-node-forge",
+    "crates/perry-ext-typescript",
     "crates/perry-wasm-host",
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
@@ -343,6 +344,10 @@ not_unsafe_ptr_arg_deref = "allow"
 swc_ecma_parser = "32.0"
 swc_ecma_ast = "19.0"
 swc_common = "18.0"
+swc_ecma_codegen = "21.0"
+swc_ecma_transforms_base = "32.0"
+swc_ecma_transforms_react = "35.0"
+swc_ecma_transforms_typescript = "35.0"
 
 # Runtime dependencies
 # bdwgc for garbage collection (Boehm GC)
@@ -489,6 +494,7 @@ perry-ext-fastify = { path = "crates/perry-ext-fastify" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-ext-node-forge = { path = "crates/perry-ext-node-forge" }
+perry-ext-typescript = { path = "crates/perry-ext-typescript" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
 perry-ui-model = { path = "crates/perry-ui-model" }

@@ -187,6 +187,9 @@ pub const NATIVE_MODULES: &[&str] = &[
     // for Socket Firewall's TLS-MITM CA so forge's pure-JS crypto isn't
     // AOT-compiled.
     "node-forge",
+    // #8511: the runtime `transpileModule` subset used by OpenCode Code Mode.
+    // The upstream compiler is deliberately not compiled into the app.
+    "typescript",
 ];
 
 /// Node built-in submodules that Perry routes through the
