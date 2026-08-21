@@ -4,4 +4,4 @@
 invalid combination with `promiseResolve`. Hooks that set `trackPromises` to
 `false` no longer allocate or receive Promise lifecycle events, including
 when they are enabled beside hooks that continue tracking Promises. Advances
-#6764.
+issue #6764.

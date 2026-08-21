@@ -453,6 +453,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         let async_id = (*promise).async_id;
                         let trigger_async_id = (*promise).trigger_async_id;
                         crate::async_hooks::before_promise(async_id, trigger_async_id);
+                        let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         crate::v8::promise_hook_before(promise);
                         // #7497: re-read BOTH from their handles — the two calls
                         // above allocate.
@@ -884,6 +885,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         unsafe { (*next).trigger_async_id }
                     };
                     crate::async_hooks::before_promise(step_async_id, step_trigger_id);
+                    let next = rooted_promise(&next_handle);
                     crate::v8::promise_hook_before(next);
                     // #7497: re-read both across the two calls above.
                     let result = call_async_step_direct(
