@@ -35,7 +35,7 @@
 //! generic pointer-mask branch, which mints a per-object mask and flips the
 //! state to `SIDE_MASK`. That branch needs no descriptor at all.
 
-use crate::{compile_module, AppMetadata, CompileOptions};
+use crate::{compile_module, AppMetadata, CompileOptions, ImportedClass};
 use perry_hir::types::Type;
 use perry_hir::{
     BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
@@ -461,5 +461,99 @@ fn an_undefined_constructor_completion_takes_the_inline_arm() {
         "the runtime call must survive on the cold arm; without it a \
          constructor returning an object would be ignored and a derived one \
          returning a primitive would not throw:\n{ir}"
+    );
+}
+
+fn imported_remote() -> ImportedClass {
+    ImportedClass {
+        name: "Remote".to_string(),
+        local_alias: None,
+        source_prefix: "producer_ts".to_string(),
+        constructor_param_count: 1,
+        has_own_constructor: true,
+        constructor_has_rest: false,
+        has_instance_fields: true,
+        method_names: vec!["read".to_string()],
+        method_param_counts: vec![0],
+        method_has_rest: vec![false],
+        method_has_synthetic_arguments: vec![false],
+        static_field_names: Vec::new(),
+        static_method_names: Vec::new(),
+        getter_names: Vec::new(),
+        setter_names: Vec::new(),
+        parent_name: None,
+        field_names: vec!["child".to_string()],
+        field_types: vec![Type::Union(vec![
+            Type::Named("Remote".to_string()),
+            Type::Null,
+        ])],
+        source_class_id: Some(55),
+        return_shape_imports: Vec::new(),
+    }
+}
+
+/// Import metadata may retain a name that a local class shadows. Such a class
+/// still has its own constructor proof and must not be mistaken for the
+/// body-less imported stub when choosing the at-allocation layout.
+#[test]
+fn a_local_class_shadowing_an_import_keeps_its_layout_proof() {
+    let module = loop_new_module(
+        "Remote",
+        Type::Union(vec![Type::Named("Remote".to_string()), Type::Null]),
+        Expr::Null,
+    );
+    let mut opts = ir_opts();
+    opts.imported_classes.push(imported_remote());
+
+    let ir =
+        String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
+    assert!(
+        ir.contains(TYPED_SHAPE_MINT_CALL) && !ir.contains(DECLARE_CALL),
+        "the local constructor proof was suppressed by a shadowed import:\n{ir}"
+    );
+}
+
+/// A consumer knows an imported class's declared field types, but its HIR stub
+/// deliberately has no constructor body. That absence is not proof that the
+/// fields may be declared before the real cross-module constructor runs.
+///
+/// More subtly, letting the consumer infer the declaration mints a dedicated
+/// typed ShapeId here while the defining module may have minted the ordinary
+/// structural id. Exact method guards compiled in the producer then reject
+/// every instance allocated in this module despite the class id and keys being
+/// identical.
+#[test]
+fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
+    let mut module = Module::new("imported_shape_consumer.ts");
+    module.init = vec![Stmt::Let {
+        id: 20,
+        name: "instance".to_string(),
+        ty: Type::Named("Remote".to_string()),
+        mutable: false,
+        init: Some(Expr::New {
+            class_name: "Remote".to_string(),
+            args: vec![Expr::Null],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+    }];
+
+    let mut opts = ir_opts();
+    opts.imported_classes.push(imported_remote());
+
+    let ir =
+        String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
+    assert!(
+        ir.contains("call i32 @js_object_shape_id_for_keys("),
+        "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
+    );
+    assert!(
+        !ir.contains(TYPED_SHAPE_MINT_CALL),
+        "an imported stub invented a consumer-local typed ShapeId:\n{ir}"
+    );
+    assert!(
+        !ir.contains(DECLARE_CALL) && ir.contains("call void @js_gc_init_typed_shape_layout("),
+        "the imported layout must be validated after its real constructor, not declared before it:\n{ir}"
     );
 }

@@ -1855,6 +1855,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // a class only gets a site entry if module init will actually compose its
     // image. A site entry with no init store would hand every instance a
     // zeroed header, so that direction of the dependency is load-bearing.
+    let imported_stub_names: std::collections::HashSet<&str> = imported_class_stubs
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
     let class_header_image_inits: std::collections::HashMap<String, (u32, u64)> = {
         let mut inits: std::collections::HashMap<String, (u32, u64)> =
             std::collections::HashMap::new();
@@ -1865,13 +1869,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            let typed_layout = crate::lower_call::typed_shape_init::layout_at_allocation_in(
-                &class_table,
-                &class_keys_globals_map,
-                &class_init_chains_map,
-                class_name,
-                field_count,
-            );
+            // An imported stub has no defining constructor body, so this
+            // module cannot prove that its layout is declarable before that
+            // constructor runs. More importantly, minting a typed ShapeId
+            // here while the producer minted an ordinary one gives the same
+            // runtime class two exact identities across modules. Keep the
+            // consumer on the canonical structural identity and validate the
+            // typed layout after the producer's constructor returns.
+            let typed_layout = if imported_stub_names.contains(class_name.as_str()) {
+                crate::target_layout::InlineTypedLayout::None
+            } else {
+                crate::lower_call::typed_shape_init::layout_at_allocation_in(
+                    &class_table,
+                    &class_keys_globals_map,
+                    &class_init_chains_map,
+                    class_name,
+                    field_count,
+                )
+            };
             let gc_packed =
                 crate::target_layout::inline_alloc_gc_packed(&triple, field_count, typed_layout);
             match inits.get(keys_global) {

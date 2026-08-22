@@ -35,6 +35,23 @@ use crate::types::{I32, I64, PTR};
 /// [`crate::typed_shape::class_layout_declarable_at_allocation`], which
 /// documents what they are and why they are enough.
 pub(super) fn layout_declared_at_allocation(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    // A consumer module's imported Class stub carries field names/types but
+    // not the defining constructor body. Treating `constructor: None` as a
+    // proof that those slots may be declared before construction lets the
+    // consumer mint a typed ShapeId while the producer mints the ordinary
+    // structural ShapeId. Besides overstating the constructor proof, that
+    // splits one runtime class across two exact identities, so a direct method
+    // guard compiled in the producer can never accept an instance allocated
+    // by the consumer. Imported classes stay on the validate-after-ctor path
+    // until producer-authored layout proof is part of cross-module metadata.
+    if ctx.imported_class_ctors.contains_key(class_name)
+        && ctx
+            .classes
+            .get(class_name)
+            .is_some_and(|class| class.constructor.is_none())
+    {
+        return false;
+    }
     layout_declared_at_allocation_in(ctx.classes, ctx.class_keys_globals, class_name)
 }
 
