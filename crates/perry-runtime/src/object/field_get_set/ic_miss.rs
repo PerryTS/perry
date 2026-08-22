@@ -1296,9 +1296,11 @@ mod c3c_pic_tests {
     #[test]
     fn unrelated_accessor_does_not_poison_plain_receiver_pic() {
         let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
         let unrelated = crate::object::js_object_alloc(0, 1);
+        let unrelated = scope.root_raw_mut_ptr(unrelated);
         crate::object::set_accessor_descriptor(
-            unrelated as usize,
+            unrelated.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
             "pic_unrelated_accessor".to_string(),
             crate::object::AccessorDescriptor::default(),
         );
@@ -1308,13 +1310,23 @@ mod c3c_pic_tests {
         );
 
         let obj = crate::object::js_object_alloc(0, 8);
+        let obj = scope.root_raw_mut_ptr(obj);
         let key_bytes = b"pic_plain_data";
         let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, 42.0);
+        let key = scope.root_string_ptr(key);
+        crate::object::js_object_set_field_by_name(
+            obj.get_raw_mut_ptr(),
+            key.get_raw_const_ptr(),
+            42.0,
+        );
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
         assert_eq!(
-            super::js_object_get_field_ic_miss(obj, key, &mut cache),
+            super::js_object_get_field_ic_miss(
+                obj.get_raw_mut_ptr(),
+                key.get_raw_const_ptr(),
+                &mut cache,
+            ),
             42.0
         );
         assert_ne!(
@@ -1330,19 +1342,31 @@ mod c3c_pic_tests {
     #[test]
     fn accessor_bearing_receiver_does_not_prime_plain_data_pic() {
         let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
         let obj = crate::object::js_object_alloc(0, 8);
+        let obj = scope.root_raw_mut_ptr(obj);
         let key_bytes = b"pic_guarded_data";
         let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, 17.0);
+        let key = scope.root_string_ptr(key);
+        crate::object::js_object_set_field_by_name(
+            obj.get_raw_mut_ptr(),
+            key.get_raw_const_ptr(),
+            17.0,
+        );
         crate::object::set_accessor_descriptor(
-            obj as usize,
+            obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
             "pic_guarded_data".to_string(),
             crate::object::AccessorDescriptor::default(),
         );
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
-        let via_pic = super::js_object_get_field_ic_miss(obj, key, &mut cache);
-        let via_ladder = super::js_object_get_field_by_name_f64(obj, key);
+        let via_pic = super::js_object_get_field_ic_miss(
+            obj.get_raw_mut_ptr(),
+            key.get_raw_const_ptr(),
+            &mut cache,
+        );
+        let via_ladder =
+            super::js_object_get_field_by_name_f64(obj.get_raw_mut_ptr(), key.get_raw_const_ptr());
         assert_eq!(
             via_pic.to_bits(),
             via_ladder.to_bits(),
