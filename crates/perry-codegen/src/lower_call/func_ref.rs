@@ -1411,7 +1411,19 @@ pub fn try_lower_func_ref_call(
         );
         result
     } else {
-        ctx.block().call(DOUBLE, &fname, &arg_slices)
+        let arena_body = crate::codegen::arena_threaded_function_body_name(&fname);
+        if ctx.func.name == arena_body {
+            let arena_slot = ctx
+                .arena_state_slot
+                .clone()
+                .expect("arena-threaded body must cache its hidden parameter");
+            let arena_state = ctx.block().load(PTR, &arena_slot);
+            let mut recursive_args = arg_slices.clone();
+            recursive_args.push((PTR, &arena_state));
+            ctx.block().call(DOUBLE, &arena_body, &recursive_args)
+        } else {
+            ctx.block().call(DOUBLE, &fname, &arg_slices)
+        }
     };
     // #7154: release the argument roots HERE and nowhere earlier.
     //

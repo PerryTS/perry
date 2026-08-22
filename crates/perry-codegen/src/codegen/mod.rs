@@ -220,6 +220,7 @@ mod typed_abi_opt_report;
 mod unknown_func_tests;
 
 pub(crate) use closure::emit_typed_capture_guard;
+pub(crate) use function::arena_threaded_function_body_name;
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{
     decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
@@ -2157,6 +2158,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // no call-site cap (the cap prices `inlinehint`'s duplication, which
         // the inline bump allocator does not incur), plus direct recursion.
         alloc_hot_functions: crate::collectors::collect_alloc_hot_functions(hir),
+        arena_threaded_functions: crate::collectors::collect_self_recursive_allocators(hir),
         clamp3_functions: hir
             .functions
             .iter()

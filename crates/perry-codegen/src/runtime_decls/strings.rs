@@ -1055,11 +1055,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I32,
         &[I32, I64, I32, PTR, I32, PTR, I32],
     );
-    // Inline bump-allocator state accessor + slow path. The codegen
-    // calls `js_inline_arena_state` once per JS function entry, caches
-    // the returned pointer in a stack slot, and reads/writes the
-    // bump-pointer state directly via fixed GEPs (data=0, offset=8,
-    // size=16). When the bump check fails, it calls
+    // Inline bump-allocator state accessor + slow path. Ordinary allocation
+    // kernels cache `js_inline_arena_state` at function entry. Self-recursive
+    // allocators resolve it in a public wrapper and forward it as a hidden body
+    // parameter. Both forms then read/write the bump-pointer state via fixed
+    // GEPs (data=0, offset=8, size=16). When the bump check fails, codegen calls
     // `js_inline_arena_slow_alloc` which syncs back to the underlying
     // arena, allocates a new block, and returns the new pointer.
     //

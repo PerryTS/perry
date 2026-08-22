@@ -1064,4 +1064,8 @@ pub(crate) struct CrossModuleCtx {
     /// `inlinehint`, whose cost scales with call sites, and the two must not
     /// share an admission rule. See the collector's doc comment.
     pub alloc_hot_functions: std::collections::HashSet<u32>,
+    /// #8591: directly self-recursive functions with at least one `new` site.
+    /// Their internal body carries an `InlineArenaState` pointer through self
+    /// calls so recursive activations do not repeat the runtime accessor.
+    pub arena_threaded_functions: std::collections::HashSet<u32>,
 }

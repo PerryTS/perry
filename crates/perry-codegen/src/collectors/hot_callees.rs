@@ -216,6 +216,27 @@ pub fn collect_alloc_hot_functions(hir: &Module) -> HashSet<u32> {
     hot
 }
 
+/// Directly self-recursive top-level functions that also contain at least one
+/// `new` site in their own body. These are the functions where threading the
+/// stable inline-arena pointer through self calls can remove a runtime lookup
+/// at every recursive level.
+pub fn collect_self_recursive_allocators(hir: &Module) -> HashSet<u32> {
+    hir.functions
+        .iter()
+        .filter_map(|f| {
+            let mut calls = HotCalleeScan::default();
+            walk_stmts(&f.body, false, &mut calls);
+            if !calls.call_counts.contains_key(&f.id) {
+                return None;
+            }
+
+            let mut sites = HashMap::new();
+            count_alloc_sites_in_stmts(&f.body, Some(f.id), &mut sites);
+            (sites.get(&f.id).copied().unwrap_or(0) != 0).then_some(f.id)
+        })
+        .collect()
+}
+
 fn record_callee(callee: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
     if let Expr::FuncRef(id) = callee {
         *scan.call_counts.entry(*id).or_insert(0) += 1;

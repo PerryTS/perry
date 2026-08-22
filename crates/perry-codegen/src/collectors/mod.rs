@@ -68,6 +68,7 @@ pub(crate) use hir_facts::{
 };
 pub(crate) use hot_callees::{
     collect_alloc_hot_functions, collect_hot_loop_callees, collect_recursion_participants,
+    collect_self_recursive_allocators,
 };
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,

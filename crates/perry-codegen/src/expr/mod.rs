@@ -24,7 +24,7 @@ use crate::native_value::{
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{is_bigint_expr, is_bool_expr, is_numeric_expr};
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
 // Issue #1098: expr.rs split into expr/ submodules. These are pure
 // mechanical moves of self-contained helper clusters out of this file;
@@ -831,13 +831,9 @@ pub(crate) struct FnCtx<'a> {
     /// the trust into a four-instruction runtime tag test instead.
     pub declared_only_numeric_locals: std::collections::HashSet<u32>,
 
-    /// Cached pointer to this function's `InlineArenaState` slot —
-    /// allocated lazily on the first `new ClassName()` site that uses
-    /// the inline bump-allocator path. The slot lives in the function
-    /// entry block (via `LlFunction::entry_init_call_ptr`) and holds
-    /// the result of a one-time `js_inline_arena_state()` call. Each
-    /// subsequent `new` in the function loads from this slot instead
-    /// of paying a TLS access per allocation.
+    /// Cached pointer to this function's `InlineArenaState` slot. Ordinary
+    /// functions populate it with the runtime accessor; arena-threaded
+    /// recursive bodies seed it from their hidden pointer parameter.
     ///
     /// `None` until the first `new` lowers; thereafter `Some(slot_name)`
     /// (e.g. `"%r3"`).
@@ -1858,6 +1854,22 @@ fn inline_cache_global_name_for_prefix(module_prefix: &str, site_id: u32) -> Str
     } else {
         format!("perry_ic_{module_prefix}__{site_id}")
     }
+}
+
+/// #8591: return this invocation's cached inline-arena state.
+///
+/// Recursive allocator bodies may seed the cache from a hidden parameter;
+/// every other function lazily emits the ordinary entry accessor when its
+/// first inline allocation site is lowered.
+pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
+    let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
+        slot
+    } else {
+        let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
+        ctx.arena_state_slot = Some(slot.clone());
+        slot
+    };
+    ctx.block().load(PTR, &arena_state_slot)
 }
 
 #[cfg(test)]

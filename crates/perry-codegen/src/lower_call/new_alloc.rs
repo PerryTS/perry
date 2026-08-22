@@ -18,7 +18,7 @@
 
 use perry_hir::Class;
 
-use crate::expr::FnCtx;
+use crate::expr::{load_inline_arena_state, FnCtx};
 use crate::types::{I32, I64, I8, PTR};
 
 /// #7469: is the `new` site being lowered inside a **loop body**?
@@ -243,9 +243,11 @@ fn emit_instance_alloc_inner(
     // bump-allocator IR — no function call into the runtime at all on
     // the hot path. The runtime exposes a `InlineArenaState` struct
     // (data ptr at offset 0, current bump offset at offset 8, current
-    // block size at offset 16) via `js_inline_arena_state()`. We call
-    // that ONCE per JS function entry (cached in `arena_state_slot`)
-    // and then emit a 5-instruction bump check + GcHeader/ObjectHeader
+    // block size at offset 16) via `js_inline_arena_state()`. Ordinary
+    // allocation kernels cache that pointer at entry; self-recursive
+    // allocators receive it from their public wrapper and forward it through
+    // recursive calls. We then emit a 5-instruction bump check +
+    // GcHeader/ObjectHeader
     // store sequence at every `new ClassName()` site. The slow path
     // (block overflow) calls `js_inline_arena_slow_alloc` which syncs
     // the inline state back to the underlying arena, allocates a new
@@ -478,21 +480,9 @@ fn emit_instance_alloc_inner(
             let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
             let total_size_str = total_size.to_string();
 
-            // Lazy: allocate the per-function arena-state slot on the
-            // first `new` we see. The slot init (`call @js_inline_arena_state`
-            // + store) lives in the entry block via `entry_init_call_ptr`,
-            // so it dominates every reachable use.
-            let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
-                slot
-            } else {
-                let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
-                ctx.arena_state_slot = Some(slot.clone());
-                slot
-            };
-
             // Inline bump-allocator IR.
+            let state_ptr = load_inline_arena_state(ctx);
             let blk = ctx.block();
-            let state_ptr = blk.load(PTR, &arena_state_slot);
 
             // offset = state.offset (at byte offset 8 in InlineArenaState).
             // The offset is invariant 8-aligned: arena blocks start at offset 0

@@ -317,6 +317,32 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
     );
 }
 
+/// #8591: the public entry resolves the thread's stable arena state once, and
+/// the internal recursive body forwards it through every self call.
+#[test]
+fn a_self_recursive_allocator_threads_arena_state_through_self_calls() {
+    assert_inline_new_not_forced();
+    let mut module = walk_module(true);
+    module.functions[0].params[0].ty = Type::Any;
+    module.functions[0].return_type = Type::Any;
+    let ir = ir_for(module);
+    assert_eq!(
+        ir.matches("call ptr @js_inline_arena_state()").count(),
+        1,
+        "only the public entry wrapper should resolve arena state:\n{ir}"
+    );
+    assert!(
+        ir.contains("define internal double @perry_fn_alloc_hot_ts__walk.__arena(")
+            && ir.contains("ptr %perry_arena_state"),
+        "the recursive allocator needs a hidden arena-state body parameter:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @perry_fn_alloc_hot_ts__walk.__arena(double")
+            && ir.contains(", ptr %r"),
+        "the public entry and recursive calls must pass the arena-state pointer:\n{ir}"
+    );
+}
+
 /// #8122: the header prefix must be ONE vector store per allocation, composed
 /// ONCE — at module init, into the per-class image global — never two scalar
 /// stores whose 40-bit GcHeader constant LLVM rematerialises (`mov` + two
@@ -388,6 +414,10 @@ fn a_cold_straight_line_function_keeps_the_outlined_allocator() {
     assert!(
         !ir.contains(INLINE_SLOW_CALL),
         "the inline bump allocator reached a cold site:\n{ir}"
+    );
+    assert!(
+        !ir.contains(".__arena("),
+        "a non-recursive function paid for an arena-threaded entry wrapper:\n{ir}"
     );
     assert!(
         ir.contains(STAMPED_OUTLINED_CALL)

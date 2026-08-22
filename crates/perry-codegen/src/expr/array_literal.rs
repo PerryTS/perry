@@ -27,7 +27,7 @@ use perry_hir::Expr;
 
 use super::{
     emit_jsvalue_slot_store_on_block, expr_produces_non_pointer_bits_by_construction,
-    nanbox_pointer_inline, FnCtx,
+    load_inline_arena_state, nanbox_pointer_inline, FnCtx,
 };
 use crate::rooting;
 use crate::type_analysis::is_numeric_expr;
@@ -127,21 +127,11 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (n as u64) * ELEMENT_SIZE;
             let total_size_str = total_size.to_string();
 
-            // Lazy per-function slot for the arena state pointer. Reused for
-            // `new ClassName()` inline allocs; first one to hit creates it.
-            let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
-                slot
-            } else {
-                let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
-                ctx.arena_state_slot = Some(slot.clone());
-                slot
-            };
-
             // Load state + compute bump check. `total_size` is always a
             // multiple of 8, every prior alloc rounds offset to 8, and blocks
             // start 8-aligned, so no align-up step is needed.
+            let state_ptr = load_inline_arena_state(ctx);
             let blk = ctx.block();
-            let state_ptr = blk.load(PTR, &arena_state_slot);
             let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
             let offset_val = blk.load(I64, &offset_field_ptr);
             let aligned_off = offset_val.clone();
