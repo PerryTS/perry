@@ -51,7 +51,6 @@ for compatibility guarantees.
 - **dayjs** / **moment** — Date manipulation
 - **uuid** — UUID generation
 - **nanoid** — ID generation
-- **slugify** — String slugification
 - **validator** — String validation
 
 ### CLI & Data

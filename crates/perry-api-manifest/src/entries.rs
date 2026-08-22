@@ -48,7 +48,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dotenv/config",  // dotenv's auto-load-on-import subpath
     "jsonwebtoken",   // JWT sign/verify
     "nanoid",         // compact URL-safe ID generation
-    "slugify",        // string → URL slug
     "validator",      // string validators/sanitizers
     "ethers",         // Ethereum library (utils/wallet/ABI)
     "mongodb",        // MongoDB driver

@@ -70,11 +70,6 @@ pub mod moment;
 #[cfg(feature = "bundled-lru-cache")]
 pub mod lru_cache;
 pub mod readline;
-// slugify is feature-gated as of v0.5.536 so the well-known bindings
-// flip can route `import 'slugify'` to perry-ext-slugify cleanly.
-// Default-on through `default = ["full"]`.
-#[cfg(feature = "bundled-slugify")]
-pub mod slugify;
 // string_decoder — issue #848. Native StringDecoder with real `write` /
 // `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
 // through HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH.
@@ -111,8 +106,6 @@ pub use lru_cache::*;
 pub use moment::*;
 pub use querystring::*;
 pub use readline::*;
-#[cfg(feature = "bundled-slugify")]
-pub use slugify::*;
 pub use string_decoder::*;
 pub use vm::*;
 pub use worker_threads::*;

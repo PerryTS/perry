@@ -9,7 +9,7 @@
 // if any snippet drifts from the real native binding, CI fails.
 //
 // Only the packages that have a wired NativeModSig dispatch (uuid, nanoid,
-// slugify, validator) are anchored here. lodash / dayjs / moment have
+// validator) are anchored here. lodash / dayjs / moment have
 // runtime declarations but no dispatch path from user-visible imports yet,
 // so the markdown page keeps those snippets as `,no-test` with a clear
 // status note above each fence.
@@ -27,13 +27,6 @@ import { nanoid } from "nanoid"
 const nid = nanoid() // Default 21 chars
 console.log(nid)
 // ANCHOR_END: nanoid
-
-// ANCHOR: slugify
-import slugify from "slugify"
-
-const slug = slugify("Hello World!")
-console.log(slug) // "hello-world"
-// ANCHOR_END: slugify
 
 // ANCHOR: validator
 import validator from "validator"

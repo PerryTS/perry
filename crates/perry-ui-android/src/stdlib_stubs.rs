@@ -1427,14 +1427,6 @@ pub extern "C" fn js_set_property() -> i64 {
 // stubs in perry-runtime/src/closure.rs (those three FFIs were never wired in
 // either perry-stdlib or perry-ext-sharp).
 #[no_mangle]
-pub extern "C" fn js_slugify() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_slugify_strict() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_sqlite_close() -> i64 {
     0
 }

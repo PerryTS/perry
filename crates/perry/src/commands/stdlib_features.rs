@@ -190,11 +190,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
             &["container"]
         }
 
-        // Slugify gained the `bundled-slugify` feature in v0.5.536 so
-        // the well-known flip can swap it out for perry-ext-slugify.
-        // Default-on via `default = ["full"]` keeps existing
-        // `import 'slugify'` calls byte-identical.
-        "slugify" => &["bundled-slugify"],
         // lru-cache: feature-gated v0.5.539; well-known flip
         // routes to perry-ext-lru-cache.
         "lru-cache" => &["bundled-lru-cache"],

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2053 entries across 134 modules
+// Coverage: 2051 entries across 133 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3661,13 +3661,6 @@ declare module "sharp" {
   export default function (p0: string): any;
   /** stdlib */
   export function sharp(p0: string): any;
-}
-
-declare module "slugify" {
-  /** stdlib */
-  export default function (p0: string, p1?: any): string;
-  /** stdlib */
-  export function slugify(p0: string, p1?: any): string;
 }
 
 declare module "sqlite" {

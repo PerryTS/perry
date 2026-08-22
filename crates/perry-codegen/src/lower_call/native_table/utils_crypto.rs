@@ -157,34 +157,6 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_STR,
     },
-    // ========== slugify ==========
-    // Second arg is npm slugify's replacement-or-options overload: a
-    // plain string ('_') OR an options object ({ replacement, lower,
-    // strict, trim }). It must cross as raw NaN-box bits (NA_JSV) so
-    // the runtime can distinguish the two — the old NA_STR coercion
-    // JSON-stringified the object and its first char '{' became the
-    // separator ("hello{world"). Missing arg pads to TAG_UNDEFINED →
-    // runtime defaults ("-" separator, no lower/strict, trim).
-    // "default" for `import slugify from 'slugify'; slugify(s)` (HIR emits method:"default").
-    // "slugify" for `import { slugify } from 'slugify'; slugify(s)` (named import).
-    NativeModSig {
-        module: "slugify",
-        has_receiver: false,
-        method: "default",
-        class_filter: None,
-        runtime: "js_slugify_with_options",
-        args: &[NA_STR, NA_JSV],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "slugify",
-        has_receiver: false,
-        method: "slugify",
-        class_filter: None,
-        runtime: "js_slugify_with_options",
-        args: &[NA_STR, NA_JSV],
-        ret: NR_STR,
-    },
     // ========== validator ==========
     NativeModSig {
         module: "validator",

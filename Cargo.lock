@@ -6147,13 +6147,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-slugify"
-version = "0.5.1519"
-dependencies = [
- "perry-ffi",
-]
-
-[[package]]
 name = "perry-ext-streams"
 version = "0.5.1519"
 dependencies = [

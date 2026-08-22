@@ -68,7 +68,7 @@ incompatible changes to anything in this document bump perry-ffi's
 ## Surface (v0.5.x)
 
 The current surface is *deliberately minimal* — just enough to port
-the simplest stdlib wrappers (`dotenv`, `nanoid`, `uuid`, `slugify`).
+the simplest remaining stdlib wrappers (`dotenv`, `nanoid`, `uuid`).
 It will grow as real wrappers demand it; we'd rather under-design
 and add than commit to a helper we later regret.
 
@@ -166,9 +166,9 @@ moves out of `perry-stdlib` over the course of #466 Phase 5.
   'dotenv'` resolves to `perry-ext-dotenv` automatically — until it
   lands, `import 'dotenv'` continues to bind to the
   `perry-stdlib` copy.
-- [#466 Phase 5] ports the rest of the wrappers in size order
-  (`uuid`, `nanoid`, `slugify`, `bcrypt`, `argon2`, then `ws`, then
-  the database batch).
+- [#466 Phase 5] ports the rest of the wrappers in size order. Ordinary
+  source packages can subsequently retire those wrappers; `slugify` did so
+  under #5716 once its installed upstream package passed source parity.
 
 [#466 Phase 1]: https://github.com/PerryTS/perry/issues/466
 [#466 Phase 2]: https://github.com/PerryTS/perry/issues/466

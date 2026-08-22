@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 84 unique FFI names, 85 declarations.
+// Inventory entries: 81 unique FFI names, 82 declarations.
 
 const testFfiSurfaceStdlibCoreVersion = 1;
 if (testFfiSurfaceStdlibCoreVersion !== 1) {
@@ -92,10 +92,6 @@ crates/perry-stdlib/src/ratelimit.rs:
   - js_ratelimit_remaining
   - js_ratelimit_reset
   - js_ratelimit_reward
-crates/perry-stdlib/src/slugify.rs:
-  - js_slugify
-  - js_slugify_strict
-  - js_slugify_with_options
 crates/perry-stdlib/src/sqlite.rs:
   - js_sqlite_begin_transaction
   - js_sqlite_close

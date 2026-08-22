@@ -71,16 +71,6 @@ yet — track at issue #200.
 {{#include ../../examples/stdlib/utilities/snippets.ts:nanoid}}
 ```
 
-## slugify
-
-The single-arg form is wired. The options-object form
-`slugify("Hello World!", { lower: true })` has a runtime function
-(`js_slugify_with_options`) but no dispatch yet — track at issue #200.
-
-```typescript
-{{#include ../../examples/stdlib/utilities/snippets.ts:slugify}}
-```
-
 ## validator
 
 ```typescript

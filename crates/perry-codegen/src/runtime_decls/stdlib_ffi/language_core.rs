@@ -1,7 +1,7 @@
 //! Core language / runtime FFI declarations (extracted from stdlib_ffi.rs):
 //! Date, String, Object, Math, Atomics, Number, JSON, Map/Set, Error, Promise,
 //! text encoding, closures, NaN-boxing, GC, console, fetch, net, performance,
-//! async-step, slugify, class registration, runtime init/module-loader,
+//! async-step, class registration, runtime init/module-loader,
 //! well-known Symbol hooks, Object.groupBy, JSX runtime adapter.
 
 use crate::module::LlModule;
@@ -308,10 +308,6 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
-
-    // ========== Slugify ==========
-    module.declare_function("js_slugify", I64, &[I64]);
-    module.declare_function("js_slugify_strict", I64, &[I64]);
 
     // ========== Class registration ==========
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);

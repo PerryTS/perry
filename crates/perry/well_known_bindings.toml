@@ -91,21 +91,6 @@ repo = "https://github.com/uuidjs/uuid"
 ref = "70177807e9229dfacde2038dc1e722f1828f358a"
 ported-at = "14.0.1"
 date = "2026-07-30"
-[bindings.slugify]
-crate = "perry-ext-slugify"
-lib = "perry_ext_slugify"
-tracking = "#466"
-# Partial: `remove`, `locale`, the complete char map, and `slugify.extend`
-# are not implemented by this wrapper.
-compat = "partial"
-
-[bindings.slugify.upstream]
-version = "1.6.9"
-sha256 = "19ab247286f687aa8803b3615eab0779f517904ec96298e5005ff4de77ff9948"
-repo = "https://github.com/simov/slugify"
-ref = "78c6ee658d61d81a3a33bc1f558b50013be9ccf6"
-ported-at = "1.6.9"
-date = "2026-07-30"
 [bindings.bcrypt]
 crate = "perry-ext-bcrypt"
 lib = "perry_ext_bcrypt"

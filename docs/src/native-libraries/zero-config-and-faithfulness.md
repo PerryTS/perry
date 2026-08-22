@@ -63,11 +63,15 @@ effective marker; missing targets and alias cycles fail closed as partial.
 
 The current third-party wrappers remain partial. Several superficially small
 wrappers still differ materially from their pinned packages: the UUID wrapper,
-for example, lacks exports including `parse` and `stringify`; slugify lacks
-`remove`, `locale`, the complete character map, and `extend`; nanoid flattens a
+for example, lacks exports including `parse` and `stringify`; nanoid flattens a
 curried API and omits exports; and dotenv implements only part of its current
 surface. A `full` marker should be added only after the implementation and
 conformance tests cover the complete pinned surface.
+
+Ordinary packages that have completed their source migration are not listed in
+the native manifest or this table. They must be installed in the application,
+and Perry compiles their package source through the normal automatic routing
+path. `slugify` is the first completed migration under this policy.
 
 ## Diagnostics and strict mode
 

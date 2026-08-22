@@ -50,7 +50,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     declare_streams_events(module);
     // Date, String, Object, Math, Atomics, Number, JSON, Map/Set, Error,
     // Promise, text encoding, closures, NaN-boxing, GC, console, fetch, net,
-    // performance, async-step, slugify, class registration, runtime init/
+    // performance, async-step, class registration, runtime init/
     // module-loader, well-known Symbol hooks, Object.groupBy, JSX adapter.
     declare_core(module);
 }

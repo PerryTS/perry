@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2990 entries across 136 modules.
+Total: 2988 entries across 135 modules.
 
 ## Modules
 
@@ -113,7 +113,6 @@ Total: 2990 entries across 136 modules.
 - [`repl`](#repl)
 - [`sea`](#sea)
 - [`sharp`](#sharp)
-- [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
 - [`stream`](#stream)
 - [`stream/consumers`](#streamconsumers)
@@ -3264,13 +3263,6 @@ Total: 2990 entries across 136 modules.
 - `trim` — instance
 - `webp` — instance
 - `width` — instance
-
-## `slugify`
-
-### Methods
-
-- `default` — module
-- `slugify` — module
 
 ## `sqlite`
 

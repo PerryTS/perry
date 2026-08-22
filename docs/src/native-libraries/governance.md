@@ -5,6 +5,12 @@ packages. A package-specific Rust rewrite can be useful as a temporary bridge,
 but it is not the default compatibility strategy and does not demonstrate that
 Perry can compile the package it replaces.
 
+Applications are expected to install their declared dependencies with npm,
+Bun, pnpm, or another package manager. Source-package migrations therefore do
+not preserve a zero-install fallback: after a bundled rewrite is removed, the
+import resolves from the application's installed dependency graph like any
+other npm package.
+
 ## Policy
 
 Use this order when adding package compatibility:
@@ -59,6 +65,14 @@ crates. Distribution builds use the inventory below as their explicit shipping
 set; changing that set therefore requires changing the recorded decision and
 passing the governance check.
 
+## Completed source migrations
+
+- `slugify@1.6.9` compiles from its installed CommonJS source through the
+  default automatic package-routing path. The #5716 E2E test compares Perry
+  with Node across transliteration, replacement, strict/trim options, locale,
+  regular-expression removal, and `slugify.extend`. Its former
+  `perry-ext-slugify` and `perry-stdlib` implementations have been removed.
+
 ## Current inventory
 
 `workspace-architecture.json` is the source of truth for the crate decision and
@@ -102,7 +116,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-pg` | `pg` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ratelimit` | `rate-limiter-flexible` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-sharp` | `sharp` | External integration | Move to an external native package | Bundled; migration pending |
-| `perry-ext-slugify` | `slugify` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-streams` | `streams` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-typescript` | `typescript` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-undici` | `undici` | Source package | Compile the upstream package source | Bundled; migration pending |

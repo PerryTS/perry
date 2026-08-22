@@ -13,7 +13,6 @@ members = [
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
     "crates/perry-ext-uuid",
-    "crates/perry-ext-slugify",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
     "crates/perry-ext-jsonwebtoken",
@@ -460,7 +459,6 @@ perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }
-perry-ext-slugify = { path = "crates/perry-ext-slugify" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }

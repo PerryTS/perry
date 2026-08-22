@@ -20,7 +20,7 @@ crate-type = ["rlib"]
 default = ["full"]
 
 # Full stdlib - everything included
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -32,12 +32,6 @@ core = []
 # end up with two copies of `_js_dotenv_*` symbols. Programs that
 # don't import dotenv pay nothing for this either way.
 bundled-dotenv = []
-
-# In-tree implementation of `slugify` — same gating contract as
-# `bundled-dotenv` (#466 Phase 4 step 2). Default-on through
-# `default = ["full"]`; the well-known flip strips this when
-# `import 'slugify'` resolves to perry-ext-slugify instead.
-bundled-slugify = []
 
 # In-tree implementation of `lru-cache`. Default-on through
 # `default = ["full"]`; flipped to perry-ext-lru-cache by the

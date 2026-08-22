@@ -32,7 +32,7 @@
 //! # Today's surface (v0.5.x)
 //!
 //! Just enough to port the smallest stdlib wrappers (`dotenv`,
-//! `nanoid`, `uuid`, `slugify`) — read a string, allocate a string.
+//! `nanoid`, `uuid`) — read a string, allocate a string.
 //! The minimal set is intentional: every helper added is a forever
 //! commitment, and we'd rather grow it as real wrappers demand than
 //! over-design up front.

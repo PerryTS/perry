@@ -41,4 +41,4 @@ The crate ships its own semver, currently tracking Perry's minor version (`0.5.x
 
 ## Surface
 
-See [`lib.rs`](src/lib.rs) for the full list. Today's surface covers what the smallest stdlib wrappers (`dotenv`, `nanoid`, `uuid`, `slugify`) need: allocate a JS string, read a JS string back, register a GC root scanner, hand objects/arrays/closures in and out of FFI calls.
+See [`lib.rs`](src/lib.rs) for the full list. Today's surface covers what the smallest stdlib wrappers (`dotenv`, `nanoid`, `uuid`) need: allocate a JS string, read a JS string back, register a GC root scanner, hand objects/arrays/closures in and out of FFI calls.
