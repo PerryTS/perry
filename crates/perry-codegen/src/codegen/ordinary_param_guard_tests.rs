@@ -5,7 +5,7 @@
 
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type};
-use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, Param, Stmt, TypeAlias};
+use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, Param, Stmt, TypeAlias, UpdateOp};
 use std::collections::HashMap;
 
 fn function_ir<'a>(ir: &'a str, marker: &str) -> &'a str {
@@ -331,6 +331,128 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
         root_slots(generic),
         2,
         "the annotation-agnostic fallback must retain roots for both the receiver and n:\n{generic}"
+    );
+}
+
+#[test]
+fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
+    let read = Function {
+        id: 1,
+        name: "read".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 10,
+            name: "table".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 11,
+                name: "i".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::Let {
+                id: 12,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::While {
+                condition: Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(11)),
+                    right: Box::new(Expr::Integer(2)),
+                },
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        12,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::BitXor,
+                            left: Box::new(Expr::LocalGet(12)),
+                            right: Box::new(Expr::IndexGet {
+                                object: Box::new(Expr::LocalGet(10)),
+                                index: Box::new(Expr::Update {
+                                    id: 11,
+                                    op: UpdateOp::Increment,
+                                    prefix: true,
+                                }),
+                            }),
+                        }),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(
+                        12,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::BitXor,
+                            left: Box::new(Expr::LocalGet(12)),
+                            right: Box::new(Expr::IndexGet {
+                                object: Box::new(Expr::LocalGet(10)),
+                                index: Box::new(Expr::Update {
+                                    id: 11,
+                                    op: UpdateOp::Increment,
+                                    prefix: true,
+                                }),
+                            }),
+                        }),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(12))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("prefix_update_typed_array.ts");
+    module.functions.push(read);
+    module.init.extend([
+        Stmt::Let {
+            id: 20,
+            name: "table".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::TypedArrayNew {
+                kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+                arg: Some(Box::new(Expr::Integer(4))),
+            }),
+        },
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![Expr::LocalGet(20)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    ]);
+
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let specialized = function_ir(&ir, "read$spec_ta4x4(");
+
+    assert!(
+        specialized.contains("load i32"),
+        "the guarded descriptor clone must load Int32Array elements natively:\n{specialized}"
+    );
+    assert!(
+        !specialized.contains("js_typed_array_index_get_dynamic")
+            && !specialized.contains("js_typed_array_get"),
+        "both prefix-update reads must retain their proven element ranges:\n{specialized}"
     );
 }
 

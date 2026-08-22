@@ -339,6 +339,22 @@ fn int_range_expr_inner(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
+        // An update expression is both a read and a write, but its returned
+        // value still has an exact range relative to the value on entry:
+        // postfix returns the old range, prefix returns the stepped range.
+        // Keeping that distinction lets a proven loop counter remain an
+        // integer element key in `table[++i]` without truncating a fractional
+        // or out-of-range dynamic property key into an i32 index.
+        Expr::Update { id, op, prefix } => {
+            let old = int_range_for_local(ctx, *id, seen)?;
+            if !prefix {
+                return Some(old);
+            }
+            match op {
+                UpdateOp::Increment => checked_range_add(old, IntRange::exact(1)),
+                UpdateOp::Decrement => checked_range_sub(old, IntRange::exact(1)),
+            }
+        }
         Expr::IndexGet { object, index } => int_typed_array_load_range(ctx, object, index, seen),
         Expr::Binary { op, left, right } => {
             // Result-shape rules that need no range on one (or either)
@@ -570,12 +586,36 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
 
 pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: UpdateOp) {
     ctx.int_range_aliases.remove(&id);
-    let remains_nonnegative = match op {
-        UpdateOp::Increment => ctx.nonnegative_integer_locals.contains(&id),
-        UpdateOp::Decrement => int_range_for_local(ctx, id, &mut std::collections::HashSet::new())
-            .is_some_and(|range| range.min >= 1),
-    };
-    ctx.int_range_facts.retain(|fact| fact.local_id != id);
+    let was_nonnegative = ctx.nonnegative_integer_locals.contains(&id);
+
+    // A dominating loop/branch fact remains useful after ++/--, but the write
+    // must not make it narrower. Dropping the fact made the second `P[++i]` in
+    // a Blowfish round opaque even after the first one had proved `[1, 16]`.
+    // Widen each active fact to cover both the old and stepped intervals. The
+    // union is conservative even when an update is conditional: lowering one
+    // branch cannot make the fact assume that the other branch updated too.
+    ctx.int_range_facts.retain_mut(|fact| {
+        if fact.local_id != id {
+            return true;
+        }
+        let shifted = match op {
+            UpdateOp::Increment => checked_range_add(fact.range, IntRange::exact(1)),
+            UpdateOp::Decrement => checked_range_sub(fact.range, IntRange::exact(1)),
+        };
+        if let Some(range) = shifted {
+            fact.range = IntRange {
+                min: fact.range.min.min(range.min),
+                max: fact.range.max.max(range.max),
+            };
+            true
+        } else {
+            false
+        }
+    });
+
+    let active_range = int_range_for_local(ctx, id, &mut std::collections::HashSet::new());
+    let remains_nonnegative = active_range.is_some_and(IntRange::is_nonnegative)
+        || matches!(op, UpdateOp::Increment) && was_nonnegative;
     if remains_nonnegative {
         ctx.nonnegative_integer_locals.insert(id);
     } else {
