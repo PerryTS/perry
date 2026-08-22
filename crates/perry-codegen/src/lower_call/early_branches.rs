@@ -21,7 +21,7 @@ use crate::expr::{
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::rooting::{with_rooted_group, RootedGroup};
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 /// Materialise the parallel `[N x double]` argument buffer
 /// `js_native_call_method_str_key` / `js_native_call_method_value` read, from
@@ -448,6 +448,67 @@ pub fn try_lower_closure_typed_local_call(
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
             };
+            let undef_this =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            // A method callback parameter can be resolved once at entry when
+            // its actual value is a directly callable arrow. Keep the full
+            // dispatcher as a nullable-target fallback: TypeScript's function
+            // annotation is not a runtime proof, and ordinary functions must
+            // still receive receiverless `this === undefined` semantics.
+            //
+            // Exact immutable aliases (`const cb = callback`) have the same
+            // identity whenever their read succeeds. A TDZ read throws while
+            // lowering `callee` above, before this dispatch arm is reached.
+            if let Some(target) = ctx
+                .resolved_arrow_callback_targets
+                .get(&(*id, lowered_args.len()))
+                .cloned()
+            {
+                let fast_ok = ctx.block().icmp_ne(PTR, &target, "null");
+                let fast_idx = ctx.new_block("callback_arrow_direct.fast");
+                let fallback_idx = ctx.new_block("callback_arrow_direct.fallback");
+                let merge_idx = ctx.new_block("callback_arrow_direct.merge");
+                let fast_label = ctx.block_label(fast_idx);
+                let fallback_label = ctx.block_label(fallback_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&fast_ok, &fast_label, &fallback_label);
+
+                ctx.current_block = fast_idx;
+                let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
+                    Vec::with_capacity(lowered_args.len() + 1);
+                direct_args.push((I64, &closure_handle));
+                direct_args.extend(lowered_args.iter().map(|value| (DOUBLE, value.as_str())));
+                let fast_value = ctx.block().call_indirect(DOUBLE, &target, &direct_args);
+                let after_fast = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+
+                ctx.current_block = fallback_idx;
+                let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
+                let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+                let mut fallback_args: Vec<(crate::types::LlvmType, &str)> =
+                    Vec::with_capacity(lowered_args.len() + 1);
+                fallback_args.push((I64, &closure_handle));
+                fallback_args.extend(lowered_args.iter().map(|value| (DOUBLE, value.as_str())));
+                let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
+                crate::rooting::implicit_this_restore(ctx, prev_this);
+                let after_fallback = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+
+                ctx.current_block = merge_idx;
+                let merged = ctx.block().phi(
+                    DOUBLE,
+                    &[
+                        (fast_value.as_str(), after_fast.as_str()),
+                        (fallback_value.as_str(), after_fallback.as_str()),
+                    ],
+                );
+                callee_group.release(ctx);
+                return Ok(Some(merged));
+            }
             // Receiverless call of a closure-typed local: bind `this` to
             // undefined for the duration of the call (OrdinaryCallBindThis,
             // #3576) so an enclosing method dispatch's IMPLICIT_THIS does
@@ -457,8 +518,6 @@ pub fn try_lower_closure_typed_local_call(
             // pays nothing (#5030). When the typed-feedback guard falls back
             // (the receiver is NOT the statically-mapped closure), the
             // fallback block does its own reset — that callee is unknown.
-            let undef_this =
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let known_func_id = ctx.local_closure_func_ids.get(id).copied();
             let callee_reads_this = known_func_id
                 .map(|fid| ctx.funcs_reading_dynamic_this.contains(&fid))

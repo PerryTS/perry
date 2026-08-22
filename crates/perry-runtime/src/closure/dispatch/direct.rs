@@ -82,6 +82,24 @@ pub(crate) fn resolve_direct_func_ptr(
     Some(func_ptr)
 }
 
+/// Resolve one receiverless arrow callback at a method boundary. Ordinary
+/// functions stay on `js_closure_callN`, which is responsible for binding a
+/// bare call's dynamic `this` to `undefined`; bound/rest/padded calls likewise
+/// retain their full dispatcher semantics.
+#[no_mangle]
+pub extern "C" fn js_closure_resolve_arrow_direct_call(
+    closure: *const ClosureHeader,
+    arity: u32,
+) -> *const u8 {
+    let Some(func_ptr) = resolve_direct_func_ptr(closure, arity) else {
+        return std::ptr::null();
+    };
+    resolve_strategy(func_ptr)
+        .is_arrow()
+        .then_some(func_ptr)
+        .unwrap_or(std::ptr::null())
+}
+
 macro_rules! define_direct_call_site {
     (
         $(#[$meta:meta])*
@@ -182,8 +200,42 @@ mod tests {
         a + b
     }
 
+    extern "C" fn ordinary3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+        a + b + c
+    }
+
+    extern "C" fn rest_body(_c: *const ClosureHeader, _a: f64, _rest: f64) -> f64 {
+        0.0
+    }
+
     fn closure_for(body: *const u8) -> *const ClosureHeader {
         crate::closure::js_closure_alloc(body, 0)
+    }
+
+    #[test]
+    fn exported_resolver_admits_only_directly_callable_arrows() {
+        let arrow = closure_for(add3 as *const u8);
+        crate::closure::js_register_closure_arity(add3 as *const u8, 3);
+        crate::closure::js_register_closure_arrow_function(add3 as *const u8);
+        assert_eq!(
+            js_closure_resolve_arrow_direct_call(arrow, 3),
+            add3 as *const u8
+        );
+        assert!(js_closure_resolve_arrow_direct_call(arrow, 2).is_null());
+
+        let ordinary = closure_for(ordinary3 as *const u8);
+        crate::closure::js_register_closure_arity(ordinary3 as *const u8, 3);
+        assert!(js_closure_resolve_arrow_direct_call(ordinary, 3).is_null());
+
+        let rest = closure_for(rest_body as *const u8);
+        crate::closure::js_register_closure_rest(rest_body as *const u8, 1);
+        crate::closure::js_register_closure_arrow_function(rest_body as *const u8);
+        assert!(js_closure_resolve_arrow_direct_call(rest, 3).is_null());
+
+        for sentinel in [BOUND_METHOD_FUNC_PTR, BOUND_FUNCTION_FUNC_PTR] {
+            let bound = closure_for(sentinel);
+            assert!(js_closure_resolve_arrow_direct_call(bound, 3).is_null());
+        }
     }
 
     #[test]

@@ -1311,17 +1311,10 @@ impl LlBlock {
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {
             let arg_str = format_args(args);
-            let param_types: Vec<&str> = args.iter().map(|(t, _)| *t).collect();
             let cont = format!("eh.cont{}", self.counter.next());
             self.emit(format!(
-                "{} = invoke {} ({})* {}({}) to label %{} unwind label %{}",
-                r,
-                ret_ty,
-                param_types.join(", "),
-                fn_ptr,
-                arg_str,
-                cont,
-                lpad
+                "{} = invoke {} {}({}) to label %{} unwind label %{}",
+                r, ret_ty, fn_ptr, arg_str, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1568,6 +1561,29 @@ mod tests {
         assert!(b
             .to_ir()
             .contains("call double @js_nanbox_string(i64 %handle)"));
+    }
+
+    #[test]
+    fn indirect_call_uses_opaque_pointer_syntax() {
+        let mut b = fresh();
+        let r = b.call_indirect(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
+        assert_eq!(r, "%r1");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = call double %callback(i64 %closure, double %arg)"
+        );
+    }
+
+    #[test]
+    fn indirect_invoke_uses_opaque_pointer_syntax() {
+        let mut b = fresh();
+        b.counter.push_eh_scope("catch.0".to_string());
+        let r = b.call_indirect(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
+        assert_eq!(r, "%r1");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) to label %eh.cont2 unwind label %catch.0\neh.cont2:"
+        );
     }
 
     #[test]

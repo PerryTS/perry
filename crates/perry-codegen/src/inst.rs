@@ -124,8 +124,8 @@ pub enum LlInst {
         /// header — a mismatch is UB, not a verifier error (#8175).
         cconv: Option<&'static str>,
     },
-    /// Pre-opaque-pointer indirect call, rendered `(T1, T2)*` exactly as the
-    /// text emitter always has.
+    /// Opaque-pointer indirect call. The callee operand itself is a `ptr`;
+    /// argument types remain explicit at the call site.
     CallIndirect {
         dst: String,
         ret: LlvmType,
@@ -299,14 +299,7 @@ impl LlInst {
                 fptr,
                 args,
             } => {
-                let _ = write!(out, "  {dst} = call {ret} (");
-                for (i, (t, _)) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    out.push_str(t);
-                }
-                let _ = write!(out, ")* {fptr}(");
+                let _ = write!(out, "  {dst} = call {ret} {fptr}(");
                 push_args(out, args);
                 out.push(')');
             }

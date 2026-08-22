@@ -523,6 +523,7 @@ pub(super) fn compile_method(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
+        resolved_arrow_callback_targets: HashMap::new(),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
@@ -676,6 +677,42 @@ pub(super) fn compile_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+
+    // Resolve each immutable callback parameter/arity once, before the method
+    // body. The runtime answers null unless the actual value is a plain arrow
+    // whose declared/rest shape can use this exact call ABI. Exact immutable
+    // aliases (`const cb = callback`) reuse the same answer: every successful
+    // read has that identity by construction, while a pre-initialisation read
+    // throws during `LocalGet` lowering before dispatch is reached.
+    let hoisted_callback_calls = crate::collectors::collect_hoisted_callback_calls(method);
+    let callback_keys: std::collections::BTreeSet<(u32, usize)> = hoisted_callback_calls
+        .iter()
+        .map(|call| (call.source_param, call.arity))
+        .collect();
+    let mut resolved_callback_ptrs = HashMap::new();
+    for (source_param, arity) in callback_keys {
+        let Some(source_slot) = ctx.locals.get(&source_param).cloned() else {
+            continue;
+        };
+        let source_box = ctx.block().load(DOUBLE, &source_slot);
+        let source_handle = crate::expr::unbox_to_i64(ctx.block(), &source_box);
+        let fn_ptr = ctx.block().call(
+            PTR,
+            "js_closure_resolve_arrow_direct_call",
+            &[(I64, &source_handle), (I32, &arity.to_string())],
+        );
+        resolved_callback_ptrs.insert((source_param, arity), fn_ptr);
+    }
+    for call in hoisted_callback_calls {
+        let Some(fn_ptr) = resolved_callback_ptrs
+            .get(&(call.source_param, call.arity))
+            .cloned()
+        else {
+            continue;
+        };
+        ctx.resolved_arrow_callback_targets
+            .insert((call.callee_local, call.arity), fn_ptr);
+    }
 
     super::arguments::materialize_arguments_object(
         &mut ctx,
@@ -1605,6 +1642,7 @@ pub(super) fn compile_static_method(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
+        resolved_arrow_callback_targets: HashMap::new(),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),

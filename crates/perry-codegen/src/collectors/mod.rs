@@ -18,6 +18,7 @@ mod escape_check;
 mod escape_news;
 mod escape_objects;
 mod hir_facts;
+mod hoisted_callback_calls;
 mod hot_callees;
 mod i32_locals;
 mod index_uses;
@@ -66,6 +67,7 @@ pub(crate) use hir_facts::{
     collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_params,
     NativeRegionFactGraph,
 };
+pub(crate) use hoisted_callback_calls::collect_hoisted_callback_calls;
 pub(crate) use hot_callees::{
     collect_alloc_hot_functions, collect_hot_loop_callees, collect_recursion_participants,
 };

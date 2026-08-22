@@ -567,6 +567,10 @@ pub(crate) struct FnCtx<'a> {
     /// `local_closure_func_ids` for guarded direct closure calls: direct
     /// calls only fire when the static arity exactly matches the call site.
     pub local_closure_param_counts: std::collections::HashMap<u32, usize>,
+    /// Nullable code pointers resolved once from immutable method callback
+    /// parameters, indexed by callback local (including exact const aliases)
+    /// and call arity.
+    pub resolved_arrow_callback_targets: std::collections::HashMap<(u32, usize), String>,
     /// Immutable local aliases of same-module function declarations.
     /// Calling one is semantically the same as calling its `FuncRef` directly;
     /// retain the runtime function object in the local for identity/property
