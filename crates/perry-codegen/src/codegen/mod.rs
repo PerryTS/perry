@@ -589,12 +589,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let imported_getters: Vec<perry_hir::Function> = ic
             .getter_names
             .iter()
-            .map(|prop| perry_hir::Function {
+            .enumerate()
+            .map(|(index, prop)| perry_hir::Function {
                 id: 0,
                 name: format!("get_{}", prop),
                 type_params: Vec::new(),
                 params: Vec::new(),
-                return_type: perry_hir::types::Type::Any,
+                return_type: ic
+                    .getter_return_types
+                    .get(index)
+                    .cloned()
+                    .unwrap_or(perry_hir::types::Type::Any),
                 body: Vec::new(),
                 is_async: false,
                 is_generator: false,
@@ -673,12 +678,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             methods: ic
                 .method_names
                 .iter()
-                .map(|m| perry_hir::Function {
+                .enumerate()
+                .map(|(index, m)| perry_hir::Function {
                     id: 0,
                     name: m.clone(),
                     type_params: Vec::new(),
                     params: Vec::new(),
-                    return_type: perry_hir::types::Type::Any,
+                    return_type: ic
+                        .method_return_types
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(perry_hir::types::Type::Any),
                     body: Vec::new(),
                     is_async: false,
                     is_generator: false,
@@ -705,7 +715,31 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             static_accessor_names: Vec::new(),
             static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
-            static_methods: Vec::new(),
+            static_methods: ic
+                .static_method_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| perry_hir::Function {
+                    id: 0,
+                    name: name.clone(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: ic
+                        .static_method_return_types
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(perry_hir::types::Type::Any),
+                    body: Vec::new(),
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: true,
+                    was_plain_async: false,
+                    was_unrolled: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                })
+                .collect(),
             computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,

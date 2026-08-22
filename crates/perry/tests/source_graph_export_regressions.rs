@@ -97,6 +97,111 @@ fn compile_and_run(dir: &Path, entry: &str) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+fn compile_and_run_with_llvm_trace(dir: &Path, entry: &str) -> (String, String) {
+    let output = dir.join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(dir)
+        .arg("compile")
+        .arg(entry)
+        .arg("--no-cache")
+        .arg("--trace")
+        .arg("llvm")
+        .arg("-o")
+        .arg(&output)
+        .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        .env("PERRY_RUNTIME_DIR", runtime_dir())
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output)
+        .current_dir(dir)
+        .output()
+        .expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let trace_dir = dir.join(".perry-trace/llvm");
+    let entry_stem = entry.replace(['/', '.', '-'], "_");
+    let entry_ir_path = std::fs::read_dir(&trace_dir)
+        .expect("read LLVM trace directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&entry_stem) && name.ends_with(".ll"))
+        })
+        .unwrap_or_else(|| panic!("missing LLVM trace for {entry} in {}", trace_dir.display()));
+    let entry_ir = std::fs::read_to_string(entry_ir_path).expect("read entry LLVM trace");
+
+    (String::from_utf8_lossy(&run.stdout).into_owned(), entry_ir)
+}
+
+#[test]
+fn imported_class_return_types_pull_in_transitive_dispatch_metadata() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "returned.ts",
+        "export class Returned {\n\
+           methodPing() { return 41; }\n\
+           getterPing() { return 42; }\n\
+           staticPing() { return 43; }\n\
+         }\n\
+         export function makeReturned() { return new Returned(); }\n",
+    );
+    write(
+        dir.path(),
+        "factory.ts",
+        "import { makeReturned } from './returned';\n\
+         import type { Returned as Result } from './returned';\n\
+         class Hidden { pong() { return 44; } }\n\
+         export class Factory {\n\
+           make(): Result { return makeReturned(); }\n\
+           get result(): Result { return makeReturned(); }\n\
+           static create(): Result { return makeReturned(); }\n\
+           hidden(): Hidden { return new Hidden(); }\n\
+         }\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { Factory } from './factory';\n\
+         const overridden = new Factory().make();\n\
+         (overridden as any).methodPing = () => 99;\n\
+         console.log(\n\
+           overridden.methodPing(),\n\
+           new Factory().result.getterPing(),\n\
+           Factory.create().staticPing(),\n\
+           new Factory().hidden().pong(),\n\
+         );\n",
+    );
+
+    let (stdout, entry_ir) = compile_and_run_with_llvm_trace(dir.path(), "main.ts");
+    assert_eq!(stdout, "99 42 43 44\n");
+    for symbol in [
+        "perry_method_returned_ts__Returned__methodPing",
+        "perry_method_returned_ts__Returned__getterPing",
+        "perry_method_returned_ts__Returned__staticPing",
+        "perry_method_factory_ts__Hidden__pong",
+    ] {
+        assert!(
+            entry_ir.contains(&format!("call double @{symbol}(")),
+            "the consumer did not route the returned instance directly through {symbol}:\n{entry_ir}"
+        );
+    }
+}
+
 #[test]
 fn namespace_reexport_survives_export_all_barrels() {
     let dir = tempfile::tempdir().expect("tempdir");

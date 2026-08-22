@@ -324,11 +324,41 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // `new ClassName(...)` — the receiver class is the constructed class.
         // Lets `(new Config()).toString()` find Config's user toString.
         Expr::New { class_name, .. } => Some(class_name.clone()),
-        // `ClassName.staticMethod(...)` chains often return an instance
-        // of `ClassName` (factory pattern: `Color.red()`). Without type
-        // info on the static method's return, assume it's the same class
-        // so chained `.toString()` finds the user's toString.
-        Expr::StaticMethodCall { class_name, .. } => Some(class_name.clone()),
+        // Prefer the declared static-method return class for factory chains.
+        // Falling back to the receiver class is only valid when the method is
+        // absent from our metadata (the legacy `Color.red()` heuristic). Once
+        // a declaration exists, treating `Factory.create(): Result` as a
+        // `Factory` receiver is both imprecise and prevents Result's direct
+        // method dispatch from being selected.
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            ..
+        } => match ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| {
+                class
+                    .static_methods
+                    .iter()
+                    .find(|method| method.name == *method_name)
+            })
+            .map(|method| &method.return_type)
+        {
+            Some(HirType::Named(name)) if ctx.classes.contains_key(name) => Some(name.clone()),
+            Some(HirType::Generic { base, type_args }) => {
+                let specialized = perry_hir::monomorph::generate_specialized_name(base, type_args);
+                if ctx.classes.contains_key(&specialized) {
+                    Some(specialized)
+                } else if ctx.classes.contains_key(base) {
+                    Some(base.clone())
+                } else {
+                    None
+                }
+            }
+            Some(_) => None,
+            None => Some(class_name.clone()),
+        },
         e if net_result_class(e).is_some() => net_result_class(e).map(str::to_string),
         // `this` inside a constructor or method body — the class name is
         // at the top of class_stack (for inlined constructors) or comes

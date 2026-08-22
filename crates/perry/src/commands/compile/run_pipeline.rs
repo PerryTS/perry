@@ -242,6 +242,11 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.name.clone())
             .collect(),
+        method_return_types: class
+            .methods
+            .iter()
+            .map(|method| method.return_type.clone())
+            .collect(),
         method_param_counts: class
             .methods
             .iter()
@@ -273,7 +278,17 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.name.clone())
             .collect(),
+        static_method_return_types: class
+            .static_methods
+            .iter()
+            .map(|method| method.return_type.clone())
+            .collect(),
         getter_names: class.getters.iter().map(|(name, _)| name.clone()).collect(),
+        getter_return_types: class
+            .getters
+            .iter()
+            .map(|(_, getter)| getter.return_type.clone())
+            .collect(),
         setter_names: class.setters.iter().map(|(name, _)| name.clone()).collect(),
         parent_name: class.extends_name.clone(),
         field_names: class
@@ -290,6 +305,88 @@ fn imported_class_from_hir(
             .collect(),
         source_class_id: Some(class.id),
         return_shape_imports: Vec::new(),
+    }
+}
+
+/// Collect class names reachable through a declared type. Imported class
+/// metadata is non-owning compile-time information, so following container,
+/// object, and callable types is conservative: it can make a later derived
+/// value eligible for guarded dispatch without creating a runtime import or
+/// changing module initialization order. For callable values only the result
+/// type is reachable; parameter types do not describe anything the consumer
+/// receives and must not expand its class metadata.
+fn collect_named_class_refs(
+    ty: &perry_hir::types::Type,
+    refs: &mut std::collections::BTreeSet<String>,
+) {
+    use perry_hir::types::Type;
+
+    match ty {
+        Type::Named(name) => {
+            refs.insert(name.clone());
+        }
+        Type::Generic { base, type_args } => {
+            refs.insert(base.clone());
+            for arg in type_args {
+                collect_named_class_refs(arg, refs);
+            }
+        }
+        Type::Array(element) | Type::Promise(element) => {
+            collect_named_class_refs(element, refs);
+        }
+        Type::Tuple(elements) | Type::Union(elements) => {
+            for element in elements {
+                collect_named_class_refs(element, refs);
+            }
+        }
+        Type::Object(object) => {
+            if let Some(name) = &object.name {
+                refs.insert(name.clone());
+            }
+            for property in object.properties.values() {
+                collect_named_class_refs(&property.ty, refs);
+            }
+            if let Some(index) = &object.index_signature {
+                collect_named_class_refs(index, refs);
+            }
+        }
+        Type::Function(function) => {
+            collect_named_class_refs(&function.return_type, refs);
+        }
+        Type::Void
+        | Type::Null
+        | Type::Boolean
+        | Type::Number
+        | Type::Int32
+        | Type::BigInt
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Symbol
+        | Type::Any
+        | Type::Unknown
+        | Type::Never
+        | Type::TypeVar(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod imported_class_return_type_tests {
+    use super::collect_named_class_refs;
+    use perry_hir::types::{FunctionType, Type};
+
+    #[test]
+    fn follows_callable_results_without_importing_parameter_classes() {
+        let ty = Type::Function(FunctionType {
+            params: vec![("input".into(), Type::Named("InputOnly".into()), false)],
+            return_type: Box::new(Type::Array(Box::new(Type::Named("Returned".into())))),
+            is_async: false,
+            is_generator: false,
+        });
+        let mut refs = std::collections::BTreeSet::new();
+
+        collect_named_class_refs(&ty, &mut refs);
+
+        assert_eq!(refs.into_iter().collect::<Vec<_>>(), ["Returned"]);
     }
 }
 
@@ -906,25 +1003,19 @@ pub fn run_with_parse_cache(
     // ambiguous for platform siblings with identical class names (OpenTUI's
     // node/bun BoxRenderable variants), while the references stored in
     // `exported_classes` point directly into `native_modules` and therefore
-    // have unambiguous addresses for this pipeline run. Keep a second legacy
-    // id map only for transitive-parent lookup, whose ImportedClass record
-    // currently retains the id but not the HIR reference.
+    // have unambiguous addresses for this pipeline run.
     let mut class_canonical_path: std::collections::HashMap<usize, String> =
         std::collections::HashMap::new();
-    let mut class_canonical_path_by_id: std::collections::HashMap<
-        perry_hir::ClassId,
-        (String, String),
-    > = std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for class in &hir_module.classes {
+            // A non-exported class can still escape through an exported
+            // method/getter return type. Keep canonical provenance for every
+            // class; only the public export lookup below remains export-gated.
+            class_canonical_path
+                .insert(class as *const perry_hir::Class as usize, path_str.clone());
             if class.is_exported {
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
-                class_canonical_path
-                    .insert(class as *const perry_hir::Class as usize, path_str.clone());
-                class_canonical_path_by_id
-                    .entry(class.id)
-                    .or_insert_with(|| (path_str.clone(), class.name.clone()));
             }
         }
         // Issue #485: handle `export { Local as Exported }` for classes.
@@ -2477,6 +2568,20 @@ pub fn run_with_parse_cache(
             no_link_destination.dir().to_path_buf()
         }
     };
+    // ImportedClass stores a defining-module symbol prefix, while scoped type
+    // aliases must be resolved against that module's HIR. Build the inverse
+    // once rather than rescanning every module for every transitive class in
+    // every parallel codegen job.
+    let native_module_paths_by_prefix: std::collections::HashMap<String, PathBuf> = ctx
+        .native_modules
+        .keys()
+        .map(|path| {
+            (
+                compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                path.clone(),
+            )
+        })
+        .collect();
     let module_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(module_jobs)
         .thread_name(|index| format!("perry-module-{index}"))
@@ -4247,8 +4352,9 @@ pub fn run_with_parse_cache(
             // class-vtable registry; copying all class metadata here multiplied
             // unrelated consumer IR and object size by the whole program.
 
-            // Transitive class closure: pull in classes referenced by
-            // field types of already-imported classes. Without this, a
+            // Transitive class closure: pull in classes referenced by fields,
+            // declared call results, and parents of already-imported classes.
+            // Without the field side of this, a
             // chain like `vm.viewport.scroll.scrollTop` (where vm is
             // `EditorViewModel`, `viewport: ViewportManager`, `scroll:
             // ScrollController`) breaks at the first hop because only
@@ -4282,17 +4388,16 @@ pub fn run_with_parse_cache(
                     continue;
                 }
                 let field_types_clone = imported_classes[idx].field_types.clone();
+                let method_return_types_clone: Vec<perry_hir::types::Type> = imported_classes[idx]
+                    .method_return_types
+                    .iter()
+                    .chain(imported_classes[idx].static_method_return_types.iter())
+                    .chain(imported_classes[idx].getter_return_types.iter())
+                    .cloned()
+                    .collect();
                 let parent_name_clone = imported_classes[idx].parent_name.clone();
-                // The child's own canonical source path, used to resolve its
-                // `extends` parent in the child's module scope. This legacy
-                // ImportedClass path only retains a ClassId, so keep the name
-                // guard here; direct class provenance above uses identity.
-                let child_name_clone = imported_classes[idx].name.clone();
-                let child_src_path: Option<String> = imported_classes[idx]
-                    .source_class_id
-                    .and_then(|cid| class_canonical_path_by_id.get(&cid).cloned())
-                    .filter(|(_, name)| name == &child_name_clone)
-                    .map(|(path, _)| path);
+                let child_source_prefix = imported_classes[idx].source_prefix.clone();
+                let child_src_path = native_module_paths_by_prefix.get(&child_source_prefix);
                 // Issue #485: include the class's parent in the transitive
                 // closure too. Without this, `import { Sub } from 'pkg'` where
                 // `Sub extends Base` (and Base lives in another file inside
@@ -4304,21 +4409,85 @@ pub fn run_with_parse_cache(
                 // undefined on the importing side.
                 //
                 // `is_parent_ref` marks the entry that came from `extends`
-                // (vs a field-type reference): parent refs get path-aware
-                // resolution + (path,name) dedup so the correct-module parent
-                // is imported even past the bare-name dedup. Field-type refs
-                // keep the legacy by-name behavior.
-                let refs: Vec<(String, bool)> = field_types_clone
-                    .iter()
-                    .filter_map(|ty| match ty {
-                        perry_hir::types::Type::Named(n) => Some(n.clone()),
-                        perry_hir::types::Type::Generic { base, .. } => Some(base.clone()),
-                        _ => None,
-                    })
-                    .map(|n| (n, false))
-                    .chain(parent_name_clone.into_iter().map(|n| (n, true)))
+                // (vs a field or return-type reference): parent refs get
+                // path-aware resolution + (path,name) dedup so the
+                // correct-module parent is imported even past the bare-name
+                // dedup. Other refs keep the legacy by-name behavior because
+                // codegen's class dispatch table is still name-keyed.
+                let mut named_refs = std::collections::BTreeSet::new();
+                for ty in field_types_clone.iter().chain(method_return_types_clone.iter()) {
+                    collect_named_class_refs(ty, &mut named_refs);
+                }
+                let refs: Vec<(String, bool)> = named_refs
+                    .into_iter()
+                    .map(|name| (name, false))
+                    .chain(parent_name_clone.into_iter().map(|name| (name, true)))
                     .collect();
                 for (ref_name, is_parent_ref) in refs {
+                    // Resolve the type name in the declaring class's own
+                    // module before falling back to the legacy global lookup.
+                    // This includes erased `import type { Result as Local }`
+                    // bindings, but only consumes their class metadata: it
+                    // does not create a value binding or module-init edge.
+                    let scoped_found = child_src_path.and_then(|child_path| {
+                        let module = ctx.native_modules.get(child_path)?;
+                        if let Some(class) =
+                            module.classes.iter().find(|class| class.name == ref_name)
+                        {
+                            let canonical_path = class_canonical_path
+                                .get(&(class as *const perry_hir::Class as usize))
+                                .cloned()
+                                .unwrap_or_else(|| child_path.to_string_lossy().into_owned());
+                            return Some((canonical_path, class));
+                        }
+                        module.imports.iter().find_map(|import| {
+                            if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                                return None;
+                            }
+                            let resolved_path = import.resolved_path.as_ref()?;
+                            import.specifiers.iter().find_map(|specifier| {
+                                let (exported_name, local_name) = match specifier {
+                                    perry_hir::ImportSpecifier::Named { imported, local } => {
+                                        (imported.as_str(), local.as_str())
+                                    }
+                                    perry_hir::ImportSpecifier::Default { local } => {
+                                        ("default", local.as_str())
+                                    }
+                                    perry_hir::ImportSpecifier::Namespace { .. } => return None,
+                                };
+                                if local_name != ref_name {
+                                    return None;
+                                }
+                                let origin_path = all_module_exports
+                                    .get(resolved_path)
+                                    .and_then(|exports| exports.get(exported_name))
+                                    .cloned()
+                                    .unwrap_or_else(|| resolved_path.clone());
+                                let origin_name = all_module_export_origin_names
+                                    .get(resolved_path)
+                                    .and_then(|names| names.get(exported_name))
+                                    .cloned()
+                                    .unwrap_or_else(|| exported_name.to_string());
+                                let class = exported_classes
+                                    .get(&(origin_path.clone(), origin_name.clone()))
+                                    .or_else(|| {
+                                        exported_classes
+                                            .get(&(origin_path.clone(), exported_name.to_string()))
+                                    })
+                                    .or_else(|| {
+                                        exported_classes.get(&(
+                                            resolved_path.clone(),
+                                            exported_name.to_string(),
+                                        ))
+                                    })?;
+                                let canonical_path = class_canonical_path
+                                    .get(&(*class as *const perry_hir::Class as usize))
+                                    .cloned()
+                                    .unwrap_or(origin_path);
+                                Some((canonical_path, *class))
+                            })
+                        })
+                    });
                     // Issue #489: pick the canonical defining path for the
                     // parent class (where `class N { ... }` actually lives)
                     // rather than the first BTreeMap match by name (which
@@ -4332,40 +4501,33 @@ pub fn run_with_parse_cache(
                     //
                     // Issue #26: for a parent ref, prefer the same-named class
                     // in the CHILD's own source module before any global match.
-                    let found = is_parent_ref
-                        .then_some(())
-                        .and(child_src_path.as_ref())
-                        .and_then(|cp| {
-                            exported_classes
-                                .iter()
-                                .find(|((path, cname), _)| cname == &ref_name && path == cp)
-                        })
-                        .or_else(|| {
-                            exported_classes.iter().find(|((path, cname), class)| {
+                    let found = scoped_found.or_else(|| {
+                        exported_classes
+                            .iter()
+                            .find(|((path, cname), class)| {
                                 cname == &ref_name
                                     && class_canonical_path
                                         .get(&(**class as *const perry_hir::Class as usize))
-                                        .map(|cp| cp == path)
+                                        .map(|canonical| canonical == path)
                                         .unwrap_or(true)
                             })
-                        })
-                        .or_else(|| {
-                            exported_classes
-                                .iter()
-                                .find(|((_, cname), _)| cname == &ref_name)
-                        })
-                        .map(|((path, _), class)| {
-                            // `exported_classes` deliberately carries alias
-                            // entries stamped under barrel paths. Selecting an
-                            // alias in the child's module is correct for scope
-                            // resolution, but constructor/method symbols still
-                            // live in the HIR class's defining module.
-                            let canonical_path = class_canonical_path
-                                .get(&(*class as *const perry_hir::Class as usize))
-                                .cloned()
-                                .unwrap_or_else(|| path.clone());
-                            (canonical_path, *class)
-                        });
+                            .or_else(|| {
+                                exported_classes
+                                    .iter()
+                                    .find(|((_, cname), _)| cname == &ref_name)
+                            })
+                            .map(|((path, _), class)| {
+                                // `exported_classes` deliberately carries alias
+                                // entries stamped under barrel paths. Selecting
+                                // one is valid for scope resolution, but symbols
+                                // still live in the defining module.
+                                let canonical_path = class_canonical_path
+                                    .get(&(*class as *const perry_hir::Class as usize))
+                                    .cloned()
+                                    .unwrap_or_else(|| path.clone());
+                                (canonical_path, *class)
+                            })
+                    });
                     // Dedup: parent refs key on (resolved_path, name) so a
                     // distinct same-named parent in another module is still
                     // imported; all other refs key on name only (legacy).

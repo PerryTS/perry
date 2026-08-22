@@ -610,8 +610,32 @@ fn compute_object_cache_key_with_env(
             buf.push_str(&c.static_field_names.join(","));
             buf.push_str(":static_methods=");
             buf.push_str(&c.static_method_names.join(","));
+            buf.push_str(":method_return_types=");
+            buf.push_str(
+                &c.method_return_types
+                    .iter()
+                    .map(stable_type_key)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            buf.push_str(":static_method_return_types=");
+            buf.push_str(
+                &c.static_method_return_types
+                    .iter()
+                    .map(stable_type_key)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             buf.push_str(":getters=");
             buf.push_str(&c.getter_names.join(","));
+            buf.push_str(":getter_return_types=");
+            buf.push_str(
+                &c.getter_return_types
+                    .iter()
+                    .map(stable_type_key)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             buf.push_str(":setters=");
             buf.push_str(&c.setter_names.join(","));
             buf.push_str(":field_types=");
