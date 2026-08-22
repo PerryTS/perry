@@ -182,6 +182,12 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // Issue #1852 — `js_ext_net_socket_end` takes the optional final
         // chunk (NA_JSV bits) so `socket.end(data)` writes before FIN.
         fn js_ext_net_socket_end(handle: i64, chunk_bits: i64);
+        fn js_ext_net_socket_emit(
+            handle: i64,
+            event_ptr: i64,
+            args_ptr: *const f64,
+            args_len: usize,
+        ) -> f64;
         fn js_ext_net_destroy_socket(handle: i64);
         // #5021 (listener half): the shared `js_net_socket_*` listener names
         // have bundled-stdlib twins that bind to an EMPTY registry in a
@@ -203,7 +209,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
         fn js_ext_net_socket_remove_listener(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
         fn js_ext_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
-        fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
+        fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
         fn js_net_socket_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
         fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
         // Issue #2211 — listeners()/rawListeners() return a *mut ArrayHeader
@@ -243,6 +249,11 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
                 .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
             js_ext_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
+        }
+        "emit" if !args.is_empty() => {
+            let event_ptr = unbox_to_i64(args[0]);
+            let rest = args.get(1..).unwrap_or(&[]);
+            js_ext_net_socket_emit(handle, event_ptr, rest.as_ptr(), rest.len())
         }
         "destroy" | "destroySoon" => {
             js_ext_net_destroy_socket(handle);
@@ -292,7 +303,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         }
         "listenerCount" if !args.is_empty() => {
             let event_ptr = unbox_to_i64(args[0]);
-            js_net_socket_listener_count(handle, event_ptr)
+            js_ext_net_socket_listener_count(handle, event_ptr)
         }
         "eventNames" => json_str_to_value(js_net_socket_event_names(handle)),
         // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`

@@ -148,6 +148,16 @@ _NOISE = re.compile(
 # `Warning`) compares by message content, not by pid. (#4910)
 _PID_PREFIX = re.compile(r"^\(node:\d+\)")
 
+# Node and Perry execute sequentially, so an otherwise byte-identical raw HTTP
+# transcript necessarily contains different automatically generated `Date`
+# header seconds. Preserve the fact that a valid RFC 7231 date was emitted,
+# while removing the wall-clock value from the differential signal.
+_HTTP_DATE = re.compile(
+    r"(?<=Date: )(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), "
+    r"\d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"\d{4} \d{2}:\d{2}:\d{2} GMT"
+)
+
 
 def normalize(text: str) -> str:
     out = []
@@ -156,6 +166,7 @@ def normalize(text: str) -> str:
         if _NOISE.search(line):
             continue
         line = _PID_PREFIX.sub("(node:PID)", line)
+        line = _HTTP_DATE.sub("<HTTP-DATE>", line)
         out.append(line)
     while out and out[-1] == "":
         out.pop()

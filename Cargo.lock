@@ -5971,6 +5971,7 @@ dependencies = [
  "bytes",
  "h2",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "lazy_static",

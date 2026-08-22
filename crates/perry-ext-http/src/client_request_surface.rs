@@ -168,6 +168,12 @@ fn socket_value(handle: Handle) -> f64 {
     if !is_client_request_handle(handle) {
         return undefined_value();
     }
+    if let Some(socket) = get_handle_mut::<ClientRequestHandle>(handle)
+        .map(|request| request.socket_handle)
+        .filter(|socket| *socket != 0)
+    {
+        return handle_value(socket);
+    }
     with_state_mut(handle, |state| {
         if state.socket == 0.0 {
             state.socket = f64::from_bits(perry_ffi::alloc_object().bits());
@@ -557,6 +563,25 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
                     (explicit + implicit_response) as f64
                 })
                 .unwrap_or(0.0)
+        }
+        "listeners" | "rawListeners" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            let callbacks = get_handle_mut::<ClientRequestHandle>(handle)
+                .map(|req| {
+                    let mut callbacks = req.listeners.get(&event).cloned().unwrap_or_default();
+                    if event == "response" && req.response_callback != 0 {
+                        callbacks.insert(0, req.response_callback);
+                    }
+                    callbacks
+                })
+                .unwrap_or_default();
+            let mut array = unsafe { perry_ffi::js_array_alloc(callbacks.len() as u32) };
+            for callback in callbacks {
+                array = unsafe {
+                    perry_ffi::js_array_push(array, JsValue::from_object_ptr(callback as *mut u8))
+                };
+            }
+            f64::from_bits(JsValue::from_object_ptr(array).bits())
         }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),

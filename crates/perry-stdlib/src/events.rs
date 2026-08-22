@@ -114,6 +114,7 @@ unsafe fn stream_listeners_for_heap_object(
 enum EventHelperTarget {
     EventEmitter(Handle),
     EventTarget(*mut ObjectHeader),
+    NetSocket(Handle),
     Stream(Handle),
 }
 
@@ -133,6 +134,11 @@ unsafe fn event_helper_target(value: f64) -> Option<EventHelperTarget> {
     }
     if let Some(target) = event_target_ptr(handle) {
         return Some(EventHelperTarget::EventTarget(target));
+    }
+    if perry_runtime::object::net_socket_handle_probe()
+        .is_some_and(|probe| unsafe { probe(handle) })
+    {
+        return Some(EventHelperTarget::NetSocket(handle));
     }
     if stream_value_from_handle(handle).is_some() {
         return Some(EventHelperTarget::Stream(handle));

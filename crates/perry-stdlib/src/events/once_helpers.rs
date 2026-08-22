@@ -208,6 +208,22 @@ pub unsafe extern "C" fn js_events_once(
         );
         return promise;
     }
+    if let EventHelperTarget::NetSocket(handle) = target {
+        perry_runtime::closure::js_register_closure_rest(
+            events_once_stream_resolve_listener as *const u8,
+            0,
+        );
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, promise as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        extern "C" {
+            fn js_ext_net_socket_once(handle: i64, event_ptr: i64, callback: i64) -> i64;
+        }
+        js_ext_net_socket_once(handle, event_name_ptr as i64, listener as i64);
+        return promise;
+    }
     if let EventHelperTarget::Stream(handle) = target {
         perry_runtime::closure::js_register_closure_rest(
             events_once_stream_resolve_listener as *const u8,

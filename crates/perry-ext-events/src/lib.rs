@@ -154,6 +154,12 @@ extern "C" {
     fn js_implicit_this_set(value: f64) -> f64;
     fn js_jsvalue_to_string(value: f64) -> *mut StringHeader;
     fn js_native_call_value(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64;
+    fn js_native_call_method_str_key(
+        object: f64,
+        name_handle: i64,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
     fn js_value_is_promise(value: f64) -> i32;
     fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
     fn js_register_event_emitter_get_domain(f: unsafe extern "C" fn(i64) -> i64);
@@ -164,6 +170,9 @@ extern "C" {
     // so the runtime's `js_dynamic_new` constructs a real emitter instead of
     // falling through to the generic empty-object path.
     fn js_set_native_events_construct(
+        f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+    );
+    fn js_set_native_events_dispatch(
         f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
     );
     // #3072: shared listener validator. Takes the raw NaN-box bits of the
@@ -233,6 +242,16 @@ impl EventsRootVisitor {
 #[inline]
 fn nanbox_pointer_bits(ptr: i64) -> f64 {
     f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK))
+}
+
+unsafe fn call_net_socket_method(handle: Handle, name: &str, args: &[f64]) -> f64 {
+    let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_native_call_method_str_key(
+        nanbox_pointer_bits(handle),
+        name_ptr as i64,
+        args.as_ptr(),
+        args.len(),
+    )
 }
 
 /// One registered listener: the original raw closure pointer plus an optional
@@ -490,6 +509,7 @@ fn ensure_runtime_hooks_registered() {
         js_register_event_emitter_set_domain(js_event_emitter_set_domain);
         js_register_event_emitter_on(event_emitter_on_hook);
         js_set_native_events_construct(events_native_construct);
+        js_set_native_events_dispatch(js_events_native_dispatch);
     });
 }
 
@@ -1673,6 +1693,24 @@ pub unsafe extern "C" fn js_events_once(
         js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
         return raw;
     }
+    if let EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) = target {
+        let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+        if event_name_ptr.is_null() {
+            return raw;
+        }
+        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, raw as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        let args = [
+            f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader)),
+            nanbox_pointer_bits(listener as i64),
+        ];
+        let _ = call_net_socket_method(handle, "once", &args);
+        return raw;
+    }
     if let EventHelperTarget::Stream(handle) = target {
         let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
         if event_name_ptr.is_null() {
@@ -1760,6 +1798,12 @@ pub unsafe extern "C" fn js_events_on(
                 js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
             }
             target as Handle
+        }
+        EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+            let listener_value = nanbox_pointer_bits(listener as i64);
+            let _ = call_net_socket_method(handle, "on", &[event, listener_value]);
+            handle
         }
         EventHelperTarget::Stream(handle) => {
             if !event_name_ptr.is_null() {
@@ -1875,6 +1919,11 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
         EventHelperTarget::EventTarget(target) => {
             js_event_target_get_event_listeners(target, event_name_ptr)
         }
+        EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+            let value = call_net_socket_method(handle, "listeners", &[event]);
+            (value.to_bits() & POINTER_MASK) as *mut ArrayHeader
+        }
         EventHelperTarget::Stream(handle) => {
             stream_listeners_for_heap_object(handle, event_name_ptr)
                 .unwrap_or_else(|| js_array_alloc(0))
@@ -1913,6 +1962,10 @@ pub unsafe extern "C" fn js_events_listener_count(
             TAG_UNDEFINED_F64_BITS as i64,
         ),
         EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
+        EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+            call_net_socket_method(handle, "listenerCount", &[event])
+        }
         EventHelperTarget::Stream(handle) => {
             stream_array_len(handle, event_name_ptr).unwrap_or(0.0)
         }
@@ -1937,6 +1990,7 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
     }) {
         EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
         EventHelperTarget::EventTarget(target) => js_event_target_get_max_listeners(target),
+        EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_) => 10.0,
         EventHelperTarget::Stream(handle) => js_node_stream_method_get_max_listeners(handle),
     }
 }
@@ -1980,6 +2034,7 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                 EventHelperTarget::EventTarget(target) => {
                     let _ = js_event_target_set_max_listeners(target, n);
                 }
+                EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_) => {}
                 EventHelperTarget::Stream(handle) => {
                     let _ = js_node_stream_method_set_max_listeners(handle, n);
                 }
@@ -1987,6 +2042,79 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
         }
     }
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+unsafe fn event_name_header(value: f64) -> *const StringHeader {
+    js_jsvalue_to_string(value)
+}
+
+/// Indirect/captured `events.*` helper dispatcher for the external events
+/// implementation. Without this registration, CommonJS destructuring such as
+/// `const { getEventListeners } = require('events')` resolves the callable but
+/// returns `undefined` when invoked.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_native_dispatch(
+    method: *const u8,
+    method_len: usize,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(TAG_UNDEFINED_F64_BITS);
+    if method.is_null() || method_len == 0 {
+        return undefined;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(method, method_len)).unwrap_or("");
+    let arg = |index: usize| {
+        if !args.is_null() && index < args_len {
+            *args.add(index)
+        } else {
+            undefined
+        }
+    };
+    match name {
+        "listenerCount" => js_events_listener_count(arg(0), event_name_header(arg(1))),
+        "getMaxListeners" => js_events_get_max_listeners(arg(0)),
+        "getEventListeners" => {
+            let array = js_events_get_event_listeners(arg(0), event_name_header(arg(1)));
+            if array.is_null() {
+                undefined
+            } else {
+                nanbox_pointer_bits(array as i64)
+            }
+        }
+        "once" => {
+            let promise = js_events_once(arg(0), event_name_header(arg(1)), arg(2));
+            if promise.is_null() {
+                undefined
+            } else {
+                nanbox_pointer_bits(promise as i64)
+            }
+        }
+        "on" => {
+            let iterator = js_events_on(arg(0), event_name_header(arg(1)), arg(2));
+            if iterator.is_null() {
+                undefined
+            } else {
+                nanbox_pointer_bits(iterator as i64)
+            }
+        }
+        "addAbortListener" => {
+            let disposable = js_events_add_abort_listener(arg(0), arg(1));
+            if disposable == 0 {
+                undefined
+            } else {
+                nanbox_pointer_bits(disposable)
+            }
+        }
+        "setMaxListeners" => {
+            let mut targets = js_array_alloc(args_len.saturating_sub(1) as u32);
+            for index in 1..args_len {
+                targets = js_array_push_f64(targets, arg(index));
+            }
+            js_events_set_max_listeners(arg(0), targets)
+        }
+        _ => undefined,
+    }
 }
 
 #[cfg(test)]

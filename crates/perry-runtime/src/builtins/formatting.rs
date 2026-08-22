@@ -1440,11 +1440,12 @@ unsafe fn format_object_as_json(
                 format_jsvalue_for_json(value, depth + 1)
             };
 
+        let display_key = format_inspect_property_key(&key_str);
         let rendered = if is_enumerable {
-            format!("{}: {}", key_str, value_str)
+            format!("{}: {}", display_key, value_str)
         } else {
             // Node wraps non-enumerable keys in brackets under showHidden.
-            format!("[{}]: {}", key_str, value_str)
+            format!("[{}]: {}", display_key, value_str)
         };
         string_parts.push((key_str, rendered));
     }
@@ -1773,6 +1774,64 @@ fn escape_string(s: &str) -> String {
         }
     }
     result
+}
+
+/// Render an own-property name the way Node's `util.inspect` does: the
+/// conservative ASCII identifier subset stays bare, while punctuation,
+/// whitespace, numeric-leading, and non-ASCII names are quoted. `$` is a
+/// valid JavaScript identifier character but Node deliberately quotes it in
+/// inspected object keys.
+fn format_inspect_property_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let is_bare = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_bare {
+        return key.to_string();
+    }
+
+    // Node prefers the delimiter that avoids an escape when exactly one kind
+    // of quote occurs in the key.
+    if key.contains('\'') && !key.contains('"') {
+        let escaped = key
+            .chars()
+            .flat_map(|c| match c {
+                '\\' => "\\\\".chars().collect::<Vec<_>>(),
+                '"' => "\\\"".chars().collect(),
+                '\n' => "\\n".chars().collect(),
+                '\r' => "\\r".chars().collect(),
+                '\t' => "\\t".chars().collect(),
+                _ => vec![c],
+            })
+            .collect::<String>();
+        format!("\"{}\"", escaped)
+    } else {
+        format!("'{}'", escape_string(key))
+    }
+}
+
+#[cfg(test)]
+mod inspect_property_key_tests {
+    use super::format_inspect_property_key;
+
+    #[test]
+    fn keeps_node_style_ascii_identifiers_bare() {
+        assert_eq!(format_inspect_property_key("alpha_2"), "alpha_2");
+        assert_eq!(format_inspect_property_key("_header"), "_header");
+    }
+
+    #[test]
+    fn quotes_non_identifier_property_names() {
+        assert_eq!(
+            format_inspect_property_key("Transfer-Encoding"),
+            "'Transfer-Encoding'"
+        );
+        assert_eq!(format_inspect_property_key("1"), "'1'");
+        assert_eq!(format_inspect_property_key("$value"), "'$value'");
+        assert_eq!(format_inspect_property_key("x'y"), "\"x'y\"");
+        assert_eq!(format_inspect_property_key("line\nbreak"), "'line\\nbreak'");
+    }
 }
 
 #[inline]

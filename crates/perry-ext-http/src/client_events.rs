@@ -68,6 +68,60 @@ pub(crate) unsafe fn fire_request_event_listeners(request_handle: Handle, event:
     }
 }
 
+pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
+    let (socket, listeners) = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| {
+            (
+                request.socket_handle,
+                request.listeners.get("socket").cloned().unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    if socket == 0 {
+        return;
+    }
+    let value = f64::from_bits(POINTER_TAG | (socket as u64 & PTR_MASK));
+    for callback in listeners {
+        if callback != 0 {
+            let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+            let _ = closure.call1(value);
+        }
+    }
+}
+
+unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
+    let listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .and_then(|response| response.listeners.get(event).cloned())
+        .unwrap_or_default();
+    for callback in listeners {
+        if callback == 0 {
+            continue;
+        }
+        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if let Some(value) = arg {
+            let _ = closure.call1(value);
+        } else {
+            let _ = closure.call0();
+        }
+    }
+}
+
+unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Handle, error: f64) {
+    fire_incoming_event(incoming, "aborted", None);
+    fire_incoming_event(incoming, "error", Some(error));
+    fire_incoming_event(incoming, "close", None);
+    if let Some(socket) = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|response| response.socket_handle)
+        .filter(|socket| *socket != 0)
+    {
+        let event = alloc_string("close");
+        perry_ext_net::js_ext_net_socket_emit(socket, event.as_raw() as i64, std::ptr::null(), 0);
+        perry_ext_net::js_ext_net_destroy_socket(socket);
+    }
+    fire_request_close_once(request_handle);
+    finish_agent_request(request_handle, false);
+}
+
 /// Fire a client request's `'error'` listeners with `arg`.
 ///
 /// # Safety
@@ -159,6 +213,7 @@ pub(crate) unsafe fn handle_response_event(
     if already_done {
         return;
     }
+    client_abort::cleanup_request_signal(request_handle);
 
     let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
         .map(|r| r.response_callback)
@@ -170,6 +225,9 @@ pub(crate) unsafe fn handle_response_event(
     }
 
     let body_clone = body.clone();
+    let socket_handle = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| request.socket_handle)
+        .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
@@ -179,6 +237,7 @@ pub(crate) unsafe fn handle_response_event(
         listeners: HashMap::new(),
         encoding: None,
         pipes: Vec::new(),
+        socket_handle,
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
@@ -277,6 +336,9 @@ pub(crate) unsafe fn handle_response_head_event(
         return;
     }
 
+    let socket_handle = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| request.socket_handle)
+        .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
@@ -286,6 +348,7 @@ pub(crate) unsafe fn handle_response_head_event(
         listeners: HashMap::new(),
         encoding: None,
         pipes: Vec::new(),
+        socket_handle,
     });
     let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
         req.incoming_handle = incoming;
@@ -383,6 +446,7 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     if incoming == 0 || was_done {
         return;
     }
+    client_abort::cleanup_request_signal(request_handle);
 
     let (data_listeners, encoding, buffered) = get_handle_mut::<IncomingMessageHandle>(incoming)
         .map(|r| {
@@ -442,13 +506,21 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
 ///
 /// Same listener-liveness contract as [`fire_request_event_listeners`].
 pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &str) {
-    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        let was = req.completed;
-        req.completed = true;
-        was
-    })
-    .unwrap_or(false);
+    let (already_done, incoming) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (was, req.incoming_handle)
+        })
+        .unwrap_or((false, 0));
     if already_done {
+        return;
+    }
+    client_abort::cleanup_request_signal(request_handle);
+    if incoming != 0 {
+        let error =
+            perry_ffi::error_value_with_code("aborted", "ECONNRESET", perry_ffi::ErrorKind::Error);
+        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(error.bits()));
         return;
     }
     fire_request_error_listeners(request_handle, error_event_arg(error_message));
@@ -472,16 +544,22 @@ pub(crate) unsafe fn handle_transport_error_event(
     syscall: &str,
     errno: i64,
 ) {
-    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        let was = req.completed;
-        req.completed = true;
-        was
-    })
-    .unwrap_or(false);
+    let (already_done, incoming) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (was, req.incoming_handle)
+        })
+        .unwrap_or((false, 0));
     if already_done {
         return;
     }
+    client_abort::cleanup_request_signal(request_handle);
     let err = perry_ffi::system_error_value(message, code, syscall, errno);
+    if incoming != 0 {
+        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(err.bits()));
+        return;
+    }
     fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
     fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);

@@ -777,6 +777,11 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "destroy" => {
             if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
                 sr.destroyed = true;
+                sr.transport_destroyed
+                    .store(true, std::sync::atomic::Ordering::Release);
+                if let Some(close) = sr.connection_close.as_ref() {
+                    close.notify_one();
+                }
             }
             self_ref
         }

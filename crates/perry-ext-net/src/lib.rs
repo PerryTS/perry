@@ -159,6 +159,17 @@ pub(crate) mod statics {
         P.get_or_init(|| Mutex::new(Vec::new()))
     }
 
+    /// HTTP Agent-owned socket handles are transport facades over the HTTP
+    /// client's private connection pool. `true` means assigned to a request;
+    /// `false` means parked in `agent.freeSockets`. Keeping this tiny bit of
+    /// metadata here lets the ordinary net.Socket EventEmitter surface expose
+    /// Node's internal listener counts without leaking HTTP internals into the
+    /// generic handle dispatcher.
+    pub fn http_agent_phases() -> &'static Mutex<HashMap<i64, bool>> {
+        static H: OnceLock<Mutex<HashMap<i64, bool>>> = OnceLock::new();
+        H.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     /// Server registry — `net.createServer(...)` returns a handle here.
     /// Separate from the socket map: server handles host an accept-loop
     /// shutdown channel and a bound port; sockets host a per-connection
@@ -359,6 +370,7 @@ enum PendingNetEvent {
     End(i64),
     Close(i64),
     Error(i64, String),
+    AbortError(i64),
     /// Issue #1123 followup — accept-loop on a `net.Server` produced
     /// a new client socket. Fires the server's `'connection'`
     /// listeners with the new socket handle.
@@ -1555,6 +1567,26 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "error");
             }
+            PendingNetEvent::AbortError(id) => {
+                let cbs = listeners_for(id, "error");
+                if cbs.is_empty() {
+                    continue;
+                }
+                let mut frame = dispatch_custody::DispatchFrame::park(cbs);
+                extern "C" {
+                    fn js_abort_error_value() -> f64;
+                }
+                frame.set_payload(js_abort_error_value().to_bits());
+                for i in 0..frame.len() {
+                    let cb = frame.cb(i);
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
+                            .call1(f64::from_bits(frame.payload_bits()));
+                    }
+                }
+                drop(frame);
+                lifecycle::drain_once_listeners(id, "error");
+            }
             PendingNetEvent::End(id) => {
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
@@ -1755,6 +1787,99 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
         .get(&id)
         .and_then(|m| m.get(event).cloned())
         .unwrap_or_default()
+}
+
+type HttpAgentSocketEventHook = extern "C" fn(i64, *const u8, usize);
+
+fn http_agent_socket_event_hook() -> &'static Mutex<Option<HttpAgentSocketEventHook>> {
+    static HOOK: std::sync::OnceLock<Mutex<Option<HttpAgentSocketEventHook>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| Mutex::new(None))
+}
+
+/// Mark an alloc-only net.Socket handle as the public facade for an HTTP
+/// Agent pool slot. `active != 0` selects the in-use listener shape; zero is
+/// the free-pool shape.
+#[no_mangle]
+pub extern "C" fn js_ext_net_set_http_agent_phase(handle: i64, active: i32) {
+    if is_net_socket_handle(handle) {
+        statics::http_agent_phases()
+            .lock()
+            .unwrap()
+            .insert(handle, active != 0);
+    }
+}
+
+/// Register the HTTP-side lifecycle hook used when user code manually emits
+/// an error on an idle Agent socket.
+#[no_mangle]
+pub extern "C" fn js_ext_net_register_http_agent_socket_event_hook(hook: HttpAgentSocketEventHook) {
+    *http_agent_socket_event_hook().lock().unwrap() = Some(hook);
+}
+
+/// Synchronous EventEmitter `socket.emit(event, ...args)` surface. Network
+/// generated events still travel through the pending-event pump; this entry
+/// point covers explicit user emission and preserves `once()` removal.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_emit(
+    handle: i64,
+    event_ptr: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let Some(event) = lifecycle::event_name_from_ptr(event_ptr) else {
+        return f64::from_bits(0x7FFC_0000_0000_0003);
+    };
+    let callbacks = listeners_for(handle, &event);
+    let args = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    for callback in callbacks.iter().copied() {
+        if callback == 0 {
+            continue;
+        }
+        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        match args {
+            [] => {
+                let _ = closure.call0();
+            }
+            [arg] => {
+                let _ = closure.call1(*arg);
+            }
+            [first, second, ..] => {
+                let _ = closure.call2(*first, *second);
+            }
+        }
+    }
+    lifecycle::drain_once_listeners(handle, &event);
+    if statics::http_agent_phases()
+        .lock()
+        .unwrap()
+        .contains_key(&handle)
+    {
+        if event == "error" {
+            js_ext_net_destroy_socket(handle);
+        }
+        if let Some(hook) = *http_agent_socket_event_hook().lock().unwrap() {
+            hook(handle, event.as_ptr(), event.len());
+        }
+    }
+    f64::from_bits(if callbacks.is_empty() {
+        0x7FFC_0000_0000_0003
+    } else {
+        0x7FFC_0000_0000_0004
+    })
+}
+
+/// Queue a Node AbortError on a socket. Used by Agent.createConnection's
+/// AbortSignal integration so an already-aborted signal still emits after the
+/// caller has had a chance to attach `once(socket, 'error')`.
+#[no_mangle]
+pub extern "C" fn js_ext_net_socket_emit_abort_error(handle: i64) {
+    js_ext_net_destroy_socket(handle);
+    push_event(PendingNetEvent::AbortError(handle));
 }
 
 // `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so

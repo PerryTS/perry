@@ -92,6 +92,9 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
+        socket_handle: 0,
+        abort_signal_bits: 0,
+        abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -109,6 +112,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         listeners: incoming_listeners,
         encoding: None,
         pipes: Vec::new(),
+        socket_handle: 0,
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -158,6 +162,9 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
+        socket_handle: 0,
+        abort_signal_bits: 0,
+        abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -287,6 +294,9 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
+        socket_handle: 0,
+        abort_signal_bits: 0,
+        abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,

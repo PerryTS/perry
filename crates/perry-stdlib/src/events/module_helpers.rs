@@ -103,6 +103,12 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
         EventHelperTarget::EventTarget(target) => {
             perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
         }
+        EventHelperTarget::NetSocket(handle) => {
+            extern "C" {
+                fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
+            }
+            js_ext_net_socket_listeners(handle, event_name_ptr as i64) as *mut ArrayHeader
+        }
         EventHelperTarget::Stream(handle) => {
             stream_listeners_for_heap_object(handle, event_name_ptr)
                 .unwrap_or_else(|| js_array_alloc(0))
@@ -138,6 +144,12 @@ pub unsafe extern "C" fn js_events_listener_count(
             undefined_bits(),
         ),
         EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
+        EventHelperTarget::NetSocket(handle) => {
+            extern "C" {
+                fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
+            }
+            js_ext_net_socket_listener_count(handle, event_name_ptr as i64)
+        }
         EventHelperTarget::Stream(handle) => {
             let event = js_nanbox_string(event_name_ptr as i64);
             perry_runtime::node_stream::js_node_stream_method_listener_count(handle, event)
@@ -165,6 +177,7 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
         EventHelperTarget::EventTarget(target) => {
             perry_runtime::event_target::js_event_target_get_max_listeners(target)
         }
+        EventHelperTarget::NetSocket(_) => 10.0,
         EventHelperTarget::Stream(handle) => {
             perry_runtime::node_stream::js_node_stream_method_get_max_listeners(handle)
         }
@@ -212,6 +225,7 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                     let _ =
                         perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
                 }
+                EventHelperTarget::NetSocket(_) => {}
                 EventHelperTarget::Stream(handle) => {
                     let _ = perry_runtime::node_stream::js_node_stream_method_set_max_listeners(
                         handle, n,

@@ -74,6 +74,7 @@ use client_dispatch::dispatch_request;
 
 // Client-request event drain helpers (#4905) — extracted from this file
 // to stay under the 2000-line lint cap.
+mod client_abort;
 mod client_events;
 
 // Client OutgoingMessage write/end callback + backpressure + setTimeout
@@ -122,6 +123,19 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 /// Events queued by the tokio blocking-pool worker for the main thread.
 pub(crate) enum PendingHttpEvent {
+    /// A ClientRequest acquired its public socket identity. Queued so callers
+    /// can attach `req.on('socket', ...)` after `http.get()` returns.
+    Socket { request_handle: Handle },
+    /// An `options.signal` listener fired for a ClientRequest.
+    SignalAbort { request_handle: Handle },
+    /// Generation-guarded retirement of a public Agent socket facade that
+    /// remained idle long enough for an unsolicited-data/remote-close poll.
+    AgentIdleExpire {
+        agent_handle: Handle,
+        key: String,
+        socket: Handle,
+        generation: u64,
+    },
     Response {
         request_handle: Handle,
         status: u16,
@@ -348,6 +362,12 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
         visitor.visit_i64_slot(&mut req.response_callback);
         visitor.visit_i64_slot(&mut req.end_callback);
+        if req.abort_signal_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut req.abort_signal_bits);
+        }
+        if req.abort_listener_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut req.abort_listener_bits);
+        }
         for cb in &mut req.pending_write_callbacks {
             visitor.visit_i64_slot(cb);
         }
@@ -455,6 +475,11 @@ pub struct ClientRequestHandle {
     agent_queued: bool,
     /// Whether this request consumed an idle Agent slot.
     reused_socket: bool,
+    /// Stable public net.Socket facade assigned by the Agent (or by the
+    /// implicit global pool for requests without an explicit Agent).
+    socket_handle: Handle,
+    abort_signal_bits: u64,
+    abort_listener_bits: u64,
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
     tls: tls_client::TlsOptions,
@@ -498,6 +523,7 @@ pub struct IncomingMessageHandle {
     /// way (`res.pipe(new PassThrough())`), so without it the destination
     /// stream never receives data and `response.text()` never settles.
     pub pipes: Vec<u64>,
+    pub socket_handle: Handle,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -636,6 +662,9 @@ fn make_request_handle(
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
+        socket_handle: 0,
+        abort_signal_bits: 0,
+        abort_listener_bits: 0,
         tls: tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -651,11 +680,23 @@ fn make_request_handle(
         .unwrap_or_else(|| "localhost::".to_string());
         let admission = agent::admit_request(agent_handle, &key, handle);
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| match admission {
-            agent::PoolAdmission::Active { reused } => {
+            agent::PoolAdmission::Active { reused, socket } => {
                 request.agent_active = true;
                 request.reused_socket = reused;
+                request.socket_handle = socket;
+                push_event(PendingHttpEvent::Socket {
+                    request_handle: handle,
+                });
             }
             agent::PoolAdmission::Queued => request.agent_queued = true,
+        });
+    } else {
+        let socket = agent::allocate_agent_socket();
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+            request.socket_handle = socket;
+        });
+        push_event(PendingHttpEvent::Socket {
+            request_handle: handle,
         });
     }
     // #4909 — `options.timeout` arms the inactivity timer as soon as the
@@ -1010,6 +1051,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         (method, url, headers, timeout, agent_handle)
     };
     let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
+    client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
     continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     handle
@@ -1067,6 +1109,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         callback,
         agent_handle,
     );
+    client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
                                          // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1113,6 +1156,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
     let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    client_abort::attach_request_signal(handle, parsed.opts);
     attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
@@ -1336,11 +1380,15 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
         if !already_active {
             let key = agent::request_key(&url);
             match agent::admit_request(agent_handle, &key, handle) {
-                agent::PoolAdmission::Active { reused } => {
+                agent::PoolAdmission::Active { reused, socket } => {
                     with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
                         request.agent_active = true;
                         request.agent_queued = false;
                         request.reused_socket = reused;
+                        request.socket_handle = socket;
+                    });
+                    push_event(PendingHttpEvent::Socket {
+                        request_handle: handle,
                     });
                 }
                 agent::PoolAdmission::Queued => {
@@ -1403,7 +1451,7 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
 /// Successful responses may leave one observable idle slot when keepAlive is
 /// enabled; error/abort/destroy paths always release without retaining it.
 pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bool) {
-    let Some((agent_handle, key, was_active)) =
+    let Some((agent_handle, key, was_active, socket)) =
         with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
             let active = request.agent_active;
             request.agent_active = false;
@@ -1411,6 +1459,7 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
                 request.agent_handle,
                 agent::request_key(&request.url),
                 active,
+                request.socket_handle,
             )
         })
     else {
@@ -1420,12 +1469,13 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
         return;
     }
 
-    let mut next = agent::release_request(agent_handle, &key, keep_alive);
-    while let Some((next_handle, reused)) = next {
+    let mut next = agent::release_request(agent_handle, &key, socket, keep_alive);
+    while let Some((next_handle, reused, next_socket)) = next {
         let next_snapshot = with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
             request.agent_active = true;
             request.agent_queued = false;
             request.reused_socket = reused;
+            request.socket_handle = next_socket;
             (request.ended && !request.completed).then(|| {
                 (
                     request.method.clone(),
@@ -1440,13 +1490,16 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
         })
         .flatten();
         if let Some(snapshot) = next_snapshot {
+            push_event(PendingHttpEvent::Socket {
+                request_handle: next_handle,
+            });
             dispatch_request_snapshot(next_handle, snapshot);
             break;
         }
         with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
             request.agent_active = false;
         });
-        next = agent::release_request(agent_handle, &key, false);
+        next = agent::release_request(agent_handle, &key, next_socket, false);
     }
 }
 
@@ -1780,6 +1833,18 @@ pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
     out
 }
 
+#[no_mangle]
+pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
+        if response.socket_handle == 0 {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            f64::from_bits(POINTER_TAG | (response.socket_handle as u64 & PTR_MASK))
+        }
+    })
+    .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+
 fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> {
     extern "C" {
         fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
@@ -1876,6 +1941,20 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
         };
         count += 1;
         match ev {
+            PendingHttpEvent::Socket { request_handle } => {
+                client_events::fire_request_socket_event(request_handle);
+            }
+            PendingHttpEvent::SignalAbort { request_handle } => {
+                client_abort::handle_request_signal_abort(request_handle);
+            }
+            PendingHttpEvent::AgentIdleExpire {
+                agent_handle,
+                key,
+                socket,
+                generation,
+            } => {
+                agent::expire_free_socket(agent_handle, &key, socket, generation);
+            }
             PendingHttpEvent::Response {
                 request_handle,
                 status,

@@ -435,6 +435,10 @@ fn read_event(event_ptr: i64) -> Option<String> {
     unsafe { string_from_header_i64(event_ptr) }
 }
 
+pub(crate) fn event_name_from_ptr(event_ptr: i64) -> Option<String> {
+    read_event(event_ptr)
+}
+
 fn register_listener_with_flag(handle: i64, event: String, cb: i64, once: bool) {
     if cb == 0 {
         return;
@@ -689,7 +693,25 @@ pub unsafe extern "C" fn js_net_socket_listener_count(handle: i64, event_ptr: i6
     let Some(event) = read_event(event_ptr) else {
         return 0.0;
     };
-    listener_count_at_handle(handle, &event)
+    let public = listener_count_at_handle(handle, &event);
+    let internal = crate::statics::http_agent_phases()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .map(|active| match event.as_str() {
+            "error" => 1.0,
+            "end" if *active => 2.0,
+            "end" => 1.0,
+            _ => 0.0,
+        })
+        .unwrap_or(0.0);
+    public + internal
+}
+
+/// Collision-proof listener-count entry for external net handles.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64 {
+    js_net_socket_listener_count(handle, event_ptr)
 }
 
 /// `socket.eventNames()` — return an array of registered event names.
@@ -719,6 +741,11 @@ pub unsafe extern "C" fn js_net_socket_listeners(handle: i64, event_ptr: i64) ->
         return unsafe { perry_ffi::js_array_alloc(0) } as i64;
     };
     listeners_array_for_event(handle, &event) as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64) -> i64 {
+    js_net_socket_listeners(handle, event_ptr)
 }
 
 /// `socket.rawListeners(event)` — see `js_net_socket_listeners`.

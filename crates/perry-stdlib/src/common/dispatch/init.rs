@@ -692,6 +692,18 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // omission rather than a decision.
     #[cfg(feature = "bundled-events")]
     perry_runtime::js_set_native_events_dispatch(crate::events::js_events_native_dispatch);
+    #[cfg(all(feature = "external-events-construct", not(feature = "bundled-events")))]
+    {
+        extern "C" {
+            fn js_events_native_dispatch(
+                method: *const u8,
+                method_len: usize,
+                args: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+        perry_runtime::js_set_native_events_dispatch(js_events_native_dispatch);
+    }
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);

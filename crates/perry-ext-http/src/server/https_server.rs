@@ -251,6 +251,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                 let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
                                 let busy = Arc::new(AtomicUsize::new(0));
                                 let read_active = Arc::new(AtomicBool::new(false));
+                                let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
                                 let close = Arc::new(tokio::sync::Notify::new());
                                 CONNECTIONS.lock().unwrap().insert(
                                     conn_id,
@@ -279,22 +280,34 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                     let io = TokioIo::new(ReadActivity::new(
                                         tls_stream,
                                         read_active.clone(),
+                                        rewrite_chunked_header.clone(),
                                     ));
+                                    let close_for_service = close.clone();
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
                                         let busy = busy.clone();
                                         let read_active = read_active.clone();
+                                        let connection_close = close_for_service.clone();
+                                        let rewrite_chunked_header = rewrite_chunked_header.clone();
                                         async move {
                                             busy.fetch_add(1, Ordering::SeqCst);
                                             read_active.store(false, Ordering::SeqCst);
-                                            let res = handle_https_request(server_handle, peer, req, request_tx).await;
+                                            let res = handle_https_request(
+                                                server_handle,
+                                                peer,
+                                                req,
+                                                request_tx,
+                                                connection_close,
+                                                rewrite_chunked_header,
+                                            )
+                                            .await;
                                             busy.fetch_sub(1, Ordering::SeqCst);
                                             res
                                         }
                                     });
-                                    let conn = http1::Builder::new()
-                                        .serve_connection(io, service)
-                                        .with_upgrades();
+                                    let mut builder = http1::Builder::new();
+                                    builder.auto_date_header(false).title_case_headers(true);
+                                    let conn = builder.serve_connection(io, service).with_upgrades();
                                     tokio::pin!(conn);
                                     tokio::select! {
                                         result = &mut conn => {
@@ -342,6 +355,8 @@ async fn handle_https_request(
     peer: SocketAddr,
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
+    connection_close: Arc<tokio::sync::Notify>,
+    rewrite_chunked_header: Arc<AtomicBool>,
 ) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -360,6 +375,7 @@ async fn handle_https_request(
     // #2132 — capture before `req` / `headers_lower` are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    let req_te = headers_lower.get("te").cloned();
     // #5080 — `Expect: 100-continue` routes to `'checkContinue'` (hyper
     // auto-sends the interim `100 Continue` once the body is polled below).
     let expects_continue = headers_lower
@@ -380,7 +396,13 @@ async fn handle_https_request(
         peer.port(),
     ));
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
+    let transport_destroyed = Arc::new(AtomicBool::new(false));
+    let sr_handle = alloc_server_response_for_request(
+        response_tx,
+        im_handle,
+        Some(connection_close),
+        Some(transport_destroyed.clone()),
+    );
     let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
         match get_handle::<HttpsServer>(server_handle) {
             Some(s) => (
@@ -416,13 +438,31 @@ async fn handle_https_request(
     perry_ffi::notify_main_thread();
     match response_rx.await {
         Ok(mut shape) => {
+            if http_version == hyper::Version::HTTP_10 {
+                shape.response_version = Some(hyper::Version::HTTP_10);
+            }
+            let server_closing = get_handle::<HttpsServer>(server_handle)
+                .map(|server| !server.base.listening)
+                .unwrap_or(false);
+            let default_connection = if server_closing {
+                Some("close")
+            } else {
+                req_connection.as_deref()
+            };
             shape.apply_default_connection_headers(
                 http_version,
-                req_connection.as_deref(),
+                default_connection,
                 keep_alive_timeout,
             );
+            let chunked = shape.apply_http10_chunked_framing(http_version, req_te.as_deref());
+            if chunked {
+                rewrite_chunked_header.store(true, Ordering::Release);
+            } else {
+                shape.apply_http10_eof_framing(http_version, req_te.as_deref());
+            }
             Ok(shape.into_hyper())
         }
+        Err(_) if transport_destroyed.load(Ordering::Acquire) => std::future::pending().await,
         Err(_) => Ok(Response::builder()
             .status(500)
             .body(Full::new(Bytes::from("Handler error")).boxed())

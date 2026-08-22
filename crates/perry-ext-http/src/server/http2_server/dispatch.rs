@@ -321,9 +321,11 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
         let shape = HyperResponseShape {
             status: stream.response_status,
             status_message: None,
+            response_version: None,
             headers,
             trailers: Vec::new(),
             body: crate::server::response::ShapeBody::Full(body),
+            auto_content_length: false,
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);

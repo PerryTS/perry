@@ -521,6 +521,15 @@ pub unsafe extern "C" fn js_register_net_socket_handle_probe(f: NetSocketHandleP
     NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
+/// Query the registered bundled/external net.Socket probe without creating a
+/// link-time dependency on either implementation.
+#[no_mangle]
+pub extern "C" fn js_is_registered_net_socket_handle(handle: i64) -> i32 {
+    net_socket_handle_probe()
+        .map(|probe| unsafe { probe(handle) } as i32)
+        .unwrap_or(0)
+}
+
 #[inline]
 pub fn ffi_handle_exists_probe() -> Option<FfiHandleExistsProbeFn> {
     let p = FFI_HANDLE_EXISTS_PROBE_PTR.load(Ordering::Acquire);
@@ -545,6 +554,14 @@ pub fn ffi_handle_exists(id: i64) -> bool {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_ffi_handle_exists_probe(f: FfiHandleExistsProbeFn) {
     FFI_HANDLE_EXISTS_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Query the registered `perry-ffi` handle probe from extension crates that
+/// need to recognize handle-backed EventEmitter implementations without a
+/// direct dependency on the owning wrapper.
+#[no_mangle]
+pub extern "C" fn js_is_registered_ffi_handle(handle: i64) -> i32 {
+    ffi_handle_exists(handle) as i32
 }
 
 #[inline]

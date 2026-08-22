@@ -265,12 +265,33 @@ pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct ReadActivity<S> {
     inner: S,
     saw_bytes: Arc<AtomicBool>,
+    response_version_rewrite_offset: Option<usize>,
+    rewrite_chunked_header: Arc<AtomicBool>,
+    pending_write: Vec<u8>,
+    pending_original_len: usize,
 }
 
 impl<S> ReadActivity<S> {
-    pub(crate) fn new(inner: S, saw_bytes: Arc<AtomicBool>) -> Self {
-        Self { inner, saw_bytes }
+    pub(crate) fn new(
+        inner: S,
+        saw_bytes: Arc<AtomicBool>,
+        rewrite_chunked_header: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inner,
+            saw_bytes,
+            response_version_rewrite_offset: None,
+            rewrite_chunked_header,
+            pending_write: Vec::new(),
+            pending_original_len: 0,
+        }
     }
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for ReadActivity<S> {
@@ -295,7 +316,76 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+        let this = self.get_mut();
+        if !this.pending_write.is_empty() {
+            return match Pin::new(&mut this.inner).poll_write(cx, &this.pending_write) {
+                Poll::Ready(Ok(written)) if written == this.pending_write.len() => {
+                    this.pending_write.clear();
+                    Poll::Ready(Ok(std::mem::take(&mut this.pending_original_len)))
+                }
+                Poll::Ready(Ok(written)) if written > 0 => {
+                    this.pending_write.drain(..written);
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Ok(_)) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+                Poll::Pending => Poll::Pending,
+            };
+        }
+        if this.response_version_rewrite_offset.is_none() && buf.starts_with(b"HTTP/1.0 ") {
+            this.response_version_rewrite_offset = Some(0);
+        }
+        let rewrite_chunked = this.rewrite_chunked_header.load(Ordering::Acquire);
+        if this.response_version_rewrite_offset.is_none() && !rewrite_chunked {
+            return Pin::new(&mut this.inner).poll_write(cx, buf);
+        }
+        let mut rewritten = buf.to_vec();
+        if let Some(offset) = this.response_version_rewrite_offset {
+            if offset <= 7 && 7 - offset < rewritten.len() {
+                rewritten[7 - offset] = b'1';
+            }
+        }
+        if rewrite_chunked {
+            const CONTENT_LENGTH: &[u8] = b"Content-Length: ";
+            if let Some(start) = find_bytes(&rewritten, CONTENT_LENGTH) {
+                let value_start = start + CONTENT_LENGTH.len();
+                if let Some(relative_end) = find_bytes(&rewritten[value_start..], b"\r\n") {
+                    let end = value_start + relative_end;
+                    rewritten.splice(start..end, b"Transfer-Encoding: chunked".iter().copied());
+                    this.rewrite_chunked_header.store(false, Ordering::Release);
+                }
+            }
+        }
+        let poll = Pin::new(&mut this.inner).poll_write(cx, &rewritten);
+        match poll {
+            Poll::Ready(Ok(written)) if written == rewritten.len() => {
+                if let Some(offset) = this.response_version_rewrite_offset {
+                    let next = offset.saturating_add(buf.len());
+                    this.response_version_rewrite_offset = (next < 9).then_some(next);
+                }
+                Poll::Ready(Ok(buf.len()))
+            }
+            Poll::Ready(Ok(written)) if written > 0 => {
+                this.pending_write.extend_from_slice(&rewritten[written..]);
+                this.pending_original_len = buf.len();
+                this.response_version_rewrite_offset = None;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(Ok(_)) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(Err(error)) => {
+                this.response_version_rewrite_offset = None;
+                Poll::Ready(Err(error))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
     fn poll_flush(
         self: Pin<&mut Self>,
@@ -620,6 +710,7 @@ fn serve_http_connection(
     let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
     let busy = Arc::new(AtomicUsize::new(0));
     let read_active = Arc::new(AtomicBool::new(false));
+    let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
     let close = Arc::new(tokio::sync::Notify::new());
     let read_active_for_io = read_active.clone();
     let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
@@ -667,26 +758,42 @@ fn serve_http_connection(
         } else {
             crate::server::raw_upgrade::PrefixedStream::empty(stream)
         };
-        let io = TokioIo::new(ReadActivity::new(stream, read_active_for_io));
+        let io = TokioIo::new(ReadActivity::new(
+            stream,
+            read_active_for_io,
+            rewrite_chunked_header.clone(),
+        ));
+        let close_for_service = close.clone();
         let service = service_fn(move |req: Request<Incoming>| {
             let request_tx = request_tx.clone();
             let upgrade_tx = upgrade_tx.clone();
             let busy = busy.clone();
             let read_active = read_active.clone();
+            let connection_close = close_for_service.clone();
+            let rewrite_chunked_header = rewrite_chunked_header.clone();
             async move {
                 busy.fetch_add(1, Ordering::SeqCst);
                 // The pending head is now an in-flight
                 // request; `busy` covers activity until
                 // the response ships (#4971).
                 read_active.store(false, Ordering::SeqCst);
-                let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
+                let res = handle_request(
+                    server_handle,
+                    peer,
+                    req,
+                    request_tx,
+                    upgrade_tx,
+                    connection_close,
+                    rewrite_chunked_header,
+                )
+                .await;
                 busy.fetch_sub(1, Ordering::SeqCst);
                 res
             }
         });
-        let conn = http1::Builder::new()
-            .serve_connection(io, service)
-            .with_upgrades();
+        let mut builder = http1::Builder::new();
+        builder.auto_date_header(false).title_case_headers(true);
+        let conn = builder.serve_connection(io, service).with_upgrades();
         tokio::pin!(conn);
         tokio::select! {
             result = &mut conn => {
@@ -1155,6 +1262,8 @@ async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
     upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
+    connection_close: Arc<tokio::sync::Notify>,
+    rewrite_chunked_header: Arc<AtomicBool>,
 ) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -1176,6 +1285,7 @@ async fn handle_request(
     // `headers_lower`) are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    let req_te = headers_lower.get("te").cloned();
     // #5080 — `Expect: 100-continue` routes to `'checkContinue'` when a
     // listener exists. hyper auto-sends the interim `100 Continue` once the
     // body below is polled, so the client's withheld body arrives before
@@ -1248,7 +1358,13 @@ async fn handle_request(
     let im_handle = alloc_incoming_message(im);
 
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
+    let transport_destroyed = Arc::new(AtomicBool::new(false));
+    let sr_handle = alloc_server_response_for_request(
+        response_tx,
+        im_handle,
+        Some(connection_close),
+        Some(transport_destroyed.clone()),
+    );
 
     let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
         match get_handle::<HttpServer>(server_handle) {
@@ -1290,13 +1406,31 @@ async fn handle_request(
 
     match response_rx.await {
         Ok(mut shape) => {
+            if http_version == hyper::Version::HTTP_10 {
+                shape.response_version = Some(hyper::Version::HTTP_10);
+            }
+            let server_closing = get_handle::<HttpServer>(server_handle)
+                .map(|server| !server.listening)
+                .unwrap_or(false);
+            let default_connection = if server_closing {
+                Some("close")
+            } else {
+                req_connection.as_deref()
+            };
             shape.apply_default_connection_headers(
                 http_version,
-                req_connection.as_deref(),
+                default_connection,
                 keep_alive_timeout,
             );
+            let chunked = shape.apply_http10_chunked_framing(http_version, req_te.as_deref());
+            if chunked {
+                rewrite_chunked_header.store(true, Ordering::Release);
+            } else {
+                shape.apply_http10_eof_framing(http_version, req_te.as_deref());
+            }
             Ok(shape.into_hyper())
         }
+        Err(_) if transport_destroyed.load(Ordering::Acquire) => std::future::pending().await,
         Err(_) => Ok(Response::builder()
             .status(500)
             .body(Full::new(Bytes::from("Handler error")).boxed())
@@ -1912,17 +2046,20 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             // Set-Cookie) into one entry per element so they emit a separate
             // wire line each (#4826).
             let mut headers = sr.snapshot_headers();
-            if !sr.headers.contains_key("content-length")
+            let auto_content_length = !sr.headers.contains_key("content-length")
                 && !sr.headers.contains_key("transfer-encoding")
-            {
+                && sr.trailers.is_empty();
+            if auto_content_length {
                 headers.push(("Content-Length".to_string(), body.len().to_string()));
             }
             let shape = HyperResponseShape {
                 status: sr.status_code,
                 status_message: sr.status_message.clone(),
+                response_version: None,
                 headers,
                 trailers: Vec::new(),
                 body: crate::server::response::ShapeBody::Full(body),
+                auto_content_length,
             };
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);

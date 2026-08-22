@@ -103,13 +103,13 @@ pub(crate) async fn handle_h2_request(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
         (
-            alloc_server_response_for_request(dummy_tx, im_handle),
+            alloc_server_response_for_request(dummy_tx, im_handle, None, None),
             stream_handle,
             headers_vec,
         )
     } else {
         (
-            alloc_server_response_for_request(response_tx, im_handle),
+            alloc_server_response_for_request(response_tx, im_handle, None, None),
             0,
             Vec::new(),
         )
@@ -243,9 +243,11 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
         let shape = HyperResponseShape {
             status: stream.response_status,
             status_message: None,
+            response_version: None,
             headers,
             trailers: Vec::new(),
             body: crate::server::response::ShapeBody::Full(Vec::new()),
+            auto_content_length: false,
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);
