@@ -181,6 +181,7 @@ fn try_join_well_formed(
         );
         for index in 0..length as usize {
             if index > 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): String payloads contain raw bytes, not traced slots.
                 if separator_len == 1 {
                     *cursor = *separator_data;
                 } else if separator_len != 0 {
@@ -324,6 +325,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
             );
             ptr::write_bytes(new_data, 0, new_capacity as usize);
             if self.byte_len != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): Builder growth copies raw string payload bytes.
                 ptr::copy_nonoverlapping(
                     crate::string::string_data(old_result),
                     new_data,
@@ -365,6 +367,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
         let output = crate::string::string_data(result) as *mut u8;
         if flags & STRING_FLAG_HAS_LONE_SURROGATES == 0 {
             unsafe {
+                // GC_STORE_AUDIT(POINTER_FREE): String payloads contain raw bytes, not traced slots.
                 ptr::copy_nonoverlapping(
                     data,
                     output.add(self.byte_len as usize),
@@ -383,6 +386,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
             if remaining.len() >= 3 && remaining[0] == 0xED && (0xA0..=0xAF).contains(&remaining[1])
             {
                 unsafe {
+                    // GC_STORE_AUDIT(POINTER_FREE): WTF-8 code units are raw string payload bytes.
                     ptr::copy_nonoverlapping(
                         remaining.as_ptr(),
                         output.add(self.byte_len as usize),
@@ -414,12 +418,14 @@ impl<'scope> DirectJoinBuilder<'scope> {
                         .encode_utf8(&mut encoded)
                         .as_bytes();
                     unsafe {
+                        // GC_STORE_AUDIT(POINTER_FREE): Canonical UTF-8 is raw string payload data.
                         ptr::copy_nonoverlapping(encoded.as_ptr(), output.add(high_pos), 4);
                     }
                     self.byte_len += 1;
                     self.surrogate_pair_count += 1;
                 } else {
                     unsafe {
+                        // GC_STORE_AUDIT(POINTER_FREE): WTF-8 code units are raw string payload bytes.
                         ptr::copy_nonoverlapping(
                             remaining.as_ptr(),
                             output.add(self.byte_len as usize),
