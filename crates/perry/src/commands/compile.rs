@@ -46,6 +46,7 @@ mod parse_cache;
 mod post_link;
 mod precompile_capture;
 mod reachability;
+mod size_report;
 mod update_config;
 mod windows_target;
 // pub(crate): commands/deps.rs (the `check --check-deps` dependency checker)
@@ -111,6 +112,7 @@ use resolve::{
     is_recognized_text_asset, parse_native_library_manifest, parse_package_specifier,
     resolve_import,
 };
+use size_report::emit_size_report;
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
     dedup_ui_lib_against_linked_libs, localize_stdlib_stub_symbols,

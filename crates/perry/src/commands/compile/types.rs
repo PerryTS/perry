@@ -234,6 +234,19 @@ pub struct CompileArgs {
     #[arg(long)]
     pub debug_symbols: bool,
 
+    /// Write `<output>.size-report.md`: a per-crate/per-function size
+    /// breakdown of the final linked binary, attributed from its own
+    /// symbol table (real ELF sizes, or address-delta-within-section on
+    /// Mach-O, which carries no symbol size) via `object` + demangled
+    /// with `rustc-demangle`. Promotes to `PERRY_KEEP_SYMBOLS` (the same
+    /// strip-skip knob `--debug-symbols` uses) so there is a symbol
+    /// table to read; unlike `--debug-symbols` this does not also request
+    /// `-g` DWARF, so the binary grows only by the symbol table, not by
+    /// full debug info. Off by default; the report itself and the
+    /// resulting unstripped binary are the tradeoff for asking.
+    #[arg(long)]
+    pub report_size: bool,
+
     /// Disable the per-module object cache.
     /// By default Perry caches each module's object bytes keyed by a
     /// hash of the source plus every `CompileOptions` field that can

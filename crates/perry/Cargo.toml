@@ -69,6 +69,10 @@ jsonwebtoken.workspace = true
 semver.workspace = true
 dotenvy = "0.15"
 rayon = "1.10"
+# `--report-size`: read the final linked binary's own symbol table (ELF/Mach-O/PE
+# via `object`, demangled via `rustc-demangle`) to attribute size by crate.
+object = { version = "0.37", default-features = false, features = ["read", "std"] }
+rustc-demangle = "0.1"
 regex.workspace = true
 
 # Cross-platform file locking (Unix flock + Windows LockFileEx) — used by

@@ -345,6 +345,14 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
 
+    // `--report-size` needs a symbol table to attribute size by crate, but not
+    // full DWARF — reuse the lighter `PERRY_KEEP_SYMBOLS` strip-skip knob
+    // rather than `PERRY_DEBUG_SYMBOLS`, so asking for a size report doesn't
+    // also pay for `-g` debug info it has no use for.
+    if args.report_size && std::env::var_os("PERRY_KEEP_SYMBOLS").is_none() {
+        std::env::set_var("PERRY_KEEP_SYMBOLS", "1");
+    }
+
     // #6125: resolve the CPU-baseline knob (`--march` / env / perry.toml
     // `[build] march` / `[build] native_tuning`) into the canonical
     // PERRY_TARGET_CPU env var, exactly like `--debug-symbols` above.
@@ -6629,6 +6637,8 @@ pub fn run_with_parse_cache(
     emit_attestation_sidecar(&ctx, &exe_path, format);
 
     print_binary_size(format, &exe_path);
+
+    emit_size_report(format, &exe_path, args.report_size);
 
     cleanup_intermediates(args.keep_intermediates, &obj_cleanup_paths);
 
