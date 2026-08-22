@@ -151,6 +151,11 @@ fn compile_ir_for_module_with_opts(module: Module, opts: CompileOptions) -> anyh
     Ok(String::from_utf8(compile_module(&module, opts)?)?)
 }
 
+fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
+    ir.contains("method_direct.inline_deref")
+        && ir.contains("load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire")
+}
+
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
     compile_artifact_json_for_module(module(name, body))
 }
@@ -11561,7 +11566,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "public method wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
     );
     assert!(
-        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+        contains_inline_direct_method_shape_guard(caller_ir)
             && caller_ir.contains("typed_i32_method.fast")
             && caller_ir.contains("typed_i32_method.generic")
             && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
@@ -11751,7 +11756,7 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "public method wrapper should guard/unbox string args, call the raw clone, box the result, and keep generic fallback:\n{wrapper_ir}"
     );
     assert!(
-        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+        contains_inline_direct_method_shape_guard(caller_ir)
             && caller_ir.contains("typed_string_method.fast")
             && caller_ir.contains("typed_string_method.generic")
             && caller_ir.contains("call i32 @js_typed_string_arg_guard")
@@ -11912,10 +11917,7 @@ fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
         )),
         "generic method ABI body must remain emitted separately:\n{ir}"
     );
-    assert!(
-        ir.contains("call i32 @js_method_direct_shape_guard"),
-        "{ir}"
-    );
+    assert!(contains_inline_direct_method_shape_guard(&ir), "{ir}");
     assert!(ir.contains("call i32 @js_typed_i1_arg_guard"), "{ir}");
     assert!(ir.contains("call i32 @js_typed_i1_arg_to_raw"), "{ir}");
     assert!(
@@ -12058,7 +12060,7 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
         "public method wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
     assert!(
-        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+        contains_inline_direct_method_shape_guard(caller_ir)
             && caller_ir.contains("call i32 @js_typed_f64_arg_guard")
             && caller_ir.contains("call double @js_typed_f64_arg_to_raw")
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
@@ -12173,10 +12175,7 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
         )),
         "generic method ABI body must remain emitted separately:\n{ir}"
     );
-    assert!(
-        ir.contains("call i32 @js_method_direct_shape_guard"),
-        "{ir}"
-    );
+    assert!(contains_inline_direct_method_shape_guard(&ir), "{ir}");
     assert!(ir.contains("call i32 @js_typed_f64_arg_guard"), "{ir}");
     assert!(ir.contains("call double @js_typed_f64_arg_to_raw"), "{ir}");
     assert!(
