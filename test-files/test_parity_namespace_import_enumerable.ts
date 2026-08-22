@@ -1,0 +1,11 @@
+import * as schema from "./fixtures/parity_5891/namespace_import/schema.ts";
+const expected = '["alpha","beta","gammaEnum","helper"]';
+if (JSON.stringify(Object.keys(schema).sort()) !== expected) throw new Error("keys");
+const forIn: string[] = [];
+for (const k in schema) forIn.push(k);
+if (JSON.stringify(forIn.sort()) !== expected) throw new Error("for-in");
+if (!Object.prototype.hasOwnProperty.call(schema, "alpha")) throw new Error("hasOwn alpha");
+if (Object.prototype.hasOwnProperty.call(schema, "Alpha")) throw new Error("type leaked");
+if (Object.entries(schema).length !== 4) throw new Error("entries");
+if ((schema as any).alpha.id !== 1 || (schema as any).helper() !== "H") throw new Error("member values");
+console.log("OK");

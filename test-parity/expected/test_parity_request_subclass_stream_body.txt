@@ -1,0 +1,4 @@
+typeof r.text: function
+typeof r[k]: function
+literal text: HI
+computed stream text: STREAMED

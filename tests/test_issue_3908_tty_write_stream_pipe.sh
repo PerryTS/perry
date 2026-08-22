@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PERRY="${PERRY_BIN:-${PERRY:-$ROOT/target/release/perry}}"
-FIXTURE="$ROOT/tests/issue_3908_tty_write_stream_pipe.js"
+FIXTURE="$ROOT/test-parity/node-suite/tty/write-stream-pipe.ts"
 WORKDIR="${TMPDIR:-/tmp}/perry-issue-3908-$$"
 BIN="$WORKDIR/perry-tty-pipe"
 NODE_OUT="$WORKDIR/node.out"

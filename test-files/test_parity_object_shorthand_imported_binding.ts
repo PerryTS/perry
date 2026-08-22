@@ -1,0 +1,13 @@
+import { db, helper } from "./fixtures/parity_5891/object_shorthand/client.ts";
+const a: any = { db };
+if (a.db?.tag !== "DBINST") throw new Error("closed-shape");
+const b: any = { db, n: 1 };
+if (b.db?.tag !== "DBINST" || b.n !== 1) throw new Error("sibling");
+const rest = { x: 9 };
+const c: any = { db, helper, ...rest };
+if (c.db?.tag !== "DBINST" || c.helper() !== "H" || c.x !== 9) throw new Error("spread");
+const key = "dyn";
+const d: any = { db, [key]: 5 };
+if (d.db?.tag !== "DBINST" || d.dyn !== 5) throw new Error("computed");
+if (a.db.q() !== 7) throw new Error("method call");
+console.log("OK");

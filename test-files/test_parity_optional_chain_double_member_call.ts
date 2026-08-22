@@ -1,0 +1,15 @@
+const cfg: any = {};
+const u: any = undefined;
+const obj: any = { a: { arr: [1, 2, 3] } };
+const r1 = cfg?.allowModels?.some((m: string) => m === "x");
+console.log("r1=" + (r1 === undefined ? "undefined" : r1));
+const r2 = u?.missing?.some((x: number) => x > 0);
+console.log("r2=" + (r2 === undefined ? "undefined" : r2));
+const r3 = obj?.a?.arr?.some((x: number) => x === 2);
+console.log("r3=" + r3);
+const r4 = obj?.a?.arr?.map((x: number) => x * 2).join(",");
+console.log("r4=" + r4);
+const r5 = u?.missing?.foo?.((x: number) => x > 0);
+console.log("r5=" + (r5 === undefined ? "undefined" : r5));
+const o2: any = { fn: () => 99 };
+console.log("r6=" + o2?.fn?.());

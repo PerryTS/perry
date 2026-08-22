@@ -1,0 +1,12 @@
+import { BaseObject } from "./fixtures/parity_5891/xmod_multilevel/base_object.ts";
+import { CameraBase } from "./fixtures/parity_5891/xmod_multilevel/camera_base.ts";
+import { PerspectiveLike } from "./fixtures/parity_5891/xmod_multilevel/perspective_like.ts";
+const camera: any = new PerspectiveLike(50, 1, 0.1, 100);
+console.log("isPerspective", camera.isPerspectiveLike === true);
+console.log("instanceofCamera", camera instanceof CameraBase);
+console.log("instanceofBase", camera instanceof BaseObject);
+console.log("projection", camera.projectionMatrix.decompose());
+console.log("plainBase", camera.plainBase);
+console.log("matrixWorld", camera.matrixWorld.decompose());
+console.log("update", camera.updateMatrixWorld(false));
+console.log("inverse", camera.matrixWorldInverse.decompose());

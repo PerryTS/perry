@@ -1,0 +1,8 @@
+validate valid: false
+compile rejected: true CompileError
+mentions api: true
+mentions issue: true
+Module threw: true CompileError
+Module mentions issue: true
+loader result: degraded
+program continues
