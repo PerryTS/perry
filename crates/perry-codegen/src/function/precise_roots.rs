@@ -24,9 +24,87 @@ fn parse_shadow_set(line: &str) -> Option<(usize, String)> {
     Some((idx.parse().ok()?, value.to_string()))
 }
 
+/// Characters that may continue an unquoted LLVM local name after its `%`
+/// sigil, as this module has always tokenized them. Both the fail-closed scan
+/// below and the landing-pad liveness count split on this set, so a root
+/// `%r2` never matches inside `%r21`.
+fn is_local_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '%' || c == '_' || c == '.'
+}
+
+/// Rewrite one root-alloca access (`store`/`load` of `i64`/`double` whose
+/// pointer operand is a root) into its `ptr addrspace(1)` form. `None` when
+/// the line is not such an access; the caller then falls through to the
+/// fail-closed scan.
+///
+/// One shape parse per line, then a set lookup on the pointer operand. The
+/// previous form iterated every root per line and built the candidate
+/// suffixes with `format!` inside that loop — O(lines × roots) with four
+/// allocations per pair, which on the 68 MB Claude Code entry function
+/// (~1.2 M lines, thousands of slots) was the bulk of a 27-minute
+/// "partitioning" phase (#8583). The accepted shapes are unchanged: the
+/// pointer operand must be the whole tail after the last `, ptr ` (so a
+/// trailing `, align 8` still falls through), and a load must be exactly
+/// `<reg> = load <ty>, ptr <root>`.
+fn rewrite_root_access(
+    trimmed: &str,
+    roots: &std::collections::HashSet<&str>,
+    cast_counter: &mut usize,
+) -> Option<String> {
+    if let Some(rest) = trimmed.strip_prefix("store i64 ") {
+        let (value, ptr) = rest.rsplit_once(", ptr ")?;
+        if !roots.contains(ptr) {
+            return None;
+        }
+        let value = value.trim();
+        if value == "0" {
+            return Some(format!("  store ptr addrspace(1) null, ptr {ptr}\n"));
+        }
+        *cast_counter += 1;
+        let n = *cast_counter;
+        return Some(format!(
+            "  %rs4gc.s{n} = inttoptr i64 {value} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{n}, ptr {ptr}\n"
+        ));
+    }
+    if let Some(rest) = trimmed.strip_prefix("store double ") {
+        let (value, ptr) = rest.rsplit_once(", ptr ")?;
+        if !roots.contains(ptr) {
+            return None;
+        }
+        let value = value.trim();
+        *cast_counter += 1;
+        let n = *cast_counter;
+        return Some(format!(
+            "  %rs4gc.b{n} = bitcast double {value} to i64\n  %rs4gc.s{n} = inttoptr i64 %rs4gc.b{n} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{n}, ptr {ptr}\n"
+        ));
+    }
+    if let Some((result, ptr)) = trimmed.split_once(" = load i64, ptr ") {
+        if result.contains(' ') || !roots.contains(ptr) {
+            return None;
+        }
+        return Some(format!(
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result} = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n"
+        ));
+    }
+    if let Some((result, ptr)) = trimmed.split_once(" = load double, ptr ") {
+        if result.contains(' ') || !roots.contains(ptr) {
+            return None;
+        }
+        return Some(format!(
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = bitcast i64 {result}.rs4i to double\n"
+        ));
+    }
+    None
+}
+
 /// Compute a conservative set of active logical shadow slots before each IR
 /// line. Joins use union ("active on any incoming path"), so a stale local can
 /// be retained but a live root cannot be omitted.
+///
+/// Linear in the function text: every per-line decision is a prefix/suffix
+/// parse plus a hash lookup against the root set (see `rewrite_root_access`).
+/// `equivalence_tests` pins this against the previous per-root form on
+/// generated functions, so the output is identical by test, not by argument.
 fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String> {
     let roots: std::collections::HashSet<&str> = root_ptrs.iter().map(String::as_str).collect();
     let mut out = String::with_capacity(lines.len() * 48 + root_ptrs.len() * 96);
@@ -54,72 +132,16 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
             continue;
         }
 
-        let mut handled = false;
-        for ptr in root_ptrs {
-            if let Some(rest) = trimmed.strip_prefix("store i64 ") {
-                if let Some(value) = rest.strip_suffix(&format!(", ptr {ptr}")) {
-                    let value = value.trim();
-                    if value == "0" {
-                        out.push_str(&format!("  store ptr addrspace(1) null, ptr {ptr}\n"));
-                    } else {
-                        cast_counter += 1;
-                        out.push_str(&format!(
-                            "  %rs4gc.s{cast_counter} = inttoptr i64 {value} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{cast_counter}, ptr {ptr}\n"
-                        ));
-                    }
-                    handled = true;
-                    break;
-                }
-            }
-            if let Some(rest) = trimmed.strip_prefix("store double ") {
-                if let Some(value) = rest.strip_suffix(&format!(", ptr {ptr}")) {
-                    let value = value.trim();
-                    cast_counter += 1;
-                    out.push_str(&format!(
-                        "  %rs4gc.b{cast_counter} = bitcast double {value} to i64\n  %rs4gc.s{cast_counter} = inttoptr i64 %rs4gc.b{cast_counter} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{cast_counter}, ptr {ptr}\n"
-                    ));
-                    handled = true;
-                    break;
-                }
-            }
-            if trimmed
-                == format!(
-                    "{} = load i64, ptr {ptr}",
-                    trimmed.split(' ').next().unwrap_or("")
-                )
-            {
-                let result = trimmed.split(' ').next().unwrap_or("");
-                out.push_str(&format!(
-                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result} = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n"
-                ));
-                handled = true;
-                break;
-            }
-            if trimmed
-                == format!(
-                    "{} = load double, ptr {ptr}",
-                    trimmed.split(' ').next().unwrap_or("")
-                )
-            {
-                let result = trimmed.split(' ').next().unwrap_or("");
-                out.push_str(&format!(
-                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = bitcast i64 {result}.rs4i to double\n"
-                ));
-                handled = true;
-                break;
-            }
-        }
-        if handled {
+        if let Some(rewritten) = rewrite_root_access(trimmed, &roots, &mut cast_counter) {
+            out.push_str(&rewritten);
             continue;
         }
 
         // Fail closed: any other appearance of a root alloca name.
-        if root_ptrs.iter().any(|ptr| {
-            line.contains(ptr.as_str())
-                && line
-                    .split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '_' || c == '.'))
-                    .any(|tok| tok == ptr)
-        }) {
+        if line
+            .split(|c: char| !is_local_name_char(c))
+            .any(|tok| roots.contains(tok))
+        {
             return None;
         }
 
@@ -356,20 +378,62 @@ mod tests {
     }
 }
 
+/// Count, per local name, how many times `text` mentions it as a whole
+/// token: a `%` followed by a maximal run of local-name characters. This is
+/// the same predicate `mentions_register` applies one register at a time,
+/// computed for every register in a single pass so the landing-pad retype
+/// below is linear instead of rescanning the function per pad (#8583).
+fn count_local_mentions<'a>(text: &'a str, counts: &mut std::collections::HashMap<&'a str, usize>) {
+    let mut chars = text.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
+        if c != '%' {
+            continue;
+        }
+        let mut end = start + 1;
+        while let Some(&(at, next)) = chars.peek() {
+            // `mentions_register` ends a match at any character outside the
+            // local-name alphabet, including another `%`, which then starts
+            // the next run on the outer loop's next iteration.
+            if next != '%' && is_local_name_char(next) {
+                end = at + next.len_utf8();
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        *counts.entry(&text[start..end]).or_insert(0) += 1;
+    }
+}
+
 pub(super) fn retype_landing_pads_for_statepoints(ir: &str) -> String {
     const ITANIUM: &str = "landingpad { ptr, i32 } catch ptr null";
     if !ir.contains(ITANIUM) {
         return ir.to_string();
     }
+    // One pass over the whole function for the mention census; each pad then
+    // subtracts its own line's mentions and asks whether anything is left.
+    let mut mentions = std::collections::HashMap::new();
+    count_local_mentions(ir, &mut mentions);
     let mut out = String::with_capacity(ir.len());
     for line in ir.lines() {
         let rewritten = match line.split_once(" = ") {
             Some((reg, rest)) if rest.trim() == ITANIUM => {
                 let reg = reg.trim();
                 // Referenced anywhere else? Then its payload is live.
-                let used = ir.lines().any(|other| {
-                    !std::ptr::eq(other.as_ptr(), line.as_ptr()) && mentions_register(other, reg)
-                });
+                let used = if reg.starts_with('%')
+                    && reg[1..].chars().all(|c| c != '%' && is_local_name_char(c))
+                {
+                    let mut own = std::collections::HashMap::new();
+                    count_local_mentions(line, &mut own);
+                    mentions.get(reg).copied().unwrap_or(0) > own.get(reg).copied().unwrap_or(0)
+                } else {
+                    // A pad name outside the tokenizer's alphabet (never emitted
+                    // by Perry): keep the exact per-line predicate.
+                    ir.lines().any(|other| {
+                        !std::ptr::eq(other.as_ptr(), line.as_ptr())
+                            && mentions_register(other, reg)
+                    })
+                };
                 if used {
                     None
                 } else {
@@ -441,3 +505,6 @@ mod stack_map_tests {
         assert!(!super::mentions_register("  %x = add i64 %r21, 1", "%r2"));
     }
 }
+
+#[cfg(test)]
+mod equivalence_tests;
