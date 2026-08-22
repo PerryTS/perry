@@ -1,6 +1,64 @@
 use super::super::handle::*;
 use super::*;
 
+/// Route external zlib stream methods before the generic dispatcher creates
+/// owned method/argument copies. The external implementation is synchronous:
+/// it consumes string/buffer arguments before returning and copies callbacks or
+/// pipe destinations into its rooted registries. Keeping this FFI boundary
+/// allocation-free on the stdlib side also avoids freeing a temporary with the
+/// wrong private allocator shim in stripped well-known-wrapper links.
+#[cfg(feature = "external-zlib-pump")]
+unsafe fn try_dispatch_external_zlib_stream(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return None;
+    }
+    let method_bytes = std::slice::from_raw_parts(method_name_ptr, method_name_len);
+    let method_name = std::str::from_utf8(method_bytes).ok()?;
+    if !matches!(
+        method_name,
+        "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "flush"
+            | "params"
+            | "reset"
+            | "close"
+            | "destroy"
+    ) {
+        return None;
+    }
+
+    extern "C" {
+        fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
+        fn js_ext_zlib_dispatch_method(
+            handle: i64,
+            method_ptr: *const u8,
+            method_len: usize,
+            args_ptr: *const f64,
+            args_len: usize,
+        ) -> f64;
+    }
+    if js_ext_zlib_is_stream_handle(handle) == 0 {
+        return None;
+    }
+    Some(js_ext_zlib_dispatch_method(
+        handle,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+    ))
+}
+
 /// Dispatch a method call on a handle-based object.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
@@ -10,6 +68,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    #[cfg(feature = "external-zlib-pump")]
+    if let Some(value) = try_dispatch_external_zlib_stream(
+        handle,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
+
     let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
         String::new()
     } else {
@@ -437,51 +506,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         // 'data'/'end' events instead of exiting before they fire (#1843).
         crate::common::async_bridge::ensure_pump_registered();
         return dispatch_zlib_stream(handle, method_name, &args);
-    }
-
-    // External zlib path (#1843): when the well-known flip routes `node:zlib`
-    // to perry-ext-zlib, the stream handle + dispatch live in perry-ext-zlib.
-    // Same registry-gated contract; the per-method match runs inside
-    // `js_ext_zlib_dispatch_method`. This may coexist with `compression` in
-    // no-auto test builds that use the full stdlib plus external archives.
-    #[cfg(feature = "external-zlib-pump")]
-    if matches!(
-        method_name,
-        "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "flush"
-            | "params"
-            | "reset"
-            | "close"
-            | "destroy"
-    ) {
-        extern "C" {
-            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
-            fn js_ext_zlib_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-        }
-        if unsafe { js_ext_zlib_is_stream_handle(handle) } != 0 {
-            // Register the stdlib pump (#1843) — see the bundled arm above.
-            crate::common::async_bridge::ensure_pump_registered();
-            return unsafe {
-                js_ext_zlib_dispatch_method(
-                    handle,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                    args.as_ptr(),
-                    args.len(),
-                )
-            };
-        }
     }
 
     #[cfg(feature = "external-http-client-pump")]

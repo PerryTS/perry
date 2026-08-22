@@ -293,10 +293,181 @@ pub unsafe extern "C" fn js_zlib_inflate(data_value: f64, callback_value: f64) {
     stream::queue_one_shot_callback(data_value, callback_value, "Inflate", inflate_bytes);
 }
 
+/// `zlib.deflateRaw(data, callback) -> undefined`.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_deflate_raw(data_value: f64, callback_value: f64) {
+    stream::queue_one_shot_callback(data_value, callback_value, "DeflateRaw", |data| {
+        deflate_raw_bytes_with(data, Compression::default())
+    });
+}
+
+/// `zlib.inflateRaw(data, callback) -> undefined`.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_inflate_raw(data_value: f64, callback_value: f64) {
+    stream::queue_one_shot_callback(data_value, callback_value, "InflateRaw", inflate_raw_bytes);
+}
+
+/// `zlib.unzip(data, callback) -> undefined`.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_unzip(data_value: f64, callback_value: f64) {
+    stream::queue_one_shot_callback(data_value, callback_value, "Unzip", unzip_bytes);
+}
+
+/// Dispatch a captured `node:zlib` export through the external zlib archive.
+///
+/// Optimized builds strip the bundled codecs from `perry-stdlib` and link this
+/// crate instead. Direct calls still target the exported `js_zlib_*` symbols,
+/// while value calls such as `util.promisify(zlib.gzip)` enter the runtime's
+/// native-module dispatcher. This is the external counterpart of
+/// `perry_stdlib::zlib::js_zlib_native_dispatch`, keeping both call paths on
+/// the same implementation.
+///
+/// # Safety
+/// `method` and `args` must be valid for their corresponding lengths. Every
+/// argument is a raw NaN-boxed JS value.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
+    method: *const u8,
+    method_len: usize,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits());
+    if method.is_null() || method_len == 0 {
+        return undefined;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(method, method_len)).unwrap_or("");
+    let arg = |index: usize| -> f64 {
+        if index < args_len && !args.is_null() {
+            *args.add(index)
+        } else {
+            undefined
+        }
+    };
+    let pointer_value = |ptr: *mut BufferHeader| -> f64 {
+        if ptr.is_null() {
+            undefined
+        } else {
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(ptr).bits())
+        }
+    };
+    let handle_value = |handle: i64| -> f64 {
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
+    };
+    let callback = || arg(args_len.saturating_sub(1));
+
+    match name {
+        "gzipSync" => pointer_value(js_zlib_gzip_sync(arg(0).to_bits() as i64, arg(1))),
+        "gunzipSync" => pointer_value(js_zlib_gunzip_sync(arg(0).to_bits() as i64)),
+        "deflateSync" => pointer_value(js_zlib_deflate_sync(arg(0).to_bits() as i64, arg(1))),
+        "inflateSync" => pointer_value(js_zlib_inflate_sync(arg(0).to_bits() as i64)),
+        "deflateRawSync" => pointer_value(js_zlib_deflate_raw_sync(arg(0), arg(1))),
+        "inflateRawSync" => pointer_value(js_zlib_inflate_raw_sync(arg(0))),
+        "unzipSync" => pointer_value(js_zlib_unzip_sync(arg(0))),
+        "brotliCompressSync" => {
+            pointer_value(js_zlib_brotli_compress_sync(arg(0).to_bits() as i64))
+        }
+        "brotliDecompressSync" => {
+            pointer_value(js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64))
+        }
+        "zstdCompressSync" => pointer_value(js_zlib_zstd_compress_sync(arg(0), arg(1))),
+        "zstdDecompressSync" => pointer_value(js_zlib_zstd_decompress_sync(arg(0), arg(1))),
+        "crc32" => js_zlib_crc32(arg(0), if args_len >= 2 { arg(1) } else { 0.0 }),
+        "gzip" => {
+            js_zlib_gzip(arg(0), callback());
+            undefined
+        }
+        "gunzip" => {
+            js_zlib_gunzip(arg(0), callback());
+            undefined
+        }
+        "deflate" => {
+            js_zlib_deflate(arg(0), callback());
+            undefined
+        }
+        "inflate" => {
+            js_zlib_inflate(arg(0), callback());
+            undefined
+        }
+        "deflateRaw" => {
+            js_zlib_deflate_raw(arg(0), callback());
+            undefined
+        }
+        "inflateRaw" => {
+            js_zlib_inflate_raw(arg(0), callback());
+            undefined
+        }
+        "unzip" => {
+            js_zlib_unzip(arg(0), callback());
+            undefined
+        }
+        "brotliCompress" => {
+            js_zlib_brotli_compress(arg(0), callback());
+            undefined
+        }
+        "brotliDecompress" => {
+            js_zlib_brotli_decompress(arg(0), callback());
+            undefined
+        }
+        "zstdCompress" => {
+            js_zlib_zstd_compress(arg(0), callback());
+            undefined
+        }
+        "zstdDecompress" => {
+            js_zlib_zstd_decompress(arg(0), callback());
+            undefined
+        }
+        "createGzip" => handle_value(js_zlib_create_gzip(arg(0))),
+        "createGunzip" => handle_value(js_zlib_create_gunzip(arg(0))),
+        "createDeflate" => handle_value(js_zlib_create_deflate(arg(0))),
+        "createInflate" => handle_value(js_zlib_create_inflate(arg(0))),
+        "createDeflateRaw" => handle_value(js_zlib_create_deflate_raw(arg(0))),
+        "createInflateRaw" => handle_value(js_zlib_create_inflate_raw(arg(0))),
+        "createUnzip" => handle_value(js_zlib_create_unzip(arg(0))),
+        "createBrotliCompress" => handle_value(js_zlib_create_brotli_compress(arg(0))),
+        "createBrotliDecompress" => handle_value(js_zlib_create_brotli_decompress(arg(0))),
+        "createZstdCompress" => handle_value(js_zlib_create_zstd_compress(arg(0))),
+        "createZstdDecompress" => handle_value(js_zlib_create_zstd_decompress(arg(0))),
+        _ => undefined,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_ffi::{alloc_string, JsString};
+    use perry_ffi::{
+        alloc_closure, alloc_string, read_buffer_bytes, register_closure_arity, JsString, JsValue,
+        RawClosureHeader,
+    };
+    use std::cell::Cell;
+
+    thread_local! {
+        static DISPATCH_CALLBACK_FIRED: Cell<bool> = const { Cell::new(false) };
+        static DISPATCH_CALLBACK_OK: Cell<bool> = const { Cell::new(false) };
+    }
+
+    extern "C" fn record_dispatch_callback(
+        _closure: *const RawClosureHeader,
+        err: f64,
+        value: f64,
+    ) -> f64 {
+        DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(true));
+        let err_is_null = err.to_bits() == JsValue::NULL.bits();
+        let output = JsValue::from_bits(value.to_bits()).as_pointer::<BufferHeader>();
+        let output_is_gzip =
+            read_buffer_bytes(output).is_some_and(|bytes| bytes.starts_with(&[0x1f, 0x8b]));
+        DISPATCH_CALLBACK_OK.with(|ok| ok.set(err_is_null && output_is_gzip));
+        f64::from_bits(JsValue::UNDEFINED.bits())
+    }
 
     #[test]
     fn gzip_then_gunzip_round_trips_text() {
@@ -356,6 +527,33 @@ mod tests {
         assert_eq!(crc32_bytes_with_seed(b"hello", 0), 907_060_870);
         assert_eq!(crc32_bytes_with_seed(b"hello", 123), 3_088_217_944);
         assert_eq!(crc32_bytes_with_seed(b"", 0), 0);
+    }
+
+    #[test]
+    fn external_native_dispatch_routes_async_gzip_callback() {
+        DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
+        DISPATCH_CALLBACK_OK.with(|ok| ok.set(false));
+
+        register_closure_arity(record_dispatch_callback as *const u8, 2);
+        let callback = alloc_closure(record_dispatch_callback as *const u8, 0);
+        assert!(!callback.is_null());
+
+        let input = alloc_buffer(b"captured zlib export");
+        assert!(!input.is_null());
+        let args = [
+            f64::from_bits(JsValue::from_object_ptr(input).bits()),
+            f64::from_bits(JsValue::from_object_ptr(callback).bits()),
+        ];
+        let method = b"gzip";
+        let result = unsafe {
+            js_ext_zlib_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len())
+        };
+
+        assert_eq!(result.to_bits(), JsValue::UNDEFINED.bits());
+        assert_eq!(js_ext_zlib_has_active_handles(), 1);
+        assert_eq!(unsafe { js_ext_zlib_process_pending() }, 1);
+        assert!(DISPATCH_CALLBACK_FIRED.with(Cell::get));
+        assert!(DISPATCH_CALLBACK_OK.with(Cell::get));
     }
 
     // End-to-end TS smoke tests cover the FFI Buffer allocation path.

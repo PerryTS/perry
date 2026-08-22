@@ -892,15 +892,6 @@
       "linux"
     ]
   },
-  "test_parity_zlib": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "The initial compile failure was caused by missing js_zlib_unzip_sync/js_zlib_crc32 exports in perry-ext-zlib; those exports are now implemented. The full fixture next exits 13 at await promisify(zlib.gzip): a direct callback probe fires, but the util.promisify wrapper remains unsettled. Independent promisify bridge gap; confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_pdf_create_smoke": {
     "issue": "8271",
     "added": "2026-08-17",

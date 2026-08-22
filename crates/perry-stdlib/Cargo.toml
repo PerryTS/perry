@@ -147,9 +147,11 @@ external-net-pump = ["async-runtime"]
 # stream-event queue (`js_ext_zlib_process_pending` /
 # `js_ext_zlib_has_active_handles`), and routes lost-static-type
 # `gz.write()` / `.on()` / `.pipe()` calls through
-# `js_ext_zlib_dispatch_method`. Mirrors `external-net-pump`. No async
-# runtime needed (zlib compression is synchronous), but the pump call
-# sites live in the async-bridge module which is `async-runtime`-gated.
+# `js_ext_zlib_dispatch_method`. It also registers
+# `js_ext_zlib_native_dispatch` for captured module exports such as
+# `util.promisify(zlib.gzip)`. Mirrors `external-net-pump`. No async runtime
+# needed (zlib compression is synchronous), but the pump call sites live in
+# the async-bridge module which is `async-runtime`-gated.
 external-zlib-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when

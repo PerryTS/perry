@@ -570,6 +570,12 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
 }
 
 fn create_stream(codec: Codec, level: Compression) -> i64 {
+    // External zlib owns its event queue, so register it directly with the
+    // runtime when the first stream is created. In particular, do not rely on
+    // perry-stdlib's async pump registration: zlib streams are synchronous and
+    // forcing the Tokio runtime just to deliver their deferred events is both
+    // unnecessary and unsafe in stripped well-known-wrapper builds.
+    ensure_aux_pump_registered();
     ensure_gc_scanner_registered();
     let mut s = statics().lock().unwrap();
     let id = s.next_id;

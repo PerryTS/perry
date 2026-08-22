@@ -660,6 +660,22 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::buffer::js_set_crypto_key_death_hook(crate::webcrypto::crypto_key_buffer_died);
     #[cfg(feature = "compression-gzip")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
+    // Optimized builds route `node:zlib` to perry-ext-zlib and compile the
+    // bundled codec module out. Captured exports (`const gzip = zlib.gzip`) and
+    // `util.promisify(zlib.gzip)` still enter the runtime's by-name dispatcher,
+    // so install the external archive's mirror when it is the active backend.
+    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression-gzip")))]
+    {
+        extern "C" {
+            fn js_ext_zlib_native_dispatch(
+                method: *const u8,
+                method_len: usize,
+                args: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+        perry_runtime::js_set_native_zlib_dispatch(js_ext_zlib_native_dispatch);
+    }
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
