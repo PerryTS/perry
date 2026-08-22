@@ -270,7 +270,7 @@ pub extern "C" fn js_promise_resolved_then(
                 capture_context(),
             ));
         });
-        crate::event_pump::js_notify_main_thread();
+        crate::event_pump::js_notify_promise_progress();
         // Suppress the rejection-handler bookkeeping: it would only
         // matter if `value` were a Promise, which it isn't here.
         let _ = on_rejected;
@@ -594,7 +594,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             trap.box_activation,
         ));
     });
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
     next
 }
 

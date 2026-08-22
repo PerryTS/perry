@@ -241,7 +241,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
     // following `js_wait_for_event` sleep — otherwise it blocks for the
     // 1 s idle cap before the loop re-checks promise state. The notify
     // sets the flag so the immediately-following wait returns at once.
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
     unsafe {
         crate::async_hooks::destroy_promise((*promise).async_id);
     }
@@ -460,7 +460,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         }
     }
     // Issue #84: see js_promise_resolve — same wake reasoning.
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
     unsafe {
         crate::async_hooks::destroy_promise((*promise).async_id);
     }
@@ -1742,7 +1742,7 @@ extern "C" fn finally_passthrough_fulfill(
                 std::ptr::null_mut(),
             ));
         });
-        crate::event_pump::js_notify_main_thread();
+        crate::event_pump::js_notify_promise_progress();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1768,7 +1768,7 @@ extern "C" fn finally_passthrough_reject(
                 std::ptr::null_mut(),
             ));
         });
-        crate::event_pump::js_notify_main_thread();
+        crate::event_pump::js_notify_promise_progress();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

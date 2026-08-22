@@ -60,6 +60,53 @@ pub(super) fn promise_all_settle(state: PromiseAllState, value: f64, is_fulfille
     }
 }
 
+/// Attach the allocation-free `Promise.all` state used when every observable
+/// combinator hook has been ruled out. Settled inputs become ordinary
+/// microtasks; pending inputs park the state in the same GC-scanned keyed table
+/// that `js_promise_resolve` drains on settlement.
+pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllState) {
+    if promise.is_null() {
+        return;
+    }
+    mark_rejection_handled(promise);
+    let mut queued = false;
+    unsafe {
+        match (*promise).state {
+            PromiseState::Fulfilled => {
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut().push_back(Task::PromiseAll(
+                        state,
+                        (*promise).value,
+                        true,
+                        context_for_promise(promise),
+                    ));
+                });
+                queued = true;
+            }
+            PromiseState::Rejected => {
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut().push_back(Task::PromiseAll(
+                        state,
+                        (*promise).reason,
+                        false,
+                        context_for_promise(promise),
+                    ));
+                });
+                queued = true;
+            }
+            PromiseState::Pending => {
+                PROMISE_ALL_STATES.with(|states| {
+                    states.borrow_mut().push(promise as usize, state);
+                });
+                set_promise_callback_context(promise);
+            }
+        }
+    }
+    if queued {
+        crate::event_pump::js_notify_promise_progress();
+    }
+}
+
 pub(super) fn scan_promise_all_states_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PROMISE_ALL_STATES.with(|states| {
         let mut states = states.borrow_mut();

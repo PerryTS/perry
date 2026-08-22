@@ -574,12 +574,12 @@ fn build_settled_rejected(reason: f64) -> f64 {
 //   Invoke(p, "then", «onFul, onRej»)          == js_promise_then(p, …)
 //        (`native_call_method/primitive_methods.rs`'s intrinsic then arm)
 //
-// with one deliberate difference: `js_promise_attach_handlers` replaces
-// `js_promise_then`, i.e. the chained promise `Promise.prototype.then` would
-// return is not allocated. `Promise.all` discards it, it is unreachable from
-// user code, and its only externally visible effects are the
-// `v8.promiseHooks` / `async_hooks` lifecycle callbacks — which the guard
-// excludes by requiring both hook sets to be inactive.
+// with one deliberate difference: the intrinsic-only arm attaches a compact
+// `PromiseAllState` rather than allocating the resolve-element closure, its
+// `[[AlreadyCalled]]` record, and the chained promise that
+// `Promise.prototype.then` would return. A native Promise settles once, and
+// `Promise.all` discards the chained promise, so none is observable after the
+// guard excludes `v8.promiseHooks` / `async_hooks` lifecycle callbacks.
 
 // A test-only tally of how many elements actually took the fast arm. A test
 // that only asserts "nothing broke" cannot tell a working fast path from a
@@ -684,17 +684,24 @@ fn perform(
     let elements_h = scope.root_nanbox_f64(boxed_ptr(elements));
     let ctor_h = scope.root_nanbox_f64(c);
     let resolve_fn_h = scope.root_nanbox_f64(promise_resolve);
+    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
     let cap_resolve_h = scope.root_nanbox_f64(cap.resolve);
     let cap_reject_h = scope.root_nanbox_f64(cap.reject);
 
     let count = unsafe { (*elements).length };
 
     // Shared state: remaining-count (init 1, spec's remainingElementsCount).
-    let state = js_array_alloc(1);
+    // The intrinsic Promise.all state uses slot 1 as its rejection latch.
+    // Other combinators retain the single spec remaining-count slot.
+    let state_slots = if kind == CombinatorKind::All { 2 } else { 1 };
+    let state = js_array_alloc(state_slots);
     unsafe {
-        (*state).length = 1;
+        (*state).length = state_slots;
     }
     js_array_set_f64(state, 0, 1.0);
+    if kind == CombinatorKind::All {
+        js_array_set_f64(state, 1, 0.0);
+    }
     // Rooted BEFORE the `values` allocation below, which can collect.
     let state_h = scope.root_nanbox_f64(boxed_ptr(state));
 
@@ -760,46 +767,46 @@ fn perform(
 
         match kind {
             CombinatorKind::All => {
-                let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
-                let elem_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
-                    all_resolve_element_fn as *const u8,
-                    unboxed_ptr(guard_h.get_nanbox_f64()),
-                    i,
-                    values_ptr(),
-                    state_ptr(),
-                    cap_resolve_h.get_nanbox_f64(),
-                    cap_reject_h.get_nanbox_f64(),
-                )));
                 let state = state_ptr();
                 js_array_set_f64(state, 0, js_array_get_f64(state, 0) + 1.0);
-                // `attachable_native_promise` is re-tested here rather than
-                // above because `js_promise_resolved` may have RETURNED the
-                // element itself (promise identity), so the own-`then` /
-                // own-`constructor` expandos that would make `Invoke` observable
-                // belong to the resolved value, not to the raw element.
-                let attached = if element_fast
-                    && !promise_lifecycle_observed()
-                    && attachable_native_promise(next_promise_h.get_nanbox_f64()).is_some()
-                {
-                    // Every address below is re-read from its handle here, AFTER
-                    // the last thing that can allocate (`attachable_native_promise`
-                    // interns the "then"/"constructor" keys), and nothing between
-                    // these four lines allocates.
-                    let p: *mut Promise = unboxed_ptr(next_promise_h.get_nanbox_f64());
-                    let on_fulfilled = as_closure_ptr(elem_h.get_nanbox_f64());
-                    let on_rejected = as_closure_ptr(cap_reject_h.get_nanbox_f64());
-                    match (on_fulfilled, on_rejected) {
-                        (Some(f), Some(r)) => {
-                            crate::promise::js_promise_attach_handlers(p, f, r);
-                            true
-                        }
-                        _ => false,
-                    }
+
+                // `attachable_native_promise` is tested after
+                // `js_promise_resolved`: that call may return the element
+                // itself, so the expandos that make `Invoke` observable belong
+                // to the resolved promise rather than the raw input.
+                let direct = if element_fast && !promise_lifecycle_observed() {
+                    attachable_native_promise(next_promise_h.get_nanbox_f64())
                 } else {
-                    false
+                    None
                 };
-                note_fast_arm_element(attached);
-                if !attached {
+
+                if let Some(promise) = direct {
+                    // Re-read every pointer from a live handle after the
+                    // expandos probe above, the last operation that can
+                    // allocate. The keyed table / Task queue becomes their GC
+                    // root before this function does any more runtime work.
+                    super::combinators::attach_promise_all_state(
+                        promise,
+                        super::combinators::PromiseAllState {
+                            result_promise: unboxed_ptr(cap_promise_h.get_nanbox_f64()),
+                            results_arr: values_ptr(),
+                            state_arr: state_ptr(),
+                            index: i,
+                        },
+                    );
+                    note_fast_arm_element(true);
+                } else {
+                    let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
+                    let elem_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
+                        all_resolve_element_fn as *const u8,
+                        unboxed_ptr(guard_h.get_nanbox_f64()),
+                        i,
+                        values_ptr(),
+                        state_ptr(),
+                        cap_resolve_h.get_nanbox_f64(),
+                        cap_reject_h.get_nanbox_f64(),
+                    )));
+                    note_fast_arm_element(false);
                     invoke_then(
                         next_promise_h.get_nanbox_f64(),
                         &[elem_h.get_nanbox_f64(), cap_reject_h.get_nanbox_f64()],
@@ -1284,6 +1291,38 @@ mod fast_arm_tests {
         js_promise_run_microtasks();
         unsafe {
             assert_eq!((*all).state, PromiseState::Fulfilled);
+        }
+        assert_eq!(taken(), 2);
+    }
+
+    /// A single pending input may feed more than one intrinsic Promise.all.
+    /// The compact fast arm must append both states to the keyed table rather
+    /// than overwrite the first registration.
+    #[test]
+    fn fast_arm_tracks_shared_pending_inputs() {
+        reset();
+        let shared = crate::promise::js_promise_new();
+        let shared_value = boxed_ptr(shared);
+        let first = run_all(array_of(&[shared_value]));
+        let second = run_all(array_of(&[shared_value]));
+
+        unsafe {
+            assert_eq!((*first).state, PromiseState::Pending);
+            assert_eq!((*second).state, PromiseState::Pending);
+        }
+
+        crate::promise::js_promise_resolve(shared, 42.0);
+        js_promise_run_microtasks();
+
+        unsafe {
+            assert_eq!((*first).state, PromiseState::Fulfilled);
+            assert_eq!((*second).state, PromiseState::Fulfilled);
+            let first_values = crate::value::js_nanbox_get_pointer((*first).value)
+                as *const crate::array::ArrayHeader;
+            let second_values = crate::value::js_nanbox_get_pointer((*second).value)
+                as *const crate::array::ArrayHeader;
+            assert_eq!(js_array_get_f64(first_values, 0), 42.0);
+            assert_eq!(js_array_get_f64(second_values, 0), 42.0);
         }
         assert_eq!(taken(), 2);
     }

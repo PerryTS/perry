@@ -232,9 +232,10 @@ extern "C" fn mt_profile_atexit() {
         crate::timer::PROFILE_INTERVAL_TIMERS_FIRED.load(Ordering::Relaxed),
     );
     eprintln!(
-        "[mt-profile] event_notify={{sent:{},during_drain:{}}} event_wait={{total:{},fast:{},zero:{},driver:{},condvar:{}}}",
+        "[mt-profile] event_notify={{sent:{},during_drain:{},drain_suppressed:{}}} event_wait={{total:{},fast:{},zero:{},driver:{},condvar:{}}}",
         crate::event_pump::PROFILE_NOTIFY_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_NOTIFY_DURING_DRAIN_COUNT.load(Ordering::Relaxed),
+        crate::event_pump::PROFILE_NOTIFY_DRAIN_SUPPRESSED_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_FAST_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_ZERO_COUNT.load(Ordering::Relaxed),
@@ -736,7 +737,7 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
             trigger_async_id: ids.trigger_async_id,
         });
     });
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
 }
 
 #[derive(Default)]

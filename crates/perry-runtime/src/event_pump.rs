@@ -231,6 +231,7 @@ static NOTIFIED: AtomicBool = AtomicBool::new(false);
 static WAITER_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_NOTIFY_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_NOTIFY_DURING_DRAIN_COUNT: AtomicI64 = AtomicI64::new(0);
+pub static PROFILE_NOTIFY_DRAIN_SUPPRESSED_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_FAST_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_ZERO_COUNT: AtomicI64 = AtomicI64::new(0);
@@ -365,6 +366,23 @@ pub extern "C" fn js_notify_main_thread() {
     *flag = true;
     drop(flag);
     PUMP.cvar.notify_one();
+}
+
+/// Notify after queueing promise/microtask work, unless this same thread is
+/// already draining that queue to quiescence.
+///
+/// Cross-thread producers see a thread-local drain depth of zero and retain
+/// the full wake path. Timer and rejection phases are outside the job-drain
+/// scope as well, because work they queue is consumed by a later pump turn.
+#[inline(always)]
+pub(crate) fn js_notify_promise_progress() {
+    if crate::promise::microtasks::microtask_job_drain_active() {
+        if crate::promise::mt_profile_enabled() {
+            PROFILE_NOTIFY_DRAIN_SUPPRESSED_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        return;
+    }
+    js_notify_main_thread();
 }
 
 // ============================================================================
@@ -672,6 +690,44 @@ mod tests {
     /// budget. (`js_wait_for_event`'s budget is computed from global
     /// timer state — there is no per-thread injection point.)
     static SERIAL: StdMutex<()> = StdMutex::new(());
+
+    /// A promise settled while promise jobs are already draining must not
+    /// leave a redundant event-loop wake behind. The active runner consumes
+    /// the propagated job before returning; outside that scope the same
+    /// helper must still publish a wake.
+    #[test]
+    fn promise_progress_notify_is_suppressed_during_job_drain() {
+        let _g = SERIAL.lock().unwrap();
+
+        NOTIFIED.store(false, Ordering::Release);
+        js_notify_promise_progress();
+        assert!(NOTIFIED.swap(false, Ordering::Acquire));
+
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let mut observed_clean_drain = false;
+        for _ in 0..32 {
+            let promise = crate::promise::js_promise_new();
+            crate::promise::js_promise_then(promise, std::ptr::null(), std::ptr::null());
+            crate::promise::js_promise_resolve(promise, undefined);
+
+            // Consume the required outside-drain notify, then run only the
+            // promise-job phase so unrelated global timers cannot wake us.
+            NOTIFIED.store(false, Ordering::Release);
+            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            if !NOTIFIED.load(Ordering::Acquire) {
+                observed_clean_drain = true;
+                break;
+            }
+            // A parallel runtime test may use the process-global notifier;
+            // retry until we observe an uncontended drain.
+            NOTIFIED.store(false, Ordering::Release);
+        }
+
+        assert!(
+            observed_clean_drain,
+            "promise propagation repeatedly left an event-loop wake behind"
+        );
+    }
 
     struct ForcedZeroBudgetGuard;
 

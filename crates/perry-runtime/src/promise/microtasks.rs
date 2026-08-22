@@ -4,6 +4,12 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+struct MicrotaskRunDepths {
+    pump: u32,
+    jobs: u32,
+}
+
 crate::perry_thread_local! {
     /// Promise currently being dispatched by the microtask runner after its
     /// task has been popped from TASK_QUEUE. While user callbacks run this is
@@ -22,14 +28,21 @@ crate::perry_thread_local! {
     pub(super) static CURRENT_MICROTASK_NEXT: std::cell::Cell<*mut Promise>
         = const { std::cell::Cell::new(std::ptr::null_mut()) };
 
-    /// Nesting depth for `js_promise_run_microtasks` on this thread.
+    /// Nesting depths for `js_promise_run_microtasks` on this thread.
     ///
     /// Await lowering can re-enter the microtask runner from inside a
     /// microtask or timer callback. Re-entrant drains may run promise jobs,
     /// but they must not recursively enter the timer queues: timers are
     /// macrotasks, and running them from a nested microtask checkpoint can
     /// build an unbounded stack of exception traps.
-    static MICROTASK_RUN_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// `pump` covers the whole checkpoint. `jobs` covers only the part that is
+    /// about to drain (or is actively draining) promise/queueMicrotask jobs;
+    /// it deliberately ends before rejection processing and timer phases, as
+    /// work queued there needs to wake an immediately-following event-loop
+    /// wait. Keep both counters in this already-audited TLS holder.
+    static MICROTASK_RUN_DEPTH: std::cell::Cell<MicrotaskRunDepths> = const {
+        std::cell::Cell::new(MicrotaskRunDepths { pump: 0, jobs: 0 })
+    };
 
     /// One-shot: the entry module is ESM and its evaluation checkpoint has
     /// not happened yet. Consumed by the first `run_microtasks` drain, which
@@ -39,15 +52,22 @@ crate::perry_thread_local! {
     static ESM_EVAL_CHECKPOINT_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether this thread is already executing a microtask checkpoint.
-///
-/// A same-thread enqueue during a checkpoint does not need to wake the event
-/// loop: the runner drains the queue to quiescence before returning. Producers
-/// on other threads observe their own depth (zero) and still take the normal
-/// cross-thread wake path.
+/// Whether this thread is already executing a microtask pump, including its
+/// rejection and timer phases. Used by the event-path profiler.
 #[inline(always)]
 pub(crate) fn microtask_drain_active() -> bool {
-    MICROTASK_RUN_DEPTH.with(|depth| depth.get() != 0)
+    MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump != 0)
+}
+
+/// Whether a same-thread promise job enqueue will be consumed by the active
+/// drain before it can return to the event loop.
+///
+/// Producers on other threads observe their own depth (zero) and still take
+/// the normal cross-thread wake path. The timer/rejection tail also observes
+/// zero so work queued there wakes the next event-loop wait.
+#[inline(always)]
+pub(crate) fn microtask_job_drain_active() -> bool {
+    MICROTASK_RUN_DEPTH.with(|depth| depth.get().jobs != 0)
 }
 
 /// Called once from the compiled entry (before top-level statements) when the
@@ -186,9 +206,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     bump(&MT_DRAIN_COUNT);
     let async_box_ref_depth = async_box_execution_ref_depth();
     let reentrant = MICROTASK_RUN_DEPTH.with(|depth| {
-        let current = depth.get();
-        depth.set(current.saturating_add(1));
-        current > 0
+        let mut current = depth.get();
+        let reentrant = current.pump > 0;
+        current.pump = current.pump.saturating_add(1);
+        current.jobs = current.jobs.saturating_add(1);
+        depth.set(current);
+        reentrant
     });
     let mut ran = 0;
 
@@ -970,6 +993,15 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         }
     }
 
+    // Promise/queueMicrotask jobs are quiescent. Notifications after this
+    // point (rejection processing or timer callbacks) must remain observable:
+    // the generated event loop may wait before its next drain.
+    MICROTASK_RUN_DEPTH.with(|depth| {
+        let mut current = depth.get();
+        current.jobs = current.jobs.saturating_sub(1);
+        depth.set(current);
+    });
+
     // #6077: the microtask checkpoint is over — the queue drained to empty.
     // This is where Node decides whether a rejection went unhandled
     // (`processTicksAndRejections` → `processPromiseRejections`), BEFORE the
@@ -1019,7 +1051,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // compacting, O(survivors) young collection instead of the non-moving
     // alloc-point fallback. Gated (default off); additive.
     if crate::gc::gc_moving_safepoint_enabled()
-        && MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
+        && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
     {
         crate::gc::gc_safepoint_moving_minor();
     }
@@ -1028,14 +1060,16 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // activation (principally direct runtime tests). Production async frames
     // publish at their own queued/running AsyncStep refcount reaching zero;
     // they do not wait for this global pump boundary.
-    if MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
+    if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
         && TASK_QUEUE.with(|q| q.borrow().is_empty())
     {
         crate::r#box::flush_released_boxes();
     }
 
     MICROTASK_RUN_DEPTH.with(|depth| {
-        depth.set(depth.get().saturating_sub(1));
+        let mut current = depth.get();
+        current.pump = current.pump.saturating_sub(1);
+        depth.set(current);
     });
 
     ran

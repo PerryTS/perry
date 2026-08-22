@@ -151,7 +151,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
             trigger_async_id: ids.trigger_async_id,
         });
     });
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
 }
 
 pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
@@ -243,7 +243,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
             trigger_async_id: ids.trigger_async_id,
         });
     });
-    crate::event_pump::js_notify_main_thread();
+    crate::event_pump::js_notify_promise_progress();
 }
 
 /// Job body — the intrinsic-`then` invocation of the adoption job. For a
@@ -280,7 +280,7 @@ extern "C" fn native_promise_adoption_job(closure: *const crate::closure::Closur
                     std::ptr::null_mut(),
                 ));
             });
-            crate::event_pump::js_notify_main_thread();
+            crate::event_pump::js_notify_promise_progress();
         }
         None => {
             super::then::js_promise_resolve_with_promise(outer, inner);
