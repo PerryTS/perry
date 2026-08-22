@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2987 entries across 136 modules.
+Total: 2990 entries across 136 modules.
 
 ## Modules
 
@@ -418,11 +418,13 @@ Total: 2987 entries across 136 modules.
 
 ### Methods
 
+- `Glob` — module
 - `file` — module
 - `fileURLToPath` — module
 - `hash` — module
 - `pathToFileURL` — module
 - `stringWidth` — module
+- `unsupported` — module
 - `write` — module
 
 ### Properties
@@ -4023,6 +4025,7 @@ Total: 2987 entries across 136 modules.
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
 - `ref` — instance *(class: `Worker`)*
+- `reload` — instance *(class: `Worker`)*
 - `removeEventListener` — instance
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
