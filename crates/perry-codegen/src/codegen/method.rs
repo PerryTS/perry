@@ -263,6 +263,7 @@ pub(super) fn compile_method(
     force_generic_body: bool,
     proven_this: Option<crate::collectors::PtrShapeLocal>,
     nonnegative_index_params: Option<&[u32]>,
+    ptr_array_cache_clone: bool,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -282,8 +283,11 @@ pub(super) fn compile_method(
     let is_pshape_clone = proven_this.is_some();
     let is_index_clone = nonnegative_index_params.is_some();
     debug_assert!(!(is_pshape_clone && is_index_clone));
+    debug_assert!(!ptr_array_cache_clone || is_pshape_clone);
     let llvm_name = if let Some(params) = nonnegative_index_params {
         crate::codegen::nonnegative_index_method_name(&public_llvm_name, params)
+    } else if ptr_array_cache_clone {
+        crate::collectors::ptr_array_cache_method_name(&public_llvm_name)
     } else if is_pshape_clone {
         crate::collectors::pshape_method_name(&public_llvm_name)
     } else if typed_public_trampoline.is_some() || force_generic_body {

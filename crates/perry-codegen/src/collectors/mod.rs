@@ -84,7 +84,8 @@ pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use proven_this::{
-    method_proven_this, prune_unregistered_clones, pshape_method_name,
+    method_proven_this, prune_unregistered_clones, pshape_method_name, ptr_array_cache_fields,
+    ptr_array_cache_method_name, ptr_array_cached_method,
     tower_route_profitable as pshape_tower_route_profitable,
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};

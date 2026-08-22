@@ -362,6 +362,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     false,
                     None,
                     Some(nonnegative_index_params),
+                    false,
                 )
                 .with_context(|| {
                     format!(
@@ -395,6 +396,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     .contains_key(&(class.name.clone(), method.name.clone())),
                 None,
                 None,
+                false,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
             // Representation-selection Phase 5a: the additive `internal`
@@ -431,6 +433,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     false,
                     Some(fact.clone()),
                     None,
+                    false,
                 )
                 .with_context(|| {
                     format!(
@@ -438,6 +441,48 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         class.name, method.name
                     )
                 })?;
+
+                // #8607: a second, stricter clone for the Phase 3b
+                // provenance+containment route. Its synthetic immutable
+                // aliases keep stable array-valued fields in local slots, so
+                // existing local-array loop optimizations can see through
+                // repeated `this.field` uses. It is never selected by the
+                // guarded or dispatch-tower `$pshape` routes.
+                if let Some(cached_method) =
+                    crate::collectors::ptr_array_cached_method(class, method)
+                {
+                    compile_method(
+                        llmod,
+                        class,
+                        &cached_method,
+                        func_names,
+                        strings,
+                        class_table,
+                        method_names,
+                        module_globals,
+                        module_global_types,
+                        opts.import_function_prefixes,
+                        enum_table,
+                        static_field_globals,
+                        class_ids,
+                        func_signatures,
+                        func_synthetic_arguments,
+                        module_boxed_vars,
+                        closure_rest_params,
+                        cross_module,
+                        None,
+                        false,
+                        Some(fact.clone()),
+                        None,
+                        true,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "lowering contained-receiver array-cache clone of method '{}::{}'",
+                            class.name, method.name
+                        )
+                    })?;
+                }
             }
         }
         for member in class
@@ -468,6 +513,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
             )
             .with_context(|| {
                 format!(
@@ -534,6 +580,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -588,6 +635,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
         }
@@ -684,6 +732,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }

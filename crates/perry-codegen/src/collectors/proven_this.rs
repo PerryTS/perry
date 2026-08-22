@@ -113,7 +113,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::{Class, Expr, Function};
+use perry_hir::types::Type;
+use perry_hir::{Class, Expr, Function, Stmt};
 
 use super::ptr_shape::{
     chain_admissible, chain_classes, chain_field_names, chain_method_map, ptr_shape_locals_enabled,
@@ -152,6 +153,337 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// ratchets that.
 pub(crate) fn pshape_method_name(public_name: &str) -> String {
     format!("{public_name}$pshape")
+}
+
+/// The contained-receiver-only array-field-cache clone.
+///
+/// Unlike [`pshape_method_name`], this clone must never be selected merely
+/// because a call site has re-checked an aliased receiver's shape. Its body
+/// keeps array-valued `this.field` loads in locals across calls in the method,
+/// which requires Phase 3b's stronger provenance + containment proof. The
+/// sole routing site is therefore the guard-free `Ptr<Shape>` local arm in
+/// `lower_call/property_get/dynamic_dispatch.rs`.
+pub(crate) fn ptr_array_cache_method_name(public_name: &str) -> String {
+    format!("{public_name}$ptr_arrays")
+}
+
+/// Build a method body that snapshots stable, array-valued fields of a
+/// contained receiver into immutable locals at entry.
+///
+/// This is deliberately a separate clone rather than a change to `$pshape`:
+/// exact shape alone fixes field *offsets*, not field *values*. An aliased
+/// receiver could have one of its array slots replaced by a callback while a
+/// method is running. A Phase 3b local has the extra containment proof that
+/// rules that alias out, and the restrictions in [`ptr_array_cache_fields`]
+/// reject direct slot replacement and internally-dispatched `this` calls.
+pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Option<Function> {
+    let fields = ptr_array_cache_fields(class, method);
+    if fields.is_empty() {
+        return None;
+    }
+
+    let mut used_ids = HashSet::new();
+    super::collect_let_ids(&method.body, &mut used_ids);
+    super::collect_ref_ids_in_stmts(&method.body, &mut used_ids);
+    used_ids.extend(method.params.iter().map(|p| p.id));
+    used_ids.extend(method.captures.iter().copied());
+    let mut next_id = used_ids.iter().copied().max().unwrap_or(0);
+
+    let mut aliases: HashMap<String, (u32, Type)> = HashMap::new();
+    for (name, ty) in fields {
+        loop {
+            next_id = next_id.checked_add(1)?;
+            if used_ids.insert(next_id) {
+                break;
+            }
+        }
+        aliases.insert(name, (next_id, ty));
+    }
+
+    let mut cached = method.clone();
+    rewrite_array_field_reads_in_stmts(&mut cached.body, &aliases);
+
+    // Preserve class declaration order. Apart from making generated IR stable,
+    // this matches the order in which the source-level equivalent would bind
+    // the aliases.
+    let mut prefix = Vec::with_capacity(aliases.len());
+    for field in &class.fields {
+        let Some((id, ty)) = aliases.get(&field.name) else {
+            continue;
+        };
+        prefix.push(Stmt::Let {
+            id: *id,
+            name: format!("__perry_ptr_array_{}", field.name),
+            ty: ty.clone(),
+            mutable: false,
+            init: Some(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: field.name.clone(),
+                byte_offset: 0,
+            }),
+        });
+    }
+    prefix.append(&mut cached.body);
+    cached.body = prefix;
+    Some(cached)
+}
+
+/// Array fields worth caching for [`ptr_array_cached_method`]. Empty means no
+/// clone may be emitted or routed to.
+///
+/// The optimization is intentionally narrow:
+///
+/// * the method contains a loop (otherwise the extra roots/code size do not
+///   amortize);
+/// * the field is an own, statically-named `Array` initialized by an array
+///   literal and is read through `this` in the method;
+/// * the method neither replaces/deletes that field nor invokes another
+///   method with the same `this` (which could replace it transitively).
+///
+/// Array *contents* may still change. The alias holds the same array object,
+/// so pushes and indexed stores remain observable exactly as before.
+pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(String, Type)> {
+    if !stmts_contain_loop(&method.body) {
+        return Vec::new();
+    }
+
+    let candidates: HashMap<&str, &Type> = class
+        .fields
+        .iter()
+        .filter(|field| {
+            field.key_expr.is_none()
+                && matches!(field.ty, Type::Array(_))
+                && matches!(field.init, Some(Expr::Array(_) | Expr::ArraySpread(_)))
+        })
+        .map(|field| (field.name.as_str(), &field.ty))
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut reads = HashSet::new();
+    let mut unsafe_rebind = false;
+    super::scalar_method_dispatch::for_each_expr_in_stmts(&method.body, &mut |expr| {
+        match expr {
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::This)
+                && candidates.contains_key(property.as_str()) =>
+            {
+                reads.insert(property.clone());
+            }
+            Expr::PropertySet {
+                object, property, ..
+            }
+            | Expr::PropertyUpdate {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::This)
+                && candidates.contains_key(property.as_str()) =>
+            {
+                unsafe_rebind = true;
+            }
+            // A computed own-property write could name any candidate field.
+            Expr::IndexSet { object, .. } | Expr::IndexUpdate { object, .. }
+                if matches!(object.as_ref(), Expr::This) =>
+            {
+                unsafe_rebind = true;
+            }
+            Expr::PutValueSet {
+                target, receiver, ..
+            } if matches!(target.as_ref(), Expr::This)
+                || matches!(receiver.as_ref(), Expr::This) =>
+            {
+                unsafe_rebind = true;
+            }
+            Expr::Delete(inner)
+                if matches!(
+                    inner.as_ref(),
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                        if matches!(object.as_ref(), Expr::This)
+                ) =>
+            {
+                unsafe_rebind = true;
+            }
+            // `this.m()` is safe for the shape proof because the callee is
+            // vetted transitively, but its stores could replace a cached
+            // array slot. Keep this local transform independent of that
+            // transitive analysis and decline the clone.
+            Expr::Call { callee, .. }
+                if matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, .. }
+                        if matches!(object.as_ref(), Expr::This)
+                ) =>
+            {
+                unsafe_rebind = true;
+            }
+            Expr::SuperPropertySet { .. }
+            | Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. } => {
+                unsafe_rebind = true;
+            }
+            _ => {}
+        }
+    });
+    if unsafe_rebind {
+        return Vec::new();
+    }
+
+    class
+        .fields
+        .iter()
+        .filter(|field| reads.contains(field.name.as_str()))
+        .filter_map(|field| {
+            candidates
+                .get(field.name.as_str())
+                .map(|ty| (field.name.clone(), (*ty).clone()))
+        })
+        .collect()
+}
+
+fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stmts_contain_loop(then_branch)
+                || else_branch.as_deref().is_some_and(stmts_contain_loop)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_contain_loop(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| stmts_contain_loop(&catch.body))
+                || finally.as_deref().is_some_and(stmts_contain_loop)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|case| stmts_contain_loop(&case.body)),
+        Stmt::Labeled { body, .. } => stmts_contain_loop(std::slice::from_ref(body.as_ref())),
+        _ => false,
+    })
+}
+
+fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<String, (u32, Type)>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(init) = init {
+                    rewrite_array_field_reads(init, aliases);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                rewrite_array_field_reads(expr, aliases);
+            }
+            Stmt::Return(expr) => {
+                if let Some(expr) = expr {
+                    rewrite_array_field_reads(expr, aliases);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                rewrite_array_field_reads(condition, aliases);
+                rewrite_array_field_reads_in_stmts(then_branch, aliases);
+                if let Some(else_branch) = else_branch {
+                    rewrite_array_field_reads_in_stmts(else_branch, aliases);
+                }
+            }
+            Stmt::While { condition, body } => {
+                rewrite_array_field_reads(condition, aliases);
+                rewrite_array_field_reads_in_stmts(body, aliases);
+            }
+            Stmt::DoWhile { body, condition } => {
+                rewrite_array_field_reads_in_stmts(body, aliases);
+                rewrite_array_field_reads(condition, aliases);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    rewrite_array_field_reads_in_stmts(
+                        std::slice::from_mut(init.as_mut()),
+                        aliases,
+                    );
+                }
+                if let Some(condition) = condition {
+                    rewrite_array_field_reads(condition, aliases);
+                }
+                if let Some(update) = update {
+                    rewrite_array_field_reads(update, aliases);
+                }
+                rewrite_array_field_reads_in_stmts(body, aliases);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_array_field_reads_in_stmts(body, aliases);
+                if let Some(catch) = catch {
+                    rewrite_array_field_reads_in_stmts(&mut catch.body, aliases);
+                }
+                if let Some(finally) = finally {
+                    rewrite_array_field_reads_in_stmts(finally, aliases);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                rewrite_array_field_reads(discriminant, aliases);
+                for case in cases {
+                    if let Some(test) = &mut case.test {
+                        rewrite_array_field_reads(test, aliases);
+                    }
+                    rewrite_array_field_reads_in_stmts(&mut case.body, aliases);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                rewrite_array_field_reads_in_stmts(std::slice::from_mut(body.as_mut()), aliases)
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+}
+
+fn rewrite_array_field_reads(expr: &mut Expr, aliases: &HashMap<String, (u32, Type)>) {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if matches!(object.as_ref(), Expr::This) {
+            if let Some((id, _)) = aliases.get(property) {
+                *expr = Expr::LocalGet(*id);
+                return;
+            }
+        }
+    }
+    // A nested ordinary function has its own dynamic `this`. A lexical arrow
+    // that mentioned the method receiver was already rejected by
+    // `method_proven_this`, so no eligible reference is lost here.
+    if matches!(expr, Expr::Closure { .. }) {
+        return;
+    }
+    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+        rewrite_array_field_reads(child, aliases)
+    });
 }
 
 /// Drop any proven-`this` clone whose method pair never made it into the

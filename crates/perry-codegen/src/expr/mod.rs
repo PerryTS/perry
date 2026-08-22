@@ -2132,6 +2132,8 @@ mod index_get;
 #[cfg(test)]
 mod index_get_claim_tests;
 mod masked_window;
+#[cfg(test)]
+mod null_default_numeric_add_tests;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
 pub(crate) use index_get::{

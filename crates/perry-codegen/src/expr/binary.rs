@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
-use perry_hir::{BinaryOp, Expr, LogicalOp};
+use perry_hir::{BinaryOp, CompareOp, Expr, LogicalOp};
 
 use crate::lower_string_concat::{
     flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
@@ -128,8 +128,13 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
     )
 }
 
-/// `+` where both operands are statically numeric but at least one of them is
-/// numeric only because a DECLARED type said so (#7773, #7776).
+/// A `+` tree whose numeric interpretation needs a runtime confirmation.
+///
+/// Most callers arrive here because both operands are statically numeric but
+/// at least one is numeric only because a DECLARED type said so (#7773,
+/// #7776). The other caller is the null-defaulted dynamic value recognized by
+/// [`is_null_defaulted_local_plus_numeric_literal`] (#8607): its common value
+/// is numeric, but its generic source left the HIR type as `Any`.
 ///
 /// Nothing enforces annotations at runtime, so a `x: number` slot reached
 /// through `as any` really can hold a string — and then the spec says `+` is
@@ -178,10 +183,8 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
 /// The residual cost lands where it is already small: every read that reaches
 /// here is one the compiler could NOT prove, so it pays an inline header
 /// precheck or a `js_typed_feedback_class_field_get_guard` call for its shape
-/// check regardless. The proven tiers (element-shape / class-field loop facts,
-/// `Ptr<Shape>` numeric fields, scalar replacement, POD records, typed arrays)
-/// never get here at all — `numeric_proof_is_declared_only` answers `false`.
-fn lower_declared_only_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+/// check regardless. Proven raw-f64 tiers need no guard at all.
+fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
     let needs_test: Vec<bool> = leaves
@@ -201,22 +204,18 @@ fn lower_declared_only_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<S
                 None => is_num,
             });
         }
-        // The caller only routes here when a leaf is declared-only, and every
-        // such leaf is a field / element / local read — none of which
-        // `expr_produces_canonical_raw_f64` vouches for. So there is always at
-        // least one test; an empty condition would mean the two predicates had
-        // drifted apart, which is worth a hard error rather than a silent
-        // unguarded `fadd`.
+        // Both callers guarantee at least one value that a static raw-f64
+        // proof cannot vouch for: either a declared-only read or the dynamic
+        // arm of a null-defaulted conditional. Keep that contract explicit so
+        // future predicate drift cannot silently turn this into an unguarded
+        // `fadd`.
         let Some(all_num) = cond else {
-            anyhow::bail!(
-                "declared-only `+` tree has no testable leaf: \
-                 numeric_proof_is_declared_only and expr_produces_canonical_raw_f64 disagree"
-            );
+            anyhow::bail!("guarded `+` tree has no testable leaf");
         };
 
-        let fast_idx = ctx.new_block("declared_add.numeric");
-        let slow_idx = ctx.new_block("declared_add.dynamic");
-        let merge_idx = ctx.new_block("declared_add.merge");
+        let fast_idx = ctx.new_block("guarded_add.numeric");
+        let slow_idx = ctx.new_block("guarded_add.dynamic");
+        let merge_idx = ctx.new_block("guarded_add.merge");
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
@@ -237,6 +236,55 @@ fn lower_declared_only_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<S
             .block()
             .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]))
     })
+}
+
+/// Recognize `(value === null ? 0 : value) + 1` and its operand-reversed form.
+///
+/// Generic user-class methods currently surface as `Any` at their call sites,
+/// even when a specialization has a numeric value type. That makes the common
+/// counter-update idiom pay the full JS `+` helper on every hit. The expression
+/// is not statically numeric — `value` may genuinely be a string — so the
+/// matching add is routed through [`lower_guarded_numeric_add`], whose tag test
+/// preserves concatenation in the slow arm while numbers take an inline
+/// `fadd`.
+///
+/// Keep this deliberately structural. Requiring one repeated local, strict
+/// null comparison, and numeric literals avoids turning arbitrary `Any`
+/// conditionals into larger two-path add trees.
+fn is_null_defaulted_local_plus_numeric_literal(left: &Expr, right: &Expr) -> bool {
+    (is_strict_null_defaulted_local(left) && is_numeric_literal(right))
+        || (is_numeric_literal(left) && is_strict_null_defaulted_local(right))
+}
+
+fn is_numeric_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Integer(_) | Expr::Number(_))
+}
+
+fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
+    let Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    } = expr
+    else {
+        return false;
+    };
+    if !is_numeric_literal(then_expr) {
+        return false;
+    }
+    let Expr::Compare {
+        op: CompareOp::Eq,
+        left,
+        right,
+    } = condition.as_ref()
+    else {
+        return false;
+    };
+    let compared_local = match (left.as_ref(), right.as_ref()) {
+        (Expr::LocalGet(id), Expr::Null) | (Expr::Null, Expr::LocalGet(id)) => *id,
+        _ => return false,
+    };
+    matches!(else_expr.as_ref(), Expr::LocalGet(id) if *id == compared_local)
 }
 
 /// The `+` tree's operand leaves, in evaluation order — a left-to-right walk,
@@ -420,7 +468,7 @@ fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced:
             // string unchanged. Every non-`+` arithmetic operator is a plain
             // `ToNumber` on its operands, so a coerce is the whole fix here;
             // `+` needs the concat dispatch and gets it from
-            // `lower_declared_only_numeric_add`. Proven raw-f64 tiers answer
+            // `lower_guarded_numeric_add`. Proven raw-f64 tiers answer
             // false here, so asking about every expression keeps them exempt.
             || numeric_proof_is_declared_only(ctx, expr))
 }
@@ -819,6 +867,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // → string concat, BIGINT → bigint add, otherwise numeric.
                 let both_numeric = crate::type_analysis::is_numeric_expr(ctx, left)
                     && crate::type_analysis::is_numeric_expr(ctx, right);
+                // #8607: a generic registry lookup leaves the counter value
+                // typed as `Any`, so `(prev === null ? 0 : prev) + 1` used to
+                // call the full JS add dispatcher on every pipeline stage.
+                // Keep its dynamic semantics in a cold arm and let the common
+                // numeric value take the same guarded fadd used for violable
+                // declared-number reads.
+                if is_null_defaulted_local_plus_numeric_literal(left, right) {
+                    return lower_guarded_numeric_add(ctx, expr);
+                }
                 // `+` is the one arithmetic operator that must distinguish
                 // numeric addition from string concatenation before lowering
                 // its operands. Admit native-i1 Booleans only when the other
@@ -849,7 +906,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if numeric_proof_is_declared_only(ctx, left)
                     || numeric_proof_is_declared_only(ctx, right)
                 {
-                    return lower_declared_only_numeric_add(ctx, expr);
+                    return lower_guarded_numeric_add(ctx, expr);
                 }
             }
             // BigInt arithmetic fast path. NaN-tagged bigints compare
