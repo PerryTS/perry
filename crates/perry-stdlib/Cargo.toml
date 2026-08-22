@@ -19,7 +19,10 @@ crate-type = ["rlib"]
 # Default: include everything for backwards compatibility
 default = ["full"]
 
-# Full stdlib - everything included
+# Full stdlib - every self-contained implementation. External pump features
+# must stay out of this list: release archives enable `full` without linking
+# their per-program provider archives, and adding an external HTTP pump here
+# made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
 full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
