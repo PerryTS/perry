@@ -274,6 +274,32 @@ fn stream_frozen_functions<'ctx>(
 /// ~whole/n, same bound as the per-unit clang model), functions stream with
 /// external linkage forced (mirror of `render_fn_external`), and the unit
 /// objects partial-link exactly like the text path.
+/// Default number of concurrent LLVM unit workers when `PERRY_CODEGEN_UNIT_JOBS`
+/// is unset.
+///
+/// This was a hard-coded `2` (#8017), chosen conservatively for Windows
+/// pagefile pressure and applied on every platform. On a large real bundle
+/// that left most cores idle: the Claude Code `cli.js` lowers to ~84 codegen
+/// units and, with the giant entry function's roots spilled (#8583) so no unit
+/// carries an unbounded RS4GC fan-out, per-unit peak RSS is a bounded ~1-2 GiB,
+/// so the two-worker cap — not memory — was the wall (a ~440s unit × dozens,
+/// two at a time, is hours). Each worker still holds one whole translation
+/// unit, so the count stays bounded, not one-thread-per-unit.
+///
+/// Non-Windows: half the machine's logical CPUs, clamped to `[2, 8]`. The 8
+/// ceiling keeps peak at ~8 × per-unit against a 64 GiB-class host with margin;
+/// projects that know their headroom raise it with `PERRY_CODEGEN_UNIT_JOBS`.
+/// Windows keeps the conservative `2` until its pagefile behavior under higher
+/// fan-out is measured — the platform the original cap was chosen for.
+fn default_unit_workers() -> usize {
+    if cfg!(target_os = "windows") {
+        return 2;
+    }
+    std::thread::available_parallelism()
+        .map(|p| (p.get() / 2).clamp(2, 8))
+        .unwrap_or(2)
+}
+
 pub fn compile_module_units_native(
     llmod: &mut LlModule,
     n: usize,
@@ -370,7 +396,7 @@ pub fn compile_module_units_native(
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&v| v > 0)
-        .unwrap_or(2)
+        .unwrap_or_else(default_unit_workers)
         .min(parts.len());
     if show_progress {
         let estimated_mib: f64 = parts
@@ -620,6 +646,23 @@ fn debug_dump(module: &Module<'_>, module_prefix: &str) {
 mod tests {
     use super::*;
     use crate::module::LlModule;
+
+    #[test]
+    fn default_unit_workers_are_bounded_and_platform_aware() {
+        let n = super::default_unit_workers();
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                n, 2,
+                "Windows keeps the conservative 2-worker default (#8017)"
+            );
+        } else {
+            assert!(
+                (2..=8).contains(&n),
+                "non-Windows default must stay in [2, 8], got {n}"
+            );
+        }
+    }
+
     use crate::types::{I1, I32, I64, PTR, VOID};
 
     fn precise_root_fixture(extra_plain_function: bool) -> LlModule {
