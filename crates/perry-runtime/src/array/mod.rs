@@ -16,6 +16,7 @@ mod is_array;
 mod iter_methods;
 mod iter_object;
 mod iterator;
+mod join;
 mod jsvalue_api;
 mod prototype_addr;
 mod push_pop;
@@ -134,10 +135,9 @@ pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
-    js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach,
-    js_array_join, js_array_join_value, js_array_map, js_array_map_discard, js_array_reduce,
-    js_array_some, js_array_to_locale_string, js_validate_array_callback,
-    js_validate_array_map_callback,
+    js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach, js_array_map,
+    js_array_map_discard, js_array_reduce, js_array_some, js_array_to_locale_string,
+    js_validate_array_callback, js_validate_array_map_callback,
 };
 pub use self::iter_object::{
     array_entries_iter, array_keys_iter, array_values_iter, array_values_iter_null_done,
@@ -149,6 +149,7 @@ pub(crate) use self::iterator::iter_bt_dump;
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
+pub use self::join::{js_array_join, js_array_join_value};
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, object_prototype_addr, object_prototype_addr_matches,
