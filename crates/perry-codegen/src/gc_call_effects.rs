@@ -100,6 +100,16 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_feedback_class_field_set_guard"
         | "js_typed_feedback_observe_property_get"
         | "js_typed_feedback_observe_property_set"
+        // #8596: closure-call IC guard. Its body reads the closure header and
+        // does registry lookups (arity/rest/func-ptr — all reads), builds a
+        // stack `Observation`, and calls `guard_observe` (`typed_feedback.rs`),
+        // whose whole effect is a TLS registry borrow, saturating counters, and
+        // a `Vec::push` of the observation — a raw Rust allocation, which by the
+        // documented rule above cannot arm a Perry-GC trigger. No Perry
+        // allocation, no re-entry into generated JS, no throw. Same class as the
+        // two observe guards above; unlike the excluded get/set wrappers it does
+        // NOT perform an object get/set. In `NONCOLLECTING` (the audit authority).
+        | "js_typed_feedback_closure_direct_call_guard"
         // Same family, audited 2026-08-04: under `diagnostics` it reads an env
         // var, serialises the counters with serde_json and writes a file;
         // without the feature the body is empty. No Perry allocation, no
@@ -115,10 +125,20 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // side-table remove `layout_init_pointer_free` already does on every
         // allocation. No Perry allocation, no re-entry into generated code.
         | "js_array_declare_all_pointer_elements"
-        // TLS dynamic-call context only.
+        // TLS dynamic-call context only. #8596 adds the `_get` reader — a bare
+        // `IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))` (`object/this_binding.rs`),
+        // the exact shape of the already-admitted `_set` and `js_new_target_get`.
+        // The `_sloppy` reader is deliberately ABSENT: it boxes booleans/strings
+        // and reads globalThis, which allocates.
         | "js_implicit_this_set"
+        | "js_implicit_this_get"
         | "js_new_target_get"
         | "js_new_target_set"
+        // #8596: TDZ-suppression window depth (`box.rs`). Each is a single
+        // thread-local `Cell<u32>` saturating inc/dec, emitted in pairs around a
+        // side-effect-free class-capture snapshot. No allocation, no re-entry.
+        | "js_tdz_suppress_begin"
+        | "js_tdz_suppress_end"
         // Closure capture-slot accessors (#8132). `closure/alloc.rs`:
         // `get` is a null check, a bounds check, and a raw slot read;
         // `set` is the raw slot write plus `note_closure_capture_slot`, whose
@@ -457,6 +477,45 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// #8596: helpers reclassified as non-safepoints (`CannotCollect`), each
+    /// verified against its runtime body AND already present in the checker's
+    /// `NONCOLLECTING` authority (so the containment test above stays green):
+    ///   - `js_typed_feedback_closure_direct_call_guard` — header/registry
+    ///     reads + a `guard_observe` whose only allocation is a Rust `Vec::push`
+    ///     (cannot arm a Perry-GC trigger); no re-entry, no throw.
+    ///   - `js_implicit_this_get` — a bare `IMPLICIT_THIS` `Cell` read, the
+    ///     shape of the already-admitted `js_implicit_this_set`.
+    ///   - `js_tdz_suppress_begin`/`_end` — a thread-local `Cell<u32>` inc/dec.
+    #[test]
+    fn issue_8596_tls_and_feedback_guards_cannot_collect() {
+        for name in [
+            "js_typed_feedback_closure_direct_call_guard",
+            "js_implicit_this_get",
+            "js_tdz_suppress_begin",
+            "js_tdz_suppress_end",
+        ] {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::CannotCollect,
+                "{name}"
+            );
+        }
+    }
+
+    /// The discriminating negatives for #8596: near-neighbours of the four
+    /// admitted above that DO allocate or throw, so they must stay
+    /// `Unknown` (a safepoint). `js_implicit_this_get_sloppy` boxes
+    /// booleans/strings and reads globalThis; the ordinary `_get` it wraps is
+    /// the only leaf-safe half.
+    #[test]
+    fn issue_8596_allocating_lookalike_stays_a_safepoint() {
+        assert_eq!(
+            classify_direct_callee("js_implicit_this_get_sloppy"),
+            GcCallEffect::Unknown,
+            "the sloppy reader boxes primitives / reads globalThis and must remain a safepoint"
+        );
     }
 
     /// The discriminating negative for the family above: `js_box_get_bits`
