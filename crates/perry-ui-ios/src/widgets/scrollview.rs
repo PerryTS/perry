@@ -7,6 +7,8 @@ use objc2_ui_kit::{UIScrollView, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use super::scroll_mutation_gate::ScrollMutationGate;
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -85,6 +87,7 @@ pub fn create() -> i64 {
 
         let view: Retained<UIView> = Retained::cast_unchecked(scroll);
         let handle = super::register_widget(view);
+        install_scroll_delegate(handle);
         #[cfg(feature = "geisterhand")]
         {
             extern "C" {
@@ -237,9 +240,15 @@ pub fn end_refreshing(scroll_handle: i64) {
 }
 
 // =============================================================================
-// Issue #553 — onScrollEnd hook (infinite-scroll callback)
+// UIScrollView delegate state (touch-scroll safety + onScrollEnd callback)
 // =============================================================================
 
+// #7763: UIKit can abort from its UIStackView layout pass when Perry mutates an
+// arranged subview while a containing UIScrollView is decelerating. NSTimer's
+// default run-loop mode already pauses during direct touch tracking, but it
+// resumes for deceleration. Keep the JS/UI pump paused through the complete
+// touch interaction and two subsequent pump turns so UIKit can commit the
+// final scroll/layout transaction before another widget mutation.
 struct ScrollEndState {
     closure: f64,
     threshold_px: f64,
@@ -248,11 +257,31 @@ struct ScrollEndState {
 
 thread_local! {
     static SCROLL_END_STATES: RefCell<HashMap<i64, ScrollEndState>> = RefCell::new(HashMap::new());
-    static SCROLL_DELEGATE_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
+    static SCROLL_MUTATION_GATE: RefCell<ScrollMutationGate> = RefCell::new(ScrollMutationGate::default());
+}
+
+static SCROLL_DELEGATE_ASSOCIATION_KEY: u8 = 0;
+
+fn begin_touch_scroll(handle: i64) {
+    if handle != 0 {
+        SCROLL_MUTATION_GATE.with(|gate| gate.borrow_mut().begin(handle));
+    }
+}
+
+fn end_touch_scroll(handle: i64) {
+    if handle != 0 {
+        SCROLL_MUTATION_GATE.with(|gate| gate.borrow_mut().end(handle));
+    }
+}
+
+/// Returns true while a touch-driven UIScrollView interaction can still have
+/// pending UIKit layout work. Called once at the start of each runtime pump.
+pub(crate) fn defer_runtime_pump_for_touch_scroll() -> bool {
+    SCROLL_MUTATION_GATE.with(|gate| gate.borrow_mut().should_defer_pump())
 }
 
 pub struct PerryScrollEndDelegateIvars {
-    key: std::cell::Cell<usize>,
+    handle: std::cell::Cell<i64>,
 }
 
 define_class!(
@@ -262,12 +291,26 @@ define_class!(
     pub struct PerryScrollEndDelegate;
 
     impl PerryScrollEndDelegate {
+        #[unsafe(method(scrollViewWillBeginDragging:))]
+        fn scroll_view_will_begin_dragging(&self, _scroll: &AnyObject) {
+            begin_touch_scroll(self.ivars().handle.get());
+        }
+
+        #[unsafe(method(scrollViewDidEndDragging:willDecelerate:))]
+        fn scroll_view_did_end_dragging(&self, _scroll: &AnyObject, decelerate: bool) {
+            if !decelerate {
+                end_touch_scroll(self.ivars().handle.get());
+            }
+        }
+
+        #[unsafe(method(scrollViewDidEndDecelerating:))]
+        fn scroll_view_did_end_decelerating(&self, _scroll: &AnyObject) {
+            end_touch_scroll(self.ivars().handle.get());
+        }
+
         #[unsafe(method(scrollViewDidScroll:))]
         fn scroll_view_did_scroll(&self, scroll: &AnyObject) {
-            let key = self.ivars().key.get();
-            let handle = SCROLL_DELEGATE_TO_HANDLE.with(|m| {
-                m.borrow().get(&key).copied().unwrap_or(0)
-            });
+            let handle = self.ivars().handle.get();
             if handle == 0 { return; }
             unsafe {
                 let offset: CGPoint = msg_send![scroll, contentOffset];
@@ -310,16 +353,36 @@ define_class!(
 impl PerryScrollEndDelegate {
     fn new() -> Retained<Self> {
         let this = Self::alloc().set_ivars(PerryScrollEndDelegateIvars {
-            key: std::cell::Cell::new(0),
+            handle: std::cell::Cell::new(0),
         });
         unsafe { msg_send![super(this), init] }
     }
 }
 
-pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+fn install_scroll_delegate(scroll_handle: i64) {
     let Some(scroll_view) = super::get_widget(scroll_handle) else {
         return;
     };
+    unsafe {
+        let delegate = PerryScrollEndDelegate::new();
+        delegate.ivars().handle.set(scroll_handle);
+        let _: () = msg_send![&*scroll_view, setDelegate: &*delegate];
+        // UIScrollView.delegate is weak. Associate the delegate with its view
+        // so it lives exactly as long as the scroll view instead of leaking a
+        // delegate for every created ScrollView.
+        objc2::ffi::objc_setAssociatedObject(
+            Retained::as_ptr(&scroll_view) as *mut AnyObject,
+            &SCROLL_DELEGATE_ASSOCIATION_KEY as *const u8 as *const std::ffi::c_void,
+            Retained::as_ptr(&delegate) as *mut AnyObject,
+            objc2::ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+        );
+    }
+}
+
+pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
+    if super::get_widget(scroll_handle).is_none() {
+        return;
+    }
     SCROLL_END_STATES.with(|s| {
         s.borrow_mut().insert(
             scroll_handle,
@@ -334,14 +397,4 @@ pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: 
             },
         );
     });
-    unsafe {
-        let delegate = PerryScrollEndDelegate::new();
-        let key = Retained::as_ptr(&delegate) as usize;
-        delegate.ivars().key.set(key);
-        SCROLL_DELEGATE_TO_HANDLE.with(|m| {
-            m.borrow_mut().insert(key, scroll_handle);
-        });
-        let _: () = msg_send![&*scroll_view, setDelegate: &*delegate];
-        std::mem::forget(delegate);
-    }
 }

@@ -637,6 +637,12 @@ define_class!(
         #[unsafe(method(pump:))]
         fn pump(&self, _sender: &AnyObject) {
             crate::catch_callback_panic("pump", std::panic::AssertUnwindSafe(|| {
+                // #7763: the default-mode timer resumes while UIScrollView is
+                // decelerating. Do not let JS-driven widget mutations overlap
+                // UIKit's touch-scroll layout transaction.
+                if crate::widgets::scrollview::defer_runtime_pump_for_touch_scroll() {
+                    return;
+                }
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();

@@ -22,6 +22,7 @@ pub mod progressview;
 pub mod qrcode;
 pub mod rich_text;
 pub mod rich_tooltip;
+pub(crate) mod scroll_mutation_gate;
 pub mod scrollview;
 pub mod securefield;
 pub mod slider;

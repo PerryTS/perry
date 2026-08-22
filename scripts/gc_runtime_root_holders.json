@@ -1722,7 +1722,7 @@
     },
     {
       "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "SCROLL_DELEGATE_TO_HANDLE"
+      "name": "SCROLL_MUTATION_GATE"
     },
     {
       "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
