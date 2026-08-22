@@ -26,6 +26,14 @@
 //! crash) in the default arm only. The interleaved `keep` array forces nursery
 //! collections while the un-rooted accumulator is live, so the collector is
 //! actually exercised against the changed frame.
+//!
+//! `keep` pushes a fresh OBJECT rather than an unboxed number ON PURPOSE, and
+//! that is load-bearing: with plain numbers the fixture measured
+//! `copied_objects=0` over a single GC cycle, so nothing was ever relocated and
+//! the differential degenerated into an arithmetic comparison. With objects it
+//! measures ~100 copied objects per cycle across ~600 cycles. If you shrink this
+//! fixture, re-check `PERRY_GC_DIAG=1 … | grep copied_objects` first: a GC test
+//! that never moves anything cannot fail for the reason it exists.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -41,17 +49,21 @@ const SOURCE: &str = r#"
 // minor runs while the (un-rooted) accumulator is live.
 function reduce(arr: Float64Array, n: number): number {
   let s = 0.0;
-  const keep: number[] = [];
+  const keep: { v: number; tag: string }[] = [];
   for (let i = 0; i < n; i++) {
     let x = arr[i] + 1.0;
     s = s + x * 0.5;
-    if ((i & 31) === 0) {
-      keep.push(x);
-      if (keep.length > 64) keep.shift();
+    if ((i & 3) === 0) {
+      // A fresh OBJECT per push, not an unboxed number: the nursery has to
+      // actually fill and relocate for this test to mean anything. Measured
+      // copied=0 when this pushed plain numbers -- the collector never moved,
+      // so the differential was nearly vacuous as a GC test.
+      keep.push({ v: x, tag: "k" + (i & 7) });
+      if (keep.length > 96) keep.shift();
     }
   }
   let t = 0.0;
-  for (const k of keep) { t = t + k; }
+  for (const k of keep) { t = t + k.v + k.tag.length; }
   return s + t;
 }
 
@@ -188,6 +200,20 @@ fn ta_view_accumulator_unroot_is_gc_correct() {
     // Rooted reference (fact disabled) and #8619 un-rooted arm, identical source.
     let rooted_bin = compile(dir.path(), Some("0"));
     let unrooted_bin = compile(dir.path(), None);
+
+    // The differential is only meaningful if the two arms actually lower
+    // DIFFERENTLY. If a future change stops the fixpoint from proving the
+    // accumulator numeric, both arms become the rooted lowering, their outputs
+    // agree trivially, and this test passes while covering nothing (CLAUDE.md's
+    // "the gate runs but its subject never did"). Assert the subject fired.
+    let rooted_img = std::fs::read(&rooted_bin).expect("read rooted binary");
+    let unrooted_img = std::fs::read(&unrooted_bin).expect("read un-rooted binary");
+    assert_ne!(
+        rooted_img, unrooted_img,
+        "PERRY_NUMBER_BY_CONSTRUCTION=0 and the default produced byte-identical \
+         binaries — the #8619 un-rooting did not fire, so the differential below \
+         is vacuous. Fix the fixture or the fixpoint, do not delete this assert."
+    );
 
     let rooted_out = run_arms(&rooted_bin, dir.path(), "rooted");
     let unrooted_out = run_arms(&unrooted_bin, dir.path(), "unrooted");
