@@ -302,6 +302,25 @@ fn guarded_read_can_follow_one_forwarding_edge_but_rechecks_the_live_header() {
         .find(|line| line.contains(" = select i1") && line.contains(", i64 "))
         .and_then(|line| line.trim().split_once(" = ").map(|(name, _)| name))
         .unwrap_or_else(|| panic!("clone has no selected live array handle:\n{clone}"));
+    let selected_target_guard = clone
+        .split("\narr.guard.deref.")
+        .nth(1)
+        .and_then(|body| body.split("\narr.guard.live.").next())
+        .unwrap_or_else(|| panic!("clone has no selected-target guard block:\n{clone}"));
+    assert!(
+        selected_target_guard.contains("label %arr.guard.live.")
+            && selected_target_guard.contains("label %arr.fallback.")
+            && !selected_target_guard.contains(&format!("sub i64 {live_handle}, 8")),
+        "the selected target must branch on its address before any live-header load:\n{selected_target_guard}"
+    );
+    let live_header_guard = clone
+        .split("\narr.guard.live.")
+        .nth(1)
+        .unwrap_or_else(|| panic!("clone has no live-header guard block:\n{clone}"));
+    assert!(
+        live_header_guard.contains(&format!("sub i64 {live_handle}, 8")),
+        "the live header must be loaded only after the selected address is validated:\n{live_header_guard}"
+    );
     let fast = clone
         .split("arr.fast")
         .nth(1)

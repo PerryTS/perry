@@ -81,6 +81,8 @@ pub(super) fn lower_guarded_array_index_get(
         // typed-`number[]`-slower-than-untyped inversion for reads.
         let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
         let deref_label = ctx.block_label(deref_idx);
+        let live_deref_idx = ctx.new_block(&format!("{}.guard.live", block_prefix));
+        let live_deref_label = ctx.block_label(live_deref_idx);
         let cold_guard_idx = if require_numeric_layout {
             Some(ctx.new_block(&format!("{}.guard.cold", block_prefix)))
         } else {
@@ -102,7 +104,7 @@ pub(super) fn lower_guarded_array_index_get(
         }
 
         ctx.current_block = deref_idx;
-        {
+        let live_handle = {
             let blk = ctx.block();
             let arr_bits = blk.bitcast_double_to_i64(arr_box);
             let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
@@ -133,7 +135,18 @@ pub(super) fn lower_guarded_array_index_get(
             let live_top = blk.lshr(I64, &live_handle, "48");
             let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
             let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
+            let live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
+            // A forwarding word is not trusted until its address is in the
+            // heap band. In particular, do not read the destination header
+            // speculatively: malformed or longer chains must reach the boxed
+            // fallback without a native dereference of the selected target.
+            blk.cond_br(&live_heap_candidate, &live_deref_label, &fallback_label);
+            live_handle
+        };
 
+        ctx.current_block = live_deref_idx;
+        {
+            let blk = ctx.block();
             let live_gc_type_addr = blk.sub(I64, &live_handle, "8");
             let live_gc_type_ptr = blk.inttoptr(I64, &live_gc_type_addr);
             let live_gc_type = blk.load(I8, &live_gc_type_ptr);
@@ -165,9 +178,7 @@ pub(super) fn lower_guarded_array_index_get(
             let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
             let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
 
-            let mut guard_ok = blk.and(I1, &live_top_clear, &live_above_handle_band);
-            guard_ok = blk.and(I1, &guard_ok, &is_array);
-            guard_ok = blk.and(I1, &guard_ok, &not_forwarded);
+            let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
             guard_ok = blk.and(I1, &guard_ok, &no_descriptors);
             guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
             guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
