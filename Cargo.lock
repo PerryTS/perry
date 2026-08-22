@@ -1747,8 +1747,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid 0.9.6",
- "der_derive",
- "flagset",
  "pem-rfc7468 0.7.0",
  "zeroize",
 ]
@@ -1760,15 +1758,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71fd89660b2dc699704064e59e9dba0147b903e85319429e131620d022be411b"
 dependencies = [
  "const-oid 0.10.2",
+ "der_derive",
+ "flagset",
  "pem-rfc7468 1.0.0",
  "zeroize",
 ]
 
 [[package]]
 name = "der_derive"
-version = "0.7.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+checksum = "59600e2c2d636fde9b65e99cc6445ac770c63d3628195ff39932b8d6d7409903"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6072,17 +6072,17 @@ dependencies = [
 name = "perry-ext-node-forge"
 version = "0.5.1516"
 dependencies = [
- "const-oid 0.9.6",
- "der 0.7.10",
+ "const-oid 0.10.2",
+ "der 0.8.0",
  "pem 4.0.0",
  "perry-ffi",
  "perry-runtime",
- "rand 0.8.7",
- "rsa 0.9.10",
+ "rand 0.10.1",
+ "rsa 0.10.0-rc.18",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "spki 0.7.3",
+ "sha2 0.11.0",
+ "spki 0.8.0",
  "time",
  "x509-cert",
 ]
@@ -7640,6 +7640,7 @@ dependencies = [
  "pkcs1 0.8.0-rc.4",
  "pkcs8 0.11.0",
  "rand_core 0.10.1",
+ "sha2 0.11.0",
  "signature 3.0.0",
  "spki 0.8.0",
  "zeroize",
@@ -11029,15 +11030,15 @@ dependencies = [
 
 [[package]]
 name = "x509-cert"
-version = "0.2.5"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
+checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
- "const-oid 0.9.6",
- "der 0.7.10",
- "sha1 0.10.6",
- "signature 2.2.0",
- "spki 0.7.3",
+ "const-oid 0.10.2",
+ "der 0.8.0",
+ "sha1 0.11.0",
+ "signature 3.0.0",
+ "spki 0.8.0",
  "tls_codec",
 ]
 

@@ -17,7 +17,7 @@
 use std::str::FromStr;
 
 use const_oid::ObjectIdentifier;
-use der::asn1::{Ia5String, OctetString, SetOfVec, Utf8StringRef};
+use der::asn1::{Ia5String, OctetString, Utf8StringRef};
 use der::flagset::FlagSet;
 use der::{Any, Decode, DecodePem, Encode, EncodePem};
 use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey};
@@ -26,16 +26,18 @@ use rsa::pkcs8::{DecodePublicKey, EncodePublicKey};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha2::Sha256;
 use x509_cert::attr::AttributeTypeAndValue;
-use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+use x509_cert::builder::profile::BuilderProfile;
+use x509_cert::builder::{Builder, CertificateBuilder};
+use x509_cert::certificate::TbsCertificate;
 use x509_cert::ext::pkix::constraints::BasicConstraints;
 use x509_cert::ext::pkix::name::{GeneralName, GeneralNames};
 use x509_cert::ext::pkix::{
     ExtendedKeyUsage, KeyUsage, KeyUsages, SubjectAltName, SubjectKeyIdentifier,
 };
-use x509_cert::ext::AsExtension;
+use x509_cert::ext::{Criticality, Extension};
 use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
 use x509_cert::serial_number::SerialNumber;
-use x509_cert::spki::SubjectPublicKeyInfoOwned;
+use x509_cert::spki::{SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
 use x509_cert::time::{Time, Validity};
 
 // ── OIDs ────────────────────────────────────────────────────────────
@@ -139,7 +141,7 @@ pub struct CertSpec {
 /// Generate an RSA keypair, returning `(privatePkcs1Pem, publicSpkiPem)`.
 pub fn generate_key_pair(bits: usize) -> Result<(String, String), String> {
     let bits = if bits == 0 { 2048 } else { bits };
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let priv_key = RsaPrivateKey::new(&mut rng, bits).map_err(|e| e.to_string())?;
     let pub_key = RsaPublicKey::from(&priv_key);
     let priv_pem = priv_key
@@ -225,7 +227,7 @@ fn name_for(oid: &ObjectIdentifier) -> String {
 /// the leaf issuer from `certificateFromPem(ca).subject.attributes` —
 /// so `parse_name` (below) must be the exact inverse of this.
 fn build_name(attrs: &[Attr]) -> Result<Name, String> {
-    let mut rdns = Vec::with_capacity(attrs.len());
+    let mut rdns = RdnSequence::default();
     for a in attrs {
         let oid = oid_for(&a.key)?;
         let value = match a.value_tag.unwrap_or(DnValueTag::Utf8) {
@@ -238,17 +240,17 @@ fn build_name(attrs: &[Attr]) -> Result<Name, String> {
             }
         };
         let atv = AttributeTypeAndValue { oid, value };
-        let set = SetOfVec::try_from(vec![atv]).map_err(|e| e.to_string())?;
-        rdns.push(RelativeDistinguishedName(set));
+        let rdn = RelativeDistinguishedName::try_from(vec![atv]).map_err(|e| e.to_string())?;
+        rdns.push(rdn);
     }
-    Ok(RdnSequence(rdns))
+    Ok(Name::hazmat_from_rdn_sequence(rdns))
 }
 
 /// Parse a `Name` back into forge-shaped attributes, preserving order.
 pub fn parse_name(name: &Name) -> Vec<Attr> {
     let mut out = Vec::new();
-    for rdn in name.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in name.iter_rdn() {
+        for atv in rdn.iter() {
             let decoded = atv
                 .value
                 .decode_as::<Utf8StringRef<'_>>()
@@ -370,9 +372,35 @@ impl<E: Encode> Encode for ExtensionWithCritical<'_, E> {
     }
 }
 
-impl<E: const_oid::AssociatedOid + Encode> AsExtension for ExtensionWithCritical<'_, E> {
-    fn critical(&self, _subject: &Name, _extensions: &[x509_cert::ext::Extension]) -> bool {
+impl<E: const_oid::AssociatedOid + Encode> Criticality for ExtensionWithCritical<'_, E> {
+    fn criticality(&self, _subject: &Name, _extensions: &[Extension]) -> bool {
         self.critical
+    }
+}
+
+/// Builder profile matching x509-cert 0.2's `Profile::Manual`: use the
+/// caller-provided names and inject no extensions of our own.
+struct ManualProfile {
+    subject: Name,
+    issuer: Name,
+}
+
+impl BuilderProfile for ManualProfile {
+    fn get_issuer(&self, _subject: &Name) -> Name {
+        self.issuer.clone()
+    }
+
+    fn get_subject(&self) -> Name {
+        self.subject.clone()
+    }
+
+    fn build_extensions(
+        &self,
+        _spk: SubjectPublicKeyInfoRef<'_>,
+        _issuer_spk: SubjectPublicKeyInfoRef<'_>,
+        _tbs: &TbsCertificate,
+    ) -> x509_cert::builder::Result<Vec<Extension>> {
+        Ok(Vec::new())
     }
 }
 
@@ -386,10 +414,10 @@ pub fn build_and_sign(spec: &CertSpec, signer_private_key_pem: &str) -> Result<S
     let subject = build_name(&spec.subject)?;
     let issuer = build_name(&spec.issuer)?;
     let serial = serial_from_hex(&spec.serial_hex)?;
-    let validity = Validity {
-        not_before: time_from_unix(spec.not_before_unix)?,
-        not_after: time_from_unix(spec.not_after_unix)?,
-    };
+    let validity = Validity::new(
+        time_from_unix(spec.not_before_unix)?,
+        time_from_unix(spec.not_after_unix)?,
+    );
 
     let cert_pub = load_public_key(&spec.public_key_pem)?;
     let spki_der = cert_pub
@@ -398,15 +426,12 @@ pub fn build_and_sign(spec: &CertSpec, signer_private_key_pem: &str) -> Result<S
         .into_vec();
     let spki = SubjectPublicKeyInfoOwned::from_der(&spki_der).map_err(|e| e.to_string())?;
 
-    // Profile::Manual gives us exact control: it injects no extensions
-    // of its own, so the cert carries precisely what sfw requested.
-    let profile = Profile::Manual {
-        issuer: Some(issuer),
-    };
+    // Keep exact control over extensions: the profile injects none, so the
+    // certificate carries precisely what sfw requested.
+    let profile = ManualProfile { subject, issuer };
 
     let mut builder =
-        CertificateBuilder::new(profile, serial, validity, subject, spki, &signing_key)
-            .map_err(|e| e.to_string())?;
+        CertificateBuilder::new(profile, serial, validity, spki).map_err(|e| e.to_string())?;
 
     let exts = &spec.extensions;
     if let Some(bc) = &exts.basic_constraints {
@@ -446,7 +471,7 @@ pub fn build_and_sign(spec: &CertSpec, signer_private_key_pem: &str) -> Result<S
     }
 
     let cert = builder
-        .build::<rsa::pkcs1v15::Signature>()
+        .build::<_, rsa::pkcs1v15::Signature>(&signing_key)
         .map_err(|e| e.to_string())?;
     cert.to_pem(der::pem::LineEnding::LF)
         .map_err(|e| e.to_string())
@@ -473,7 +498,7 @@ fn compute_ski(spki_der: &[u8]) -> Result<SubjectKeyIdentifier, String> {
 /// `certificateFromPem(...).subject.attributes`).
 pub fn cert_subject_attrs(pem: &str) -> Result<Vec<Attr>, String> {
     let cert = x509_cert::Certificate::from_pem(pem).map_err(|e| e.to_string())?;
-    Ok(parse_name(&cert.tbs_certificate.subject))
+    Ok(parse_name(cert.tbs_certificate().subject()))
 }
 
 #[cfg(test)]
@@ -552,13 +577,25 @@ mod tests {
     #[test]
     fn self_signed_ca_builds_and_parses() {
         let (priv_pem, pub_pem) = generate_key_pair(2048).unwrap();
-        let ca_pem = build_and_sign(&ca_spec(&pub_pem), &priv_pem).unwrap();
+        let spec = ca_spec(&pub_pem);
+        let ca_pem = build_and_sign(&spec, &priv_pem).unwrap();
         assert!(ca_pem.contains("-----BEGIN CERTIFICATE-----"));
         let attrs = cert_subject_attrs(&ca_pem).unwrap();
         // Order-preserving round-trip: CN first, O second.
         assert_eq!(attrs[0].key, "commonName");
         assert_eq!(attrs[0].value, "Socket Security CA");
         assert_eq!(attrs[1].key, "organizationName");
+
+        let cert = x509_cert::Certificate::from_pem(&ca_pem).unwrap();
+        let validity = cert.tbs_certificate().validity();
+        assert_eq!(
+            validity.not_before.to_unix_duration().as_secs(),
+            spec.not_before_unix as u64
+        );
+        assert_eq!(
+            validity.not_after.to_unix_duration().as_secs(),
+            spec.not_after_unix as u64
+        );
     }
 
     #[test]
@@ -568,12 +605,21 @@ mod tests {
         let (priv_pem, pub_pem) = generate_key_pair(2048).unwrap();
         let ca_pem = build_and_sign(&ca_spec(&pub_pem), &priv_pem).unwrap();
         let ca = x509_cert::Certificate::from_pem(&ca_pem).unwrap();
-        let parsed_attrs = parse_name(&ca.tbs_certificate.subject);
-        let rebuilt = build_name(&parsed_attrs).unwrap();
+        let parsed_attrs = parse_name(ca.tbs_certificate().subject());
+
+        let mut leaf_spec = ca_spec(&pub_pem);
+        leaf_spec.subject = vec![Attr {
+            key: "commonName".into(),
+            value: "leaf.example".into(),
+            value_tag: None,
+        }];
+        leaf_spec.issuer = parsed_attrs;
+        let leaf_pem = build_and_sign(&leaf_spec, &priv_pem).unwrap();
+        let leaf = x509_cert::Certificate::from_pem(&leaf_pem).unwrap();
         assert_eq!(
-            rebuilt.to_der().unwrap(),
-            ca.tbs_certificate.subject.to_der().unwrap(),
-            "rebuilt issuer DN must match CA subject DN exactly"
+            leaf.tbs_certificate().issuer().to_der().unwrap(),
+            ca.tbs_certificate().subject().to_der().unwrap(),
+            "leaf issuer DN must match CA subject DN exactly"
         );
     }
 
@@ -611,7 +657,8 @@ mod tests {
         spec.extensions.key_usage.as_mut().unwrap().critical = false;
         let pem = build_and_sign(&spec, &priv_pem).unwrap();
         let cert = x509_cert::Certificate::from_pem(&pem).unwrap();
-        let extensions = cert.tbs_certificate.extensions.as_ref().unwrap();
+        let extensions = cert.tbs_certificate().extensions().unwrap();
+        assert_eq!(extensions.len(), 3, "profile must not inject extensions");
         let basic_constraints = extensions
             .iter()
             .find(|ext| ext.extn_id == BasicConstraints::OID)

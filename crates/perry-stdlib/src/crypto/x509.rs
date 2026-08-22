@@ -31,8 +31,8 @@ pub(super) fn x509_attr_short_name(oid: &str) -> String {
 /// do: one `TYPE=value` per line, newline-joined, in encoding order.
 pub(super) fn x509_format_name(name: &x509_cert::name::Name) -> String {
     let mut lines: Vec<String> = Vec::new();
-    for rdn in name.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in name.iter_rdn() {
+        for atv in rdn.iter() {
             let oid = atv.oid.to_string();
             let value = x509_attr_value(atv);
             lines.push(format!("{}={}", x509_attr_short_name(&oid), value));
@@ -107,9 +107,8 @@ fn x509_find_extension<'a>(
     cert: &'a x509_cert::Certificate,
     oid: &str,
 ) -> Option<&'a x509_cert::ext::Extension> {
-    cert.tbs_certificate
-        .extensions
-        .as_ref()?
+    cert.tbs_certificate()
+        .extensions()?
         .iter()
         .find(|ext| ext.extn_id.to_string() == oid)
 }
@@ -166,8 +165,8 @@ fn x509_decoded_subject_alt_name(
 
 fn x509_subject_common_names(cert: &x509_cert::Certificate) -> Vec<String> {
     let mut names = Vec::new();
-    for rdn in cert.tbs_certificate.subject.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in cert.tbs_certificate().subject().iter_rdn() {
+        for atv in rdn.iter() {
             if atv.oid.to_string() == "2.5.4.3" {
                 names.push(x509_attr_value(atv));
             }
@@ -185,8 +184,8 @@ enum X509HostSubject {
 
 fn x509_subject_email_addresses(cert: &x509_cert::Certificate) -> Vec<String> {
     let mut addresses = Vec::new();
-    for rdn in cert.tbs_certificate.subject.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in cert.tbs_certificate().subject().iter_rdn() {
+        for atv in rdn.iter() {
             if atv.oid.to_string() == "1.2.840.113549.1.9.1" {
                 addresses.push(x509_attr_value(atv));
             }
@@ -499,10 +498,10 @@ fn x509_name_der(name: &x509_cert::name::Name) -> Option<Vec<u8>> {
 fn x509_check_issued_value(cert: &x509_cert::Certificate, issuer: &x509_cert::Certificate) -> bool {
     use x509_cert::der::Encode;
 
-    let Some(issuer_name) = x509_name_der(&cert.tbs_certificate.issuer) else {
+    let Some(issuer_name) = x509_name_der(cert.tbs_certificate().issuer()) else {
         return false;
     };
-    let Some(subject_name) = x509_name_der(&issuer.tbs_certificate.subject) else {
+    let Some(subject_name) = x509_name_der(issuer.tbs_certificate().subject()) else {
         return false;
     };
     if issuer_name != subject_name {
@@ -515,13 +514,13 @@ fn x509_check_issued_value(cert: &x509_cert::Certificate, issuer: &x509_cert::Ce
     let Some((_, public_key)) = x509_rsa_public_key(issuer) else {
         return false;
     };
-    let Some(signature_bytes) = cert.signature.as_bytes() else {
+    let Some(signature_bytes) = cert.signature().as_bytes() else {
         return false;
     };
     let Ok(signature) = RsaPkcs1v15Signature::try_from(signature_bytes) else {
         return false;
     };
-    let Ok(tbs_der) = cert.tbs_certificate.to_der() else {
+    let Ok(tbs_der) = cert.tbs_certificate().to_der() else {
         return false;
     };
 
@@ -586,7 +585,12 @@ fn x509_public_key_pem(spki_der: &[u8]) -> String {
 unsafe fn x509_public_key_value(handle: &X509Handle) -> f64 {
     use x509_cert::der::Encode;
 
-    let spki_der = match handle.cert.tbs_certificate.subject_public_key_info.to_der() {
+    let spki_der = match handle
+        .cert
+        .tbs_certificate()
+        .subject_public_key_info()
+        .to_der()
+    {
         Ok(der) => der,
         Err(_) => return nanbox_undefined(),
     };
@@ -599,7 +603,7 @@ unsafe fn x509_public_key_value(handle: &X509Handle) -> f64 {
 }
 
 fn x509_signature_algorithm_oid(cert: &x509_cert::Certificate) -> String {
-    cert.signature_algorithm.oid.to_string()
+    cert.signature_algorithm().oid.to_string()
 }
 
 fn x509_signature_algorithm_name(cert: &x509_cert::Certificate) -> Option<&'static str> {
@@ -616,7 +620,7 @@ fn x509_signature_algorithm_name(cert: &x509_cert::Certificate) -> Option<&'stat
 }
 
 fn x509_rsa_signature_digest(cert: &x509_cert::Certificate) -> Option<RsaDigestKind> {
-    match cert.signature_algorithm.oid.to_string().as_str() {
+    match cert.signature_algorithm().oid.to_string().as_str() {
         "1.2.840.113549.1.1.11" => Some(RsaDigestKind::Sha256),
         "1.2.840.113549.1.1.12" => Some(RsaDigestKind::Sha384),
         "1.2.840.113549.1.1.13" => Some(RsaDigestKind::Sha512),
@@ -625,14 +629,12 @@ fn x509_rsa_signature_digest(cert: &x509_cert::Certificate) -> Option<RsaDigestK
 }
 
 unsafe fn x509_name_legacy_object(name: &x509_cert::name::Name) -> f64 {
-    let attr_count = name.0.iter().map(|rdn| rdn.0.len()).sum::<usize>() as u32;
+    let attr_count = name.iter().count() as u32;
     let obj = js_object_alloc(0, attr_count);
-    for rdn in name.0.iter() {
-        for atv in rdn.0.iter() {
-            let key = x509_attr_short_name(&atv.oid.to_string());
-            let value = x509_attr_value(atv);
-            set_object_string_field(obj, key.as_bytes(), &value);
-        }
+    for atv in name.iter() {
+        let key = x509_attr_short_name(&atv.oid.to_string());
+        let value = x509_attr_value(atv);
+        set_object_string_field(obj, key.as_bytes(), &value);
     }
     nanbox_ptr(obj)
 }
@@ -640,15 +642,19 @@ unsafe fn x509_name_legacy_object(name: &x509_cert::name::Name) -> f64 {
 fn x509_rsa_public_key(cert: &x509_cert::Certificate) -> Option<(Vec<u8>, RsaPublicKey)> {
     use x509_cert::der::Encode;
 
-    let spki_der = cert.tbs_certificate.subject_public_key_info.to_der().ok()?;
+    let spki_der = cert
+        .tbs_certificate()
+        .subject_public_key_info()
+        .to_der()
+        .ok()?;
     let pem = x509_public_key_pem(&spki_der);
     let public_key = parse_rsa_public_key_pem(&pem)?;
     Some((spki_der, public_key))
 }
 
 fn x509_serial_number_hex(cert: &x509_cert::Certificate) -> String {
-    cert.tbs_certificate
-        .serial_number
+    cert.tbs_certificate()
+        .serial_number()
         .as_bytes()
         .iter()
         .map(|b| format!("{:02X}", b))
@@ -671,10 +677,10 @@ unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
     use sha2::{Digest, Sha256, Sha512};
 
     let obj = js_object_alloc(0, 20);
-    let tbs = &handle.cert.tbs_certificate;
+    let tbs = handle.cert.tbs_certificate();
 
-    set_object_value_field(obj, b"subject", x509_name_legacy_object(&tbs.subject));
-    set_object_value_field(obj, b"issuer", x509_name_legacy_object(&tbs.issuer));
+    set_object_value_field(obj, b"subject", x509_name_legacy_object(tbs.subject()));
+    set_object_value_field(obj, b"issuer", x509_name_legacy_object(tbs.issuer()));
     match x509_subject_alt_name(&handle.cert) {
         Some(value) => set_object_string_field(obj, b"subjectaltname", &value),
         None => set_undefined_field(obj, b"subjectaltname"),
@@ -713,9 +719,13 @@ unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
     set_object_string_field(
         obj,
         b"valid_from",
-        &x509_format_time(&tbs.validity.not_before),
+        &x509_format_time(&tbs.validity().not_before),
     );
-    set_object_string_field(obj, b"valid_to", &x509_format_time(&tbs.validity.not_after));
+    set_object_string_field(
+        obj,
+        b"valid_to",
+        &x509_format_time(&tbs.validity().not_after),
+    );
     set_object_string_field(
         obj,
         b"fingerprint",
@@ -848,13 +858,13 @@ unsafe fn x509_verify_value(handle: &X509Handle, args: &[f64]) -> f64 {
         Some(key) => key,
         None => return js_bool(false),
     };
-    let tbs_der = match handle.cert.tbs_certificate.to_der() {
+    let tbs_der = match handle.cert.tbs_certificate().to_der() {
         Ok(der) => der,
         Err(_) => return js_bool(false),
     };
     let signature = match handle
         .cert
-        .signature
+        .signature()
         .as_bytes()
         .and_then(|bytes| RsaPkcs1v15Signature::try_from(bytes).ok())
     {
@@ -1017,17 +1027,17 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         Some(h) => h,
         None => return nanbox_undefined(),
     };
-    let tbs = &h.cert.tbs_certificate;
+    let tbs = h.cert.tbs_certificate();
     match property {
-        "subject" => x509_string_f64(&x509_format_name(&tbs.subject)),
-        "issuer" => x509_string_f64(&x509_format_name(&tbs.issuer)),
-        "validFrom" => x509_string_f64(&x509_format_time(&tbs.validity.not_before)),
-        "validTo" => x509_string_f64(&x509_format_time(&tbs.validity.not_after)),
+        "subject" => x509_string_f64(&x509_format_name(tbs.subject())),
+        "issuer" => x509_string_f64(&x509_format_name(tbs.issuer())),
+        "validFrom" => x509_string_f64(&x509_format_time(&tbs.validity().not_before)),
+        "validTo" => x509_string_f64(&x509_format_time(&tbs.validity().not_after)),
         "validFromDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity.not_before,
+            &tbs.validity().not_before,
         )),
         "validToDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity.not_after,
+            &tbs.validity().not_after,
         )),
         "serialNumber" => x509_string_f64(&x509_serial_number_hex(&h.cert)),
         "signatureAlgorithm" => match x509_signature_algorithm_name(&h.cert) {
@@ -1170,7 +1180,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
 /// Extract the BasicConstraints `cA` flag (default false when absent).
 pub(super) fn x509_basic_constraints_ca(cert: &x509_cert::Certificate) -> bool {
     use x509_cert::der::Decode;
-    let Some(exts) = cert.tbs_certificate.extensions.as_ref() else {
+    let Some(exts) = cert.tbs_certificate().extensions() else {
         return false;
     };
     for ext in exts.iter() {

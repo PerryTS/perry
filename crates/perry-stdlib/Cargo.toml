@@ -407,9 +407,9 @@ p256 = { version = "0.13", optional = true, default-features = false, features =
 p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
-# #1367 node:crypto X509Certificate — DER/PEM cert parsing (RustCrypto, reuses
-# the der/spki/const-oid already in the lock).
-x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }
+# #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 uses
+# the DER/SPKI 0.8 stack; the direct SPKI 0.7 pin remains for jsonwebtoken.
+x509-cert = { version = "0.3", optional = true, default-features = false, features = ["pem"] }
 spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
 aes_09 = { package = "aes", version = "0.9", optional = true }

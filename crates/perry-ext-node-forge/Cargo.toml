@@ -16,15 +16,15 @@ perry-ffi.workspace = true
 perry-runtime = { workspace = true, features = ["default", "stdlib"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# RustCrypto PKI stack — all already present in the workspace Cargo.lock.
-rsa = { version = "0.9", features = ["sha2", "pem"] }
-sha2 = "0.10"
-x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
-der = { version = "0.7", features = ["oid"] }
-spki = "0.7"
-const-oid = "0.9"
+# RustCrypto PKI stack.
+rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
+sha2 = "0.11"
+x509-cert = { version = "0.3", features = ["builder", "hazmat"] }
+der = { version = "0.8", features = ["oid"] }
+spki = "0.8"
+const-oid = "0.10"
 pem = "4"
-rand = "0.8"
+rand = "0.10"
 time = { version = "0.3", features = ["parsing"] }
 
 [dev-dependencies]
