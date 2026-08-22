@@ -114,6 +114,12 @@ fn current_thread_id() -> u64 {
     hasher.finish()
 }
 
+#[cfg(test)]
+fn token_belongs_to_test_thread(token_ptr: usize, thread_id: u64) -> bool {
+    let token = unsafe { &*(token_ptr as *const NativeAsyncCompletion) };
+    token.main_thread_id == thread_id
+}
+
 fn token_from_ptr<'a>(token: *mut NativeAsyncCompletion) -> Option<&'a NativeAsyncCompletion> {
     if token.is_null() {
         None
@@ -420,7 +426,29 @@ pub extern "C" fn js_native_async_completion_reject_promise_bits(
 pub extern "C" fn js_native_async_process_pending() -> i32 {
     let pending: Vec<usize> = {
         let mut registry = crate::gc::lock_gc_root_registry(registry());
-        registry.pending.drain(..).collect()
+        #[cfg(not(test))]
+        {
+            registry.pending.drain(..).collect()
+        }
+        #[cfg(test)]
+        {
+            // Every libtest thread owns a separate runtime heap, but they share
+            // this production registry. Leave foreign completions queued for
+            // the thread that owns their Promise instead of settling them into
+            // this thread's heap.
+            let thread_id = current_thread_id();
+            let mut owned = Vec::new();
+            let mut foreign = VecDeque::new();
+            while let Some(token_ptr) = registry.pending.pop_front() {
+                if token_belongs_to_test_thread(token_ptr, thread_id) {
+                    owned.push(token_ptr);
+                } else {
+                    foreign.push_back(token_ptr);
+                }
+            }
+            registry.pending = foreign;
+            owned
+        }
     };
     let mut processed = 0i32;
     for token_ptr in pending {
@@ -518,10 +546,21 @@ pub extern "C" fn js_native_async_drop_promise_token(promise: *mut Promise) {
 #[no_mangle]
 pub extern "C" fn js_native_async_has_active() -> i32 {
     let registry = crate::gc::lock_gc_root_registry(registry());
-    if registry.tokens.is_empty() && registry.pending.is_empty() {
-        0
-    } else {
+    #[cfg(not(test))]
+    let has_active = !registry.tokens.is_empty() || !registry.pending.is_empty();
+    #[cfg(test)]
+    let has_active = {
+        let thread_id = current_thread_id();
+        registry
+            .tokens
+            .iter()
+            .chain(registry.pending.iter())
+            .any(|&token_ptr| token_belongs_to_test_thread(token_ptr, thread_id))
+    };
+    if has_active {
         1
+    } else {
+        0
     }
 }
 
@@ -529,7 +568,13 @@ pub extern "C" fn js_native_async_has_active() -> i32 {
 pub fn scan_native_async_completion_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut registry = crate::gc::lock_gc_root_registry(registry());
     let mut moved_promises = Vec::new();
+    #[cfg(test)]
+    let thread_id = current_thread_id();
     for &token_ptr in &registry.tokens {
+        #[cfg(test)]
+        if !token_belongs_to_test_thread(token_ptr, thread_id) {
+            continue;
+        }
         let token = unsafe { &*(token_ptr as *const NativeAsyncCompletion) };
         let mut slots = token
             .slots
@@ -571,9 +616,16 @@ pub(crate) fn test_native_async_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 pub(crate) fn test_reset_native_async_registry() {
     let mut registry = crate::gc::lock_gc_root_registry(registry());
-    registry.tokens.clear();
-    registry.by_promise.clear();
-    registry.pending.clear();
+    let thread_id = current_thread_id();
+    registry
+        .tokens
+        .retain(|&token_ptr| !token_belongs_to_test_thread(token_ptr, thread_id));
+    registry
+        .by_promise
+        .retain(|_, token_ptr| !token_belongs_to_test_thread(*token_ptr, thread_id));
+    registry
+        .pending
+        .retain(|&token_ptr| !token_belongs_to_test_thread(token_ptr, thread_id));
 }
 
 #[cfg(test)]
@@ -813,6 +865,19 @@ mod tests {
         .expect("thread join");
 
         assert_eq!(status, PERRY_NATIVE_ASYNC_WRONG_THREAD);
+        let foreign_observation = std::thread::spawn(|| {
+            (
+                js_native_async_has_active(),
+                js_native_async_process_pending(),
+            )
+        })
+        .join()
+        .expect("foreign drain thread join");
+        assert_eq!(
+            foreign_observation,
+            (0, 0),
+            "a foreign test thread must not observe or drain this token"
+        );
         assert_eq!(js_native_async_process_pending(), 1);
         assert_eq!(super::super::js_promise_state(promise), 2);
         unsafe {
